@@ -147,6 +147,28 @@ export function getPlainText(root: HTMLElement): string {
   return text;
 }
 
+export function getRawText(root: HTMLElement): string {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: rejectBreaks,
+  });
+  let text = "";
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    text += (node as Text).data;
+  }
+  return text;
+}
+
+export function rangeFromTextOffsets(root: HTMLElement, start: number, end: number): Range | null {
+  const from = pointFromOffset(root, Math.min(start, end));
+  const to = pointFromOffset(root, Math.max(start, end));
+  if (!from || !to) return null;
+  const range = document.createRange();
+  range.setStart(from.node, from.offset);
+  range.setEnd(to.node, to.offset);
+  return range;
+}
+
 export function countWords(text: string): number {
   const parts = text.trim().split(/\s+/);
   return parts[0] === "" ? 0 : parts.length;

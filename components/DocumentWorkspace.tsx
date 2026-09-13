@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MdOutlineFormatClear } from "react-icons/md";
+import { AgentPanel } from "@/components/AgentPanel";
 import { CommentsPanel, type DocComment } from "@/components/CommentsPanel";
 import { ColorPicker } from "@/components/ColorPicker";
 import {
@@ -59,8 +60,11 @@ import {
   toggleList,
   wrapSelectionMark,
 } from "@/lib/editorApi";
+import { acceptAgentEdit, applyAgentEdits, captureAgentSelection, jumpToAgentEdit, rejectAgentEdit } from "@/lib/agent/edits";
+import type { AgentSelection, AgentTurn } from "@/lib/agent/types";
 import {
   countWords,
+  getPlainText,
   isEditorVisuallyEmpty,
   PAGE_GAP,
   PAGE_HEIGHT,
@@ -123,6 +127,13 @@ export function DocumentWorkspace() {
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [commentsMinimized, setCommentsMinimized] = useState(false);
   const [comments, setComments] = useState<DocComment[]>([]);
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [agentMinimized, setAgentMinimized] = useState(false);
+  const [askPrompt, setAskPrompt] = useState("");
+  const [askBusy, setAskBusy] = useState(false);
+  const [askError, setAskError] = useState<string | null>(null);
+  const [agentContext, setAgentContext] = useState<AgentSelection | null>(null);
+  const [agentTurns, setAgentTurns] = useState<AgentTurn[]>([]);
   const [dialog, setDialog] = useState<DialogName>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [contextMenu, setContextMenu] = useState<{
@@ -294,8 +305,122 @@ export function DocumentWorkspace() {
     speak("Comment added.");
   };
 
+  const openAsk = () => {
+    if (mode === "viewing") return;
+    restoreSelection(true);
+    const el = editorEl();
+    setAgentContext(el ? captureAgentSelection(el) : null);
+    setAgentOpen(true);
+    setAgentMinimized(false);
+    setAskError(null);
+  };
+
+  const submitAsk = async () => {
+    const el = editorEl();
+    const prompt = askPrompt.trim();
+    if (!el || !prompt || askBusy || mode === "viewing") return;
+    restoreSelection(true);
+    const context = agentContext;
+    setAgentContext(context);
+    setAskBusy(true);
+    setAskError(null);
+    try {
+      const response = await fetch("/api/agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          prompt,
+          document: getPlainText(el),
+          selection: context
+            ? { text: context.text, before: context.before, after: context.after }
+            : null,
+        }),
+      });
+      const data = (await response.json()) as {
+        message?: string;
+        edits?: Array<{ find: string; replace: string; reason?: string }>;
+        mock?: boolean;
+        error?: string;
+      };
+      if (!response.ok) {
+        throw new Error(data.error || "The agent could not propose edits.");
+      }
+      const edits = applyAgentEdits(el, data.edits ?? [], context);
+      setAgentTurns((list) => [
+        ...list,
+        {
+          id: crypto.randomUUID(),
+          prompt,
+          selection: context?.text ?? null,
+          message: data.message || "Review the proposed edits.",
+          mock: Boolean(data.mock),
+          edits,
+        },
+      ]);
+      setAskPrompt("");
+      setAgentOpen(true);
+      setAgentMinimized(false);
+      afterEdit();
+      const pending = edits.filter((edit) => edit.status === "pending").length;
+      speak(pending ? `${pending} ${pending === 1 ? "edit" : "edits"} ready to accept or reject.` : data.message || "No edits proposed.");
+    } catch (error) {
+      setAskError(error instanceof Error ? error.message : "The agent could not propose edits.");
+      setAgentOpen(true);
+      setAgentMinimized(false);
+    } finally {
+      setAskBusy(false);
+    }
+  };
+
+  const reviewEdit = (id: string, action: "accept" | "reject") => {
+    const el = editorEl();
+    if (!el) return;
+    if (action === "accept") acceptAgentEdit(el, id);
+    else rejectAgentEdit(el, id);
+    setAgentTurns((list) =>
+      list.map((turn) => ({
+        ...turn,
+        edits: turn.edits.map((edit) =>
+          edit.id === id && edit.status === "pending"
+            ? { ...edit, status: action === "accept" ? "accepted" : "rejected" }
+            : edit,
+        ),
+      })),
+    );
+    afterEdit();
+    speak(action === "accept" ? "Edit accepted." : "Edit rejected.");
+  };
+
+  const reviewAll = (action: "accept" | "reject") => {
+    const el = editorEl();
+    if (!el) return;
+    const ids = agentTurns.flatMap((turn) =>
+      turn.edits.filter((edit) => edit.status === "pending").map((edit) => edit.id),
+    );
+    for (const id of ids) {
+      if (action === "accept") acceptAgentEdit(el, id);
+      else rejectAgentEdit(el, id);
+    }
+    setAgentTurns((list) =>
+      list.map((turn) => ({
+        ...turn,
+        edits: turn.edits.map((edit) =>
+          edit.status === "pending" ? { ...edit, status: action === "accept" ? "accepted" : "rejected" } : edit,
+        ),
+      })),
+    );
+    afterEdit();
+  };
+
   const handleAction = async (action: string, value?: string) => {
-    if (action !== "text-color" && action !== "highlight-color") {
+    if (
+      action !== "text-color" &&
+      action !== "highlight-color" &&
+      action !== "ask-inline" &&
+      action !== "agent-panel" &&
+      action !== "add-to-chat"
+    ) {
       restoreSelection();
     }
     const el = editorEl();
@@ -493,6 +618,11 @@ export function DocumentWorkspace() {
       case "shortcuts":
         setDialog("shortcuts");
         return;
+      case "ask-inline":
+      case "agent-panel":
+      case "add-to-chat":
+        if (!readOnly) openAsk();
+        return;
       default:
         return;
     }
@@ -532,6 +662,10 @@ export function DocumentWorkspace() {
         event.preventDefault();
         setDialog("search");
       }
+      if (key === "j" && !event.shiftKey && !event.altKey) {
+        event.preventDefault();
+        if (mode !== "viewing") void handleAction("ask-inline");
+      }
       if (key === "k" && !event.shiftKey && !event.altKey && !inField) {
         event.preventDefault();
         openLinkDialog();
@@ -549,6 +683,23 @@ export function DocumentWorkspace() {
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
+
+  useEffect(() => {
+    const onClick = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const button = target.closest("[data-agent-action]");
+      if (!(button instanceof HTMLElement)) return;
+      const wrap = button.closest(".agent-edit");
+      const id = wrap instanceof HTMLElement ? wrap.dataset.editId : "";
+      const action = button.dataset.agentAction;
+      if (!id || (action !== "accept" && action !== "reject")) return;
+      event.preventDefault();
+      reviewEdit(id, action);
+    };
+    document.addEventListener("click", onClick);
+    return () => document.removeEventListener("click", onClick);
+  });
 
   const scaledWidth = PAGE_WIDTH * zoom;
   const scaledHeight =
@@ -739,6 +890,18 @@ export function DocumentWorkspace() {
             <MdOutlineFormatClear />
           </button>
           <span className="toolbar-sep" />
+          <button
+            className="tool"
+            type="button"
+            title="Ask Inline"
+            aria-label="Ask Inline"
+            data-active={agentOpen}
+            disabled={mode === "viewing"}
+            onClick={() => void handleAction("ask-inline")}
+          >
+            <AskIcon />
+          </button>
+          <span className="toolbar-sep" />
           <select
             className="toolbar-select zoom"
             aria-label="Zoom"
@@ -834,6 +997,34 @@ export function DocumentWorkspace() {
           {metrics.wordCount} {metrics.wordCount === 1 ? "word" : "words"}
         </div>
         </div>
+        <AgentPanel
+          open={agentOpen}
+          minimized={agentMinimized}
+          busy={askBusy}
+          error={askError}
+          prompt={askPrompt}
+          context={agentContext}
+          turns={agentTurns}
+          onPromptChange={setAskPrompt}
+          onSubmit={() => void submitAsk()}
+          onClearContext={() => setAgentContext(null)}
+          onMinimizedChange={setAgentMinimized}
+          onClose={() => setAgentOpen(false)}
+          onNewChat={() => {
+            setAgentTurns([]);
+            setAskPrompt("");
+            setAskError(null);
+            setAgentContext(null);
+          }}
+          onJump={(id) => {
+            const el = editorEl();
+            if (el) jumpToAgentEdit(el, id);
+          }}
+          onAccept={(id) => reviewEdit(id, "accept")}
+          onReject={(id) => reviewEdit(id, "reject")}
+          onAcceptAll={() => reviewAll("accept")}
+          onRejectAll={() => reviewAll("reject")}
+        />
         {commentsOpen && (
           <CommentsPanel
             comments={comments}
@@ -1025,6 +1216,7 @@ export function DocumentWorkspace() {
             { label: "Paste without formatting", action: "paste-plain", shortcut: "⌘⇧V" },
             { label: "Delete", action: "delete", disabled: !contextMenu.hasSelection },
             { label: "Comment", action: "comment", shortcut: "⌘⌥M", disabled: !contextMenu.hasSelection },
+            { label: "Add text to AI chat", action: "add-to-chat", disabled: !contextMenu.hasSelection },
             { label: "Clear formatting", action: "clear-format", disabled: !contextMenu.hasSelection },
           ]}
         />
@@ -1034,6 +1226,20 @@ export function DocumentWorkspace() {
         {announce}
       </div>
     </div>
+  );
+}
+
+function AskIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M12 3.5 13.2 8.2 18 9.4 13.2 10.6 12 15.3 10.8 10.6 6 9.4l4.8-1.2L12 3.5Z"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinejoin="round"
+      />
+      <path d="M18.5 14.5 19.2 16.8 21.5 17.5 19.2 18.2 18.5 20.5 17.8 18.2 15.5 17.5l2.3-.7.7-2.3Z" fill="currentColor" />
+    </svg>
   );
 }
 
