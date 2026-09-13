@@ -144,7 +144,7 @@ export function MenuBar(props: Props) {
         { label: "Clear formatting", action: "clear-format", writes: true },
       ])}
       {menu("tools", "Tools", [
-        { label: "Ask Inline", action: "ask-inline", shortcut: "⌘J", writes: true },
+        { label: "Chat", action: "ask-inline", shortcut: "⌘J", writes: true },
         { label: "Review edits", action: "agent-panel" },
         "sep",
         { label: "Word count", action: "word-count" },

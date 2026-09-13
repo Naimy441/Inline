@@ -21,6 +21,7 @@ import {
   writeClipboardFromSelection,
 } from "@/lib/editorApi";
 import { constrainImage, normalizeImages, selectImage, selectedImage } from "@/lib/images";
+import { sanitizeStoredHtml, serializeEditorHtml } from "@/lib/documentStore";
 import {
   PAGE_BREAK_HEIGHT,
   PAGE_CONTENT_HEIGHT,
@@ -58,6 +59,7 @@ export type EditorHandle = {
   };
   reflow: () => void;
   getText: () => string;
+  getHtml: () => string;
 };
 
 type Props = {
@@ -66,8 +68,10 @@ type Props = {
   substitutions: boolean;
   columns: number;
   lineSpacing: string;
+  initialHtml?: string;
   onMetricsChange: (metrics: EditorMetrics) => void;
   onActiveChange?: () => void;
+  onContentChange?: (html: string) => void;
 };
 
 function applyEditorMinHeight(editor: HTMLElement, pageCount: number) {
@@ -83,14 +87,20 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
     substitutions,
     columns,
     lineSpacing,
+    initialHtml,
     onMetricsChange,
     onActiveChange,
+    onContentChange,
   },
   ref,
 ) {
   const editorRef = useRef<HTMLDivElement>(null);
   const composingRef = useRef(false);
   const rafRef = useRef<number>(0);
+  const restoredRef = useRef(false);
+  const initialHtmlRef = useRef(initialHtml);
+  const onContentChangeRef = useRef(onContentChange);
+  onContentChangeRef.current = onContentChange;
   const dragRef = useRef<{
     img: HTMLImageElement;
     handle: string;
@@ -123,10 +133,11 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
     normalizeImages(editor);
     if (!needsReflow(editor)) {
       publishMetrics(1);
-      return;
+    } else {
+      const pageCount = preserveCaret(editor, () => reflowPages(editor));
+      publishMetrics(pageCount);
     }
-    const pageCount = preserveCaret(editor, () => reflowPages(editor));
-    publishMetrics(pageCount);
+    onContentChangeRef.current?.(serializeEditorHtml(editor));
   }, [publishMetrics]);
 
   const scheduleReflow = useCallback(() => {
@@ -141,6 +152,10 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
     document.execCommand("defaultParagraphSeparator", false, "div");
     const editor = editorRef.current;
     if (editor) {
+      if (!restoredRef.current && initialHtmlRef.current) {
+        editor.innerHTML = sanitizeStoredHtml(initialHtmlRef.current);
+        restoredRef.current = true;
+      }
       editor.focus();
       reflow();
     }
@@ -237,6 +252,10 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
     getText: () => {
       const editor = editorRef.current;
       return editor ? getPlainText(editor) : "";
+    },
+    getHtml: () => {
+      const editor = editorRef.current;
+      return editor ? serializeEditorHtml(editor) : "";
     },
   }));
 

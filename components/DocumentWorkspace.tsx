@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MdOutlineFormatClear } from "react-icons/md";
 import { AgentPanel } from "@/components/AgentPanel";
+import { DiffReviewBar } from "@/components/DiffReviewBar";
 import { CommentsPanel, type DocComment } from "@/components/CommentsPanel";
 import { ColorPicker } from "@/components/ColorPicker";
 import {
@@ -60,8 +61,12 @@ import {
   toggleList,
   wrapSelectionMark,
 } from "@/lib/editorApi";
+import { createChat, loadChats, patchChat, pendingEditIds, saveChats, setEditStatus, titleFromPrompt } from "@/lib/agent/chats";
+import { loadDocument, saveDocument } from "@/lib/documentStore";
 import { acceptAgentEdit, applyAgentEdits, captureAgentSelection, jumpToAgentEdit, rejectAgentEdit } from "@/lib/agent/edits";
-import type { AgentSelection, AgentTurn } from "@/lib/agent/types";
+import { AGENT_MODELS, DEFAULT_MODEL } from "@/lib/agent/models";
+import { readSseData } from "@/lib/agent/sse";
+import type { AgentChat, AgentMode, AgentSelection, AgentStreamEvent, ThinkingLevel } from "@/lib/agent/types";
 import {
   countWords,
   getPlainText,
@@ -127,13 +132,23 @@ export function DocumentWorkspace() {
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [commentsMinimized, setCommentsMinimized] = useState(false);
   const [comments, setComments] = useState<DocComment[]>([]);
+  const [docReady, setDocReady] = useState(false);
+  const [initialHtml, setInitialHtml] = useState("");
+  const persistTimer = useRef(0);
   const [agentOpen, setAgentOpen] = useState(false);
   const [agentMinimized, setAgentMinimized] = useState(false);
   const [askPrompt, setAskPrompt] = useState("");
+  const [chatDrafts, setChatDrafts] = useState<Record<string, string>>({});
   const [askBusy, setAskBusy] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
+  const [livePhase, setLivePhase] = useState<"thinking" | "planning" | null>(null);
+  const [liveThinking, setLiveThinking] = useState("");
   const [agentContext, setAgentContext] = useState<AgentSelection | null>(null);
-  const [agentTurns, setAgentTurns] = useState<AgentTurn[]>([]);
+  const [chats, setChats] = useState<AgentChat[]>([]);
+  const [activeChatId, setActiveChatId] = useState("");
+  const [chatsReady, setChatsReady] = useState(false);
+  const [modelCatalog, setModelCatalog] = useState(AGENT_MODELS);
+  const [availableProviders, setAvailableProviders] = useState({ openai: true, anthropic: false });
   const [dialog, setDialog] = useState<DialogName>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [contextMenu, setContextMenu] = useState<{
@@ -146,7 +161,12 @@ export function DocumentWorkspace() {
   const [highlightColor, setHighlightColorValue] = useState("transparent");
 
   useEffect(() => {
-    document.title = `${title || "Untitled document"} - Inline`;
+    const next = `${title || "Untitled document"} - Inline`;
+    document.title = next;
+    const frame = window.requestAnimationFrame(() => {
+      document.title = next;
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [title]);
 
   useEffect(() => {
@@ -160,6 +180,148 @@ export function DocumentWorkspace() {
     document.documentElement.dataset.theme = darkMode ? "dark" : "light";
     window.localStorage.setItem("inline-theme", darkMode ? "dark" : "light");
   }, [darkMode]);
+
+  useEffect(() => {
+    const storedDoc = loadDocument();
+    if (storedDoc) {
+      setTitle(storedDoc.title);
+      setInitialHtml(storedDoc.html);
+      setHeaderText(storedDoc.headerText);
+      setFooterText(storedDoc.footerText);
+      setShowHeader(storedDoc.showHeader);
+      setShowFooter(storedDoc.showFooter);
+      setShowPageNumbers(storedDoc.showPageNumbers);
+      setColumnCount(storedDoc.columns);
+      setSpacing(storedDoc.lineSpacing);
+      setComments(storedDoc.comments);
+    }
+    setDocReady(true);
+  }, []);
+
+  useEffect(() => {
+    const stored = loadChats();
+    if (stored) {
+      setChats(stored.chats);
+      setActiveChatId(stored.activeId);
+      setAgentOpen(stored.open);
+      setAgentMinimized(stored.minimized);
+      setChatDrafts(stored.drafts);
+      setAskPrompt(stored.drafts[stored.activeId] ?? "");
+    } else {
+      const chat = createChat();
+      setChats([chat]);
+      setActiveChatId(chat.id);
+    }
+    setChatsReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!chatsReady || !chats.length || !activeChatId) return;
+    saveChats({
+      chats,
+      activeId: activeChatId,
+      open: agentOpen,
+      minimized: agentMinimized,
+      drafts: { ...chatDrafts, [activeChatId]: askPrompt },
+    });
+  }, [activeChatId, agentMinimized, agentOpen, askPrompt, chatDrafts, chats, chatsReady]);
+
+  const persistDocument = useCallback(
+    (html?: string) => {
+      if (!docReady) return;
+      const nextHtml = html ?? editorRef.current?.getHtml() ?? initialHtml;
+      saveDocument({
+        title,
+        html: nextHtml,
+        headerText,
+        footerText,
+        showHeader,
+        showFooter,
+        showPageNumbers,
+        columns,
+        lineSpacing,
+        comments,
+      });
+    },
+    [
+      comments,
+      columns,
+      docReady,
+      footerText,
+      headerText,
+      initialHtml,
+      lineSpacing,
+      showFooter,
+      showHeader,
+      showPageNumbers,
+      title,
+    ],
+  );
+
+  const schedulePersist = useCallback(
+    (html?: string) => {
+      window.clearTimeout(persistTimer.current);
+      persistTimer.current = window.setTimeout(() => persistDocument(html), 400);
+    },
+    [persistDocument],
+  );
+
+  useEffect(() => {
+    if (!docReady) return;
+    schedulePersist();
+  }, [
+    comments,
+    columns,
+    docReady,
+    footerText,
+    headerText,
+    lineSpacing,
+    schedulePersist,
+    showFooter,
+    showHeader,
+    showPageNumbers,
+    title,
+  ]);
+
+  useEffect(() => {
+    const flush = () => persistDocument();
+    const onHide = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onHide);
+    };
+  }, [persistDocument]);
+
+  useEffect(() => () => window.clearTimeout(persistTimer.current), []);
+
+  useEffect(() => {
+    void fetch("/api/agent/models")
+      .then((response) => response.json())
+      .then((data: {
+        defaultModel?: string;
+        models?: typeof AGENT_MODELS;
+        providers?: { openai?: boolean; anthropic?: boolean };
+      }) => {
+        if (Array.isArray(data.models) && data.models.length) setModelCatalog(data.models);
+        setAvailableProviders({
+          openai: Boolean(data.providers?.openai),
+          anthropic: Boolean(data.providers?.anthropic),
+        });
+        const nextModel = data.defaultModel || DEFAULT_MODEL;
+        setChats((list) =>
+          list.map((chat) =>
+            !chat.titled && chat.turns.length === 0 && chat.model === DEFAULT_MODEL
+              ? { ...chat, model: nextModel }
+              : chat,
+          ),
+        );
+      })
+      .catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     const saveSelection = () => {
@@ -275,7 +437,9 @@ export function DocumentWorkspace() {
     if (next.fontSize) setFontSize(next.fontSize);
   }, []);
 
-  const editorEl = () => editorRef.current?.getElement() ?? null;
+  const editorEl = useCallback(() => editorRef.current?.getElement() ?? null, []);
+  const activeChat = chats.find((chat) => chat.id === activeChatId) ?? chats[0];
+  const reviewIds = pendingEditIds(chats);
 
   const speak = useCallback((text: string) => {
     setAnnounce(text);
@@ -318,12 +482,16 @@ export function DocumentWorkspace() {
   const submitAsk = async () => {
     const el = editorEl();
     const prompt = askPrompt.trim();
+    const chat = activeChat ?? createChat();
     if (!el || !prompt || askBusy || mode === "viewing") return;
     restoreSelection(true);
     const context = agentContext;
     setAgentContext(context);
     setAskBusy(true);
     setAskError(null);
+    setLivePhase(chat.mode === "plan" ? "planning" : "thinking");
+    setLiveThinking("");
+    const started = Date.now();
     try {
       const response = await fetch("/api/agent", {
         method: "POST",
@@ -335,41 +503,97 @@ export function DocumentWorkspace() {
           selection: context
             ? { text: context.text, before: context.before, after: context.after }
             : null,
+          mode: chat.mode,
+          model: chat.model,
+          thinkingLevel: chat.thinkingLevel,
+          nameChat: !chat.titled,
+          history: chat.turns.slice(-8).flatMap((turn) => [
+            { role: "user" as const, content: turn.prompt },
+            { role: "assistant" as const, content: turn.message },
+          ]),
         }),
       });
-      const data = (await response.json()) as {
+      if (!response.ok) {
+        const failed = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(failed.error || "The agent could not propose edits.");
+      }
+      let data: {
         message?: string;
+        thinking?: string;
+        chatTitle?: string;
         edits?: Array<{ find: string; replace: string; reason?: string }>;
         mock?: boolean;
-        error?: string;
-      };
-      if (!response.ok) {
-        throw new Error(data.error || "The agent could not propose edits.");
+      } | null = null;
+      let streamedThinking = "";
+      for await (const raw of readSseData(response)) {
+        let event: AgentStreamEvent;
+        try {
+          event = JSON.parse(raw) as AgentStreamEvent;
+        } catch {
+          continue;
+        }
+        if (event.type === "phase") setLivePhase(event.phase);
+        if (event.type === "thinking") {
+          streamedThinking += event.delta;
+          setLiveThinking(streamedThinking);
+        }
+        if (event.type === "error") throw new Error(event.error);
+        if (event.type === "done") data = event.result;
       }
-      const edits = applyAgentEdits(el, data.edits ?? [], context);
-      setAgentTurns((list) => [
-        ...list,
-        {
-          id: crypto.randomUUID(),
-          prompt,
-          selection: context?.text ?? null,
-          message: data.message || "Review the proposed edits.",
-          mock: Boolean(data.mock),
-          edits,
-        },
-      ]);
+      if (!data) {
+        throw new Error("The agent could not propose edits.");
+      }
+      const edits = chat.mode === "agent" ? applyAgentEdits(el, data.edits ?? [], context) : [];
+      const nextTitle = data.chatTitle?.trim() || (chat.titled ? chat.title : titleFromPrompt(prompt));
+      setChats((list) => {
+        const exists = list.some((item) => item.id === chat.id);
+        const base = exists ? list : [chat, ...list];
+        return base.map((item) =>
+          item.id === chat.id
+            ? {
+                ...item,
+                title: nextTitle,
+                titled: true,
+                updatedAt: Date.now(),
+                turns: [
+                  ...item.turns,
+                  {
+                    id: crypto.randomUUID(),
+                    prompt,
+                    selection: context?.text ?? null,
+                    message: data.message || "Review the proposed edits.",
+                    thinking: data.thinking || streamedThinking || undefined,
+                    durationMs: Date.now() - started,
+                    mock: Boolean(data.mock),
+                    mode: item.mode,
+                    model: item.model,
+                    edits,
+                  },
+                ],
+              }
+            : item,
+        );
+      });
+      setActiveChatId(chat.id);
       setAskPrompt("");
+      setChatDrafts((drafts) => {
+        const next = { ...drafts };
+        delete next[chat.id];
+        return next;
+      });
       setAgentOpen(true);
       setAgentMinimized(false);
       afterEdit();
       const pending = edits.filter((edit) => edit.status === "pending").length;
-      speak(pending ? `${pending} ${pending === 1 ? "edit" : "edits"} ready to accept or reject.` : data.message || "No edits proposed.");
+      speak(pending ? `${pending} ${pending === 1 ? "edit" : "edits"} ready to keep or undo.` : data.message || "No edits proposed.");
     } catch (error) {
       setAskError(error instanceof Error ? error.message : "The agent could not propose edits.");
       setAgentOpen(true);
       setAgentMinimized(false);
     } finally {
       setAskBusy(false);
+      setLivePhase(null);
+      setLiveThinking("");
     }
   };
 
@@ -378,16 +602,7 @@ export function DocumentWorkspace() {
     if (!el) return;
     if (action === "accept") acceptAgentEdit(el, id);
     else rejectAgentEdit(el, id);
-    setAgentTurns((list) =>
-      list.map((turn) => ({
-        ...turn,
-        edits: turn.edits.map((edit) =>
-          edit.id === id && edit.status === "pending"
-            ? { ...edit, status: action === "accept" ? "accepted" : "rejected" }
-            : edit,
-        ),
-      })),
-    );
+    setChats((list) => setEditStatus(list, id, action === "accept" ? "accepted" : "rejected"));
     afterEdit();
     speak(action === "accept" ? "Edit accepted." : "Edit rejected.");
   };
@@ -395,20 +610,13 @@ export function DocumentWorkspace() {
   const reviewAll = (action: "accept" | "reject") => {
     const el = editorEl();
     if (!el) return;
-    const ids = agentTurns.flatMap((turn) =>
-      turn.edits.filter((edit) => edit.status === "pending").map((edit) => edit.id),
-    );
+    const ids = reviewIds;
     for (const id of ids) {
       if (action === "accept") acceptAgentEdit(el, id);
       else rejectAgentEdit(el, id);
     }
-    setAgentTurns((list) =>
-      list.map((turn) => ({
-        ...turn,
-        edits: turn.edits.map((edit) =>
-          edit.status === "pending" ? { ...edit, status: action === "accept" ? "accepted" : "rejected" } : edit,
-        ),
-      })),
+    setChats((list) =>
+      ids.reduce((next, id) => setEditStatus(next, id, action === "accept" ? "accepted" : "rejected"), list),
     );
     afterEdit();
   };
@@ -706,7 +914,15 @@ export function DocumentWorkspace() {
     (metrics.pageCount * PAGE_HEIGHT + Math.max(0, metrics.pageCount - 1) * PAGE_GAP) * zoom;
 
   return (
-    <div className="app">
+    <div
+      className={[
+        "app",
+        agentOpen && !agentMinimized ? "is-chat-open" : "",
+        agentOpen && agentMinimized ? "is-chat-min" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
       <header className="header">
         <div className="logo" aria-hidden="true">
           <DocsLogo />
@@ -724,7 +940,7 @@ export function DocumentWorkspace() {
               {mode === "suggesting" ? "Suggesting" : "Viewing"}
             </span>
           )}
-          <div className="header-meta">Letter · 1&quot; margins</div>
+          <div className="header-meta">Letter - 1&quot; margins</div>
         </div>
         <MenuBar
           mode={mode}
@@ -893,13 +1109,13 @@ export function DocumentWorkspace() {
           <button
             className="tool"
             type="button"
-            title="Ask Inline"
-            aria-label="Ask Inline"
+            title="Chat"
+            aria-label="Chat"
             data-active={agentOpen}
             disabled={mode === "viewing"}
             onClick={() => void handleAction("ask-inline")}
           >
-            <AskIcon />
+            <ChatIcon />
           </button>
           <span className="toolbar-sep" />
           <select
@@ -977,16 +1193,20 @@ export function DocumentWorkspace() {
                   </div>
                 ))}
               </div>
-              <EditorSurface
-                ref={editorRef}
-                mode={mode}
-                showInvisibles={showInvisibles}
-                substitutions={substitutions}
-                columns={columns}
-                lineSpacing={lineSpacing}
-                onMetricsChange={onMetricsChange}
-                onActiveChange={refreshActive}
-              />
+              {docReady ? (
+                <EditorSurface
+                  ref={editorRef}
+                  mode={mode}
+                  showInvisibles={showInvisibles}
+                  substitutions={substitutions}
+                  columns={columns}
+                  lineSpacing={lineSpacing}
+                  initialHtml={initialHtml}
+                  onMetricsChange={onMetricsChange}
+                  onActiveChange={refreshActive}
+                  onContentChange={schedulePersist}
+                />
+              ) : null}
             </div>
           </div>
         </main>
@@ -997,33 +1217,11 @@ export function DocumentWorkspace() {
           {metrics.wordCount} {metrics.wordCount === 1 ? "word" : "words"}
         </div>
         </div>
-        <AgentPanel
-          open={agentOpen}
-          minimized={agentMinimized}
-          busy={askBusy}
-          error={askError}
-          prompt={askPrompt}
-          context={agentContext}
-          turns={agentTurns}
-          onPromptChange={setAskPrompt}
-          onSubmit={() => void submitAsk()}
-          onClearContext={() => setAgentContext(null)}
-          onMinimizedChange={setAgentMinimized}
-          onClose={() => setAgentOpen(false)}
-          onNewChat={() => {
-            setAgentTurns([]);
-            setAskPrompt("");
-            setAskError(null);
-            setAgentContext(null);
-          }}
-          onJump={(id) => {
-            const el = editorEl();
-            if (el) jumpToAgentEdit(el, id);
-          }}
+        <DiffReviewBar
+          getEditor={editorEl}
+          pendingIds={reviewIds}
           onAccept={(id) => reviewEdit(id, "accept")}
           onReject={(id) => reviewEdit(id, "reject")}
-          onAcceptAll={() => reviewAll("accept")}
-          onRejectAll={() => reviewAll("reject")}
         />
         {commentsOpen && (
           <CommentsPanel
@@ -1067,6 +1265,92 @@ export function DocumentWorkspace() {
           </aside>
         )}
       </div>
+
+      <AgentPanel
+        open={agentOpen}
+        minimized={agentMinimized}
+        busy={askBusy}
+        livePhase={livePhase}
+        liveThinking={liveThinking}
+        error={askError}
+        prompt={askPrompt}
+        context={agentContext}
+        chats={chats}
+        activeChatId={activeChat?.id ?? activeChatId}
+        models={modelCatalog}
+        providers={availableProviders}
+        onPromptChange={setAskPrompt}
+        onSubmit={() => void submitAsk()}
+        onClearContext={() => setAgentContext(null)}
+        onMinimizedChange={setAgentMinimized}
+        onClose={() => setAgentOpen(false)}
+        onNewChat={() => {
+          const chat = createChat({
+            mode: activeChat?.mode,
+            model: activeChat?.model,
+            thinkingLevel: activeChat?.thinkingLevel,
+          });
+          if (activeChatId) {
+            setChatDrafts((drafts) => ({ ...drafts, [activeChatId]: askPrompt }));
+          }
+          setChats((list) => [chat, ...list]);
+          setActiveChatId(chat.id);
+          setAskPrompt("");
+          setAskError(null);
+          setAgentContext(null);
+        }}
+        onSelectChat={(id) => {
+          setChatDrafts((drafts) => {
+            const next = activeChatId ? { ...drafts, [activeChatId]: askPrompt } : { ...drafts };
+            setAskPrompt(next[id] ?? "");
+            return next;
+          });
+          setActiveChatId(id);
+          setAskError(null);
+        }}
+        onDeleteChat={(id) => {
+          setChatDrafts((drafts) => {
+            const next = { ...drafts };
+            delete next[id];
+            return next;
+          });
+          setChats((list) => {
+            const next = list.filter((chat) => chat.id !== id);
+            if (!next.length) {
+              const chat = createChat({
+                mode: activeChat?.mode,
+                model: activeChat?.model,
+                thinkingLevel: activeChat?.thinkingLevel,
+              });
+              setActiveChatId(chat.id);
+              setAskPrompt("");
+              return [chat];
+            }
+            if (id === activeChatId) {
+              setActiveChatId(next[0].id);
+              setAskPrompt(chatDrafts[next[0].id] ?? "");
+            }
+            return next;
+          });
+        }}
+        onModeChange={(nextMode: AgentMode) => {
+          if (activeChat) setChats((list) => patchChat(list, activeChat.id, { mode: nextMode }));
+        }}
+        onModelChange={(nextModel) => {
+          if (activeChat) setChats((list) => patchChat(list, activeChat.id, { model: nextModel }));
+        }}
+        onThinkingChange={(level: ThinkingLevel) => {
+          if (activeChat) setChats((list) => patchChat(list, activeChat.id, { thinkingLevel: level }));
+        }}
+        onJump={(id) => {
+          const el = editorEl();
+          if (el) jumpToAgentEdit(el, id);
+        }}
+        onAccept={(id) => reviewEdit(id, "accept")}
+        onReject={(id) => reviewEdit(id, "reject")}
+        onAcceptAll={() => reviewAll("accept")}
+        onRejectAll={() => reviewAll("reject")}
+      />
 
       <input
         ref={imageInputRef}
@@ -1229,16 +1513,16 @@ export function DocumentWorkspace() {
   );
 }
 
-function AskIcon() {
+function ChatIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <path
-        d="M12 3.5 13.2 8.2 18 9.4 13.2 10.6 12 15.3 10.8 10.6 6 9.4l4.8-1.2L12 3.5Z"
+        d="M6.2 5.5h11.6A2.7 2.7 0 0 1 20.5 8.2v6.2a2.7 2.7 0 0 1-2.7 2.7H11l-3.8 2.8v-2.8H6.2A2.7 2.7 0 0 1 3.5 14.4V8.2A2.7 2.7 0 0 1 6.2 5.5Z"
         stroke="currentColor"
-        strokeWidth="1.7"
+        strokeWidth="1.8"
         strokeLinejoin="round"
       />
-      <path d="M18.5 14.5 19.2 16.8 21.5 17.5 19.2 18.2 18.5 20.5 17.8 18.2 15.5 17.5l2.3-.7.7-2.3Z" fill="currentColor" />
+      <path d="M8 9.6h8M8 12.6h5.2" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
     </svg>
   );
 }

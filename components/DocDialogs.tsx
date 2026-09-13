@@ -427,7 +427,9 @@ export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
         <li><kbd>⌘/Ctrl</kbd>+<kbd>A</kbd> Select all</li>
         <li><kbd>⌘/Ctrl</kbd>+<kbd>F</kbd> Find and replace</li>
         <li><kbd>⌘/Ctrl</kbd>+<kbd>K</kbd> Insert link</li>
-        <li><kbd>⌘/Ctrl</kbd>+<kbd>J</kbd> Ask Inline about the selection</li>
+        <li><kbd>⌘/Ctrl</kbd>+<kbd>J</kbd> Open chat</li>
+        <li><kbd>⌘/Ctrl</kbd>+<kbd>Y</kbd> Keep hovered change</li>
+        <li><kbd>⌘/Ctrl</kbd>+<kbd>N</kbd> Undo hovered change</li>
         <li><kbd>⌘/Ctrl</kbd>+<kbd>B</kbd> / <kbd>I</kbd> / <kbd>U</kbd> Bold, italic, underline</li>
         <li><kbd>⌘/Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>8</kbd> Bullet list</li>
         <li><kbd>⌘/Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>M</kbd> Comment</li>

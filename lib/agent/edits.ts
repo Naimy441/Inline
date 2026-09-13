@@ -67,9 +67,33 @@ export function rejectAgentEdit(editor: HTMLElement, id: string) {
 }
 
 export function jumpToAgentEdit(editor: HTMLElement, id: string) {
-  editor.querySelector(`.agent-edit[data-edit-id="${cssId(id)}"]`)?.scrollIntoView({
+  const target = editor.querySelector(`.agent-edit[data-edit-id="${cssId(id)}"]`);
+  target?.scrollIntoView({
     block: "center",
     behavior: "smooth",
+  });
+  highlightAgentEdit(editor, id);
+}
+
+export function documentEditIds(editor: HTMLElement) {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  editor.querySelectorAll<HTMLElement>(".agent-edit").forEach((node) => {
+    const id = node.dataset.editId;
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    ids.push(id);
+  });
+  return ids;
+}
+
+export function highlightAgentEdit(editor: HTMLElement, id: string | null) {
+  editor.querySelectorAll(".agent-edit.is-reviewing").forEach((node) => {
+    node.classList.remove("is-reviewing");
+  });
+  if (!id) return;
+  editor.querySelectorAll(`.agent-edit[data-edit-id="${cssId(id)}"]`).forEach((node) => {
+    node.classList.add("is-reviewing");
   });
 }
 
@@ -176,7 +200,7 @@ function insertParagraphsAfter(editor: HTMLElement, anchor: Node, id: string, pa
     add.className = "suggestion-add";
     add.textContent = para;
     insert.append(add);
-    if (after && editor.contains(after) && after !== editor) after.after(insert);
+    if (after instanceof Element && editor.contains(after) && after !== editor) after.after(insert);
     else editor.append(insert);
     after = insert;
   }

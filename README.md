@@ -139,3 +139,5 @@ GENERAL FEATURES
 - Light/Dark Mode
 
 
+TODO:
+Switch to tailwind

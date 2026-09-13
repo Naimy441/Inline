@@ -1,5 +1,7 @@
-import { runAgent } from "@/lib/agent/runAgent";
-import type { AgentRequest } from "@/lib/agent/types";
+import { isAgentMode, isThinkingLevel, resolveAgentModel } from "@/lib/agent/models";
+import { runAgentStream } from "@/lib/agent/runAgent";
+import { encodeSse } from "@/lib/agent/sse";
+import type { AgentHistoryMessage, AgentRequest } from "@/lib/agent/types";
 
 export async function POST(request: Request) {
   let body: Partial<AgentRequest>;
@@ -27,16 +29,50 @@ export async function POST(request: Request) {
         }
       : null;
 
-  try {
-    const result = await runAgent({
-      title: typeof body.title === "string" ? body.title.slice(0, 200) : "Untitled document",
-      prompt,
-      document,
-      selection,
-    });
-    return Response.json(result);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Agent request failed.";
-    return Response.json({ error: message }, { status: 502 });
-  }
+  const history = Array.isArray(body.history)
+    ? body.history
+        .map((item): AgentHistoryMessage | null => {
+          if (!item || (item.role !== "user" && item.role !== "assistant")) return null;
+          if (typeof item.content !== "string" || !item.content.trim()) return null;
+          return { role: item.role, content: item.content.slice(0, 8000) };
+        })
+        .filter((item): item is AgentHistoryMessage => item !== null)
+        .slice(-12)
+    : [];
+
+  const agentRequest: AgentRequest = {
+    title: typeof body.title === "string" ? body.title.slice(0, 200) : "Untitled document",
+    prompt,
+    document,
+    selection,
+    mode: isAgentMode(body.mode) ? body.mode : "agent",
+    model: resolveAgentModel(typeof body.model === "string" ? body.model : undefined),
+    thinkingLevel: isThinkingLevel(body.thinkingLevel) ? body.thinkingLevel : "medium",
+    nameChat: Boolean(body.nameChat),
+    history,
+  };
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const encoder = new TextEncoder();
+      try {
+        for await (const event of runAgentStream(agentRequest)) {
+          controller.enqueue(encoder.encode(encodeSse(event)));
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Agent request failed.";
+        controller.enqueue(encoder.encode(encodeSse({ type: "error", error: message })));
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    },
+  });
 }
