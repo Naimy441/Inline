@@ -19,6 +19,8 @@ type Props = {
   darkMode: boolean;
   columns: number;
   lineSpacing: string;
+  focusMode: boolean;
+  preserveTone: boolean;
   onAction: (action: string, value?: string) => void;
 };
 
@@ -89,6 +91,7 @@ export function MenuBar(props: Props) {
         { label: props.commentsOpen && !props.commentsMinimized ? "Minimize comments" : "Expand comments", action: "comments-toggle" },
         { label: "Show non-printing characters", action: "invisibles", checked: props.showInvisibles },
         { label: "Dark mode", action: "theme", checked: props.darkMode },
+        { label: "Focus mode", action: "focus-mode", shortcut: "⌘⇧F", checked: props.focusMode },
         { label: props.isFullscreen ? "Exit full screen" : "Full screen", action: "fullscreen", shortcut: "F11" },
       ])}
       {menu("insert", "Insert", [
@@ -145,8 +148,19 @@ export function MenuBar(props: Props) {
       ])}
       {menu("tools", "Tools", [
         { label: "Chat", action: "ask-inline", shortcut: "⌘J", writes: true },
+        { label: "Inline edit", action: "inline-edit", shortcut: "⌘K", writes: true },
+        { label: "Command palette", action: "palette", shortcut: "⌘⇧P" },
         { label: "Review edits", action: "agent-panel" },
+        { label: "Address all comments", action: "address-comments", writes: true },
         "sep",
+        { label: "Fix grammar", action: "fix-grammar", shortcut: "⌘⇧G", writes: true },
+        { label: "Clean AI writing", action: "clean-ai", writes: true },
+        { label: "Writing lint", action: "writing-lint", shortcut: "⌘⇧L" },
+        { label: "Suggest tone", action: "suggest-tone" },
+        { label: "Summarize", action: "summarize" },
+        { label: "Preserve tone", action: "preserve-tone", checked: props.preserveTone },
+        "sep",
+        { label: "Version history", action: "history", shortcut: "⌘⇧H" },
         { label: "Word count", action: "word-count" },
         { label: "Compare documents", action: "compare" },
         { label: "Citations", action: "citation", writes: true },

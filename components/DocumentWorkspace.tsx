@@ -1,10 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { MdOutlineFormatClear } from "react-icons/md";
 import { AgentPanel } from "@/components/AgentPanel";
+import { AgentToast } from "@/components/AgentToast";
+import { CommandPalette, type PaletteCommand } from "@/components/CommandPalette";
 import { DiffReviewBar } from "@/components/DiffReviewBar";
 import { CommentsPanel, type DocComment } from "@/components/CommentsPanel";
+import { HistoryPanel } from "@/components/HistoryPanel";
+import { InlineComposer } from "@/components/InlineComposer";
+import { LintPanel } from "@/components/LintPanel";
+import { SelectionHud } from "@/components/SelectionHud";
+import { SlashMenu } from "@/components/SlashMenu";
 import { ColorPicker } from "@/components/ColorPicker";
 import {
   DOCUMENT_FONTS,
@@ -61,12 +68,18 @@ import {
   toggleList,
   wrapSelectionMark,
 } from "@/lib/editorApi";
-import { createChat, loadChats, patchChat, pendingEditIds, saveChats, setEditStatus, titleFromPrompt } from "@/lib/agent/chats";
+import { applyClientTools } from "@/lib/agent/clientTools";
+import { acceptMissingEdits, createChat, loadChats, patchChat, pendingEditIds, removeTurnsFrom, saveChats, setEditStatus, titleFromPrompt } from "@/lib/agent/chats";
 import { loadDocument, saveDocument } from "@/lib/documentStore";
-import { acceptAgentEdit, applyAgentEdits, captureAgentSelection, jumpToAgentEdit, rejectAgentEdit } from "@/lib/agent/edits";
+import { acceptAgentEdit, applyAgentEdits, captureAgentSelection, documentEditIds, jumpToAgentEdit, rejectAgentEdit, replaceAgentEdits, settleAgentEdits } from "@/lib/agent/edits";
 import { AGENT_MODELS, DEFAULT_MODEL } from "@/lib/agent/models";
-import { readSseData } from "@/lib/agent/sse";
-import type { AgentChat, AgentMode, AgentSelection, AgentStreamEvent, ThinkingLevel } from "@/lib/agent/types";
+import { runAgentJob } from "@/lib/agent/runJob";
+import type { AgentAttachment, AgentChat, AgentMode, AgentSelection, AgentTask, PendingEdit, ThinkingLevel } from "@/lib/agent/types";
+import { loadHistory, pushSnapshot, saveHistory, snapshotLabel, type HistorySnapshot } from "@/lib/historyStore";
+import { listLockedRanges, wrapLockedRegion } from "@/lib/locks";
+import { lintWriting } from "@/lib/writing/lint";
+import { PROMPT_TEMPLATES, QUICK_PROMPTS, templateById } from "@/lib/writing/templates";
+import { cleanAiArtifactsInEditor, detectAiTropes } from "@/lib/writing/tropes";
 import {
   countWords,
   getPlainText,
@@ -91,6 +104,18 @@ type DialogName =
   | "signature"
   | "shortcuts"
   | null;
+
+const TOOLBAR_OVERFLOW_GROUPS = ["font", "style", "insert", "align", "lists", "ai"] as const;
+type ToolbarOverflowId = (typeof TOOLBAR_OVERFLOW_GROUPS)[number];
+
+const TOOLBAR_GROUP_FALLBACK: Record<ToolbarOverflowId, number> = {
+  font: 176,
+  style: 144,
+  insert: 58,
+  align: 172,
+  lists: 144,
+  ai: 116,
+};
 
 export function DocumentWorkspace() {
   const editorRef = useRef<EditorHandle>(null);
@@ -141,8 +166,12 @@ export function DocumentWorkspace() {
   const [chatDrafts, setChatDrafts] = useState<Record<string, string>>({});
   const [askBusy, setAskBusy] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
-  const [livePhase, setLivePhase] = useState<"thinking" | "planning" | null>(null);
+  const [livePhase, setLivePhase] = useState<"thinking" | "planning" | "editing" | "reviewing" | null>(null);
   const [liveThinking, setLiveThinking] = useState("");
+  const [livePrompt, setLivePrompt] = useState("");
+  const [liveSelection, setLiveSelection] = useState<string | null>(null);
+  const [liveMessage, setLiveMessage] = useState("");
+  const [liveEdits, setLiveEdits] = useState<PendingEdit[]>([]);
   const [agentContext, setAgentContext] = useState<AgentSelection | null>(null);
   const [chats, setChats] = useState<AgentChat[]>([]);
   const [activeChatId, setActiveChatId] = useState("");
@@ -159,6 +188,29 @@ export function DocumentWorkspace() {
   const [darkMode, setDarkMode] = useState<boolean | null>(null);
   const [textColor, setTextColorValue] = useState("auto");
   const [highlightColor, setHighlightColorValue] = useState("transparent");
+  const [focusMode, setFocusMode] = useState(false);
+  const [preserveTone, setPreserveTone] = useState(true);
+  const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
+  const [history, setHistory] = useState<HistorySnapshot[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [lintOpen, setLintOpen] = useState(false);
+  const [inlineOpen, setInlineOpen] = useState(false);
+  const [inlinePrompt, setInlinePrompt] = useState("");
+  const [inlineBox, setInlineBox] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [hudBox, setHudBox] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [selectionLocked, setSelectionLocked] = useState(false);
+  const [slash, setSlash] = useState<{ query: string; top: number; left: number } | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [toast, setToast] = useState<{ text: string; action?: () => void } | null>(null);
+  const [liveTools, setLiveTools] = useState<string[]>([]);
+  const toastTimer = useRef(0);
+  const jobAbortRef = useRef<AbortController | null>(null);
+  const pendingRevertRef = useRef<string | null>(null);
+  const inlineContextRef = useRef<AgentSelection | null>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const toolbarWidths = useRef<Partial<Record<ToolbarOverflowId, number>>>({});
+  const [toolbarOverflow, setToolbarOverflow] = useState<ToolbarOverflowId[]>([]);
+  const [toolbarMoreOpen, setToolbarMoreOpen] = useState(false);
 
   useEffect(() => {
     const next = `${title || "Untitled document"} - Inline`;
@@ -213,6 +265,11 @@ export function DocumentWorkspace() {
       setActiveChatId(chat.id);
     }
     setChatsReady(true);
+    setHistory(loadHistory());
+    const storedFocus = window.localStorage.getItem("inline-focus");
+    const storedTone = window.localStorage.getItem("inline-preserve-tone");
+    if (storedFocus === "1") setFocusMode(true);
+    if (storedTone === "0") setPreserveTone(false);
   }, []);
 
   useEffect(() => {
@@ -225,6 +282,18 @@ export function DocumentWorkspace() {
       drafts: { ...chatDrafts, [activeChatId]: askPrompt },
     });
   }, [activeChatId, agentMinimized, agentOpen, askPrompt, chatDrafts, chats, chatsReady]);
+
+  useEffect(() => {
+    window.localStorage.setItem("inline-focus", focusMode ? "1" : "0");
+  }, [focusMode]);
+
+  useEffect(() => {
+    window.localStorage.setItem("inline-preserve-tone", preserveTone ? "1" : "0");
+  }, [preserveTone]);
+
+  useEffect(() => {
+    saveHistory(history);
+  }, [history]);
 
   const persistDocument = useCallback(
     (html?: string) => {
@@ -337,10 +406,21 @@ export function DocumentWorkspace() {
       }
       savedSelectionRef.current = range;
       if (range.start !== range.end) expandedSelectionRef.current = range;
+      if (selection && !selection.isCollapsed && range.start !== range.end) {
+        const rect = selection.getRangeAt(0).getBoundingClientRect();
+        if (rect.width || rect.height) {
+          setHudBox({ top: rect.top, left: rect.left, width: rect.width });
+          const node = selection.anchorNode;
+          const el = node instanceof Element ? node : node?.parentElement;
+          setSelectionLocked(Boolean(el?.closest(".locked-region")));
+        }
+      } else if (!inlineOpen) {
+        setHudBox(null);
+      }
     };
     document.addEventListener("selectionchange", saveSelection);
     return () => document.removeEventListener("selectionchange", saveSelection);
-  }, []);
+  }, [inlineOpen]);
 
   const restoreSelection = (preferExpanded = false) => {
     const el = editorRef.current?.getElement();
@@ -471,83 +551,137 @@ export function DocumentWorkspace() {
 
   const openAsk = () => {
     if (mode === "viewing") return;
-    restoreSelection(true);
-    const el = editorEl();
-    setAgentContext(el ? captureAgentSelection(el) : null);
     setAgentOpen(true);
     setAgentMinimized(false);
     setAskError(null);
   };
 
-  const submitAsk = async () => {
-    const el = editorEl();
-    const prompt = askPrompt.trim();
-    const chat = activeChat ?? createChat();
-    if (!el || !prompt || askBusy || mode === "viewing") return;
+  const addSelectionToChat = () => {
+    if (mode === "viewing") return;
     restoreSelection(true);
-    const context = agentContext;
+    const el = editorEl();
+    const context = el ? captureAgentSelection(el) : null;
+    if (!context) {
+      speak("Select text to add to chat.");
+      return;
+    }
     setAgentContext(context);
+    openAsk();
+  };
+
+  const stopJob = () => {
+    jobAbortRef.current?.abort();
+  };
+
+  const captureSnapshot = (label: string) => {
+    const el = editorEl();
+    let id = "";
+    setHistory((list) => {
+      const result = pushSnapshot(list, {
+        label,
+        title,
+        html: el ? el.innerHTML : initialHtml,
+        headerText,
+        footerText,
+        showHeader,
+        showFooter,
+        showPageNumbers,
+        columns,
+        lineSpacing,
+        comments,
+      });
+      id = result.snapshot.id;
+      return result.list;
+    });
+    return id;
+  };
+
+  const restoreSnapshot = (id: string, options?: { announce?: string }) => {
+    const snap = history.find((item) => item.id === id);
+    if (!snap) return false;
+    captureSnapshot(snapshotLabel("restore"));
+    editorRef.current?.setHtml(snap.html);
+    setTitle(snap.title);
+    setHeaderText(snap.headerText);
+    setFooterText(snap.footerText);
+    setShowHeader(snap.showHeader);
+    setShowFooter(snap.showFooter);
+    setShowPageNumbers(snap.showPageNumbers);
+    setColumnCount(snap.columns);
+    setSpacing(snap.lineSpacing);
+    setComments(snap.comments);
+    afterEdit();
+    if (options?.announce !== "") {
+      speak(options?.announce ?? "Restored previous version.");
+    }
+    return true;
+  };
+
+  const showToast = (text: string, action?: () => void) => {
+    window.clearTimeout(toastTimer.current);
+    setToast({ text, action });
+    toastTimer.current = window.setTimeout(() => setToast(null), 7000);
+  };
+
+  const runJob = async (options: {
+    prompt: string;
+    context?: AgentSelection | null;
+    comments?: DocComment[];
+    mode?: AgentMode;
+    openPanel?: boolean;
+    silent?: boolean;
+    clearPrompt?: boolean;
+  }) => {
+    const el = editorEl();
+    const prompt = options.prompt.trim();
+    const chat = activeChat ?? createChat();
+    if (!el || !prompt || askBusy || mode === "viewing") return false;
+    if (pendingRevertRef.current) {
+      const revertId = pendingRevertRef.current;
+      pendingRevertRef.current = null;
+      restoreSnapshot(revertId, { announce: "" });
+    }
+    restoreSelection(true);
+    const context = options.context === undefined ? agentContext : options.context;
+    const snapshotId = captureSnapshot(snapshotLabel("agent"));
+    const controller = new AbortController();
+    jobAbortRef.current = controller;
     setAskBusy(true);
     setAskError(null);
-    setLivePhase(chat.mode === "plan" ? "planning" : "thinking");
+    setLiveTools([]);
+    setLivePhase((options.mode ?? chat.mode) === "plan" ? "planning" : "thinking");
     setLiveThinking("");
-    const started = Date.now();
-    try {
-      const response = await fetch("/api/agent", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title,
-          prompt,
-          document: getPlainText(el),
-          selection: context
-            ? { text: context.text, before: context.before, after: context.after }
-            : null,
-          mode: chat.mode,
-          model: chat.model,
-          thinkingLevel: chat.thinkingLevel,
-          nameChat: !chat.titled,
-          history: chat.turns.slice(-8).flatMap((turn) => [
-            { role: "user" as const, content: turn.prompt },
-            { role: "assistant" as const, content: turn.message },
-          ]),
-        }),
+    setLivePrompt(prompt);
+    setLiveSelection(context?.text ?? null);
+    setLiveMessage("");
+    setLiveEdits([]);
+    if (options.clearPrompt !== false) {
+      setAskPrompt("");
+      setChatDrafts((drafts) => {
+        const next = { ...drafts };
+        delete next[chat.id];
+        return next;
       });
-      if (!response.ok) {
-        const failed = (await response.json().catch(() => ({}))) as { error?: string };
-        throw new Error(failed.error || "The agent could not propose edits.");
-      }
-      let data: {
-        message?: string;
-        thinking?: string;
-        chatTitle?: string;
-        edits?: Array<{ find: string; replace: string; reason?: string }>;
-        mock?: boolean;
-      } | null = null;
-      let streamedThinking = "";
-      for await (const raw of readSseData(response)) {
-        let event: AgentStreamEvent;
-        try {
-          event = JSON.parse(raw) as AgentStreamEvent;
-        } catch {
-          continue;
-        }
-        if (event.type === "phase") setLivePhase(event.phase);
-        if (event.type === "thinking") {
-          streamedThinking += event.delta;
-          setLiveThinking(streamedThinking);
-        }
-        if (event.type === "error") throw new Error(event.error);
-        if (event.type === "done") data = event.result;
-      }
-      if (!data) {
-        throw new Error("The agent could not propose edits.");
-      }
-      const edits = chat.mode === "agent" ? applyAgentEdits(el, data.edits ?? [], context) : [];
+    }
+    const started = Date.now();
+    const jobMode = options.mode ?? chat.mode;
+    let appliedEdits: PendingEdit[] | null = null;
+    let streamedMessage = "";
+    let streamedThinking = "";
+    const persistTurn = (data: {
+      message: string;
+      thinking?: string;
+      edits: PendingEdit[];
+      mock?: boolean;
+      chatTitle?: string;
+      tasks?: AgentTask[];
+      tools?: { name: string; hidden?: boolean }[];
+    }) => {
       const nextTitle = data.chatTitle?.trim() || (chat.titled ? chat.title : titleFromPrompt(prompt));
+      const nextTasks: AgentTask[] = data.tasks?.length ? data.tasks : chat.tasks;
       setChats((list) => {
         const exists = list.some((item) => item.id === chat.id);
-        const base = exists ? list : [chat, ...list];
+        const base = acceptMissingEdits(exists ? list : [chat, ...list], documentEditIds(el));
         return base.map((item) =>
           item.id === chat.id
             ? {
@@ -555,19 +689,23 @@ export function DocumentWorkspace() {
                 title: nextTitle,
                 titled: true,
                 updatedAt: Date.now(),
+                tasks: nextTasks,
                 turns: [
                   ...item.turns,
                   {
                     id: crypto.randomUUID(),
                     prompt,
                     selection: context?.text ?? null,
-                    message: data.message || "Review the proposed edits.",
-                    thinking: data.thinking || streamedThinking || undefined,
+                    message: data.message,
+                    thinking: data.thinking,
                     durationMs: Date.now() - started,
                     mock: Boolean(data.mock),
-                    mode: item.mode,
+                    mode: jobMode,
                     model: item.model,
-                    edits,
+                    edits: data.edits,
+                    tasks: data.tasks,
+                    tools: data.tools,
+                    snapshotId,
                   },
                 ],
               }
@@ -575,26 +713,238 @@ export function DocumentWorkspace() {
         );
       });
       setActiveChatId(chat.id);
-      setAskPrompt("");
-      setChatDrafts((drafts) => {
-        const next = { ...drafts };
-        delete next[chat.id];
-        return next;
+    };
+    try {
+      const data = await runAgentJob(
+        {
+          title,
+          prompt,
+          document: getPlainText(el, true),
+          selection: context
+            ? { text: context.text, before: context.before, after: context.after }
+            : null,
+          mode: jobMode,
+          model: chat.model,
+          thinkingLevel: chat.thinkingLevel,
+          nameChat: !chat.titled,
+          history: chat.turns.slice(-8).flatMap((turn) => [
+            { role: "user" as const, content: turn.prompt },
+            { role: "assistant" as const, content: turn.message },
+          ]),
+          comments: options.comments?.map((comment) => ({
+            id: comment.id,
+            quote: comment.quote,
+            body: comment.body,
+          })),
+          attachments,
+          lockedRanges: listLockedRanges(el),
+          preserveTone,
+          pageCount: metrics.pageCount,
+        },
+        {
+          signal: controller.signal,
+          onPhase: setLivePhase,
+          onThinking: (text) => {
+            streamedThinking = text;
+            setLiveThinking(text);
+          },
+          onMessage: (text) => {
+            streamedMessage = text;
+            setLiveMessage(text);
+          },
+          onEdits: (drafts) => {
+            if (jobMode !== "agent") return;
+            appliedEdits = replaceAgentEdits(el, drafts, context, appliedEdits ?? []);
+            setLiveEdits(appliedEdits);
+            setLivePhase("editing");
+            setChats((list) => acceptMissingEdits(list, documentEditIds(el)));
+            afterEdit();
+          },
+          onTool: (name) => {
+            setLiveTools((list) => (list.includes(name) ? list : [...list, name]));
+          },
+        },
+      );
+      const edits = appliedEdits ?? (jobMode === "agent" ? applyAgentEdits(el, data.edits ?? [], context) : []);
+      if (data.tools?.length) {
+        applyClientTools(el, data.tools, {
+          print: () => window.print(),
+          setHeader: setHeaderText,
+          showHeader: () => setShowHeader(true),
+          showPageNumbers: () => {
+            setShowFooter(true);
+            setShowPageNumbers(true);
+          },
+        });
+      }
+      persistTurn({
+        message: data.message || "Review the proposed edits.",
+        thinking: data.thinking,
+        edits,
+        mock: data.mock,
+        chatTitle: data.chatTitle,
+        tasks: data.tasks,
+        tools: data.tools?.map((tool) => ({ name: tool.name, hidden: tool.hidden })),
       });
-      setAgentOpen(true);
-      setAgentMinimized(false);
+      if (options.openPanel) {
+        setAgentOpen(true);
+        setAgentMinimized(false);
+      }
+      setInlineOpen(false);
       afterEdit();
       const pending = edits.filter((edit) => edit.status === "pending").length;
-      speak(pending ? `${pending} ${pending === 1 ? "edit" : "edits"} ready to keep or undo.` : data.message || "No edits proposed.");
+      const summary = pending
+        ? `${pending} ${pending === 1 ? "edit" : "edits"} ready to keep or undo.`
+        : data.message || "Done.";
+      speak(summary);
+      if (options.silent) {
+        showToast(summary, () => {
+          setAgentOpen(true);
+          setAgentMinimized(false);
+        });
+      }
+      return true;
     } catch (error) {
-      setAskError(error instanceof Error ? error.message : "The agent could not propose edits.");
-      setAgentOpen(true);
-      setAgentMinimized(false);
+      if (isAbortError(error)) {
+        pendingRevertRef.current = snapshotId;
+        afterEdit();
+        return false;
+      }
+      const message = error instanceof Error ? error.message : "The agent could not propose edits.";
+      setAskError(message);
+      if (!options.silent) {
+        setAgentOpen(true);
+        setAgentMinimized(false);
+      } else {
+        showToast(message);
+      }
+      return false;
     } finally {
+      if (jobAbortRef.current === controller) jobAbortRef.current = null;
       setAskBusy(false);
       setLivePhase(null);
       setLiveThinking("");
+      setLivePrompt("");
+      setLiveSelection(null);
+      setLiveMessage("");
+      setLiveEdits([]);
+      setLiveTools([]);
     }
+  };
+
+  const submitAsk = async () => {
+    const ok = await runJob({
+      prompt: askPrompt,
+      context: agentContext,
+      openPanel: true,
+      clearPrompt: false,
+    });
+    if (!ok) return;
+    setAskPrompt("");
+    if (activeChatId) {
+      setChatDrafts((drafts) => {
+        const next = { ...drafts };
+        delete next[activeChatId];
+        return next;
+      });
+    }
+    setAgentContext(null);
+  };
+
+  const openInlineEdit = () => {
+    if (mode === "viewing" || focusMode) return;
+    restoreSelection(true);
+    const el = editorEl();
+    const context = el ? captureAgentSelection(el) : null;
+    if (!context) {
+      openLinkDialog();
+      return;
+    }
+    inlineContextRef.current = context;
+    const selection = window.getSelection();
+    const rect = selection?.rangeCount ? selection.getRangeAt(0).getBoundingClientRect() : null;
+    setInlineBox(rect ? { top: rect.bottom, left: rect.left, width: rect.width } : hudBox);
+    setInlinePrompt("");
+    setInlineOpen(true);
+    setHudBox(null);
+  };
+
+  const refreshLint = () => {
+    const el = editorEl();
+    const text = el ? getPlainText(el) : "";
+    return {
+      lint: lintWriting(text, metrics.pageCount),
+      tropes: detectAiTropes(text),
+    };
+  };
+
+  const addressComments = (target: DocComment[]) => {
+    if (!target.length) return;
+    void runJob({
+      prompt: "Address these comments in the document. Make a targeted edit for each quote. Do not invent new claims.",
+      comments: target,
+      mode: "agent",
+      openPanel: true,
+    });
+  };
+
+  const applyTemplate = (id: string) => {
+    const template = templateById(id);
+    if (!template) return;
+    const el = editorEl();
+    if (el) {
+      const selection = window.getSelection();
+      const node = selection?.anchorNode;
+      const block = (node instanceof Element ? node : node?.parentElement)?.closest("div, p, h1, h2, h3, li");
+      if (block && (block.textContent || "").trim().startsWith("/")) {
+        block.textContent = "";
+      }
+      const empty = !getPlainText(el).trim();
+      if (template.skeleton && empty) {
+        insertHtml(el, template.skeleton);
+        afterEdit();
+      }
+    }
+    setAskPrompt(template.prompt);
+    setAgentOpen(true);
+    setAgentMinimized(false);
+    setSlash(null);
+  };
+
+  const revertTurn = (turnId: string) => {
+    const chat = activeChat;
+    const turn = chat?.turns.find((item) => item.id === turnId);
+    if (!chat || !turn?.snapshotId) return;
+    if (!restoreSnapshot(turn.snapshotId, { announce: "Reverted to before that message." })) {
+      speak("That version is no longer available.");
+      return;
+    }
+    pendingRevertRef.current = null;
+    setChats((list) => removeTurnsFrom(list, chat.id, turnId));
+    setAskPrompt(turn.prompt);
+    setAskError(null);
+    if (turn.selection) {
+      setAgentContext(null);
+    }
+  };
+
+  const addAttachments = (files: FileList | null) => {
+    if (!files?.length) return;
+    void Promise.all(
+      [...files].slice(0, 4).map(
+        (file) =>
+          new Promise<AgentAttachment>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () =>
+              resolve({
+                id: crypto.randomUUID(),
+                name: file.name,
+                text: String(reader.result ?? "").slice(0, 20_000),
+              });
+            reader.readAsText(file);
+          }),
+      ),
+    ).then((next) => setAttachments((list) => [...list, ...next].slice(0, 4)));
   };
 
   const reviewEdit = (id: string, action: "accept" | "reject") => {
@@ -602,6 +952,7 @@ export function DocumentWorkspace() {
     if (!el) return;
     if (action === "accept") acceptAgentEdit(el, id);
     else rejectAgentEdit(el, id);
+    settleAgentEdits(el);
     setChats((list) => setEditStatus(list, id, action === "accept" ? "accepted" : "rejected"));
     afterEdit();
     speak(action === "accept" ? "Edit accepted." : "Edit rejected.");
@@ -615,6 +966,7 @@ export function DocumentWorkspace() {
       if (action === "accept") acceptAgentEdit(el, id);
       else rejectAgentEdit(el, id);
     }
+    settleAgentEdits(el);
     setChats((list) =>
       ids.reduce((next, id) => setEditStatus(next, id, action === "accept" ? "accepted" : "rejected"), list),
     );
@@ -627,7 +979,9 @@ export function DocumentWorkspace() {
       action !== "highlight-color" &&
       action !== "ask-inline" &&
       action !== "agent-panel" &&
-      action !== "add-to-chat"
+      action !== "add-to-chat" &&
+      action !== "inline-edit" &&
+      action !== "palette"
     ) {
       restoreSelection();
     }
@@ -828,8 +1182,78 @@ export function DocumentWorkspace() {
         return;
       case "ask-inline":
       case "agent-panel":
-      case "add-to-chat":
         if (!readOnly) openAsk();
+        return;
+      case "add-to-chat":
+        if (!readOnly) addSelectionToChat();
+        return;
+      case "inline-edit":
+        if (!readOnly) openInlineEdit();
+        return;
+      case "palette":
+        setPaletteOpen(true);
+        return;
+      case "focus-mode":
+        setFocusMode((on) => !on);
+        return;
+      case "preserve-tone":
+        setPreserveTone((on) => !on);
+        return;
+      case "writing-lint":
+        setLintOpen((on) => !on);
+        return;
+      case "history":
+        setHistoryOpen((on) => !on);
+        return;
+      case "fix-grammar":
+        if (!readOnly) {
+          void runJob({
+            prompt: QUICK_PROMPTS.find((item) => item.id === "grammar")!.prompt,
+            context: editorEl() ? captureAgentSelection(editorEl()!) : null,
+            mode: "agent",
+            silent: true,
+            clearPrompt: false,
+          });
+        }
+        return;
+      case "clean-ai":
+        if (!readOnly && el) {
+          const local = cleanAiArtifactsInEditor(el);
+          afterEdit();
+          void runJob({
+            prompt: QUICK_PROMPTS.find((item) => item.id === "tropes")!.prompt,
+            context: captureAgentSelection(el),
+            mode: "agent",
+            silent: true,
+            clearPrompt: false,
+          });
+          if (local) speak(`Removed ${local} hidden token ${local === 1 ? "span" : "spans"}.`);
+        }
+        return;
+      case "suggest-tone":
+        void runJob({
+          prompt: QUICK_PROMPTS.find((item) => item.id === "tone")!.prompt,
+          mode: "ask",
+          openPanel: true,
+          clearPrompt: false,
+        });
+        return;
+      case "summarize":
+        void runJob({
+          prompt: QUICK_PROMPTS.find((item) => item.id === "summarize")!.prompt,
+          mode: "ask",
+          openPanel: true,
+          clearPrompt: false,
+        });
+        return;
+      case "address-comments":
+        addressComments(comments);
+        return;
+      case "lock-region":
+        if (el && !readOnly) {
+          wrapLockedRegion(el, crypto.randomUUID());
+          afterEdit();
+        }
         return;
       default:
         return;
@@ -866,7 +1290,7 @@ export function DocumentWorkspace() {
       }
       if (!meta) return;
       const key = event.key.toLowerCase();
-      if (key === "f") {
+      if (key === "f" && !event.shiftKey) {
         event.preventDefault();
         setDialog("search");
       }
@@ -876,7 +1300,28 @@ export function DocumentWorkspace() {
       }
       if (key === "k" && !event.shiftKey && !event.altKey && !inField) {
         event.preventDefault();
-        openLinkDialog();
+        if (mode !== "viewing" && selectedText().trim()) openInlineEdit();
+        else openLinkDialog();
+      }
+      if (key === "p" && event.shiftKey) {
+        event.preventDefault();
+        setPaletteOpen(true);
+      }
+      if (key === "g" && event.shiftKey) {
+        event.preventDefault();
+        void handleAction("fix-grammar");
+      }
+      if (key === "l" && event.shiftKey) {
+        event.preventDefault();
+        void handleAction("writing-lint");
+      }
+      if (key === "h" && event.shiftKey) {
+        event.preventDefault();
+        void handleAction("history");
+      }
+      if (key === "f" && event.shiftKey) {
+        event.preventDefault();
+        void handleAction("focus-mode");
       }
       if (key === "v" && event.shiftKey) {
         event.preventDefault();
@@ -909,6 +1354,288 @@ export function DocumentWorkspace() {
     return () => document.removeEventListener("click", onClick);
   });
 
+  useLayoutEffect(() => {
+    const toolbar = toolbarRef.current;
+    if (!toolbar) return;
+    const update = () => {
+      for (const id of TOOLBAR_OVERFLOW_GROUPS) {
+        const el = toolbar.querySelector(`:scope > [data-toolbar-group="${id}"]`);
+        if (el instanceof HTMLElement) toolbarWidths.current[id] = el.offsetWidth;
+      }
+      const history = toolbar.querySelector(':scope > [data-toolbar-group="history"]');
+      const zoomEl = toolbar.querySelector(':scope > [data-toolbar-group="zoom"]');
+      const more = toolbar.querySelector(":scope > .toolbar-more");
+      const sepEl = toolbar.querySelector(":scope > .toolbar-sep");
+      const historyW = history instanceof HTMLElement ? history.offsetWidth : 56;
+      const zoomW = zoomEl instanceof HTMLElement ? zoomEl.offsetWidth : 76;
+      const moreW = more instanceof HTMLElement ? more.offsetWidth : 28;
+      const gap = Number.parseFloat(getComputedStyle(toolbar).gap) || 1;
+      let sepW = 9;
+      if (sepEl instanceof HTMLElement) {
+        const styles = getComputedStyle(sepEl);
+        sepW = sepEl.offsetWidth + Number.parseFloat(styles.marginLeft) + Number.parseFloat(styles.marginRight);
+      }
+      const budget = toolbar.clientWidth;
+      let best = 0;
+      for (let count = TOOLBAR_OVERFLOW_GROUPS.length; count >= 0; count -= 1) {
+        const hasMore = count < TOOLBAR_OVERFLOW_GROUPS.length;
+        let content = historyW + zoomW + (hasMore ? moreW : 0);
+        for (let i = 0; i < count; i += 1) {
+          const id = TOOLBAR_OVERFLOW_GROUPS[i];
+          content += toolbarWidths.current[id] ?? TOOLBAR_GROUP_FALLBACK[id];
+        }
+        const leftParts = 1 + count + (hasMore ? 1 : 0);
+        const seps = Math.max(0, leftParts - 1);
+        const children = leftParts + seps + 1;
+        const used = content + seps * sepW + (children - 1) * gap;
+        if (used <= budget - 2) {
+          best = count;
+          break;
+        }
+      }
+      const next = TOOLBAR_OVERFLOW_GROUPS.slice(best);
+      setToolbarOverflow((current) =>
+        current.length === next.length && current.every((id, index) => id === next[index]) ? current : [...next],
+      );
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(toolbar);
+    update();
+    return () => observer.disconnect();
+  }, [font, fontSize, agentOpen, agentMinimized, focusMode]);
+
+  useEffect(() => {
+    if (!toolbarMoreOpen) return;
+    const onDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && target.closest("[data-toolbar-more]")) return;
+      setToolbarMoreOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setToolbarMoreOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [toolbarMoreOpen]);
+
+  useEffect(() => {
+    if (toolbarOverflow.length === 0) setToolbarMoreOpen(false);
+  }, [toolbarOverflow.length]);
+
+  useLayoutEffect(() => {
+    if (!toolbarMoreOpen) return;
+    const pop = toolbarRef.current?.querySelector("[data-toolbar-more-pop]");
+    if (!(pop instanceof HTMLElement)) return;
+    pop.classList.toggle("is-start", pop.getBoundingClientRect().left < 8);
+  }, [toolbarMoreOpen, toolbarOverflow]);
+
+  const renderOverflowGroup = (id: ToolbarOverflowId) => {
+    switch (id) {
+      case "font":
+        return (
+          <>
+            <FontFamilyPicker
+              value={font}
+              onPick={(next) => {
+                restoreSelection();
+                setFont(next);
+                editorRef.current?.setFontFamily(next);
+              }}
+            />
+            <FontSizePicker
+              value={Number.parseInt(fontSize, 10) || 11}
+              onPick={(size) => {
+                restoreSelection();
+                const next = `${size}pt`;
+                setFontSize(next);
+                editorRef.current?.setFontSize(next);
+              }}
+            />
+          </>
+        );
+      case "style":
+        return (
+          <>
+            <button
+              className="tool"
+              type="button"
+              title="Bold"
+              data-active={active.bold}
+              onClick={() => void handleAction("bold")}
+            >
+              <BoldIcon />
+            </button>
+            <button
+              className="tool"
+              type="button"
+              title="Italic"
+              data-active={active.italic}
+              onClick={() => void handleAction("italic")}
+            >
+              <ItalicIcon />
+            </button>
+            <button
+              className="tool"
+              type="button"
+              title="Underline"
+              data-active={active.underline}
+              onClick={() => void handleAction("underline")}
+            >
+              <UnderlineIcon />
+            </button>
+            <ColorPicker
+              label="Text color"
+              kind="text"
+              value={textColor}
+              onPick={(color) => void handleAction("text-color", color)}
+            />
+            <ColorPicker
+              label="Highlight color"
+              kind="highlight"
+              value={highlightColor}
+              onPick={(color) => void handleAction("highlight-color", color)}
+            />
+          </>
+        );
+      case "insert":
+        return (
+          <>
+            <button className="tool" type="button" title="Insert link" onClick={() => void handleAction("link")}>
+              <LinkIcon />
+            </button>
+            <button className="tool" type="button" title="Insert image" onClick={() => void handleAction("image")}>
+              <ImageIcon />
+            </button>
+          </>
+        );
+      case "align":
+        return (
+          <>
+            <button
+              className="tool"
+              type="button"
+              title="Align left"
+              data-active={active.align === "left"}
+              onClick={() => void handleAction("align", "left")}
+            >
+              <AlignLeftIcon />
+            </button>
+            <button
+              className="tool"
+              type="button"
+              title="Align center"
+              data-active={active.align === "center"}
+              onClick={() => void handleAction("align", "center")}
+            >
+              <AlignCenterIcon />
+            </button>
+            <button
+              className="tool"
+              type="button"
+              title="Align right"
+              data-active={active.align === "right"}
+              onClick={() => void handleAction("align", "right")}
+            >
+              <AlignRightIcon />
+            </button>
+            <button
+              className="tool"
+              type="button"
+              title="Justify"
+              data-active={active.align === "justify"}
+              onClick={() => void handleAction("align", "justify")}
+            >
+              <AlignJustifyIcon />
+            </button>
+            <LineSpacingPicker
+              value={lineSpacing}
+              onPick={(next) => void handleAction("spacing", next)}
+            />
+          </>
+        );
+      case "lists":
+        return (
+          <>
+            <button
+              className="tool"
+              type="button"
+              title="Bulleted list"
+              data-active={active.list === "ul"}
+              onClick={() => void handleAction("ul")}
+            >
+              <BulletListIcon />
+            </button>
+            <button
+              className="tool"
+              type="button"
+              title="Numbered list"
+              aria-label="Numbered list"
+              data-active={active.list === "ol"}
+              onClick={() => void handleAction("ol")}
+            >
+              <NumberedListIcon />
+            </button>
+            <button className="tool" type="button" title="Decrease indent" onClick={() => void handleAction("outdent")}>
+              <OutdentIcon />
+            </button>
+            <button className="tool" type="button" title="Increase indent" onClick={() => void handleAction("indent")}>
+              <IndentIcon />
+            </button>
+            <button className="tool" type="button" title="Clear formatting" onClick={() => void handleAction("clear-format")}>
+              <MdOutlineFormatClear />
+            </button>
+          </>
+        );
+      case "ai":
+        return (
+          <>
+            <button
+              className="tool ai-tool"
+              type="button"
+              title="Chat"
+              aria-label="Chat"
+              data-active={agentOpen}
+              disabled={mode === "viewing"}
+              onClick={() => void handleAction("ask-inline")}
+            >
+              <ChatIcon />
+            </button>
+            <button
+              className="tool ai-tool"
+              type="button"
+              title="Fix grammar"
+              disabled={mode === "viewing"}
+              onClick={() => void handleAction("fix-grammar")}
+            >
+              <GrammarIcon />
+            </button>
+            <button
+              className="tool ai-tool"
+              type="button"
+              title="Writing lint"
+              data-active={lintOpen}
+              onClick={() => void handleAction("writing-lint")}
+            >
+              <LintIcon />
+            </button>
+            <button
+              className="tool"
+              type="button"
+              title="Focus mode"
+              data-active={focusMode}
+              onClick={() => void handleAction("focus-mode")}
+            >
+              <FocusIcon />
+            </button>
+          </>
+        );
+    }
+  };
+
   const scaledWidth = PAGE_WIDTH * zoom;
   const scaledHeight =
     (metrics.pageCount * PAGE_HEIGHT + Math.max(0, metrics.pageCount - 1) * PAGE_GAP) * zoom;
@@ -917,8 +1644,9 @@ export function DocumentWorkspace() {
     <div
       className={[
         "app",
-        agentOpen && !agentMinimized ? "is-chat-open" : "",
-        agentOpen && agentMinimized ? "is-chat-min" : "",
+        agentOpen && !agentMinimized && !focusMode ? "is-chat-open" : "",
+        agentOpen && agentMinimized && !focusMode ? "is-chat-min" : "",
+        focusMode ? "is-focus" : "",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -957,182 +1685,77 @@ export function DocumentWorkspace() {
           darkMode={Boolean(darkMode)}
           columns={columns}
           lineSpacing={lineSpacing}
+          focusMode={focusMode}
+          preserveTone={preserveTone}
           onAction={(action, value) => void handleAction(action, value)}
         />
         </div>
       </header>
 
       <div className="toolbar-wrap">
-        <div className="toolbar" role="toolbar" aria-label="Formatting">
-          <button className="tool" type="button" title="Undo" onClick={() => void handleAction("undo")}>
-            <UndoIcon />
-          </button>
-          <button className="tool" type="button" title="Redo" onClick={() => void handleAction("redo")}>
-            <RedoIcon />
-          </button>
-          <span className="toolbar-sep" />
-          <FontFamilyPicker
-            value={font}
-            onPick={(next) => {
-              restoreSelection();
-              setFont(next);
-              editorRef.current?.setFontFamily(next);
-            }}
-          />
-          <FontSizePicker
-            value={Number.parseInt(fontSize, 10) || 11}
-            onPick={(size) => {
-              restoreSelection();
-              const next = `${size}pt`;
-              setFontSize(next);
-              editorRef.current?.setFontSize(next);
-            }}
-          />
-          <span className="toolbar-sep" />
-          <button
-            className="tool"
-            type="button"
-            title="Bold"
-            data-active={active.bold}
-            onClick={() => void handleAction("bold")}
-          >
-            <BoldIcon />
-          </button>
-          <button
-            className="tool"
-            type="button"
-            title="Italic"
-            data-active={active.italic}
-            onClick={() => void handleAction("italic")}
-          >
-            <ItalicIcon />
-          </button>
-          <button
-            className="tool"
-            type="button"
-            title="Underline"
-            data-active={active.underline}
-            onClick={() => void handleAction("underline")}
-          >
-            <UnderlineIcon />
-          </button>
-          <ColorPicker
-            label="Text color"
-            kind="text"
-            value={textColor}
-            onPick={(color) => void handleAction("text-color", color)}
-          />
-          <ColorPicker
-            label="Highlight color"
-            kind="highlight"
-            value={highlightColor}
-            onPick={(color) => void handleAction("highlight-color", color)}
-          />
-          <span className="toolbar-sep" />
-          <button className="tool" type="button" title="Insert link" onClick={() => void handleAction("link")}>
-            <LinkIcon />
-          </button>
-          <button className="tool" type="button" title="Insert image" onClick={() => void handleAction("image")}>
-            <ImageIcon />
-          </button>
-          <span className="toolbar-sep" />
-          <button
-            className="tool"
-            type="button"
-            title="Align left"
-            data-active={active.align === "left"}
-            onClick={() => void handleAction("align", "left")}
-          >
-            <AlignLeftIcon />
-          </button>
-          <button
-            className="tool"
-            type="button"
-            title="Align center"
-            data-active={active.align === "center"}
-            onClick={() => void handleAction("align", "center")}
-          >
-            <AlignCenterIcon />
-          </button>
-          <button
-            className="tool"
-            type="button"
-            title="Align right"
-            data-active={active.align === "right"}
-            onClick={() => void handleAction("align", "right")}
-          >
-            <AlignRightIcon />
-          </button>
-          <button
-            className="tool"
-            type="button"
-            title="Justify"
-            data-active={active.align === "justify"}
-            onClick={() => void handleAction("align", "justify")}
-          >
-            <AlignJustifyIcon />
-          </button>
-          <LineSpacingPicker
-            value={lineSpacing}
-            onPick={(next) => void handleAction("spacing", next)}
-          />
-          <span className="toolbar-sep" />
-          <button
-            className="tool"
-            type="button"
-            title="Bulleted list"
-            data-active={active.list === "ul"}
-            onClick={() => void handleAction("ul")}
-          >
-            <BulletListIcon />
-          </button>
-          <button
-            className="tool"
-            type="button"
-            title="Numbered list"
-            aria-label="Numbered list"
-            data-active={active.list === "ol"}
-            onClick={() => void handleAction("ol")}
-          >
-            <NumberedListIcon />
-          </button>
-          <button className="tool" type="button" title="Decrease indent" onClick={() => void handleAction("outdent")}>
-            <OutdentIcon />
-          </button>
-          <button className="tool" type="button" title="Increase indent" onClick={() => void handleAction("indent")}>
-            <IndentIcon />
-          </button>
-          <button className="tool" type="button" title="Clear formatting" onClick={() => void handleAction("clear-format")}>
-            <MdOutlineFormatClear />
-          </button>
-          <span className="toolbar-sep" />
-          <button
-            className="tool"
-            type="button"
-            title="Chat"
-            aria-label="Chat"
-            data-active={agentOpen}
-            disabled={mode === "viewing"}
-            onClick={() => void handleAction("ask-inline")}
-          >
-            <ChatIcon />
-          </button>
-          <span className="toolbar-sep" />
-          <select
-            className="toolbar-select zoom"
-            aria-label="Zoom"
-            value={zoomMode === "fit" ? "fit" : String(zoomMode)}
-            onChange={(event) => {
-              const next = event.target.value;
-              setZoomMode(next === "fit" ? "fit" : Number(next));
-            }}
-          >
-            <option value="fit">Fit</option>
-            <option value="0.75">75%</option>
-            <option value="1">100%</option>
-            <option value="1.25">125%</option>
-            <option value="1.5">150%</option>
-          </select>
+        <div className="toolbar" ref={toolbarRef} role="toolbar" aria-label="Formatting">
+          <span className="toolbar-group" data-toolbar-group="history">
+            <button className="tool" type="button" title="Undo" onClick={() => void handleAction("undo")}>
+              <UndoIcon />
+            </button>
+            <button className="tool" type="button" title="Redo" onClick={() => void handleAction("redo")}>
+              <RedoIcon />
+            </button>
+          </span>
+          {TOOLBAR_OVERFLOW_GROUPS.map((id) =>
+            toolbarOverflow.includes(id) ? null : (
+              <Fragment key={id}>
+                <span className="toolbar-sep" />
+                <span className="toolbar-group" data-toolbar-group={id}>
+                  {renderOverflowGroup(id)}
+                </span>
+              </Fragment>
+            ),
+          )}
+          {toolbarOverflow.length > 0 && (
+            <>
+              <span className="toolbar-sep" />
+              <div className="toolbar-more" data-toolbar-more>
+                <button
+                  className="tool"
+                  type="button"
+                  title="More"
+                  aria-label="More"
+                  aria-expanded={toolbarMoreOpen}
+                  data-active={toolbarMoreOpen}
+                  onClick={() => setToolbarMoreOpen((value) => !value)}
+                >
+                  <MoreIcon />
+                </button>
+                {toolbarMoreOpen && (
+                  <div className="toolbar-more-pop" data-toolbar-more-pop aria-label="More formatting tools">
+                    {toolbarOverflow.map((id) => (
+                      <div key={id} className="toolbar-more-row">
+                        {renderOverflowGroup(id)}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+          <span className="toolbar-group is-zoom" data-toolbar-group="zoom">
+            <select
+              className="toolbar-select zoom"
+              aria-label="Zoom"
+              value={zoomMode === "fit" ? "fit" : String(zoomMode)}
+              onChange={(event) => {
+                const next = event.target.value;
+                setZoomMode(next === "fit" ? "fit" : Number(next));
+              }}
+            >
+              <option value="fit">Fit</option>
+              <option value="0.75">75%</option>
+              <option value="1">100%</option>
+              <option value="1.25">125%</option>
+              <option value="1.5">150%</option>
+            </select>
+          </span>
         </div>
       </div>
 
@@ -1205,6 +1828,13 @@ export function DocumentWorkspace() {
                   onMetricsChange={onMetricsChange}
                   onActiveChange={refreshActive}
                   onContentChange={schedulePersist}
+                  onSlashQuery={(query, rect) => {
+                    if (focusMode || mode === "viewing") {
+                      setSlash(null);
+                      return;
+                    }
+                    setSlash(query != null && rect ? { query, top: rect.bottom + 6, left: rect.left } : null);
+                  }}
                 />
               ) : null}
             </div>
@@ -1223,10 +1853,11 @@ export function DocumentWorkspace() {
           onAccept={(id) => reviewEdit(id, "accept")}
           onReject={(id) => reviewEdit(id, "reject")}
         />
-        {commentsOpen && (
+        {commentsOpen && !focusMode && (
           <CommentsPanel
             comments={comments}
             minimized={commentsMinimized}
+            busy={askBusy}
             onMinimizedChange={setCommentsMinimized}
             onChange={(id, body) =>
               setComments((list) => list.map((comment) => (comment.id === id ? { ...comment, body } : comment)))
@@ -1243,6 +1874,29 @@ export function DocumentWorkspace() {
               const mark = editorEl()?.querySelector(`mark[data-comment-id="${id}"]`);
               mark?.scrollIntoView({ block: "center" });
             }}
+            onAddress={addressComments}
+          />
+        )}
+        {historyOpen && !focusMode && (
+          <HistoryPanel
+            snapshots={history}
+            onRestore={restoreSnapshot}
+            onSave={() => captureSnapshot(snapshotLabel("manual"))}
+            onClose={() => setHistoryOpen(false)}
+          />
+        )}
+        {lintOpen && !focusMode && (
+          <LintPanel
+            lint={refreshLint().lint}
+            tropes={refreshLint().tropes}
+            onClose={() => setLintOpen(false)}
+            onJump={(find) => {
+              const el = editorEl();
+              if (el) findNext(el, find);
+            }}
+            onGrammar={() => void handleAction("fix-grammar")}
+            onClean={() => void handleAction("clean-ai")}
+            onTone={() => void handleAction("suggest-tone")}
           />
         )}
         {screenReader && (
@@ -1272,6 +1926,10 @@ export function DocumentWorkspace() {
         busy={askBusy}
         livePhase={livePhase}
         liveThinking={liveThinking}
+        livePrompt={livePrompt}
+        liveSelection={liveSelection}
+        liveMessage={liveMessage}
+        liveEdits={liveEdits}
         error={askError}
         prompt={askPrompt}
         context={agentContext}
@@ -1281,6 +1939,9 @@ export function DocumentWorkspace() {
         providers={availableProviders}
         onPromptChange={setAskPrompt}
         onSubmit={() => void submitAsk()}
+        onStop={stopJob}
+        onRevert={revertTurn}
+        revertSnapshotIds={history.map((item) => item.id)}
         onClearContext={() => setAgentContext(null)}
         onMinimizedChange={setAgentMinimized}
         onClose={() => setAgentOpen(false)}
@@ -1350,6 +2011,33 @@ export function DocumentWorkspace() {
         onReject={(id) => reviewEdit(id, "reject")}
         onAcceptAll={() => reviewAll("accept")}
         onRejectAll={() => reviewAll("reject")}
+        attachments={attachments}
+        preserveTone={preserveTone}
+        liveTools={liveTools}
+        onPreserveToneChange={setPreserveTone}
+        onAttach={addAttachments}
+        onRemoveAttachment={(id) => setAttachments((list) => list.filter((file) => file.id !== id))}
+        onTemplate={(prompt) => {
+          setAskPrompt(prompt);
+          setAgentOpen(true);
+          setAgentMinimized(false);
+        }}
+        onToggleTask={(id) => {
+          if (!activeChat) return;
+          setChats((list) =>
+            patchChat(
+              list,
+              activeChat.id,
+              {
+                tasks: (activeChat.tasks ?? []).map((task) =>
+                  task.id === id
+                    ? { ...task, status: task.status === "done" ? "pending" : "done" }
+                    : task,
+                ),
+              },
+            ),
+          );
+        }}
       />
 
       <input
@@ -1487,6 +2175,77 @@ export function DocumentWorkspace() {
       )}
       {dialog === "shortcuts" && <ShortcutsDialog onClose={() => setDialog(null)} />}
 
+      {!focusMode && !inlineOpen && hudBox && mode !== "viewing" && selectedText().trim() && (
+        <SelectionHud
+          box={hudBox}
+          locked={selectionLocked}
+          onEdit={openInlineEdit}
+          onAsk={openAsk}
+          onComment={addComment}
+          onLock={() => void handleAction("lock-region")}
+        />
+      )}
+      {inlineOpen && inlineBox && (
+        <InlineComposer
+          box={inlineBox}
+          prompt={inlinePrompt}
+          busy={askBusy}
+          preserveTone={preserveTone}
+          onPromptChange={setInlinePrompt}
+          onPreserveToneChange={setPreserveTone}
+          onSubmit={() =>
+            void runJob({
+              prompt: inlinePrompt,
+              context: inlineContextRef.current,
+              mode: "agent",
+              silent: true,
+              clearPrompt: false,
+            })
+          }
+          onOpenChat={() => {
+            setAskPrompt(inlinePrompt);
+            setInlineOpen(false);
+            openAsk();
+          }}
+          onClose={() => setInlineOpen(false)}
+        />
+      )}
+      {slash && !focusMode && (
+        <SlashMenu
+          query={slash.query}
+          box={{ top: slash.top, left: slash.left }}
+          onPick={applyTemplate}
+          onClose={() => setSlash(null)}
+        />
+      )}
+      {paletteOpen && (
+        <CommandPalette
+          commands={PALETTE_COMMANDS}
+          onPick={(id) => {
+            setPaletteOpen(false);
+            if (id.startsWith("template:")) {
+              applyTemplate(id.slice(9));
+              return;
+            }
+            void handleAction(id);
+          }}
+          onClose={() => setPaletteOpen(false)}
+        />
+      )}
+      {toast && (
+        <AgentToast
+          text={toast.text}
+          actionLabel="Open chat"
+          onAction={toast.action}
+          onDismiss={() => setToast(null)}
+        />
+      )}
+      {focusMode && (
+        <button type="button" className="focus-exit" onClick={() => setFocusMode(false)}>
+          Exit focus <kbd>⌘⇧F</kbd>
+        </button>
+      )}
+
       {contextMenu && (
         <ContextMenu
           x={contextMenu.x}
@@ -1500,7 +2259,13 @@ export function DocumentWorkspace() {
             { label: "Paste without formatting", action: "paste-plain", shortcut: "⌘⇧V" },
             { label: "Delete", action: "delete", disabled: !contextMenu.hasSelection },
             { label: "Comment", action: "comment", shortcut: "⌘⌥M", disabled: !contextMenu.hasSelection },
-            { label: "Add text to AI chat", action: "add-to-chat", disabled: !contextMenu.hasSelection },
+            ...(focusMode
+              ? []
+              : [
+                  { label: "Inline edit", action: "inline-edit", shortcut: "⌘K", disabled: !contextMenu.hasSelection },
+                  { label: "Add text to AI chat", action: "add-to-chat", disabled: !contextMenu.hasSelection },
+                  { label: "Lock from AI", action: "lock-region", disabled: !contextMenu.hasSelection },
+                ]),
             { label: "Clear formatting", action: "clear-format", disabled: !contextMenu.hasSelection },
           ]}
         />
@@ -1510,6 +2275,61 @@ export function DocumentWorkspace() {
         {announce}
       </div>
     </div>
+  );
+}
+
+const PALETTE_COMMANDS: PaletteCommand[] = [
+  { id: "ask-inline", label: "Open chat", group: "Agent", shortcut: "⌘J" },
+  { id: "inline-edit", label: "Inline edit", group: "Agent", shortcut: "⌘K", hint: "Edit the selection without opening chat" },
+  { id: "fix-grammar", label: "Fix grammar", group: "Agent", shortcut: "⌘⇧G" },
+  { id: "clean-ai", label: "Clean AI writing", group: "Agent", hint: "Tropes, em dashes, watermarks" },
+  { id: "writing-lint", label: "Writing lint", group: "Agent", shortcut: "⌘⇧L" },
+  { id: "suggest-tone", label: "Suggest tone", group: "Agent" },
+  { id: "summarize", label: "Summarize and ideate", group: "Agent" },
+  { id: "address-comments", label: "Address all comments", group: "Agent" },
+  { id: "history", label: "Version history", group: "Document", shortcut: "⌘⇧H" },
+  { id: "focus-mode", label: "Focus mode", group: "Document", shortcut: "⌘⇧F" },
+  { id: "preserve-tone", label: "Toggle preserve tone", group: "Agent" },
+  { id: "citation", label: "Insert citation", group: "Document" },
+  ...PROMPT_TEMPLATES.map((item) => ({
+    id: `template:${item.id}`,
+    label: item.label,
+    hint: item.hint,
+    group: "Templates",
+  })),
+];
+
+function isAbortError(error: unknown) {
+  return (
+    (error instanceof DOMException && error.name === "AbortError") ||
+    (error instanceof Error && (error.name === "AbortError" || /aborted|AbortError/i.test(error.message)))
+  );
+}
+
+function GrammarIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M5 18 10.2 6h1.7L17 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M7.2 13.4h8.2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function LintIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M5 6h14M5 12h9M5 18h11" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <circle cx="18.2" cy="12" r="2.1" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
+  );
+}
+
+function FocusIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="3.1" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M12 4.5v2.4M12 17.1v2.4M4.5 12h2.4M17.1 12h2.4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
   );
 }
 
@@ -1523,6 +2343,16 @@ function ChatIcon() {
         strokeLinejoin="round"
       />
       <path d="M8 9.6h8M8 12.6h5.2" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function MoreIcon() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="3.5" cy="8" r="1.2" fill="currentColor" />
+      <circle cx="8" cy="8" r="1.2" fill="currentColor" />
+      <circle cx="12.5" cy="8" r="1.2" fill="currentColor" />
     </svg>
   );
 }

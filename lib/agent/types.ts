@@ -1,3 +1,5 @@
+import type { AgentToolCall } from "@/lib/agent/tools";
+
 export type AgentMode = "agent" | "plan" | "ask";
 export type ThinkingLevel = "none" | "low" | "medium" | "high" | "xhigh";
 export type AgentProvider = "openai" | "anthropic";
@@ -21,6 +23,33 @@ export type AgentHistoryMessage = {
   content: string;
 };
 
+export type AgentComment = {
+  id: string;
+  quote: string;
+  body: string;
+};
+
+export type AgentAttachment = {
+  id: string;
+  name: string;
+  text: string;
+};
+
+export type AgentLockedRange = {
+  id: string;
+  text: string;
+};
+
+export type AgentTaskStatus = "pending" | "in_progress" | "done";
+export type AgentTaskKind = "research" | "draft" | "edit" | "cite" | "review";
+
+export type AgentTask = {
+  id: string;
+  title: string;
+  status: AgentTaskStatus;
+  kind?: AgentTaskKind;
+};
+
 export type AgentRequest = {
   title: string;
   prompt: string;
@@ -31,6 +60,12 @@ export type AgentRequest = {
   thinkingLevel: ThinkingLevel;
   nameChat: boolean;
   history: AgentHistoryMessage[];
+  comments?: AgentComment[];
+  attachments?: AgentAttachment[];
+  lockedRanges?: AgentLockedRange[];
+  preserveTone?: boolean;
+  pageCount?: number;
+  reviewAttempt?: number;
 };
 
 export type AgentResponse = {
@@ -38,12 +73,19 @@ export type AgentResponse = {
   thinking?: string;
   chatTitle?: string;
   edits: AgentEditDraft[];
+  tasks: AgentTask[];
+  tools: AgentToolCall[];
   mock: boolean;
 };
 
 export type AgentStreamEvent =
-  | { type: "phase"; phase: "thinking" | "planning" }
+  | { type: "phase"; phase: "thinking" | "planning" | "editing" | "reviewing" }
   | { type: "thinking"; delta: string }
+  | { type: "message"; delta: string; reset?: boolean }
+  | { type: "edits"; edits: AgentEditDraft[] }
+  | { type: "tool"; name: string; hidden?: boolean }
+  | { type: "tool_result"; name: string; hidden?: boolean }
+  | { type: "tasks"; tasks: AgentTask[] }
   | { type: "done"; result: AgentResponse }
   | { type: "error"; error: string };
 
@@ -63,6 +105,9 @@ export type AgentTurn = {
   mode: AgentMode;
   model: string;
   edits: PendingEdit[];
+  tasks?: AgentTask[];
+  tools?: Array<{ name: string; hidden?: boolean }>;
+  snapshotId?: string;
 };
 
 export type AgentChat = {
@@ -75,4 +120,5 @@ export type AgentChat = {
   model: string;
   thinkingLevel: ThinkingLevel;
   turns: AgentTurn[];
+  tasks: AgentTask[];
 };

@@ -16,6 +16,7 @@ export function DiffReviewBar({ getEditor, pendingIds, onAccept, onReject }: Pro
   const [activeId, setActiveId] = useState<string | null>(null);
   const [box, setBox] = useState<Box | null>(null);
   const overBarRef = useRef(false);
+  const hoverIdRef = useRef<string | null>(null);
   const pendingKey = pendingIds.join("|");
   const ordered = visiblePending(getEditor(), pendingIds);
   const active = activeId && ordered.includes(activeId) ? activeId : null;
@@ -23,6 +24,7 @@ export function DiffReviewBar({ getEditor, pendingIds, onAccept, onReject }: Pro
 
   useEffect(() => {
     if (!pendingIds.length) {
+      hoverIdRef.current = null;
       setActiveId(null);
       setBox(null);
       const editor = getEditor();
@@ -32,39 +34,68 @@ export function DiffReviewBar({ getEditor, pendingIds, onAccept, onReject }: Pro
 
   useEffect(() => {
     let hideTimer = 0;
-    const show = (id: string) => {
+    let switchTimer = 0;
+    const show = (id: string, node: HTMLElement) => {
       window.clearTimeout(hideTimer);
       const editor = getEditor();
       if (!editor) return;
+      hoverIdRef.current = id;
       setActiveId(id);
       highlightAgentEdit(editor, id);
-      setBox(unionBox(editor, id));
+      setBox(sameBox(fragmentBox(node)));
     };
     const hide = () => {
       window.clearTimeout(hideTimer);
+      window.clearTimeout(switchTimer);
       hideTimer = window.setTimeout(() => {
         if (overBarRef.current) return;
+        hoverIdRef.current = null;
         setActiveId(null);
         setBox(null);
         const editor = getEditor();
         if (editor) highlightAgentEdit(editor, null);
-      }, 140);
+      }, 180);
     };
 
     const onMove = (event: MouseEvent) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
-      if (target.closest(".diff-review")) return;
+      if (target.closest(".diff-review")) {
+        window.clearTimeout(hideTimer);
+        return;
+      }
       const wrap = target.closest(".agent-edit");
-      const id = wrap instanceof HTMLElement ? wrap.dataset.editId : "";
-      if (id && pendingIds.includes(id)) show(id);
-      else hide();
+      const id = wrap instanceof HTMLElement ? wrap.dataset.editId ?? "" : "";
+      if (id && pendingIds.includes(id) && wrap instanceof HTMLElement) {
+        window.clearTimeout(hideTimer);
+        if (id === hoverIdRef.current) {
+          window.clearTimeout(switchTimer);
+          setBox(sameBox(fragmentBox(wrap)));
+          return;
+        }
+        window.clearTimeout(switchTimer);
+        if (!hoverIdRef.current) {
+          show(id, wrap);
+          return;
+        }
+        switchTimer = window.setTimeout(() => show(id, wrap), 90);
+        return;
+      }
+      hide();
     };
 
     const onScroll = () => {
+      if (!hoverIdRef.current) return;
       const editor = getEditor();
-      if (!editor || !active) return;
-      setBox(unionBox(editor, active));
+      if (!editor) return;
+      const node = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2);
+      const wrap =
+        node instanceof Element
+          ? node.closest<HTMLElement>(`.agent-edit[data-edit-id="${cssId(hoverIdRef.current)}"]`)
+          : null;
+      const fallback = editor.querySelector<HTMLElement>(`.agent-edit[data-edit-id="${cssId(hoverIdRef.current)}"]`);
+      const current = wrap ?? fallback;
+      if (current) setBox(sameBox(fragmentBox(current)));
     };
 
     document.addEventListener("mousemove", onMove);
@@ -72,11 +103,12 @@ export function DiffReviewBar({ getEditor, pendingIds, onAccept, onReject }: Pro
     window.addEventListener("resize", onScroll);
     return () => {
       window.clearTimeout(hideTimer);
+      window.clearTimeout(switchTimer);
       document.removeEventListener("mousemove", onMove);
       window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", onScroll);
     };
-  }, [getEditor, pendingKey, active]);
+  }, [getEditor, pendingKey]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -117,7 +149,9 @@ export function DiffReviewBar({ getEditor, pendingIds, onAccept, onReject }: Pro
     if (!editor || !id) return;
     setActiveId(id);
     jumpToAgentEdit(editor, id);
-    setBox(unionBox(editor, id));
+    hoverIdRef.current = id;
+    const node = editor.querySelector<HTMLElement>(`.agent-edit[data-edit-id="${cssId(id)}"]`);
+    if (node) setBox(fragmentBox(node));
   };
 
   return (
@@ -156,19 +190,24 @@ function visiblePending(editor: HTMLElement | null, pendingIds: string[]) {
   return documentEditIds(editor).filter((id) => pending.has(id));
 }
 
-function unionBox(editor: HTMLElement, id: string): Box | null {
-  const nodes = [...editor.querySelectorAll<HTMLElement>(`.agent-edit[data-edit-id="${cssId(id)}"]`)];
-  if (!nodes.length) return null;
-  return nodes.reduce<Box | null>((acc, node) => {
-    const rect = node.getBoundingClientRect();
-    if (!acc) return { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right };
-    return {
-      top: Math.min(acc.top, rect.top),
-      bottom: Math.max(acc.bottom, rect.bottom),
-      left: Math.min(acc.left, rect.left),
-      right: Math.max(acc.right, rect.right),
-    };
-  }, null);
+function fragmentBox(node: HTMLElement): Box {
+  const rect = node.getBoundingClientRect();
+  return { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right };
+}
+
+function sameBox(next: Box) {
+  return (current: Box | null) => {
+    if (
+      current &&
+      Math.abs(current.top - next.top) < 1 &&
+      Math.abs(current.bottom - next.bottom) < 1 &&
+      Math.abs(current.left - next.left) < 1 &&
+      Math.abs(current.right - next.right) < 1
+    ) {
+      return current;
+    }
+    return next;
+  };
 }
 
 function cssId(id: string) {

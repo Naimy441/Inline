@@ -57,7 +57,13 @@ function isAtomicBlock(node: Node | null): boolean {
   return node.classList.contains("doc-image") || node.tagName === "IMG" || node.tagName === "TABLE";
 }
 
-function rejectBreaks(node: Node): number {
+function isSuggestionDel(node: Node): boolean {
+  const el = node instanceof Element ? node : node.parentElement;
+  return Boolean(el?.closest(".suggestion-del"));
+}
+
+function rejectBreaks(node: Node, proposed = false): number {
+  if (proposed && isSuggestionDel(node)) return NodeFilter.FILTER_REJECT;
   if (node instanceof HTMLElement && node.getAttribute(BREAK_ATTR) === "true") {
     return NodeFilter.FILTER_REJECT;
   }
@@ -113,9 +119,10 @@ function blockOf(node: Node): Element | null {
   return el?.closest("div, p, h1, h2, h3, li, td, pre, blockquote") ?? el;
 }
 
-export function getPlainText(root: HTMLElement): string {
+export function getPlainText(root: HTMLElement, proposed = false): string {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
     acceptNode(node) {
+      if (proposed && isSuggestionDel(node)) return NodeFilter.FILTER_REJECT;
       if (node instanceof HTMLElement) {
         if (node.getAttribute(MANUAL_BREAK_ATTR) === "true") return NodeFilter.FILTER_REJECT;
         if (node.tagName === "BR") {
@@ -125,7 +132,7 @@ export function getPlainText(root: HTMLElement): string {
           return NodeFilter.FILTER_ACCEPT;
         }
       }
-      return rejectBreaks(node);
+      return rejectBreaks(node, proposed);
     },
   });
   let text = "";
@@ -147,9 +154,9 @@ export function getPlainText(root: HTMLElement): string {
   return text;
 }
 
-export function getRawText(root: HTMLElement): string {
+export function getRawText(root: HTMLElement, proposed = false): string {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode: rejectBreaks,
+    acceptNode: (node) => rejectBreaks(node, proposed),
   });
   let text = "";
   let node: Node | null;
@@ -159,9 +166,9 @@ export function getRawText(root: HTMLElement): string {
   return text;
 }
 
-export function rangeFromTextOffsets(root: HTMLElement, start: number, end: number): Range | null {
-  const from = pointFromOffset(root, Math.min(start, end));
-  const to = pointFromOffset(root, Math.max(start, end));
+export function rangeFromTextOffsets(root: HTMLElement, start: number, end: number, proposed = false): Range | null {
+  const from = pointFromOffset(root, Math.min(start, end), proposed);
+  const to = pointFromOffset(root, Math.max(start, end), proposed);
   if (!from || !to) return null;
   const range = document.createRange();
   range.setStart(from.node, from.offset);
@@ -201,9 +208,9 @@ function textOffsetAt(root: HTMLElement, container: Node, offset: number): numbe
   return acc;
 }
 
-function pointFromOffset(root: HTMLElement, offset: number): { node: Text; offset: number } | null {
+function pointFromOffset(root: HTMLElement, offset: number, proposed = false): { node: Text; offset: number } | null {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode: rejectBreaks,
+    acceptNode: (node) => rejectBreaks(node, proposed),
   });
   let remaining = offset;
   let node: Node | null;
@@ -430,9 +437,29 @@ export function reflowPages(root: HTMLElement): number {
     seen.add(key);
 
     insertBreakAt(root, point, pageBottom);
+    hoistBreaksFromMarks(root);
   }
 
+  hoistBreaksFromMarks(root);
   return root.querySelectorAll(`[${BREAK_ATTR}]`).length + 1;
+}
+
+function hoistBreaksFromMarks(root: HTMLElement) {
+  root
+    .querySelectorAll(`.agent-edit .page-break, .suggestion-add .page-break, .suggestion-del .page-break, .agent-edit .page-push, .suggestion-add .page-push, .suggestion-del .page-push`)
+    .forEach((node) => splitMarkAround(node));
+}
+
+function splitMarkAround(node: Node) {
+  let parent = node.parentElement;
+  while (parent?.matches(".agent-edit, .suggestion-add, .suggestion-del")) {
+    const after = parent.cloneNode(false) as HTMLElement;
+    while (node.nextSibling) after.appendChild(node.nextSibling);
+    parent.after(node, after);
+    if (!parent.hasChildNodes()) parent.remove();
+    if (!after.hasChildNodes()) after.remove();
+    parent = node.parentElement;
+  }
 }
 
 export function isEditorVisuallyEmpty(root: HTMLElement): boolean {

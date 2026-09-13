@@ -28,6 +28,7 @@ export function createChat(
     model: defaults?.model ?? DEFAULT_MODEL,
     thinkingLevel: defaults?.thinkingLevel ?? "medium",
     turns: [],
+    tasks: [],
   };
 }
 
@@ -128,6 +129,24 @@ export function setEditStatus(
   }));
 }
 
+export function removeTurnsFrom(chats: AgentChat[], chatId: string, turnId: string) {
+  return chats.map((chat) => {
+    if (chat.id !== chatId) return chat;
+    const index = chat.turns.findIndex((turn) => turn.id === turnId);
+    if (index < 0) return chat;
+    return { ...chat, turns: chat.turns.slice(0, index), updatedAt: Date.now() };
+  });
+}
+
+export function acceptMissingEdits(chats: AgentChat[], liveIds: string[]) {
+  const live = new Set(liveIds);
+  let next = chats;
+  for (const id of pendingEditIds(chats)) {
+    if (!live.has(id)) next = setEditStatus(next, id, "accepted");
+  }
+  return next;
+}
+
 export function pendingEditIds(chats: AgentChat[]) {
   const ids: string[] = [];
   const seen = new Set<string>();
@@ -146,7 +165,9 @@ export function pendingEditIds(chats: AgentChat[]) {
 function isChat(value: unknown): value is AgentChat {
   if (!value || typeof value !== "object") return false;
   const chat = value as AgentChat;
-  return typeof chat.id === "string" && typeof chat.title === "string" && Array.isArray(chat.turns);
+  if (typeof chat.id !== "string" || typeof chat.title !== "string" || !Array.isArray(chat.turns)) return false;
+  if (!Array.isArray(chat.tasks)) chat.tasks = [];
+  return true;
 }
 
 export function relativeTime(timestamp: number) {

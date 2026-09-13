@@ -1,4 +1,5 @@
 import type { AgentSelection, PendingEdit } from "@/lib/agent/types";
+import { rangeTouchesLock } from "@/lib/locks";
 import { getPlainText, getRawText, rangeFromTextOffsets, saveSelectionRange } from "@/lib/pagination";
 
 export function captureAgentSelection(editor: HTMLElement): AgentSelection | null {
@@ -10,7 +11,7 @@ export function captureAgentSelection(editor: HTMLElement): AgentSelection | nul
   const live = window.getSelection()?.toString() ?? "";
   const text = (live.trim() ? live : raw.slice(start, end)).replace(/\u00a0/g, " ");
   if (!text.trim()) return null;
-  const readable = getPlainText(editor);
+  const readable = getPlainText(editor, true);
   const readableIndex = indexOfLoose(readable, text);
   return {
     text: text.replace(/\u00a0/g, " "),
@@ -24,6 +25,16 @@ export function captureAgentSelection(editor: HTMLElement): AgentSelection | nul
   };
 }
 
+export function replaceAgentEdits(
+  editor: HTMLElement,
+  drafts: Array<{ find: string; replace: string; reason?: string }>,
+  selection: AgentSelection | null,
+  previous: PendingEdit[] = [],
+): PendingEdit[] {
+  for (const edit of previous) rejectAgentEdit(editor, edit.id);
+  return applyAgentEdits(editor, drafts, selection);
+}
+
 export function applyAgentEdits(
   editor: HTMLElement,
   drafts: Array<{ find: string; replace: string; reason?: string }>,
@@ -35,24 +46,31 @@ export function applyAgentEdits(
     status: "pending" as const,
   }));
 
-  return prepared.map((edit) => {
+  const edits = prepared.map((edit) => {
     if (applyOneEdit(editor, edit, selection)) return edit;
     return { ...edit, status: "missed" as const };
   });
+  settleAgentEdits(editor);
+  return edits;
 }
 
 export function acceptAgentEdit(editor: HTMLElement, id: string) {
   editor.querySelectorAll(`.agent-edit[data-edit-id="${cssId(id)}"]`).forEach((wrap) => {
-    const add = wrap.querySelector(".suggestion-add");
-    if (wrap.classList.contains("agent-edit-insert")) {
-      const block = document.createElement("div");
-      if (add) block.append(...add.childNodes);
-      else block.append(document.createElement("br"));
-      wrap.replaceWith(block);
-      return;
-    }
-    wrap.replaceWith(...(add ? [...add.childNodes] : []));
+    unwrapAgentEdit(wrap);
   });
+}
+
+function unwrapAgentEdit(wrap: Element) {
+  const add = wrap.querySelector(":scope > .suggestion-add") ?? wrap.querySelector(".suggestion-add");
+  const live = liveNodes(add ?? wrap);
+  if (wrap.classList.contains("agent-edit-insert")) {
+    const block = document.createElement("div");
+    if (live.length) block.append(...live);
+    else block.append(document.createElement("br"));
+    wrap.replaceWith(block);
+    return;
+  }
+  wrap.replaceWith(...live);
 }
 
 export function rejectAgentEdit(editor: HTMLElement, id: string) {
@@ -87,6 +105,20 @@ export function documentEditIds(editor: HTMLElement) {
   return ids;
 }
 
+export function settleAgentEdits(editor: HTMLElement) {
+  [...editor.querySelectorAll<HTMLElement>(".agent-edit .agent-edit")].reverse().forEach((wrap) => {
+    unwrapAgentEdit(wrap);
+  });
+  editor.querySelectorAll(".suggestion-add").forEach((node) => {
+    if (node.closest(".agent-edit")) return;
+    node.replaceWith(...liveNodes(node));
+  });
+  editor.querySelectorAll(".suggestion-del").forEach((node) => {
+    if (node.closest(".agent-edit")) return;
+    node.remove();
+  });
+}
+
 export function highlightAgentEdit(editor: HTMLElement, id: string | null) {
   editor.querySelectorAll(".agent-edit.is-reviewing").forEach((node) => {
     node.classList.remove("is-reviewing");
@@ -108,8 +140,12 @@ function applyOneEdit(
     return parts.length > 0 || Boolean(edit.replace);
   }
 
-  const range = locateEditRange(editor, edit.find, selection);
-  if (!range || range.collapsed) return false;
+  let range = locateEditRange(editor, edit.find, selection);
+  if (!range || range.collapsed || rangeTouchesLock(range)) return false;
+  if (flattenIntersectingEdits(editor, range).length) {
+    range = locateEditRange(editor, edit.find, selection);
+    if (!range || range.collapsed || rangeTouchesLock(range)) return false;
+  }
 
   const original = range.toString();
   const first = parts[0] ?? "";
@@ -146,11 +182,11 @@ function locateEditRange(
   }
 
   const hit = findInRaw(editor, needle);
-  return hit ? rangeFromTextOffsets(editor, hit.start, hit.end) : null;
+  return hit ? rangeFromTextOffsets(editor, hit.start, hit.end, true) : null;
 }
 
 function findInRaw(root: HTMLElement, needle: string): { start: number; end: number } | null {
-  const raw = getRawText(root);
+  const raw = getRawText(root, true);
   const exact = raw.indexOf(needle);
   if (exact >= 0) return { start: exact, end: exact + needle.length };
 
@@ -167,6 +203,49 @@ function findInRaw(root: HTMLElement, needle: string): { start: number; end: num
   if (at < 0) at = compact.toLowerCase().indexOf(compactNeedle.toLowerCase());
   if (at < 0 || map[at] == null || map[at + compactNeedle.length - 1] == null) return null;
   return { start: map[at], end: map[at + compactNeedle.length - 1] + 1 };
+}
+
+function liveNodes(from: Node | null): Node[] {
+  if (!from) return [];
+  if (from instanceof Element) {
+    if (from.classList.contains("suggestion-del")) return [];
+    if (from.classList.contains("suggestion-add") || from.classList.contains("agent-edit")) {
+      return [...from.childNodes].flatMap(liveNodes);
+    }
+  }
+  return [from];
+}
+
+function flattenIntersectingEdits(editor: HTMLElement, range: Range): string[] {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  const host =
+    range.commonAncestorContainer instanceof Element
+      ? range.commonAncestorContainer
+      : range.commonAncestorContainer.parentElement;
+  const nested = host?.closest<HTMLElement>(".agent-edit");
+  if (nested?.dataset.editId) {
+    seen.add(nested.dataset.editId);
+    ids.push(nested.dataset.editId);
+  }
+  editor.querySelectorAll<HTMLElement>(".agent-edit").forEach((wrap) => {
+    const id = wrap.dataset.editId;
+    if (!id || seen.has(id) || !rangeIntersectsNode(range, wrap)) return;
+    seen.add(id);
+    ids.push(id);
+  });
+  for (const id of ids) acceptAgentEdit(editor, id);
+  return ids;
+}
+
+function rangeIntersectsNode(range: Range, node: Node): boolean {
+  const probe = document.createRange();
+  try {
+    probe.selectNode(node);
+  } catch {
+    probe.selectNodeContents(node);
+  }
+  return range.compareBoundaryPoints(Range.END_TO_START, probe) < 0 && range.compareBoundaryPoints(Range.START_TO_END, probe) > 0;
 }
 
 function wrapReplacement(range: Range, id: string, replacement: string) {

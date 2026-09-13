@@ -60,6 +60,7 @@ export type EditorHandle = {
   reflow: () => void;
   getText: () => string;
   getHtml: () => string;
+  setHtml: (html: string) => void;
 };
 
 type Props = {
@@ -72,6 +73,7 @@ type Props = {
   onMetricsChange: (metrics: EditorMetrics) => void;
   onActiveChange?: () => void;
   onContentChange?: (html: string) => void;
+  onSlashQuery?: (query: string | null, rect: DOMRect | null) => void;
 };
 
 function applyEditorMinHeight(editor: HTMLElement, pageCount: number) {
@@ -91,6 +93,7 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
     onMetricsChange,
     onActiveChange,
     onContentChange,
+    onSlashQuery,
   },
   ref,
 ) {
@@ -100,7 +103,9 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
   const restoredRef = useRef(false);
   const initialHtmlRef = useRef(initialHtml);
   const onContentChangeRef = useRef(onContentChange);
+  const onSlashQueryRef = useRef(onSlashQuery);
   onContentChangeRef.current = onContentChange;
+  onSlashQueryRef.current = onSlashQuery;
   const dragRef = useRef<{
     img: HTMLImageElement;
     handle: string;
@@ -257,6 +262,12 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
       const editor = editorRef.current;
       return editor ? serializeEditorHtml(editor) : "";
     },
+    setHtml: (html) => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      editor.innerHTML = sanitizeStoredHtml(html);
+      scheduleReflow();
+    },
   }));
 
   const className = [
@@ -324,6 +335,14 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
         const editor = editorRef.current;
         if (editor && substitutionsRef.current) {
           applySubstitutionsNearCaret(editor);
+        }
+        const selection = window.getSelection();
+        const block = blockText(selection);
+        if (block.startsWith("/")) {
+          const rect = selection?.rangeCount ? selection.getRangeAt(0).getBoundingClientRect() : null;
+          onSlashQueryRef.current?.(block.slice(1), rect);
+        } else {
+          onSlashQueryRef.current?.(null, null);
         }
         scheduleReflow();
       }}
@@ -395,3 +414,11 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
     />
   );
 });
+
+function blockText(selection: Selection | null) {
+  if (!selection?.anchorNode) return "";
+  const node = selection.anchorNode;
+  const el = node instanceof Element ? node : node.parentElement;
+  const block = el?.closest("div, p, h1, h2, h3, li") ?? el;
+  return (block?.textContent ?? "").trim();
+}
