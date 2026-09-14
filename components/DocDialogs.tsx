@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DiffPart } from "@/lib/diff";
 import { EMOJI_CATEGORIES, filterEmojis } from "@/lib/emojis";
+import { PAPER_SIZES, type PageLayout, type PaperSize } from "@/lib/pagination";
 
 type DialogProps = {
   title: string;
@@ -110,6 +111,76 @@ export function WordCountDialog({
       <div className="dialog-actions">
         <button type="button" onClick={onClose}>
           Close
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+
+export function PageSetupDialog({
+  layout,
+  onClose,
+  onApply,
+}: {
+  layout: PageLayout;
+  onClose: () => void;
+  onApply: (layout: PageLayout) => void;
+}) {
+  const [paperSize, setPaperSize] = useState<PaperSize>(layout.paperSize);
+  const [margins, setMargins] = useState({
+    top: layout.marginTop / 96,
+    right: layout.marginRight / 96,
+    bottom: layout.marginBottom / 96,
+    left: layout.marginLeft / 96,
+  });
+  const paper = PAPER_SIZES[paperSize];
+  const updateMargin = (key: keyof typeof margins, value: string) => {
+    const next = Number(value);
+    setMargins((current) => ({ ...current, [key]: Number.isFinite(next) ? Math.max(0.25, Math.min(3, next)) : current[key] }));
+  };
+
+  return (
+    <Dialog title="Page setup" onClose={onClose}>
+      <label className="field">
+        Paper size
+        <select value={paperSize} onChange={(event) => setPaperSize(event.target.value as PaperSize)}>
+          {(Object.keys(PAPER_SIZES) as PaperSize[]).map((size) => (
+            <option key={size} value={size}>{PAPER_SIZES[size].label}</option>
+          ))}
+        </select>
+      </label>
+      <p className="dialog-help">Set margins in inches. Changes reflow the document immediately.</p>
+      <div className="field-row page-margin-grid">
+        {(["top", "right", "bottom", "left"] as const).map((key) => (
+          <label className="field" key={key}>
+            {key[0].toUpperCase() + key.slice(1)}
+            <input
+              type="number"
+              min={0.25}
+              max={3}
+              step={0.05}
+              value={margins[key]}
+              onChange={(event) => updateMargin(key, event.target.value)}
+            />
+          </label>
+        ))}
+      </div>
+      <div className="dialog-actions">
+        <button type="button" onClick={onClose}>Cancel</button>
+        <button
+          type="button"
+          className="primary"
+          onClick={() => onApply({
+            paperSize,
+            width: paper.width,
+            height: paper.height,
+            marginTop: margins.top * 96,
+            marginRight: margins.right * 96,
+            marginBottom: margins.bottom * 96,
+            marginLeft: margins.left * 96,
+          })}
+        >
+          Apply
         </button>
       </div>
     </Dialog>

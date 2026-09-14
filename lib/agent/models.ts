@@ -8,6 +8,8 @@ export type AgentModelOption = {
 };
 
 export const DEFAULT_MODEL = "gpt-5.4-nano";
+export const GRAMMAR_MODEL = "gpt-4o-mini";
+export const GRAMMAR_MODEL_FALLBACKS = ["gpt-4.1-mini", "gpt-4.1-nano", "gpt-4.1"] as const;
 
 export const AGENT_MODELS: AgentModelOption[] = [
   { id: "gpt-5.4", label: "GPT-5.4", provider: "openai", thinking: true },

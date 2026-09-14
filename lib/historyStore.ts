@@ -1,4 +1,5 @@
-import type { StoredComment } from "@/lib/documentStore";
+import type { HeaderAlign, PageNumberLocation, StoredComment } from "@/lib/documentStore";
+import type { PageLayout } from "@/lib/pagination";
 
 export type HistorySnapshot = {
   id: string;
@@ -8,11 +9,20 @@ export type HistorySnapshot = {
   html: string;
   headerText: string;
   footerText: string;
+  firstHeaderText?: string;
+  firstFooterText?: string;
   showHeader: boolean;
   showFooter: boolean;
   showPageNumbers: boolean;
+  differentFirstPage?: boolean;
+  pageNumberLocation: PageNumberLocation;
+  headerAlign: HeaderAlign;
+  footerAlign?: HeaderAlign;
+  fontFamily: string;
+  fontSize: string;
   columns: number;
   lineSpacing: string;
+  pageLayout?: PageLayout;
   comments: StoredComment[];
 };
 

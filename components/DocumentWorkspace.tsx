@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type MutableRefObject, type Ref } from "react";
 import { MdOutlineFormatClear } from "react-icons/md";
 import { AgentPanel } from "@/components/AgentPanel";
 import { AgentToast } from "@/components/AgentToast";
@@ -13,10 +13,14 @@ import { LintPanel } from "@/components/LintPanel";
 import { SlashMenu } from "@/components/SlashMenu";
 import { ColorPicker } from "@/components/ColorPicker";
 import {
+  BLOCK_STYLES,
   DOCUMENT_FONTS,
   FontFamilyPicker,
   FontSizePicker,
   LineSpacingPicker,
+  ToolbarSelect,
+  ZOOM_OPTIONS,
+  type ZoomValue,
 } from "@/components/FontControls";
 import { ContextMenu } from "@/components/ContextMenu";
 import {
@@ -24,6 +28,7 @@ import {
   CompareDialog,
   EmojiDialog,
   LinkDialog,
+  PageSetupDialog,
   SearchReplaceDialog,
   ShortcutsDialog,
   SignatureDialog,
@@ -69,8 +74,10 @@ import {
 } from "@/lib/editorApi";
 import { applyClientTools } from "@/lib/agent/clientTools";
 import { acceptMissingEdits, createChat, loadChats, patchChat, pendingEditIds, removeTurnsFrom, saveChats, setEditStatus, titleFromPrompt } from "@/lib/agent/chats";
-import { loadDocument, saveDocument } from "@/lib/documentStore";
-import { acceptAgentEdit, applyAgentEdits, captureAgentSelection, documentEditIds, jumpToAgentEdit, rejectAgentEdit, replaceAgentEdits, sameAgentSelection, selectionFromOffsets, settleAgentEdits } from "@/lib/agent/edits";
+import { InlineMark } from "@/components/InlineMark";
+import { duplicateDocument, loadDocument, saveDocument, trashDocument, type HeaderAlign, type PageNumberLocation } from "@/lib/documentStore";
+import { downloadDocument } from "@/lib/documentExport";
+import { acceptAgentEdit, applyAgentEdits, applySilentEdits, captureAgentSelection, clearGrammarFlash, documentEditIds, jumpToAgentEdit, rejectAgentEdit, replaceAgentEdits, sameAgentSelection, selectionFromOffsets, settleAgentEdits } from "@/lib/agent/edits";
 import { AGENT_MODELS, DEFAULT_MODEL } from "@/lib/agent/models";
 import { runAgentJob } from "@/lib/agent/runJob";
 import type { AgentAttachment, AgentChat, AgentCitation, AgentEditDraft, AgentMode, AgentQueueItem, AgentSelection, AgentTask, PendingEdit, ThinkingLevel } from "@/lib/agent/types";
@@ -79,15 +86,18 @@ import { listLockedRanges, wrapLockedRegion } from "@/lib/locks";
 import { lintWriting } from "@/lib/writing/lint";
 import { PROMPT_TEMPLATES, QUICK_PROMPTS, templateById } from "@/lib/writing/templates";
 import { cleanAiArtifactsInEditor, detectAiTropes } from "@/lib/writing/tropes";
+import { useInlineTheme } from "@/lib/theme";
 import {
   countWords,
+  cssInches,
+  DEFAULT_PAGE_LAYOUT,
+  DPI,
   getPlainText,
   isEditorVisuallyEmpty,
   PAGE_GAP,
-  PAGE_HEIGHT,
-  PAGE_WIDTH,
   restoreSelectionRange,
   saveSelectionRange,
+  type PageLayout,
   type TextRange,
 } from "@/lib/pagination";
 
@@ -101,6 +111,7 @@ type DialogName =
   | "compare"
   | "citation"
   | "signature"
+  | "page-setup"
   | "shortcuts"
   | null;
 
@@ -130,23 +141,47 @@ function suppressRepeatedEdits(
   return drafts.filter((draft) => !prior.has(editFingerprint(draft)));
 }
 
-const TOOLBAR_OVERFLOW_GROUPS = ["font", "style", "insert", "align", "lists", "ai"] as const;
+const TOOLBAR_OVERFLOW_GROUPS = ["style", "font", "insert", "align", "lists"] as const;
 type ToolbarOverflowId = (typeof TOOLBAR_OVERFLOW_GROUPS)[number];
 
 const TOOLBAR_GROUP_FALLBACK: Record<ToolbarOverflowId, number> = {
   font: 176,
-  style: 144,
+  style: 276,
   insert: 58,
   align: 172,
   lists: 144,
-  ai: 116,
 };
 
-export function DocumentWorkspace() {
+const CHROME_FROM_PX = 0.5 * DPI;
+const CHROME_LINE_PX = 20;
+const CHROME_BAR_PX = 36;
+
+type DocumentWorkspaceProps = {
+  documentId?: string;
+  onGoHome?: () => void;
+};
+
+export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspaceProps = {}) {
+  const workspaceId = documentId || "doc-legacy";
   const editorRef = useRef<EditorHandle>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const savedSelectionRef = useRef<TextRange | null>(null);
   const expandedSelectionRef = useRef<TextRange | null>(null);
+  const liveSelectionRef = useRef<{
+    startNode: Node;
+    startOffset: number;
+    endNode: Node;
+    endOffset: number;
+    collapsed: boolean;
+  } | null>(null);
+  const liveExpandedRef = useRef<{
+    startNode: Node;
+    startOffset: number;
+    endNode: Node;
+    endOffset: number;
+  } | null>(null);
+  const selectionOffsetTimer = useRef(0);
+  const agentContextLenRef = useRef(0);
   const [linkText, setLinkText] = useState("");
   const [title, setTitle] = useState("Untitled document");
   const [metrics, setMetrics] = useState<EditorMetrics>({
@@ -155,11 +190,12 @@ export function DocumentWorkspace() {
     charCount: 0,
   });
   const canvasRef = useRef<HTMLElement>(null);
-  const [zoomMode, setZoomMode] = useState<"fit" | number>("fit");
+  const [zoomMode, setZoomMode] = useState<"fit" | number>(1);
   const [fitZoom, setFitZoom] = useState(1);
   const [font, setFont] = useState("Arial");
   const [fontSize, setFontSize] = useState("11pt");
   const [active, setActive] = useState({
+    blockStyle: "normal" as "normal" | "title" | "subtitle" | "h1" | "h2" | "h3",
     bold: false,
     italic: false,
     underline: false,
@@ -174,11 +210,32 @@ export function DocumentWorkspace() {
   const [announce, setAnnounce] = useState("");
   const [columns, setColumnCount] = useState(1);
   const [lineSpacing, setSpacing] = useState("1.15");
+  const [pageLayout, setPageLayout] = useState<PageLayout>(DEFAULT_PAGE_LAYOUT);
   const [showHeader, setShowHeader] = useState(false);
   const [showFooter, setShowFooter] = useState(false);
   const [showPageNumbers, setShowPageNumbers] = useState(false);
+  const [pageNumberLocation, setPageNumberLocation] = useState<PageNumberLocation>("footer");
+  const [headerAlign, setHeaderAlign] = useState<HeaderAlign>("center");
+  const [footerAlign, setFooterAlign] = useState<HeaderAlign>("center");
+  const [docFont, setDocFont] = useState("Arial, Helvetica, sans-serif");
+  const [docFontSize, setDocFontSize] = useState("11pt");
   const [headerText, setHeaderText] = useState("");
   const [footerText, setFooterText] = useState("");
+  const [firstHeaderText, setFirstHeaderText] = useState("");
+  const [firstFooterText, setFirstFooterText] = useState("");
+  const [differentFirstPage, setDifferentFirstPage] = useState(false);
+  const [chromeFocus, setChromeFocus] = useState<null | "header" | "footer">(null);
+  const [chromePage, setChromePage] = useState(0);
+  const headerFieldRef = useRef<HTMLTextAreaElement | null>(null);
+  const footerFieldRef = useRef<HTMLTextAreaElement | null>(null);
+  const headerMeasureRef = useRef<HTMLDivElement | null>(null);
+  const firstHeaderMeasureRef = useRef<HTMLDivElement | null>(null);
+  const footerMeasureRef = useRef<HTMLDivElement | null>(null);
+  const firstFooterMeasureRef = useRef<HTMLDivElement | null>(null);
+  const headerStackRef = useRef<HTMLDivElement | null>(null);
+  const footerStackRef = useRef<HTMLDivElement | null>(null);
+  const [chromeSize, setChromeSize] = useState({ header: 0, firstHeader: 0, footer: 0, firstFooter: 0 });
+  const [liveStackH, setLiveStackH] = useState(0);
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [commentsMinimized, setCommentsMinimized] = useState(false);
   const [comments, setComments] = useState<DocComment[]>([]);
@@ -213,7 +270,7 @@ export function DocumentWorkspace() {
     y: number;
     hasSelection: boolean;
   } | null>(null);
-  const [darkMode, setDarkMode] = useState<boolean | null>(null);
+  const { darkMode, toggleTheme } = useInlineTheme();
   const [textColor, setTextColorValue] = useState("auto");
   const [highlightColor, setHighlightColorValue] = useState("transparent");
   const [focusMode, setFocusMode] = useState(false);
@@ -234,6 +291,11 @@ export function DocumentWorkspace() {
   const chatPersistTimer = useRef(0);
   const jobAbortRef = useRef<AbortController | null>(null);
   const jobRunningRef = useRef(false);
+  const grammarBusyRef = useRef(false);
+  const grammarDoneTimer = useRef(0);
+  const grammarFlashTimer = useRef(0);
+  const [grammarPhase, setGrammarPhase] = useState<"idle" | "running" | "done">("idle");
+  const [grammarNote, setGrammarNote] = useState("");
   const jobQueueRef = useRef<Array<AgentJobOptions & { queueId: string; selection?: string | null }>>([]);
   const pendingRevertRef = useRef<string | null>(null);
   const inlineContextRef = useRef<AgentSelection | null>(null);
@@ -253,36 +315,35 @@ export function DocumentWorkspace() {
   }, [title]);
 
   useEffect(() => {
-    const stored = window.localStorage.getItem("inline-theme");
-    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    setDarkMode(stored ? stored === "dark" : prefersDark);
-  }, []);
-
-  useEffect(() => {
-    if (darkMode == null) return;
-    document.documentElement.dataset.theme = darkMode ? "dark" : "light";
-    window.localStorage.setItem("inline-theme", darkMode ? "dark" : "light");
-  }, [darkMode]);
-
-  useEffect(() => {
-    const storedDoc = loadDocument();
+    const storedDoc = loadDocument(workspaceId);
     if (storedDoc) {
       setTitle(storedDoc.title);
       setInitialHtml(storedDoc.html);
       setHeaderText(storedDoc.headerText);
       setFooterText(storedDoc.footerText);
+      setFirstHeaderText(storedDoc.firstHeaderText);
+      setFirstFooterText(storedDoc.firstFooterText);
       setShowHeader(storedDoc.showHeader);
       setShowFooter(storedDoc.showFooter);
       setShowPageNumbers(storedDoc.showPageNumbers);
+      setDifferentFirstPage(storedDoc.differentFirstPage);
+      setPageNumberLocation(storedDoc.pageNumberLocation);
+      setHeaderAlign(storedDoc.headerAlign);
+      setFooterAlign(storedDoc.footerAlign);
+      setDocFont(storedDoc.fontFamily);
+      setDocFontSize(storedDoc.fontSize);
+      setFont(storedDoc.fontFamily.split(",")[0]?.replace(/["']/g, "") || "Arial");
+      setFontSize(storedDoc.fontSize);
       setColumnCount(storedDoc.columns);
       setSpacing(storedDoc.lineSpacing);
+      setPageLayout(storedDoc.pageLayout ?? DEFAULT_PAGE_LAYOUT);
       setComments(storedDoc.comments);
     }
     setDocReady(true);
-  }, []);
+  }, [workspaceId]);
 
   useEffect(() => {
-    const stored = loadChats();
+    const stored = loadChats(workspaceId);
     if (stored) {
       setChats(stored.chats);
       setActiveChatId(stored.activeId);
@@ -294,6 +355,10 @@ export function DocumentWorkspace() {
       const chat = createChat();
       setChats([chat]);
       setActiveChatId(chat.id);
+      setAgentOpen(false);
+      setAgentMinimized(false);
+      setChatDrafts({});
+      setAskPrompt("");
     }
     setChatsReady(true);
     const storedHistory = loadHistory();
@@ -303,13 +368,13 @@ export function DocumentWorkspace() {
     const storedTone = window.localStorage.getItem("inline-preserve-tone");
     if (storedFocus === "1") setFocusMode(true);
     if (storedTone === "0") setPreserveTone(false);
-  }, []);
+  }, [workspaceId]);
 
   useEffect(() => {
     if (!chatsReady || !chats.length || !activeChatId) return;
     window.clearTimeout(chatPersistTimer.current);
     chatPersistTimer.current = window.setTimeout(() => {
-      saveChats({
+      saveChats(workspaceId, {
         chats,
         activeId: activeChatId,
         open: agentOpen,
@@ -319,7 +384,7 @@ export function DocumentWorkspace() {
       chatPersistTimer.current = 0;
     }, 180);
     return () => window.clearTimeout(chatPersistTimer.current);
-  }, [activeChatId, agentMinimized, agentOpen, askPrompt, chatDrafts, chats, chatsReady]);
+  }, [activeChatId, agentMinimized, agentOpen, askPrompt, chatDrafts, chats, chatsReady, workspaceId]);
 
   useEffect(() => {
     window.localStorage.setItem("inline-focus", focusMode ? "1" : "0");
@@ -342,27 +407,46 @@ export function DocumentWorkspace() {
         html: nextHtml,
         headerText,
         footerText,
+        firstHeaderText,
+        firstFooterText,
         showHeader,
         showFooter,
         showPageNumbers,
+        differentFirstPage,
+        pageNumberLocation,
+        headerAlign,
+        footerAlign,
+        fontFamily: docFont,
+        fontSize: docFontSize,
         columns,
         lineSpacing,
+        pageLayout,
         comments,
-      });
+      }, workspaceId);
     },
     [
       comments,
       columns,
       docReady,
       editorReady,
+      docFont,
+      docFontSize,
+      differentFirstPage,
+      firstFooterText,
+      firstHeaderText,
+      footerAlign,
       footerText,
+      headerAlign,
       headerText,
       initialHtml,
       lineSpacing,
+      pageLayout,
+      pageNumberLocation,
       showFooter,
       showHeader,
       showPageNumbers,
       title,
+      workspaceId,
     ],
   );
 
@@ -382,9 +466,17 @@ export function DocumentWorkspace() {
     columns,
     docReady,
     editorReady,
+    docFont,
+    docFontSize,
+    differentFirstPage,
+    firstFooterText,
+    firstHeaderText,
+    footerAlign,
     footerText,
+    headerAlign,
     headerText,
     lineSpacing,
+    pageNumberLocation,
     schedulePersist,
     showFooter,
     showHeader,
@@ -405,7 +497,14 @@ export function DocumentWorkspace() {
     };
   }, [persistDocument]);
 
-  useEffect(() => () => window.clearTimeout(persistTimer.current), []);
+  useEffect(
+    () => () => {
+      window.clearTimeout(persistTimer.current);
+      window.clearTimeout(grammarDoneTimer.current);
+      window.clearTimeout(grammarFlashTimer.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     void fetch("/api/agent/models")
@@ -432,42 +531,78 @@ export function DocumentWorkspace() {
       .catch(() => undefined);
   }, []);
 
+  agentContextLenRef.current = agentContext.length;
+
   useEffect(() => {
     const saveSelection = () => {
       const el = editorRef.current?.getElement();
       if (!el) return;
-      const range = saveSelectionRange(el);
-      if (!range) return;
       const selection = window.getSelection();
-      const inside = Boolean(selection?.anchorNode && el.contains(selection.anchorNode));
-      if (!inside) return;
-      if (range.start === range.end && document.activeElement !== el && savedSelectionRef.current) {
-        return;
-      }
-      savedSelectionRef.current = range;
-      if (range.start !== range.end) {
-        expandedSelectionRef.current = range;
-        if (!suppressContextSyncRef.current && !inlineOpen) {
+      if (!selection?.rangeCount || !selection.anchorNode || !el.contains(selection.anchorNode)) return;
+      const range = selection.getRangeAt(0);
+      if (range.collapsed && document.activeElement !== el && liveSelectionRef.current) return;
+      const live = {
+        startNode: range.startContainer,
+        startOffset: range.startOffset,
+        endNode: range.endContainer,
+        endOffset: range.endOffset,
+        collapsed: range.collapsed,
+      };
+      liveSelectionRef.current = live;
+      window.clearTimeout(selectionOffsetTimer.current);
+      if (!range.collapsed) {
+        liveExpandedRef.current = live;
+        if (!suppressContextSyncRef.current && !inlineOpen && agentContextLenRef.current === 0) {
           const captured = captureAgentSelection(el);
           if (captured) {
-            setAgentContext((current) => {
-              if (current.length > 0) return current;
-              return [captured];
-            });
+            agentContextLenRef.current = 1;
+            setAgentContext([captured]);
           }
         }
-      } else if (document.activeElement === el) {
+        selectionOffsetTimer.current = window.setTimeout(() => {
+          const next = editorRef.current?.getElement();
+          if (!next) return;
+          const stored = saveSelectionRange(next);
+          if (!stored) return;
+          savedSelectionRef.current = stored;
+          expandedSelectionRef.current = stored;
+        }, 120);
+        return;
+      }
+      if (document.activeElement === el) {
+        liveExpandedRef.current = null;
         expandedSelectionRef.current = null;
       }
     };
     document.addEventListener("selectionchange", saveSelection);
-    return () => document.removeEventListener("selectionchange", saveSelection);
+    return () => {
+      document.removeEventListener("selectionchange", saveSelection);
+      window.clearTimeout(selectionOffsetTimer.current);
+    };
   }, [inlineOpen]);
 
   const restoreSelection = (preferExpanded = false) => {
     const el = editorRef.current?.getElement();
     if (!el) return;
     el.focus({ preventScroll: true });
+    const liveCollapsed = Boolean(liveSelectionRef.current?.collapsed);
+    const live =
+      preferExpanded && liveCollapsed && liveExpandedRef.current
+        ? liveExpandedRef.current
+        : liveSelectionRef.current;
+    if (live && live.startNode.isConnected && live.endNode.isConnected) {
+      try {
+        const next = document.createRange();
+        next.setStart(live.startNode, live.startOffset);
+        next.setEnd(live.endNode, live.endOffset);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(next);
+        return;
+      } catch {
+        /* Fall back to text offsets if the live nodes were split. */
+      }
+    }
     const collapsed = savedSelectionRef.current && savedSelectionRef.current.start === savedSelectionRef.current.end;
     const range =
       preferExpanded && collapsed && expandedSelectionRef.current
@@ -486,14 +621,14 @@ export function DocumentWorkspace() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const updateFit = () => {
-      const next = Math.min(1, (canvas.clientWidth - 80) / PAGE_WIDTH);
+      const next = Math.min(1, (canvas.clientWidth - 80) / pageLayout.width);
       setFitZoom(Number.isFinite(next) && next > 0.2 ? next : 1);
     };
     updateFit();
     const observer = new ResizeObserver(updateFit);
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, []);
+  }, [pageLayout.width]);
 
   useEffect(() => {
     const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
@@ -535,9 +670,12 @@ export function DocumentWorkspace() {
   }, []);
 
   const refreshActive = useCallback(() => {
+    const editor = editorRef.current?.getElement();
+    if (editor && document.activeElement === editor) setChromeFocus(null);
     const next = editorRef.current?.queryActive();
     if (!next) return;
     setActive((prev) =>
+      prev.blockStyle === next.blockStyle &&
       prev.bold === next.bold &&
       prev.italic === next.italic &&
       prev.underline === next.underline &&
@@ -545,6 +683,7 @@ export function DocumentWorkspace() {
       prev.list === next.list
         ? prev
         : {
+            blockStyle: next.blockStyle,
             bold: next.bold,
             italic: next.italic,
             underline: next.underline,
@@ -660,11 +799,20 @@ export function DocumentWorkspace() {
       html: el ? el.innerHTML : initialHtml,
       headerText,
       footerText,
+      firstHeaderText,
+      firstFooterText,
       showHeader,
       showFooter,
       showPageNumbers,
+      differentFirstPage,
+      pageNumberLocation,
+      headerAlign,
+      footerAlign,
+      fontFamily: docFont,
+      fontSize: docFontSize,
       columns,
       lineSpacing,
+      pageLayout,
       comments,
     });
     historyRef.current = result.list;
@@ -680,11 +828,22 @@ export function DocumentWorkspace() {
     setTitle(snap.title);
     setHeaderText(snap.headerText);
     setFooterText(snap.footerText);
+    setFirstHeaderText(snap.firstHeaderText ?? "");
+    setFirstFooterText(snap.firstFooterText ?? "");
     setShowHeader(snap.showHeader);
     setShowFooter(snap.showFooter);
     setShowPageNumbers(snap.showPageNumbers);
+    setDifferentFirstPage(Boolean(snap.differentFirstPage));
+    setPageNumberLocation(snap.pageNumberLocation ?? "footer");
+    setHeaderAlign(snap.headerAlign ?? "center");
+    setFooterAlign(snap.footerAlign ?? "center");
+    setDocFont(snap.fontFamily ?? "Arial, Helvetica, sans-serif");
+    setDocFontSize(snap.fontSize ?? "11pt");
+    setFont((snap.fontFamily ?? "Arial").split(",")[0]?.replace(/["']/g, "") || "Arial");
+    setFontSize(snap.fontSize ?? "11pt");
     setColumnCount(snap.columns);
     setSpacing(snap.lineSpacing);
+    setPageLayout(snap.pageLayout ?? DEFAULT_PAGE_LAYOUT);
     setComments(snap.comments);
     afterEdit();
     if (options?.announce !== "") {
@@ -872,7 +1031,6 @@ export function DocumentWorkspace() {
           setHeader: setHeaderText,
           showHeader: () => setShowHeader(true),
           showPageNumbers: () => {
-            setShowFooter(true);
             setShowPageNumbers(true);
           },
         });
@@ -966,6 +1124,81 @@ export function DocumentWorkspace() {
     }
     jobRunningRef.current = true;
     return executeJob({ ...options, prompt, context, chatId });
+  };
+
+  const finishGrammar = (note: string) => {
+    setGrammarNote(note);
+    setGrammarPhase("done");
+    window.clearTimeout(grammarDoneTimer.current);
+    grammarDoneTimer.current = window.setTimeout(() => {
+      setGrammarPhase("idle");
+      setGrammarNote("");
+    }, 3800);
+    window.clearTimeout(grammarFlashTimer.current);
+    grammarFlashTimer.current = window.setTimeout(() => {
+      const editor = editorEl();
+      if (editor) clearGrammarFlash(editor);
+    }, 2400);
+  };
+
+  const runGrammarFix = async () => {
+    if (mode === "viewing") {
+      finishGrammar("Can't edit in view mode");
+      return;
+    }
+    const el = editorEl();
+    if (!el) {
+      finishGrammar("Couldn't check");
+      return;
+    }
+    if (grammarBusyRef.current) return;
+    const selected = captureAgentSelection(el);
+    const source = (selected?.text || getPlainText(el, true)).replace(/\u00a0/g, " ");
+    if (!source.trim()) {
+      speak("Nothing to proofread.");
+      finishGrammar("Nothing to check");
+      return;
+    }
+    grammarBusyRef.current = true;
+    window.clearTimeout(grammarDoneTimer.current);
+    window.clearTimeout(grammarFlashTimer.current);
+    clearGrammarFlash(el);
+    setGrammarPhase("running");
+    setGrammarNote("Checking grammar");
+    const started = performance.now();
+    try {
+      const response = await fetch("/api/agent/grammar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: source }),
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        edits?: Array<{ find: string; replace: string }>;
+        error?: string;
+      };
+      if (!response.ok) throw new Error(data.error || "Grammar request failed.");
+      const edits = Array.isArray(data.edits) ? data.edits.filter((edit) => edit.find && edit.replace !== undefined) : [];
+      if (!edits.length) {
+        speak("Grammar looks clean.");
+        await holdGrammarLoad(started);
+        finishGrammar("Looks clean");
+        return;
+      }
+      captureSnapshot(snapshotLabel("agent"));
+      const applied = applySilentEdits(el, edits, selected);
+      afterEdit();
+      const note = applied ? `Fixed ${applied}` : "No changes applied";
+      speak(applied ? `Fixed ${applied} ${applied === 1 ? "issue" : "issues"}.` : "Could not apply grammar fixes.");
+      await holdGrammarLoad(started);
+      finishGrammar(note);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not fix grammar.";
+      speak(message);
+      await holdGrammarLoad(started);
+      finishGrammar("Couldn't check");
+    } finally {
+      grammarBusyRef.current = false;
+    }
   };
 
   const cancelQueuedJob = (id: string) => {
@@ -1148,6 +1381,35 @@ export function DocumentWorkspace() {
       case "print":
         window.print();
         return;
+      case "home":
+        onGoHome?.();
+        return;
+      case "make-copy": {
+        const copy = duplicateDocument(workspaceId);
+        if (copy) window.location.href = `/?doc=${encodeURIComponent(copy.id)}`;
+        return;
+      }
+      case "trash":
+        if (!window.confirm(`Move “${title || "Untitled document"}” to trash?`)) return;
+        trashDocument(workspaceId);
+        onGoHome?.();
+        return;
+      case "download-text":
+      case "download-markdown":
+      case "download-html":
+      case "download-docx":
+        if (el) {
+          const format = action === "download-docx"
+            ? "docx"
+            : action === "download-html"
+              ? "html"
+              : action === "download-markdown"
+                ? "md"
+                : "txt";
+          downloadDocument(el, title, format);
+          speak(`Downloaded ${format === "docx" ? "Word" : format.toUpperCase()} document.`);
+        }
+        return;
       case "undo":
       case "redo":
       case "cut":
@@ -1204,7 +1466,7 @@ export function DocumentWorkspace() {
         setShowInvisibles((on) => !on);
         return;
       case "theme":
-        setDarkMode((on) => !on);
+        toggleTheme();
         return;
       case "text-color":
         if (el && !readOnly && value) {
@@ -1269,10 +1531,22 @@ export function DocumentWorkspace() {
         if (el && !readOnly) applyBlockStyle(el, (value as "normal" | "title" | "subtitle" | "h1" | "h2" | "h3") ?? "normal");
         afterEdit();
         return;
-      case "align":
-        if (el && !readOnly) setAlignment(el, (value as "left" | "center" | "right" | "justify") ?? "left");
+      case "align": {
+        const nextAlign = (value as HeaderAlign) ?? "left";
+        if (chromeFocus === "header") {
+          setHeaderAlign(nextAlign);
+          afterEdit();
+          return;
+        }
+        if (chromeFocus === "footer") {
+          setFooterAlign(nextAlign);
+          afterEdit();
+          return;
+        }
+        if (el && !readOnly) setAlignment(el, nextAlign);
         afterEdit();
         return;
+      }
       case "spacing":
         if (el) {
           const next = value || "1.15";
@@ -1289,17 +1563,46 @@ export function DocumentWorkspace() {
           afterEdit();
         }
         return;
+      case "page-setup":
+        setDialog("page-setup");
+        return;
       case "header":
-        setShowHeader((on) => !on);
+        setShowHeader((on) => {
+          const next = !on;
+          if (next) {
+            setChromeFocus("header");
+            setChromePage(0);
+          } else if (chromeFocus === "header") {
+            setChromeFocus(null);
+          }
+          return next;
+        });
         return;
       case "footer":
-        setShowFooter((on) => !on);
+        setShowFooter((on) => {
+          const next = !on;
+          if (next) {
+            setChromeFocus("footer");
+            setChromePage(0);
+          } else if (chromeFocus === "footer") {
+            setChromeFocus(null);
+          }
+          return next;
+        });
         return;
       case "page-numbers":
-        setShowPageNumbers((on) => {
-          if (!on) setShowFooter(true);
-          return !on;
-        });
+        setShowPageNumbers((on) => !on);
+        return;
+      case "page-numbers-header":
+        setPageNumberLocation("header");
+        setShowPageNumbers(true);
+        return;
+      case "page-numbers-footer":
+        setPageNumberLocation("footer");
+        setShowPageNumbers(true);
+        return;
+      case "different-first-page":
+        setDifferentFirstPage((on) => !on);
         return;
       case "clear-format":
         if (el && !readOnly) runCommand(el, "removeFormat");
@@ -1362,15 +1665,8 @@ export function DocumentWorkspace() {
         setHistoryOpen((on) => !on);
         return;
       case "fix-grammar":
-        if (!readOnly) {
-          void runJob({
-            prompt: QUICK_PROMPTS.find((item) => item.id === "grammar")!.prompt,
-            context: selectionContext(editorEl()),
-            mode: "agent",
-            silent: true,
-            clearPrompt: false,
-          });
-        }
+        setToolbarMoreOpen(false);
+        if (!readOnly) void runGrammarFix();
         return;
       case "clean-ai":
         if (!readOnly && el) {
@@ -1519,11 +1815,9 @@ export function DocumentWorkspace() {
         if (el instanceof HTMLElement) toolbarWidths.current[id] = el.offsetWidth;
       }
       const history = toolbar.querySelector(':scope > [data-toolbar-group="history"]');
-      const zoomEl = toolbar.querySelector(':scope > [data-toolbar-group="zoom"]');
       const more = toolbar.querySelector(":scope > .toolbar-more");
       const sepEl = toolbar.querySelector(":scope > .toolbar-sep");
       const historyW = history instanceof HTMLElement ? history.offsetWidth : 56;
-      const zoomW = zoomEl instanceof HTMLElement ? zoomEl.offsetWidth : 76;
       const moreW = more instanceof HTMLElement ? more.offsetWidth : 28;
       const gap = Number.parseFloat(getComputedStyle(toolbar).gap) || 1;
       let sepW = 9;
@@ -1531,18 +1825,20 @@ export function DocumentWorkspace() {
         const styles = getComputedStyle(sepEl);
         sepW = sepEl.offsetWidth + Number.parseFloat(styles.marginLeft) + Number.parseFloat(styles.marginRight);
       }
-      const budget = toolbar.clientWidth;
+      const aiGroup = toolbar.querySelector(':scope > [data-toolbar-group="ai"]');
+      const aiW = aiGroup instanceof HTMLElement ? aiGroup.offsetWidth : 58;
+      const budget = toolbar.clientWidth - aiW - sepW - gap;
       let best = 0;
       for (let count = TOOLBAR_OVERFLOW_GROUPS.length; count >= 0; count -= 1) {
         const hasMore = count < TOOLBAR_OVERFLOW_GROUPS.length;
-        let content = historyW + zoomW + (hasMore ? moreW : 0);
+        let content = historyW + (hasMore ? moreW : 0);
         for (let i = 0; i < count; i += 1) {
           const id = TOOLBAR_OVERFLOW_GROUPS[i];
           content += toolbarWidths.current[id] ?? TOOLBAR_GROUP_FALLBACK[id];
         }
         const leftParts = 1 + count + (hasMore ? 1 : 0);
         const seps = Math.max(0, leftParts - 1);
-        const children = leftParts + seps + 1;
+        const children = leftParts + seps;
         const used = content + seps * sepW + (children - 1) * gap;
         if (used <= budget - 2) {
           best = count;
@@ -1589,6 +1885,82 @@ export function DocumentWorkspace() {
     pop.classList.toggle("is-start", pop.getBoundingClientRect().left < 8);
   }, [toolbarMoreOpen, toolbarOverflow]);
 
+  const headerHasNumber = showPageNumbers && pageNumberLocation === "header";
+  const footerHasNumber = showPageNumbers && pageNumberLocation === "footer";
+
+  const openChrome = useCallback((kind: "header" | "footer", page: number) => {
+    if (kind === "header") setShowHeader(true);
+    else setShowFooter(true);
+    setChromeFocus(kind);
+    setChromePage(page);
+  }, []);
+
+  useLayoutEffect(() => {
+    const update = () => {
+      const next = {
+        header: headerText ? headerMeasureRef.current?.offsetHeight ?? 0 : 0,
+        firstHeader: firstHeaderText ? firstHeaderMeasureRef.current?.offsetHeight ?? 0 : 0,
+        footer: footerText ? footerMeasureRef.current?.offsetHeight ?? 0 : 0,
+        firstFooter: firstFooterText ? firstFooterMeasureRef.current?.offsetHeight ?? 0 : 0,
+      };
+      setChromeSize((prev) =>
+        prev.header === next.header &&
+        prev.firstHeader === next.firstHeader &&
+        prev.footer === next.footer &&
+        prev.firstFooter === next.firstFooter
+          ? prev
+          : next,
+      );
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    for (const node of [headerMeasureRef.current, firstHeaderMeasureRef.current, footerMeasureRef.current, firstFooterMeasureRef.current]) {
+      if (node) observer.observe(node);
+    }
+    return () => observer.disconnect();
+  }, [headerText, firstHeaderText, footerText, firstFooterText, headerHasNumber, footerHasNumber, pageLayout.width, pageLayout.marginLeft, pageLayout.marginRight]);
+
+  useEffect(() => {
+    if (chromeFocus === "header") headerFieldRef.current?.focus({ preventScroll: true });
+    if (chromeFocus === "footer") footerFieldRef.current?.focus({ preventScroll: true });
+  }, [chromeFocus, chromePage, showHeader, showFooter]);
+
+  useLayoutEffect(() => {
+    const el = chromeFocus === "header" ? headerStackRef.current : chromeFocus === "footer" ? footerStackRef.current : null;
+    if (!el) {
+      setLiveStackH(0);
+      return;
+    }
+    const update = () => setLiveStackH(el.offsetHeight);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [chromeFocus, chromePage, headerText, footerText, firstHeaderText, firstFooterText]);
+
+  const flowLayout = useMemo(() => {
+    const headerTextH =
+      showHeader || chromeFocus === "header"
+        ? Math.max(chromeSize.header, differentFirstPage ? chromeSize.firstHeader : 0)
+        : 0;
+    const footerTextH =
+      showFooter || chromeFocus === "footer"
+        ? Math.max(chromeSize.footer, differentFirstPage ? chromeSize.firstFooter : 0)
+        : 0;
+    const headerBlock =
+      chromeFocus === "header"
+        ? Math.max(liveStackH, headerTextH + CHROME_BAR_PX, CHROME_LINE_PX + CHROME_BAR_PX)
+        : headerTextH;
+    const footerBlock =
+      chromeFocus === "footer"
+        ? Math.max(liveStackH, footerTextH + CHROME_BAR_PX, CHROME_LINE_PX + CHROME_BAR_PX)
+        : footerTextH;
+    const marginTop = Math.max(pageLayout.marginTop, CHROME_FROM_PX + headerBlock);
+    const marginBottom = Math.max(pageLayout.marginBottom, CHROME_FROM_PX + footerBlock);
+    if (marginTop === pageLayout.marginTop && marginBottom === pageLayout.marginBottom) return pageLayout;
+    return { ...pageLayout, marginTop, marginBottom };
+  }, [pageLayout, chromeSize, differentFirstPage, showHeader, showFooter, chromeFocus, liveStackH]);
+
   const renderOverflowGroup = (id: ToolbarOverflowId) => {
     switch (id) {
       case "font":
@@ -1616,6 +1988,13 @@ export function DocumentWorkspace() {
       case "style":
         return (
           <>
+            <ToolbarSelect
+              variant="style"
+              ariaLabel="Paragraph style"
+              value={active.blockStyle}
+              options={BLOCK_STYLES}
+              onPick={(next) => void handleAction("style", next)}
+            />
             <button
               className="tool"
               type="button"
@@ -1675,7 +2054,10 @@ export function DocumentWorkspace() {
               className="tool"
               type="button"
               title="Align left"
-              data-active={active.align === "left"}
+              data-active={chromeAlign === "left"}
+              onMouseDown={(event: MouseEvent<HTMLButtonElement>) => {
+                if (chromeFocus) event.preventDefault();
+              }}
               onClick={() => void handleAction("align", "left")}
             >
               <AlignLeftIcon />
@@ -1684,7 +2066,10 @@ export function DocumentWorkspace() {
               className="tool"
               type="button"
               title="Align center"
-              data-active={active.align === "center"}
+              data-active={chromeAlign === "center"}
+              onMouseDown={(event: MouseEvent<HTMLButtonElement>) => {
+                if (chromeFocus) event.preventDefault();
+              }}
               onClick={() => void handleAction("align", "center")}
             >
               <AlignCenterIcon />
@@ -1693,7 +2078,10 @@ export function DocumentWorkspace() {
               className="tool"
               type="button"
               title="Align right"
-              data-active={active.align === "right"}
+              data-active={chromeAlign === "right"}
+              onMouseDown={(event: MouseEvent<HTMLButtonElement>) => {
+                if (chromeFocus) event.preventDefault();
+              }}
               onClick={() => void handleAction("align", "right")}
             >
               <AlignRightIcon />
@@ -1702,7 +2090,10 @@ export function DocumentWorkspace() {
               className="tool"
               type="button"
               title="Justify"
-              data-active={active.align === "justify"}
+              data-active={chromeAlign === "justify"}
+              onMouseDown={(event: MouseEvent<HTMLButtonElement>) => {
+                if (chromeFocus) event.preventDefault();
+              }}
               onClick={() => void handleAction("align", "justify")}
             >
               <AlignJustifyIcon />
@@ -1746,55 +2137,70 @@ export function DocumentWorkspace() {
             </button>
           </>
         );
-      case "ai":
-        return (
-          <>
-            <button
-              className="tool ai-tool"
-              type="button"
-              title="Chat"
-              aria-label="Chat"
-              data-active={agentOpen}
-              disabled={mode === "viewing"}
-              onClick={() => void handleAction("ask-inline")}
-            >
-              <ChatIcon />
-            </button>
-            <button
-              className="tool ai-tool"
-              type="button"
-              title="Fix grammar"
-              disabled={mode === "viewing"}
-              onClick={() => void handleAction("fix-grammar")}
-            >
-              <GrammarIcon />
-            </button>
-            <button
-              className="tool ai-tool"
-              type="button"
-              title="Writing lint"
-              data-active={lintOpen}
-              onClick={() => void handleAction("writing-lint")}
-            >
-              <LintIcon />
-            </button>
-            <button
-              className="tool"
-              type="button"
-              title="Focus mode"
-              data-active={focusMode}
-              onClick={() => void handleAction("focus-mode")}
-            >
-              <FocusIcon />
-            </button>
-          </>
-        );
     }
   };
 
-  const scaledWidth = PAGE_WIDTH * zoom;
+  const renderAiTools = () => (
+    <>
+      <button
+        className="tool ai-tool"
+        type="button"
+        title="Chat"
+        aria-label="Chat"
+        data-active={agentOpen}
+        disabled={mode === "viewing"}
+        onClick={() => void handleAction("ask-inline")}
+      >
+        <ChatIcon />
+      </button>
+      <button
+        className="tool ai-tool grammar-tool"
+        type="button"
+        title={
+          grammarPhase === "running"
+            ? "Fixing grammar…"
+            : grammarNote || "Fix grammar"
+        }
+        aria-label="Fix grammar"
+        aria-busy={grammarPhase === "running"}
+        data-grammar={grammarPhase}
+        disabled={mode === "viewing"}
+        onClick={() => {
+          setToolbarMoreOpen(false);
+          void handleAction("fix-grammar");
+        }}
+      >
+        {grammarPhase === "running" ? (
+          <GrammarSpinner />
+        ) : grammarPhase === "done" ? (
+          <GrammarCheckIcon />
+        ) : (
+          <GrammarIcon />
+        )}
+      </button>
+    </>
+  );
+
+  const scaledWidth = pageLayout.width * zoom;
   const scaledHeight =
-    (metrics.pageCount * PAGE_HEIGHT + Math.max(0, metrics.pageCount - 1) * PAGE_GAP) * zoom;
+    (metrics.pageCount * pageLayout.height + Math.max(0, metrics.pageCount - 1) * PAGE_GAP) * zoom;
+  const documentStyle = {
+    transform: `scale(${zoom})`,
+    "--page-width": cssInches(pageLayout.width),
+    "--page-height": cssInches(pageLayout.height),
+    "--page-margin-top": cssInches(flowLayout.marginTop),
+    "--page-margin-right": cssInches(flowLayout.marginRight),
+    "--page-margin-bottom": cssInches(flowLayout.marginBottom),
+    "--page-margin-left": cssInches(flowLayout.marginLeft),
+    "--page-content-width": cssInches(flowLayout.width - flowLayout.marginLeft - flowLayout.marginRight),
+    "--page-content-height": cssInches(flowLayout.height - flowLayout.marginTop - flowLayout.marginBottom),
+    "--page-break-height": cssInches(flowLayout.marginTop + flowLayout.marginBottom + PAGE_GAP),
+    "--doc-font": docFont,
+    "--doc-size": docFontSize,
+    "--header-from": "0.5in",
+    "--footer-from": "0.5in",
+  } as CSSProperties;
+  const chromeAlign = chromeFocus === "header" ? headerAlign : chromeFocus === "footer" ? footerAlign : active.align;
 
   return (
     <div
@@ -1808,9 +2214,9 @@ export function DocumentWorkspace() {
         .join(" ")}
     >
       <header className="header">
-        <div className="logo" aria-hidden="true">
-          <DocsLogo />
-        </div>
+        <button className="logo logo-button" type="button" aria-label="Inline home" onClick={onGoHome}>
+          <InlineMark />
+        </button>
         <div className="header-main">
         <div className="header-row">
           <input
@@ -1824,7 +2230,6 @@ export function DocumentWorkspace() {
               {mode === "suggesting" ? "Suggesting" : "Viewing"}
             </span>
           )}
-          <div className="header-meta">Letter - 1&quot; margins</div>
         </div>
         <MenuBar
           mode={mode}
@@ -1836,6 +2241,8 @@ export function DocumentWorkspace() {
           showHeader={showHeader}
           showFooter={showFooter}
           showPageNumbers={showPageNumbers}
+          pageNumberLocation={pageNumberLocation}
+          differentFirstPage={differentFirstPage}
           substitutions={substitutions}
           screenReader={screenReader}
           darkMode={Boolean(darkMode)}
@@ -1857,6 +2264,19 @@ export function DocumentWorkspace() {
             <button className="tool" type="button" title="Redo" onClick={() => void handleAction("redo")}>
               <RedoIcon />
             </button>
+            <button className="tool" type="button" title="Search" aria-label="Search" onClick={() => void handleAction("search")}>
+              <SearchIcon />
+            </button>
+            <button className="tool" type="button" title="Print" aria-label="Print" onClick={() => void handleAction("print")}>
+              <PrintIcon />
+            </button>
+            <ToolbarSelect
+              variant="zoom"
+              ariaLabel="Zoom"
+              value={zoomMode === "fit" ? "fit" : (String(zoomMode) as ZoomValue)}
+              options={ZOOM_OPTIONS}
+              onPick={(next) => setZoomMode(next === "fit" ? "fit" : Number(next))}
+            />
           </span>
           {TOOLBAR_OVERFLOW_GROUPS.map((id) =>
             toolbarOverflow.includes(id) ? null : (
@@ -1895,22 +2315,9 @@ export function DocumentWorkspace() {
               </div>
             </>
           )}
-          <span className="toolbar-group is-zoom" data-toolbar-group="zoom">
-            <select
-              className="toolbar-select zoom"
-              aria-label="Zoom"
-              value={zoomMode === "fit" ? "fit" : String(zoomMode)}
-              onChange={(event) => {
-                const next = event.target.value;
-                setZoomMode(next === "fit" ? "fit" : Number(next));
-              }}
-            >
-              <option value="fit">Fit</option>
-              <option value="0.75">75%</option>
-              <option value="1">100%</option>
-              <option value="1.25">125%</option>
-              <option value="1.5">150%</option>
-            </select>
+          <span className="toolbar-sep" />
+          <span className="toolbar-group" data-toolbar-group="ai">
+            {renderAiTools()}
           </span>
         </div>
       </div>
@@ -1940,36 +2347,10 @@ export function DocumentWorkspace() {
         >
         <main className="canvas" ref={canvasRef} onScroll={updateCurrentPage}>
           <div className="document-scale" style={{ width: scaledWidth, height: scaledHeight }}>
-            <div className="document" style={{ transform: `scale(${zoom})` }}>
+            <div className="document" style={documentStyle}>
               <div className="papers">
                 {Array.from({ length: metrics.pageCount }, (_, index) => (
-                  <div className="paper" key={index}>
-                    {showHeader && (
-                      <div className="paper-header">
-                        <input
-                          className="paper-chrome"
-                          value={headerText}
-                          placeholder="Header"
-                          onChange={(event) => setHeaderText(event.target.value)}
-                        />
-                      </div>
-                    )}
-                    {(showFooter || showPageNumbers) && (
-                      <div className="paper-footer">
-                        {showFooter ? (
-                          <input
-                            className="paper-chrome"
-                            value={footerText}
-                            placeholder="Footer"
-                            onChange={(event) => setFooterText(event.target.value)}
-                          />
-                        ) : (
-                          <span />
-                        )}
-                        {showPageNumbers && <span className="page-num">{index + 1}</span>}
-                      </div>
-                    )}
-                  </div>
+                  <div className="paper" key={index} />
                 ))}
               </div>
               {docReady ? (
@@ -1981,6 +2362,7 @@ export function DocumentWorkspace() {
                   columns={columns}
                   lineSpacing={lineSpacing}
                   initialHtml={initialHtml}
+                  pageLayout={flowLayout}
                   onMetricsChange={onMetricsChange}
                   onActiveChange={refreshActive}
                   onContentChange={schedulePersist}
@@ -1994,6 +2376,67 @@ export function DocumentWorkspace() {
                   }}
                 />
               ) : null}
+              <div className="chrome-layer">
+                {Array.from({ length: metrics.pageCount }, (_, index) => (
+                  <PaperChromePage
+                    key={index}
+                    index={index}
+                    readOnly={mode === "viewing"}
+                    chromeFocus={chromeFocus}
+                    chromePage={chromePage}
+                    differentFirstPage={differentFirstPage}
+                    showHeader={showHeader}
+                    showFooter={showFooter}
+                    headerText={headerText}
+                    footerText={footerText}
+                    firstHeaderText={firstHeaderText}
+                    firstFooterText={firstFooterText}
+                    headerAlign={headerAlign}
+                    footerAlign={footerAlign}
+                    headerHasNumber={headerHasNumber}
+                    footerHasNumber={footerHasNumber}
+                    pageNumberLocation={pageNumberLocation}
+                    showPageNumbers={showPageNumbers}
+                    headerFieldRef={headerFieldRef}
+                    footerFieldRef={footerFieldRef}
+                    headerStackRef={chromeFocus === "header" && chromePage === index ? headerStackRef : undefined}
+                    footerStackRef={chromeFocus === "footer" && chromePage === index ? footerStackRef : undefined}
+                    onOpen={openChrome}
+                    onHeaderChange={(page, next) => {
+                      if (differentFirstPage && page === 0) setFirstHeaderText(next);
+                      else setHeaderText(next);
+                    }}
+                    onFooterChange={(page, next) => {
+                      if (differentFirstPage && page === 0) setFirstFooterText(next);
+                      else setFooterText(next);
+                    }}
+                    onDifferentFirstPage={setDifferentFirstPage}
+                    onPageNumbersHeader={() => {
+                      setPageNumberLocation("header");
+                      setShowPageNumbers(true);
+                    }}
+                    onPageNumbersFooter={() => {
+                      setPageNumberLocation("footer");
+                      setShowPageNumbers(true);
+                    }}
+                    onRemovePageNumbers={() => setShowPageNumbers(false)}
+                  />
+                ))}
+              </div>
+              <div className="paper-chrome-probes" aria-hidden>
+                <div ref={headerMeasureRef} className={`paper-chrome-measure${headerHasNumber ? " has-page-num" : ""}`}>
+                  {headerText}
+                </div>
+                <div ref={firstHeaderMeasureRef} className={`paper-chrome-measure${headerHasNumber ? " has-page-num" : ""}`}>
+                  {firstHeaderText}
+                </div>
+                <div ref={footerMeasureRef} className={`paper-chrome-measure${footerHasNumber ? " has-page-num" : ""}`}>
+                  {footerText}
+                </div>
+                <div ref={firstFooterMeasureRef} className={`paper-chrome-measure${footerHasNumber ? " has-page-num" : ""}`}>
+                  {firstFooterText}
+                </div>
+              </div>
             </div>
           </div>
         </main>
@@ -2003,6 +2446,12 @@ export function DocumentWorkspace() {
         <div className="canvas-meta canvas-meta-words">
           {metrics.wordCount} {metrics.wordCount === 1 ? "word" : "words"}
         </div>
+        {grammarPhase !== "idle" ? (
+          <div className="grammar-pip" data-state={grammarPhase} role="status" aria-live="polite">
+            {grammarPhase === "running" ? <GrammarSpinner /> : <GrammarCheckIcon />}
+            <span>{grammarNote || (grammarPhase === "running" ? "Checking grammar" : "Done")}</span>
+          </div>
+        ) : null}
         </div>
         <DiffReviewBar
           getEditor={editorEl}
@@ -2336,6 +2785,17 @@ export function DocumentWorkspace() {
           }}
         />
       )}
+      {dialog === "page-setup" && (
+        <PageSetupDialog
+          layout={pageLayout}
+          onClose={() => setDialog(null)}
+          onApply={(next) => {
+            setPageLayout(next);
+            setDialog(null);
+            afterEdit();
+          }}
+        />
+      )}
       {dialog === "shortcuts" && <ShortcutsDialog onClose={() => setDialog(null)} />}
 
       {inlineOpen && inlineBox && (
@@ -2438,6 +2898,11 @@ export function DocumentWorkspace() {
   );
 }
 
+function holdGrammarLoad(started: number) {
+  const wait = Math.max(0, 650 - (performance.now() - started));
+  return wait ? new Promise<void>((resolve) => window.setTimeout(resolve, wait)) : Promise.resolve();
+}
+
 const PALETTE_COMMANDS: PaletteCommand[] = [
   { id: "ask-inline", label: "Open chat", group: "Agent", shortcut: "⌘J" },
   { id: "inline-edit", label: "Inline edit", group: "Agent", shortcut: "⌘K", hint: "Edit the selection without opening chat" },
@@ -2475,20 +2940,19 @@ function GrammarIcon() {
   );
 }
 
-function LintIcon() {
+function GrammarSpinner() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M5 6h14M5 12h9M5 18h11" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      <circle cx="18.2" cy="12" r="2.1" stroke="currentColor" strokeWidth="1.6" />
+    <svg className="grammar-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="7.2" stroke="currentColor" strokeWidth="1.8" opacity="0.28" />
+      <path d="M12 4.8a7.2 7.2 0 0 1 7.2 7.2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
     </svg>
   );
 }
 
-function FocusIcon() {
+function GrammarCheckIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <circle cx="12" cy="12" r="3.1" stroke="currentColor" strokeWidth="1.7" />
-      <path d="M12 4.5v2.4M12 17.1v2.4M4.5 12h2.4M17.1 12h2.4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    <svg className="grammar-check" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M6.4 12.4 10.2 16.2 17.6 8.2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -2517,14 +2981,26 @@ function MoreIcon() {
   );
 }
 
-function DocsLogo() {
+function SearchIcon() {
   return (
-    <svg viewBox="7.5 3.5 23 33" width="28" height="40" aria-hidden="true">
-      <rect x="8" y="4" width="22" height="32" rx="2.5" fill="#1e293b" />
-      <circle cx="25.5" cy="8.5" r="2.15" fill="var(--doc-mark)" />
-      <rect x="13" y="18" width="12" height="2" rx="1" fill="#e5e7eb" />
-      <rect x="13" y="23" width="12" height="2" rx="1" fill="#e5e7eb" />
-      <rect x="13" y="28" width="8" height="2" rx="1" fill="#e5e7eb" />
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="11" cy="11" r="6.1" stroke="currentColor" strokeWidth="2.2" />
+      <path d="m15.8 15.8 4.2 4.2" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function PrintIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M7.2 8V4.8h9.6V8" stroke="currentColor" strokeWidth="2.2" strokeLinejoin="round" />
+      <path
+        d="M6.2 15H5.1A2.1 2.1 0 0 1 3 12.9V10a1.8 1.8 0 0 1 1.8-1.8h14.4A1.8 1.8 0 0 1 21 10v2.9a2.1 2.1 0 0 1-2.1 2.1h-1.1"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinejoin="round"
+      />
+      <rect x="6.2" y="13.2" width="11.6" height="6.6" rx="1.2" stroke="currentColor" strokeWidth="2.2" />
     </svg>
   );
 }
@@ -2702,5 +3178,253 @@ function IndentIcon() {
     <svg viewBox="0 0 24 24" fill="currentColor">
       <path d="M4 6h16v1.7H4V6Zm8 5.15h8v1.7h-8v-1.7ZM4 16.3h16V18H4v-1.7ZM4 8.9v3.6h3.4v2.6L11 12.5 7.4 8.9v2.6H4V8.9Z" />
     </svg>
+  );
+}
+
+function chromePageText(differentFirstPage: boolean, index: number, first: string, rest: string) {
+  return differentFirstPage && index === 0 ? first : rest;
+}
+
+function PaperChromePage({
+  index,
+  readOnly,
+  chromeFocus,
+  chromePage,
+  differentFirstPage,
+  showHeader,
+  showFooter,
+  headerText,
+  footerText,
+  firstHeaderText,
+  firstFooterText,
+  headerAlign,
+  footerAlign,
+  headerHasNumber,
+  footerHasNumber,
+  pageNumberLocation,
+  showPageNumbers,
+  headerFieldRef,
+  footerFieldRef,
+  headerStackRef,
+  footerStackRef,
+  onOpen,
+  onHeaderChange,
+  onFooterChange,
+  onDifferentFirstPage,
+  onPageNumbersHeader,
+  onPageNumbersFooter,
+  onRemovePageNumbers,
+}: {
+  index: number;
+  readOnly: boolean;
+  chromeFocus: null | "header" | "footer";
+  chromePage: number;
+  differentFirstPage: boolean;
+  showHeader: boolean;
+  showFooter: boolean;
+  headerText: string;
+  footerText: string;
+  firstHeaderText: string;
+  firstFooterText: string;
+  headerAlign: HeaderAlign;
+  footerAlign: HeaderAlign;
+  headerHasNumber: boolean;
+  footerHasNumber: boolean;
+  pageNumberLocation: PageNumberLocation;
+  showPageNumbers: boolean;
+  headerFieldRef: Ref<HTMLTextAreaElement>;
+  footerFieldRef: Ref<HTMLTextAreaElement>;
+  headerStackRef?: Ref<HTMLDivElement>;
+  footerStackRef?: Ref<HTMLDivElement>;
+  onOpen: (kind: "header" | "footer", page: number) => void;
+  onHeaderChange: (page: number, value: string) => void;
+  onFooterChange: (page: number, value: string) => void;
+  onDifferentFirstPage: (value: boolean) => void;
+  onPageNumbersHeader: () => void;
+  onPageNumbersFooter: () => void;
+  onRemovePageNumbers: () => void;
+}) {
+  const headerValue = chromePageText(differentFirstPage, index, firstHeaderText, headerText);
+  const footerValue = chromePageText(differentFirstPage, index, firstFooterText, footerText);
+  const editingHeader = chromeFocus === "header" && chromePage === index;
+  const editingFooter = chromeFocus === "footer" && chromePage === index;
+  const showHeaderStack = editingHeader || (showHeader && Boolean(headerValue));
+  const showFooterStack = editingFooter || (showFooter && Boolean(footerValue));
+  return (
+    <div className="chrome-page">
+      <div
+        className="paper-chrome-hit paper-chrome-hit-header"
+        onMouseDown={(event) => event.stopPropagation()}
+        onDoubleClick={(event) => {
+          if (readOnly) return;
+          event.preventDefault();
+          event.stopPropagation();
+          onOpen("header", index);
+        }}
+      />
+      <div
+        className="paper-chrome-hit paper-chrome-hit-footer"
+        onMouseDown={(event) => event.stopPropagation()}
+        onDoubleClick={(event) => {
+          if (readOnly) return;
+          event.preventDefault();
+          event.stopPropagation();
+          onOpen("footer", index);
+        }}
+      />
+      {showHeaderStack ? (
+        <div ref={headerStackRef} className={`paper-header-stack${editingHeader ? " is-active" : ""}`}>
+          <div className={`paper-header${headerHasNumber ? " has-page-num" : ""}`} data-align={headerAlign}>
+            {editingHeader ? (
+              <ChromeField
+                fieldRef={headerFieldRef}
+                value={headerValue}
+                ariaLabel="Header"
+                onChange={(next) => onHeaderChange(index, next)}
+                onActivate={() => onOpen("header", index)}
+              />
+            ) : (
+              <span className="paper-chrome paper-chrome-static">{headerValue}</span>
+            )}
+          </div>
+          <ChromeBar
+            kind="header"
+            firstPage={index === 0}
+            differentFirstPage={differentFirstPage}
+            pageNumberLocation={pageNumberLocation}
+            showPageNumbers={showPageNumbers}
+            onDifferentFirstPage={onDifferentFirstPage}
+            onPageNumbersHeader={onPageNumbersHeader}
+            onPageNumbersFooter={onPageNumbersFooter}
+            onRemovePageNumbers={onRemovePageNumbers}
+          />
+        </div>
+      ) : null}
+      {headerHasNumber ? <span className="page-num page-num-header">{index + 1}</span> : null}
+      {showFooterStack ? (
+        <div ref={footerStackRef} className={`paper-footer-stack${editingFooter ? " is-active" : ""}`}>
+          <ChromeBar
+            kind="footer"
+            firstPage={index === 0}
+            differentFirstPage={differentFirstPage}
+            pageNumberLocation={pageNumberLocation}
+            showPageNumbers={showPageNumbers}
+            onDifferentFirstPage={onDifferentFirstPage}
+            onPageNumbersHeader={onPageNumbersHeader}
+            onPageNumbersFooter={onPageNumbersFooter}
+            onRemovePageNumbers={onRemovePageNumbers}
+          />
+          <div className={`paper-footer${footerHasNumber ? " has-page-num" : ""}`} data-align={footerAlign}>
+            {editingFooter ? (
+              <ChromeField
+                fieldRef={footerFieldRef}
+                value={footerValue}
+                ariaLabel="Footer"
+                onChange={(next) => onFooterChange(index, next)}
+                onActivate={() => onOpen("footer", index)}
+              />
+            ) : (
+              <span className="paper-chrome paper-chrome-static">{footerValue}</span>
+            )}
+          </div>
+        </div>
+      ) : null}
+      {footerHasNumber ? <span className="page-num page-num-footer">{index + 1}</span> : null}
+    </div>
+  );
+}
+
+function ChromeField({
+  value,
+  ariaLabel,
+  onChange,
+  onActivate,
+  fieldRef,
+}: {
+  value: string;
+  ariaLabel: string;
+  onChange: (value: string) => void;
+  onActivate: () => void;
+  fieldRef?: Ref<HTMLTextAreaElement>;
+}) {
+  const innerRef = useRef<HTMLTextAreaElement | null>(null);
+  const setRefs = (node: HTMLTextAreaElement | null) => {
+    innerRef.current = node;
+    if (typeof fieldRef === "function") fieldRef(node);
+    else if (fieldRef) (fieldRef as MutableRefObject<HTMLTextAreaElement | null>).current = node;
+  };
+  const grow = () => {
+    const el = innerRef.current;
+    if (!el) return;
+    el.style.height = "0px";
+    el.style.height = `${el.scrollHeight}px`;
+  };
+  useLayoutEffect(grow, [value]);
+  return (
+    <textarea
+      ref={setRefs}
+      className="paper-chrome"
+      rows={1}
+      value={value}
+      aria-label={ariaLabel}
+      onChange={(event) => onChange(event.target.value)}
+      onMouseDown={onActivate}
+      onFocus={onActivate}
+      onKeyDown={(event) => event.stopPropagation()}
+      onInput={grow}
+    />
+  );
+}
+
+function ChromeBar({
+  kind,
+  firstPage,
+  differentFirstPage,
+  pageNumberLocation,
+  showPageNumbers,
+  onDifferentFirstPage,
+  onPageNumbersHeader,
+  onPageNumbersFooter,
+  onRemovePageNumbers,
+}: {
+  kind: "header" | "footer";
+  firstPage: boolean;
+  differentFirstPage: boolean;
+  pageNumberLocation: PageNumberLocation;
+  showPageNumbers: boolean;
+  onDifferentFirstPage: (value: boolean) => void;
+  onPageNumbersHeader: () => void;
+  onPageNumbersFooter: () => void;
+  onRemovePageNumbers: () => void;
+}) {
+  const label = differentFirstPage && firstPage ? `First page ${kind}` : kind === "header" ? "Header" : "Footer";
+  return (
+    <div className="paper-chrome-bar">
+      <strong>{label}</strong>
+      <label className="paper-chrome-check">
+        <input
+          type="checkbox"
+          checked={differentFirstPage}
+          onChange={(event) => onDifferentFirstPage(event.target.checked)}
+        />
+        Different first page
+      </label>
+      <details className="paper-chrome-options">
+        <summary>Options</summary>
+        <div className="paper-chrome-options-menu">
+          <button type="button" onClick={onPageNumbersHeader}>
+            {showPageNumbers && pageNumberLocation === "header" ? "✓ " : ""}Page number in header
+          </button>
+          <button type="button" onClick={onPageNumbersFooter}>
+            {showPageNumbers && pageNumberLocation === "footer" ? "✓ " : ""}Page number in footer
+          </button>
+          {showPageNumbers ? (
+            <button type="button" onClick={onRemovePageNumbers}>
+              Remove page numbers
+            </button>
+          ) : null}
+        </div>
+      </details>
+    </div>
   );
 }

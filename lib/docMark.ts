@@ -1,14 +1,9 @@
 export const DOC_MARK_COLORS = [
-  "#22d3ee",
-  "#8b5cf6",
-  "#34d399",
-  "#fbbf24",
-  "#fb7185",
-  "#60a5fa",
+  "#e879f9",
 ] as const;
 
 export const DOC_MARK_STORAGE_KEY = "inline-doc-mark-color";
-export const DOC_MARK_FALLBACK = "#60a5fa";
+export const DOC_MARK_FALLBACK = "#e879f9";
 
 export function isDocMarkColor(value: string | null | undefined): value is (typeof DOC_MARK_COLORS)[number] {
   return Boolean(value && (DOC_MARK_COLORS as readonly string[]).includes(value));

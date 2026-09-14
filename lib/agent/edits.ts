@@ -28,7 +28,7 @@ export function selectionFromOffsets(
   const documentText = getTextIndex(editor, true).text;
   const text = (liveText || documentText.slice(from, to)).replace(/\u00a0/g, " ");
   if (!text.trim()) return null;
-  const readable = getTextIndex(editor, true).text;
+  const readable = documentText;
   const readableIndex = indexOfLoose(readable, text);
   return {
     text,
@@ -76,6 +76,24 @@ export function applyAgentEdits(
   });
   settleAgentEdits(editor);
   return edits;
+}
+
+export function applySilentEdits(
+  editor: HTMLElement,
+  drafts: Array<{ find: string; replace: string }>,
+  selection: AgentSelection | null,
+) {
+  const edits = applyAgentEdits(editor, drafts, selection);
+  const applied = edits.filter((edit) => edit.status === "pending");
+  for (const edit of applied) acceptAgentEdit(editor, edit.id, { flash: true });
+  settleAgentEdits(editor);
+  return applied.length;
+}
+
+export function clearGrammarFlash(editor: HTMLElement) {
+  editor.querySelectorAll(".grammar-flash").forEach((node) => {
+    node.replaceWith(...node.childNodes);
+  });
 }
 
 /**
@@ -162,14 +180,14 @@ function ensureBlockStructure(editor: HTMLElement) {
   }
 }
 
-export function acceptAgentEdit(editor: HTMLElement, id: string) {
+export function acceptAgentEdit(editor: HTMLElement, id: string, options?: { flash?: boolean }) {
   editor.querySelectorAll(`.agent-edit[data-edit-id="${cssId(id)}"]`).forEach((wrap) => {
     structuralRestores.delete(id);
-    unwrapAgentEdit(wrap);
+    unwrapAgentEdit(wrap, options?.flash);
   });
 }
 
-function unwrapAgentEdit(wrap: Element) {
+function unwrapAgentEdit(wrap: Element, flash = false) {
   const add = wrap.querySelector(":scope > .suggestion-add") ?? wrap.querySelector(".suggestion-add");
   const live = liveNodes(add ?? wrap);
   if (wrap.classList.contains("agent-edit-insert")) {
@@ -177,6 +195,18 @@ function unwrapAgentEdit(wrap: Element) {
     if (live.length) block.append(...live);
     else block.append(document.createElement("br"));
     wrap.replaceWith(block);
+    return;
+  }
+  const canFlash =
+    flash &&
+    live.length > 0 &&
+    !wrap.classList.contains("agent-edit-structural") &&
+    live.every((node) => node.nodeType === Node.TEXT_NODE || (node instanceof HTMLElement && !/^(DIV|P|H1|H2|H3|UL|OL|LI|TABLE|TR|TD|TH|BLOCKQUOTE)$/.test(node.tagName)));
+  if (canFlash) {
+    const mark = document.createElement("span");
+    mark.className = "grammar-flash";
+    mark.append(...live);
+    wrap.replaceWith(mark);
     return;
   }
   wrap.replaceWith(...live);

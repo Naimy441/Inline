@@ -2,6 +2,7 @@
 
 import {
   forwardRef,
+  memo,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -14,6 +15,7 @@ import {
   handleTab,
   maybeConvertMarkdownList,
   sanitizeCopiedHtml,
+  selectionBlockStyle,
   selectionFontMetrics,
   suggestionDelete,
   suggestionInsert,
@@ -23,16 +25,18 @@ import {
 import { constrainImage, normalizeImages, selectImage, selectedImage } from "@/lib/images";
 import { sanitizeStoredHtml, serializeEditorHtml } from "@/lib/documentStore";
 import {
-  PAGE_BREAK_HEIGHT,
-  PAGE_CONTENT_HEIGHT,
-  PAGE_CONTENT_WIDTH,
   countWords,
+  DEFAULT_PAGE_LAYOUT,
   getPlainText,
   isEditorVisuallyEmpty,
   needsReflow,
+  pageBreakHeight,
+  pageContentHeight,
+  pageContentWidth,
   preserveCaret,
   reflowPages,
   visualScale,
+  type PageLayout,
 } from "@/lib/pagination";
 import type { ViewMode } from "@/components/MenuBar";
 
@@ -54,6 +58,7 @@ export type EditorHandle = {
     underline: boolean;
     font: string;
     fontSize: string;
+    blockStyle: "normal" | "title" | "subtitle" | "h1" | "h2" | "h3";
     align: "left" | "center" | "right" | "justify";
     list: "ul" | "ol" | null;
   };
@@ -69,27 +74,29 @@ type Props = {
   substitutions: boolean;
   columns: number;
   lineSpacing: string;
+  pageLayout: PageLayout;
   initialHtml?: string;
   onMetricsChange: (metrics: EditorMetrics) => void;
   onActiveChange?: () => void;
-  onContentChange?: (html: string) => void;
+  onContentChange?: (html?: string) => void;
   onSlashQuery?: (query: string | null, rect: DOMRect | null) => void;
   onReady?: () => void;
 };
 
-function applyEditorMinHeight(editor: HTMLElement, pageCount: number) {
+function applyEditorMinHeight(editor: HTMLElement, pageCount: number, layout: PageLayout) {
   const minHeight =
-    pageCount * PAGE_CONTENT_HEIGHT + Math.max(0, pageCount - 1) * PAGE_BREAK_HEIGHT;
+    pageCount * pageContentHeight(layout) + Math.max(0, pageCount - 1) * pageBreakHeight(layout);
   editor.style.minHeight = `${minHeight}px`;
 }
 
-export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurface(
+export const EditorSurface = memo(forwardRef<EditorHandle, Props>(function EditorSurface(
   {
     mode,
     showInvisibles,
     substitutions,
     columns,
     lineSpacing,
+    pageLayout = DEFAULT_PAGE_LAYOUT,
     initialHtml,
     onMetricsChange,
     onActiveChange,
@@ -102,7 +109,12 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
   const editorRef = useRef<HTMLDivElement>(null);
   const composingRef = useRef(false);
   const rafRef = useRef<number>(0);
+  const metricsTimerRef = useRef(0);
+  const lastPagesRef = useRef(1);
+  const lastWordsRef = useRef(0);
+  const lastCharsRef = useRef(0);
   const restoredRef = useRef(false);
+  const focusedOnReadyRef = useRef(false);
   const initialHtmlRef = useRef(initialHtml);
   const onContentChangeRef = useRef(onContentChange);
   const onSlashQueryRef = useRef(onSlashQuery);
@@ -122,19 +134,38 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
   modeRef.current = mode;
   substitutionsRef.current = substitutions;
 
-  const publishMetrics = useCallback(
+  const publishPageCount = useCallback(
     (pageCount: number) => {
       const editor = editorRef.current;
       if (!editor) return;
-      // Pending suggestions represent the proposed document to users, so
-      // counts must ignore deleted text and include inserted text.
-      const text = getPlainText(editor, true);
-      applyEditorMinHeight(editor, pageCount);
+      applyEditorMinHeight(editor, pageCount, pageLayout);
+      if (pageCount === lastPagesRef.current) return;
+      lastPagesRef.current = pageCount;
       onMetricsChange({
         pageCount,
-        wordCount: countWords(text),
-        charCount: text.length,
+        wordCount: lastWordsRef.current,
+        charCount: lastCharsRef.current,
       });
+    },
+    [onMetricsChange, pageLayout],
+  );
+
+  const scheduleWordMetrics = useCallback(
+    (pageCount: number) => {
+      lastPagesRef.current = pageCount;
+      window.clearTimeout(metricsTimerRef.current);
+      metricsTimerRef.current = window.setTimeout(() => {
+        const editor = editorRef.current;
+        if (!editor) return;
+        const text = getPlainText(editor, true);
+        lastWordsRef.current = countWords(text);
+        lastCharsRef.current = text.length;
+        onMetricsChange({
+          pageCount: lastPagesRef.current,
+          wordCount: lastWordsRef.current,
+          charCount: lastCharsRef.current,
+        });
+      }, 160);
     },
     [onMetricsChange],
   );
@@ -142,15 +173,18 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
   const reflow = useCallback(() => {
     const editor = editorRef.current;
     if (!editor) return;
-    normalizeImages(editor);
-    if (!needsReflow(editor)) {
-      publishMetrics(1);
+    if (editor.querySelector("img")) normalizeImages(editor, pageLayout);
+
+    if (!needsReflow(editor, pageLayout)) {
+      publishPageCount(1);
+      scheduleWordMetrics(1);
     } else {
-      const pageCount = preserveCaret(editor, () => reflowPages(editor));
-      publishMetrics(pageCount);
+      const pageCount = preserveCaret(editor, () => reflowPages(editor, pageLayout));
+      publishPageCount(pageCount);
+      scheduleWordMetrics(pageCount);
     }
-    onContentChangeRef.current?.(serializeEditorHtml(editor));
-  }, [publishMetrics]);
+    onContentChangeRef.current?.();
+  }, [pageLayout, publishPageCount, scheduleWordMetrics]);
 
   const scheduleReflow = useCallback(() => {
     cancelAnimationFrame(rafRef.current);
@@ -168,11 +202,17 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
         editor.innerHTML = sanitizeStoredHtml(initialHtmlRef.current);
         restoredRef.current = true;
       }
-      editor.focus();
+      if (!focusedOnReadyRef.current) {
+        focusedOnReadyRef.current = true;
+        editor.focus();
+        onReadyRef.current?.();
+      }
       reflow();
-      onReadyRef.current?.();
     }
-    return () => cancelAnimationFrame(rafRef.current);
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      window.clearTimeout(metricsTimerRef.current);
+    };
   }, [reflow]);
 
   useEffect(() => {
@@ -191,7 +231,7 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
       const target = event.target;
       if (!(target instanceof Node) || editor.contains(target)) return;
       if (!(target instanceof HTMLElement)) return;
-      if (target.closest("input, textarea, button, .paper-chrome")) return;
+      if (target.closest("input, textarea, button, .paper-chrome, .paper-chrome-hit, .paper-header-stack, .paper-footer-stack")) return;
       if (!target.closest(".paper, .document")) return;
       event.preventDefault();
       editor.focus({ preventScroll: true });
@@ -221,8 +261,8 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
         const dx = (event.clientX - drag.startX) / scale;
         const signed = drag.handle.includes("w") ? -dx : dx;
         const ratio = (drag.img.naturalHeight || 1) / (drag.img.naturalWidth || 1);
-        const maxW = Math.min(PAGE_CONTENT_WIDTH, editor.clientWidth || PAGE_CONTENT_WIDTH);
-        const maxH = PAGE_CONTENT_HEIGHT;
+        const maxW = Math.min(pageContentWidth(pageLayout), editor.clientWidth || pageContentWidth(pageLayout));
+        const maxH = pageContentHeight(pageLayout);
         const nextW = Math.min(maxW, Math.max(48, drag.startW + signed));
         const nextH = nextW * ratio;
         const width = nextH > maxH ? maxH / ratio : nextW;
@@ -246,7 +286,7 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [scheduleReflow]);
+  }, [pageLayout, scheduleReflow]);
 
   useImperativeHandle(ref, () => ({
     focus: () => editorRef.current?.focus(),
@@ -280,6 +320,7 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
         underline: document.queryCommandState("underline"),
         font: metrics.family,
         fontSize: `${metrics.sizePt}pt`,
+        blockStyle: editor ? selectionBlockStyle(editor) : "normal",
         align: document.queryCommandState("justifyCenter")
           ? "center"
           : document.queryCommandState("justifyRight")
@@ -334,7 +375,7 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
       onLoadCapture={(event) => {
         const img = event.target;
         if (!(img instanceof HTMLImageElement)) return;
-        constrainImage(img);
+        constrainImage(img, pageLayout);
         scheduleReflow();
       }}
       onMouseDown={(event) => {
@@ -365,14 +406,16 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
       onBeforeInput={(event) => {
         if (modeRef.current !== "suggesting") return;
         const input = event.nativeEvent as InputEvent;
+        const inputType = typeof input.inputType === "string" ? input.inputType : "";
         const editor = editorRef.current;
         if (!editor) return;
-        if (input.inputType === "insertText" && input.data) {
+        if (inputType === "insertText" && input.data) {
           event.preventDefault();
           suggestionInsert(editor, input.data);
           scheduleReflow();
+          return;
         }
-        if (input.inputType.startsWith("delete")) {
+        if (inputType.startsWith("delete")) {
           event.preventDefault();
           suggestionDelete(editor);
           scheduleReflow();
@@ -424,6 +467,12 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
           scheduleReflow();
           return;
         }
+        if (modeRef.current === "suggesting" && (event.key === "Backspace" || event.key === "Delete")) {
+          event.preventDefault();
+          suggestionDelete(editor);
+          scheduleReflow();
+          return;
+        }
         if (event.key === "Backspace" || event.key === "Delete") {
           if (selectedImage(editor)) {
             event.preventDefault();
@@ -460,7 +509,7 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
       }}
     />
   );
-});
+}));
 
 function extendEditorSelection(
   editor: HTMLElement,

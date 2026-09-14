@@ -1,5 +1,9 @@
 /** Letter page geometry. CSS `in` is 96px, matching these constants. */
 export const DPI = 96;
+
+export function cssInches(px: number) {
+  return `${px / DPI}in`;
+}
 export const PAGE_WIDTH = 8.5 * DPI;
 export const PAGE_HEIGHT = 11 * DPI;
 export const PAGE_MARGIN = 1 * DPI;
@@ -7,6 +11,54 @@ export const PAGE_GAP = 24;
 export const PAGE_CONTENT_WIDTH = PAGE_WIDTH - PAGE_MARGIN * 2;
 export const PAGE_CONTENT_HEIGHT = PAGE_HEIGHT - PAGE_MARGIN * 2;
 export const PAGE_BREAK_HEIGHT = PAGE_MARGIN * 2 + PAGE_GAP;
+
+export type PaperSize = "letter" | "a4" | "legal";
+
+export type PageLayout = {
+  paperSize: PaperSize;
+  width: number;
+  height: number;
+  marginTop: number;
+  marginRight: number;
+  marginBottom: number;
+  marginLeft: number;
+};
+
+export const DEFAULT_PAGE_LAYOUT: PageLayout = {
+  paperSize: "letter",
+  width: PAGE_WIDTH,
+  height: PAGE_HEIGHT,
+  marginTop: PAGE_MARGIN,
+  marginRight: PAGE_MARGIN,
+  marginBottom: PAGE_MARGIN,
+  marginLeft: PAGE_MARGIN,
+};
+
+export const PAPER_SIZES: Record<PaperSize, { label: string; width: number; height: number }> = {
+  letter: { label: "Letter (8.5 × 11 in)", width: 8.5 * DPI, height: 11 * DPI },
+  a4: { label: "A4 (8.27 × 11.69 in)", width: 8.27 * DPI, height: 11.69 * DPI },
+  legal: { label: "Legal (8.5 × 14 in)", width: 8.5 * DPI, height: 14 * DPI },
+};
+
+export function pageContentWidth(layout: PageLayout) {
+  return Math.max(96, layout.width - layout.marginLeft - layout.marginRight);
+}
+
+export function pageContentHeight(layout: PageLayout) {
+  return Math.max(96, layout.height - layout.marginTop - layout.marginBottom);
+}
+
+export function pageBreakHeight(layout: PageLayout) {
+  return layout.marginTop + layout.marginBottom + PAGE_GAP;
+}
+
+export function createPageLayout(
+  paperSize: PaperSize,
+  margins: Pick<PageLayout, "marginTop" | "marginRight" | "marginBottom" | "marginLeft"> = DEFAULT_PAGE_LAYOUT,
+): PageLayout {
+  const paper = PAPER_SIZES[paperSize];
+  return { paperSize, width: paper.width, height: paper.height, ...margins };
+}
 
 const BREAK_ATTR = "data-page-break";
 const PUSH_ATTR = "data-page-push";
@@ -94,16 +146,16 @@ function rejectBreaks(node: Node, proposed = false): number {
   return NodeFilter.FILTER_SKIP;
 }
 
-function lineWalker(root: HTMLElement): TreeWalker {
-  return document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
-    acceptNode: rejectBreaks,
-  });
-}
-
 export function visualScale(root: HTMLElement): number {
   const visual = root.getBoundingClientRect().width;
   const layout = root.offsetWidth || PAGE_WIDTH;
   return visual / layout || 1;
+}
+
+function lineWalker(root: HTMLElement): TreeWalker {
+  return document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
+    acceptNode: rejectBreaks,
+  });
 }
 
 function localY(root: HTMLElement, clientY: number, scale: number): number {
@@ -168,9 +220,25 @@ export function getRawText(root: HTMLElement, proposed = false): string {
 
 type DomPoint = { node: Node; offset: number };
 
+type IndexSegment =
+  | {
+      kind: "text";
+      node: Text;
+      nodeOffset: number;
+      textStart: number;
+      length: number;
+    }
+  | {
+      kind: "break";
+      start: DomPoint;
+      end: DomPoint;
+      textStart: number;
+    };
+
 type TextIndex = {
   text: string;
-  points: DomPoint[];
+  root: HTMLElement;
+  segments: IndexSegment[];
 };
 
 /**
@@ -194,41 +262,57 @@ export function getTextIndex(root: HTMLElement, proposed = false): TextIndex {
     },
   });
   const textParts: string[] = [];
-  const points: DomPoint[] = [];
+  const segments: IndexSegment[] = [];
   let previousBlock: Element | null = null;
-  let previousPoint: DomPoint | null = null;
+  let previousEnd: DomPoint | null = null;
+  let textStart = 0;
   let node: Node | null;
 
-  const appendChar = (value: string, start: DomPoint, end: DomPoint) => {
-    textParts.push(value);
-    if (!points.length) points.push(start);
-    points.push(end);
-    previousPoint = end;
+  const pushBreak = (start: DomPoint, end: DomPoint) => {
+    textParts.push("\n");
+    segments.push({ kind: "break", start, end, textStart });
+    textStart += 1;
+    previousEnd = end;
+  };
+
+  const pushText = (textNode: Text, from: number, to: number) => {
+    const length = to - from;
+    if (length <= 0) return;
+    textParts.push(textNode.data.slice(from, to));
+    segments.push({ kind: "text", node: textNode, nodeOffset: from, textStart, length });
+    textStart += length;
+    previousEnd = { node: textNode, offset: to };
   };
 
   while ((node = walker.nextNode())) {
     if (node instanceof HTMLElement && node.tagName === "BR") {
       const parent = node.parentNode;
       if (!parent) continue;
-      const index = [...parent.childNodes].indexOf(node);
-      appendChar("\n", { node: parent, offset: index }, { node: parent, offset: index + 1 });
+      const index = childIndex(parent, node);
+      pushBreak({ node: parent, offset: index }, { node: parent, offset: index + 1 });
       previousBlock = blockOf(node);
       continue;
     }
     if (node.nodeType !== Node.TEXT_NODE || !node.textContent) continue;
     const textNode = node as Text;
     const block = blockOf(textNode);
-    if (textParts.length && !textParts[textParts.length - 1].endsWith("\n") && block !== previousBlock && previousPoint) {
-      appendChar("\n", previousPoint, { node: textNode, offset: 0 });
+    if (textParts.length && !textParts[textParts.length - 1].endsWith("\n") && block !== previousBlock && previousEnd) {
+      pushBreak(previousEnd, { node: textNode, offset: 0 });
     }
-    for (let offset = 0; offset < textNode.data.length; offset += 1) {
-      appendChar(textNode.data[offset], { node: textNode, offset }, { node: textNode, offset: offset + 1 });
-    }
+    pushText(textNode, 0, textNode.data.length);
     previousBlock = block;
   }
 
-  if (!points.length) points.push({ node: root, offset: 0 });
-  return { text: textParts.join(""), points };
+  return { text: textParts.join(""), root, segments };
+}
+
+function childIndex(parent: Node, node: Node) {
+  let index = 0;
+  for (let child = parent.firstChild; child; child = child.nextSibling) {
+    if (child === node) return index;
+    index += 1;
+  }
+  return index;
 }
 
 export function rangeFromTextOffsets(root: HTMLElement, start: number, end: number, proposed = true): Range | null {
@@ -253,33 +337,69 @@ export function countWords(text: string): number {
 
 export type TextRange = { start: number; end: number };
 
-function textOffsetAt(root: HTMLElement, container: Node, offset: number, proposed: boolean): number | null {
-  if (container !== root && !root.contains(container)) return null;
-  const index = getTextIndex(root, proposed);
-  const target = { node: container, offset };
-  for (let position = index.points.length - 1; position >= 0; position -= 1) {
-    if (compareDomPoints(index.points[position], target) <= 0) return position;
-  }
-  return 0;
-}
-
 function pointFromOffset(index: TextIndex, offset: number): DomPoint | null {
-  if (!index.points.length) return null;
-  return index.points[Math.max(0, Math.min(offset, index.points.length - 1))];
+  if (!index.segments.length) return { node: index.root, offset: 0 };
+  const clamped = Math.max(0, Math.min(offset, index.text.length));
+  for (const seg of index.segments) {
+    const length = seg.kind === "text" ? seg.length : 1;
+    const segEnd = seg.textStart + length;
+    if (clamped > segEnd) continue;
+    if (seg.kind === "text") {
+      return { node: seg.node, offset: seg.nodeOffset + (clamped - seg.textStart) };
+    }
+    return clamped === seg.textStart ? seg.start : seg.end;
+  }
+  const last = index.segments[index.segments.length - 1];
+  if (last.kind === "text") {
+    return { node: last.node, offset: last.nodeOffset + last.length };
+  }
+  return last.end;
 }
 
-function compareDomPoints(left: DomPoint, right: DomPoint) {
-  const a = document.createRange();
-  const b = document.createRange();
+function offsetFromDomPoint(index: TextIndex, target: DomPoint): number {
+  if (target.node.nodeType === Node.TEXT_NODE) {
+    for (const seg of index.segments) {
+      if (seg.kind === "text" && seg.node === target.node) {
+        const inner = target.offset - seg.nodeOffset;
+        return seg.textStart + Math.max(0, Math.min(inner, seg.length));
+      }
+    }
+  }
+
+  if (!index.segments.length) return 0;
+
+  let probe: Range;
   try {
-    a.setStart(left.node, left.offset);
-    a.collapse(true);
-    b.setStart(right.node, right.offset);
-    b.collapse(true);
-    return a.compareBoundaryPoints(Range.START_TO_START, b);
+    probe = document.createRange();
+    probe.setStart(target.node, target.offset);
+    probe.collapse(true);
   } catch {
     return 0;
   }
+
+  const compare = (point: DomPoint) => {
+    const other = document.createRange();
+    try {
+      other.setStart(point.node, point.offset);
+      other.collapse(true);
+      return probe.compareBoundaryPoints(Range.START_TO_START, other);
+    } catch {
+      return 0;
+    }
+  };
+
+  for (const seg of index.segments) {
+    const start = seg.kind === "text" ? { node: seg.node, offset: seg.nodeOffset } : seg.start;
+    const end = seg.kind === "text" ? { node: seg.node, offset: seg.nodeOffset + seg.length } : seg.end;
+    if (compare(end) > 0) continue;
+    if (compare(start) <= 0) return seg.textStart;
+    if (seg.kind === "text") {
+      const inner = Math.max(0, Math.min(target.offset - seg.nodeOffset, seg.length));
+      return seg.textStart + inner;
+    }
+    return seg.textStart + 1;
+  }
+  return index.text.length;
 }
 
 export function saveCaretOffset(root: HTMLElement): number | null {
@@ -291,10 +411,13 @@ export function saveSelectionRange(root: HTMLElement, proposed = true): TextRang
   const selection = window.getSelection();
   if (!selection || selection.rangeCount === 0) return null;
   const range = selection.getRangeAt(0);
-  const start = textOffsetAt(root, range.startContainer, range.startOffset, proposed);
-  const end = textOffsetAt(root, range.endContainer, range.endOffset, proposed);
-  if (start == null || end == null) return null;
-  return { start, end };
+  const ancestor = range.commonAncestorContainer;
+  if (ancestor !== root && !root.contains(ancestor)) return null;
+  const index = getTextIndex(root, proposed);
+  return {
+    start: offsetFromDomPoint(index, { node: range.startContainer, offset: range.startOffset }),
+    end: offsetFromDomPoint(index, { node: range.endContainer, offset: range.endOffset }),
+  };
 }
 
 export function restoreSelectionRange(root: HTMLElement, range: TextRange, proposed = true) {
@@ -305,8 +428,12 @@ export function restoreSelectionRange(root: HTMLElement, range: TextRange, propo
   const end = pointFromOffset(index, Math.max(range.start, range.end));
   if (!start || !end) return;
   const next = document.createRange();
-  next.setStart(start.node, start.offset);
-  next.setEnd(end.node, end.offset);
+  try {
+    next.setStart(start.node, start.offset);
+    next.setEnd(end.node, end.offset);
+  } catch {
+    return;
+  }
   selection.removeAllRanges();
   selection.addRange(next);
 }
@@ -431,7 +558,7 @@ export function getContentBottom(root: HTMLElement): number {
   return max;
 }
 
-export function reflowPages(root: HTMLElement): number {
+export function reflowPages(root: HTMLElement, layout: PageLayout = DEFAULT_PAGE_LAYOUT): number {
   stripPageBreaks(root);
   const scale = visualScale(root);
 
@@ -446,8 +573,10 @@ export function reflowPages(root: HTMLElement): number {
 
   while (safety++ < 50) {
     const breaks = root.querySelectorAll(`[${BREAK_ATTR}]`).length;
-    const pageBottom = (breaks + 1) * PAGE_CONTENT_HEIGHT + breaks * PAGE_BREAK_HEIGHT;
-    const pageStart = breaks * (PAGE_CONTENT_HEIGHT + PAGE_BREAK_HEIGHT);
+    const contentHeight = pageContentHeight(layout);
+    const breakHeight = pageBreakHeight(layout);
+    const pageBottom = (breaks + 1) * contentHeight + breaks * breakHeight;
+    const pageStart = breaks * (contentHeight + breakHeight);
 
     let changed = false;
     root.querySelectorAll(`[${MANUAL_BREAK_ATTR}]`).forEach((node) => {
@@ -545,10 +674,10 @@ export function isEditorVisuallyEmpty(root: HTMLElement): boolean {
   return blocks <= 1;
 }
 
-export function needsReflow(root: HTMLElement): boolean {
+export function needsReflow(root: HTMLElement, layout: PageLayout = DEFAULT_PAGE_LAYOUT): boolean {
   if (root.querySelector(`[${BREAK_ATTR}]`)) return true;
   if (root.querySelector(`[${MANUAL_BREAK_ATTR}]`)) return true;
-  return getContentBottom(root) > PAGE_CONTENT_HEIGHT + 1;
+  return getContentBottom(root) > pageContentHeight(layout) + 1;
 }
 
 export function preserveCaret<T>(root: HTMLElement, fn: () => T): T {

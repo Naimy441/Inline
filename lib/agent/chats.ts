@@ -1,8 +1,11 @@
 import { DEFAULT_MODEL } from "@/lib/agent/models";
 import type { AgentChat, PendingEdit } from "@/lib/agent/types";
 
-const STORAGE_KEY = "inline-chats-v1";
 const MAX_CHATS = 40;
+
+function chatKey(documentId: string) {
+  return `inline-chats-v2:${documentId}`;
+}
 
 export type StoredChats = {
   chats: AgentChat[];
@@ -32,10 +35,10 @@ export function createChat(
   };
 }
 
-export function loadChats(): StoredChats | null {
-  if (typeof window === "undefined") return null;
+export function loadChats(documentId: string): StoredChats | null {
+  if (typeof window === "undefined" || !documentId) return null;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(chatKey(documentId));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<StoredChats>;
     if (!Array.isArray(parsed.chats) || parsed.chats.length === 0) return null;
@@ -54,20 +57,23 @@ export function loadChats(): StoredChats | null {
   }
 }
 
-export function saveChats(session: {
-  chats: AgentChat[];
-  activeId: string;
-  open: boolean;
-  minimized: boolean;
-  drafts?: Record<string, string>;
-}) {
-  if (typeof window === "undefined") return;
+export function saveChats(
+  documentId: string,
+  session: {
+    chats: AgentChat[];
+    activeId: string;
+    open: boolean;
+    minimized: boolean;
+    drafts?: Record<string, string>;
+  },
+) {
+  if (typeof window === "undefined" || !documentId) return;
   const trimmed = session.chats
     .slice()
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, MAX_CHATS);
   window.localStorage.setItem(
-    STORAGE_KEY,
+    chatKey(documentId),
     JSON.stringify({
       chats: trimmed,
       activeId: session.activeId,
@@ -76,6 +82,11 @@ export function saveChats(session: {
       drafts: cleanDrafts(session.drafts, trimmed),
     }),
   );
+}
+
+export function clearChats(documentId: string) {
+  if (typeof window === "undefined" || !documentId) return;
+  window.localStorage.removeItem(chatKey(documentId));
 }
 
 export function cleanDrafts(value: unknown, chats: AgentChat[]) {

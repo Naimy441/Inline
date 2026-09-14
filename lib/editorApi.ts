@@ -401,10 +401,26 @@ export function applyBlockStyle(
     h3: "h3",
   } as const;
   document.execCommand("formatBlock", false, map[style]);
+  const blocks = blocksInSelection(editor);
+  const selected = blocks.length ? blocks : [closestBlock(editor)].filter((block): block is HTMLElement => Boolean(block));
+  for (const block of selected) {
+    block.classList.remove("style-title", "style-subtitle", "style-h1", "style-h2", "style-h3");
+    if (style !== "normal") block.classList.add(`style-${style}`);
+  }
+}
+
+export function selectionBlockStyle(editor: HTMLElement): "normal" | "title" | "subtitle" | "h1" | "h2" | "h3" {
   const block = closestBlock(editor);
-  if (!block) return;
-  block.classList.remove("style-title", "style-subtitle", "style-h1", "style-h2", "style-h3");
-  if (style !== "normal") block.classList.add(`style-${style}`);
+  if (!block) return "normal";
+  if (block.classList.contains("style-title")) return "title";
+  if (block.classList.contains("style-subtitle")) return "subtitle";
+  if (block.classList.contains("style-h1")) return "h1";
+  if (block.classList.contains("style-h2")) return "h2";
+  if (block.classList.contains("style-h3")) return "h3";
+  if (block.tagName === "H1") return "h1";
+  if (block.tagName === "H2") return "h2";
+  if (block.tagName === "H3") return "h3";
+  return "normal";
 }
 
 export function setAlignment(editor: HTMLElement, align: "left" | "center" | "right" | "justify") {

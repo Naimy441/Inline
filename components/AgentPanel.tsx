@@ -1340,8 +1340,8 @@ function hunkIsLong(edit: PendingEdit) {
   return text.length > 140 || text.split(/\n/).length > 3;
 }
 
-function clipHunk(text: string) {
-  const clean = text.replace(/\s+/g, " ").trim();
+function clipHunk(text: unknown) {
+  const clean = typeof text === "string" ? text.replace(/\s+/g, " ").trim() : "";
   return clean.length > 92 ? `${clean.slice(0, 92).trim()}…` : clean;
 }
 

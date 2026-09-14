@@ -293,6 +293,111 @@ function PlusIcon() {
   );
 }
 
+export const BLOCK_STYLES = [
+  { value: "normal", label: "Normal text" },
+  { value: "title", label: "Title" },
+  { value: "subtitle", label: "Subtitle" },
+  { value: "h1", label: "Heading 1" },
+  { value: "h2", label: "Heading 2" },
+  { value: "h3", label: "Heading 3" },
+] as const;
+
+export type BlockStyleValue = (typeof BLOCK_STYLES)[number]["value"];
+
+export const ZOOM_OPTIONS = [
+  { value: "fit", label: "Fit" },
+  { value: "0.75", label: "75%" },
+  { value: "1", label: "100%" },
+  { value: "1.25", label: "125%" },
+  { value: "1.5", label: "150%" },
+] as const;
+
+export type ZoomValue = (typeof ZOOM_OPTIONS)[number]["value"];
+
+type ToolbarSelectProps<T extends string> = {
+  value: T;
+  options: ReadonlyArray<{ value: T; label: string }>;
+  onPick: (value: T) => void;
+  ariaLabel: string;
+  variant?: "style" | "zoom";
+};
+
+export function ToolbarSelect<T extends string>({
+  value,
+  options,
+  onPick,
+  ariaLabel,
+  variant = "style",
+}: ToolbarSelectProps<T>) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const frozenRange = useRef<Range | null>(null);
+  const current = options.find((option) => option.value === value) ?? options[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => {
+      if (rootRef.current?.contains(event.target as Node)) return;
+      setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div
+      ref={rootRef}
+      className={`toolbar-menu toolbar-menu-${variant}`}
+      onMouseDown={(event) => {
+        freezeRange(frozenRange);
+        event.preventDefault();
+      }}
+    >
+      <button
+        type="button"
+        className={`toolbar-menu-btn is-${variant}`}
+        aria-label={ariaLabel}
+        aria-expanded={open}
+        title={ariaLabel}
+        onClick={() => setOpen((next) => !next)}
+      >
+        <span className="toolbar-menu-label">{current.label}</span>
+        <ChevronIcon />
+      </button>
+      {open && (
+        <div className={`font-popover toolbar-menu-popover is-${variant}`} role="listbox" aria-label={ariaLabel}>
+          {options.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              role="option"
+              aria-selected={value === option.value}
+              className="font-option toolbar-menu-option"
+              data-active={value === option.value}
+              data-style={variant === "style" ? option.value : undefined}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                restoreRange(frozenRange.current);
+                onPick(option.value);
+                setOpen(false);
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const LINE_SPACINGS = [
   { value: "1", label: "Single" },
   { value: "1.15", label: "1.15" },

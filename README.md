@@ -138,18 +138,6 @@ GENERAL FEATURES
 - Collaborative Editing
 - Light/Dark Mode
 
-## Agent editing contract
-
-Inline treats the document as a canonical logical text index instead of a collection of DOM text nodes. The index includes visible text, line breaks, and block boundaries, so an agent can target exact words, paragraph breaks, multi-paragraph ranges, and empty replacements. Edits support explicit `replace`, `insert`, and `delete` intent plus a zero-based `occurrence` for duplicate text.
-
-Cross-block edits are shown as one reversible structural suggestion. Accepting commits the proposed structure; rejecting restores the original block HTML. Locked regions are checked before changes are applied, and every agent turn receives a snapshot for rollback.
-
-Adjacent line-level patches are coalesced by their canonical source offsets before they reach the editor. This produces one consecutive page diff and one matching chat hunk for a paragraph-sized rewrite, while non-adjacent changes remain independently reviewable.
-
-Long documents include a paragraph index, outline, ranked retrieval hints, and the complete bounded source text. Retrieval narrows attention but is never the source of truth for an edit. Server tools run in bounded inspect/revise rounds before client-side actions are returned, while citation results are kept as structured source cards.
-
-Additional prompts submitted during an active run are retained in a FIFO queue with their highlighted context captured at submission time. Queued work can be removed before it starts, and stopping the current run does not silently discard the queue.
-
-
 TODO:
-Switch to tailwind
+Switch to Tailwind
+Make something like an MCP tool system where the AI makes changes in real time and you see them update the document. Because currently it sends the whole doc and history every single time... and processes the entire response all at once, which is a horrible system

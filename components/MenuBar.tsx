@@ -14,6 +14,8 @@ type Props = {
   showHeader: boolean;
   showFooter: boolean;
   showPageNumbers: boolean;
+  pageNumberLocation: "header" | "footer";
+  differentFirstPage: boolean;
   substitutions: boolean;
   screenReader: boolean;
   darkMode: boolean;
@@ -68,7 +70,18 @@ export function MenuBar(props: Props) {
   return (
     <nav className="menubar" aria-label="Document menus">
       {menu("file", "File", [
-        { label: "Print", action: "print", shortcut: "⌘P" },
+        { label: "Back to home", action: "home" },
+        { label: "Make a copy", action: "make-copy" },
+        { label: "Page setup", action: "page-setup", writes: true },
+        "sep",
+        { label: "Download as text", action: "download-text" },
+        { label: "Download as Markdown", action: "download-markdown" },
+        { label: "Download as HTML", action: "download-html" },
+        { label: "Download as Word", action: "download-docx" },
+        { label: "Save as PDF", action: "print", shortcut: "⌘P" },
+        { label: "Move to trash", action: "trash", writes: true },
+        "sep",
+        { label: "Print", action: "print" },
       ])}
       {menu("edit", "Edit", [
         { label: "Undo", action: "undo", shortcut: "⌘Z", writes: true },
@@ -144,6 +157,9 @@ export function MenuBar(props: Props) {
         { label: "Header", action: "header", checked: props.showHeader },
         { label: "Footer", action: "footer", checked: props.showFooter },
         { label: "Page numbers", action: "page-numbers", checked: props.showPageNumbers },
+        { label: "Page numbers in header", action: "page-numbers-header", checked: props.showPageNumbers && props.pageNumberLocation === "header" },
+        { label: "Page numbers in footer", action: "page-numbers-footer", checked: props.showPageNumbers && props.pageNumberLocation === "footer" },
+        { label: "Different first page", action: "different-first-page", checked: props.differentFirstPage },
         { label: "Clear formatting", action: "clear-format", writes: true },
       ])}
       {menu("tools", "Tools", [
