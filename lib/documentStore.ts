@@ -41,8 +41,8 @@ export type DocumentDraft = Omit<StoredDocument, "id" | "version" | "updatedAt" 
 export const DOCUMENTS_STORAGE_KEY = "inline-documents-v2";
 export const DOCUMENT_STORAGE_KEY = "inline-document-v1";
 
-/** Inline boot script: set the tab title from the stored document before React hydrates. */
-export const documentTitleBootScript = `try{var id=new URLSearchParams(location.search).get("doc");if(!id){document.title="Inline"}else{var docs=JSON.parse(localStorage.getItem(${JSON.stringify(DOCUMENTS_STORAGE_KEY)})||"[]");var doc=Array.isArray(docs)?docs.find(function(item){return item&&item.id===id&&!item.deletedAt&&item.title;}):null;if(doc)document.title=String(doc.title).replace(/\\s+/g," ").trim()+" - Inline"}}catch(e){}`;
+/** Set the browser tab title from localStorage before React hydrates. */
+export const documentTitleBootScript = `try{var p=new URLSearchParams(location.search).get("doc");if(!p){document.title="Inline"}else{var raw=localStorage.getItem(${JSON.stringify(DOCUMENTS_STORAGE_KEY)});var docs=raw?JSON.parse(raw):[];var d=Array.isArray(docs)?docs.find(function(x){return x&&x.id===p&&!x.deletedAt}):null;var t=d&&typeof d.title==="string"?d.title.replace(/\\s+/g," ").trim():"";document.title=(t||"Untitled document")+" - Inline"}}catch(e){}`;
 
 export function listDocuments(options: { includeTrashed?: boolean } = {}): StoredDocument[] {
   const documents = readDocuments();

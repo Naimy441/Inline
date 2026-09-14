@@ -2,10 +2,14 @@ import { DEFAULT_MODEL } from "@/lib/agent/models";
 import type { AgentChat, PendingEdit } from "@/lib/agent/types";
 
 const MAX_CHATS = 40;
+const CHAT_KEY_PREFIX = "inline-chats-v2:";
 
 function chatKey(documentId: string) {
-  return `inline-chats-v2:${documentId}`;
+  return `${CHAT_KEY_PREFIX}${documentId}`;
 }
+
+/** Reserve the chat column before React hydrates so the doc toolbar measures at the right width. */
+export const chatLayoutBootScript = `try{var p=new URLSearchParams(location.search).get("doc");if(p){var raw=localStorage.getItem(${JSON.stringify(CHAT_KEY_PREFIX)}+p);var c=raw?JSON.parse(raw):null;if(c&&c.open&&!c.minimized)document.documentElement.dataset.chat="open";else if(c&&c.open&&c.minimized)document.documentElement.dataset.chat="min"}else{delete document.documentElement.dataset.chat}}catch(e){}`;
 
 export type StoredChats = {
   chats: AgentChat[];

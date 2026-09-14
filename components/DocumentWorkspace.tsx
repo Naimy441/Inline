@@ -154,12 +154,6 @@ const TOOLBAR_GROUP_FALLBACK: Record<ToolbarOverflowId, number> = {
   lists: 144,
 };
 
-function toolbarPackWidth(parts: number[], sepW: number, gap: number) {
-  if (!parts.length) return 0;
-  const seps = parts.length - 1;
-  return parts.reduce((sum, part) => sum + part, 0) + seps * (sepW + 2 * gap);
-}
-
 const CHROME_FROM_PX = 0.5 * DPI;
 const CHROME_LINE_PX = 20;
 const CHROME_BAR_PX = 36;
@@ -313,30 +307,42 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
   const inlineContextRef = useRef<AgentSelection | null>(null);
   const suppressContextSyncRef = useRef(false);
   const toolbarRef = useRef<HTMLDivElement>(null);
-  const toolbarMeasureRef = useRef<HTMLDivElement>(null);
   const toolbarWidths = useRef<Partial<Record<ToolbarOverflowId, number>>>({});
   const [toolbarOverflow, setToolbarOverflow] = useState<ToolbarOverflowId[]>([]);
   const [toolbarMoreOpen, setToolbarMoreOpen] = useState(false);
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (!docReady) return;
-    const next = `${title || "Untitled document"} - Inline`;
+    const next = `${title.trim() || "Untitled document"} - Inline`;
     const apply = () => {
       if (document.title !== next) document.title = next;
+      const tag = document.querySelector("title");
+      if (tag && tag.textContent !== next) tag.textContent = next;
     };
     apply();
-    const titleEl = document.querySelector("title");
     const observer = new MutationObserver(apply);
-    if (titleEl) observer.observe(titleEl, { childList: true, characterData: true, subtree: true });
-    observer.observe(document.head, { childList: true });
-    return () => observer.disconnect();
+    observer.observe(document.head, { subtree: true, childList: true, characterData: true });
+    const stop = window.setTimeout(() => observer.disconnect(), 2500);
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(stop);
+    };
   }, [docReady, title]);
+
+  useEffect(() => {
+    if (agentOpen && !agentMinimized && !focusMode) {
+      document.documentElement.dataset.chat = "open";
+    } else if (agentOpen && agentMinimized && !focusMode) {
+      document.documentElement.dataset.chat = "min";
+    } else {
+      delete document.documentElement.dataset.chat;
+    }
+  }, [agentOpen, agentMinimized, focusMode]);
 
   useLayoutEffect(() => {
     const storedDoc = loadDocument(workspaceId);
     if (storedDoc) {
       setTitle(storedDoc.title);
-      document.title = `${storedDoc.title} - Inline`;
       setInitialHtml(storedDoc.html);
       setHeaderText(storedDoc.headerText);
       setFooterText(storedDoc.footerText);
@@ -1896,20 +1902,17 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
   useLayoutEffect(() => {
     const toolbar = toolbarRef.current;
     if (!toolbar) return;
-    const measure = toolbarMeasureRef.current;
     const update = () => {
       if (toolbar.clientWidth < 160) return;
       for (const id of TOOLBAR_OVERFLOW_GROUPS) {
-        const probed =
-          measure?.querySelector(`[data-measure-group="${id}"]`) ??
-          toolbar.querySelector(`:scope > [data-toolbar-group="${id}"]`);
-        if (probed instanceof HTMLElement && probed.offsetWidth > 0) toolbarWidths.current[id] = probed.offsetWidth;
+        const el = toolbar.querySelector(`:scope > [data-toolbar-group="${id}"]`);
+        if (el instanceof HTMLElement) toolbarWidths.current[id] = el.offsetWidth;
       }
       const history = toolbar.querySelector(':scope > [data-toolbar-group="history"]');
       const more = toolbar.querySelector(":scope > .toolbar-more");
       const sepEl = toolbar.querySelector(":scope > .toolbar-sep");
       const historyW = history instanceof HTMLElement ? history.offsetWidth : 56;
-      const moreW = more instanceof HTMLElement && more.offsetWidth > 0 ? more.offsetWidth : 28;
+      const moreW = more instanceof HTMLElement ? more.offsetWidth : 28;
       const gap = Number.parseFloat(getComputedStyle(toolbar).gap) || 1;
       let sepW = 9;
       if (sepEl instanceof HTMLElement) {
@@ -1918,17 +1921,21 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
       }
       const aiGroup = toolbar.querySelector(':scope > [data-toolbar-group="ai"]');
       const aiW = aiGroup instanceof HTMLElement ? aiGroup.offsetWidth : 58;
-      const groupWidth = (id: ToolbarOverflowId) => toolbarWidths.current[id] ?? TOOLBAR_GROUP_FALLBACK[id];
+      const budget = toolbar.clientWidth - aiW - sepW - gap;
+      if (budget < 80) return;
       let best = 0;
       for (let count = TOOLBAR_OVERFLOW_GROUPS.length; count >= 0; count -= 1) {
         const hasMore = count < TOOLBAR_OVERFLOW_GROUPS.length;
-        const parts = [
-          historyW,
-          ...TOOLBAR_OVERFLOW_GROUPS.slice(0, count).map(groupWidth),
-          ...(hasMore ? [moreW] : []),
-          aiW,
-        ];
-        if (toolbarPackWidth(parts, sepW, gap) <= toolbar.clientWidth) {
+        let content = historyW + (hasMore ? moreW : 0);
+        for (let i = 0; i < count; i += 1) {
+          const id = TOOLBAR_OVERFLOW_GROUPS[i];
+          content += toolbarWidths.current[id] ?? TOOLBAR_GROUP_FALLBACK[id];
+        }
+        const leftParts = 1 + count + (hasMore ? 1 : 0);
+        const seps = Math.max(0, leftParts - 1);
+        const children = leftParts + seps;
+        const used = content + seps * sepW + (children - 1) * gap;
+        if (used <= budget - 2) {
           best = count;
           break;
         }
@@ -1941,45 +1948,12 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
     const observer = new ResizeObserver(update);
     observer.observe(toolbar);
     update();
-    let nested = 0;
-    const frame = window.requestAnimationFrame(() => {
-      update();
-      nested = window.requestAnimationFrame(update);
-    });
+    const frame = window.requestAnimationFrame(update);
     return () => {
       observer.disconnect();
       window.cancelAnimationFrame(frame);
-      window.cancelAnimationFrame(nested);
     };
-  }, [font, fontSize, agentOpen, agentMinimized, focusMode, chatsReady]);
-
-  useLayoutEffect(() => {
-    const app = toolbarRef.current?.closest(".app");
-    if (!app) return;
-    const apply = () => {
-      const header = app.querySelector(".header");
-      const wrap = app.querySelector(".toolbar-wrap");
-      const bottom = Math.max(
-        header instanceof HTMLElement ? header.getBoundingClientRect().bottom : 0,
-        wrap instanceof HTMLElement ? wrap.getBoundingClientRect().bottom : 0,
-      );
-      if (bottom > 40) {
-        document.documentElement.style.setProperty("--chat-top", `${Math.round(bottom)}px`);
-      }
-    };
-    apply();
-    const observer = new ResizeObserver(apply);
-    const header = app.querySelector(".header");
-    const wrap = app.querySelector(".toolbar-wrap");
-    if (header) observer.observe(header);
-    if (wrap) observer.observe(wrap);
-    window.addEventListener("resize", apply);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", apply);
-      document.documentElement.style.removeProperty("--chat-top");
-    };
-  }, [agentOpen, agentMinimized, focusMode, docReady]);
+  }, [font, fontSize, agentOpen, agentMinimized, focusMode]);
 
   useEffect(() => {
     if (!toolbarMoreOpen) return;
@@ -2338,6 +2312,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
         .filter(Boolean)
         .join(" ")}
     >
+      {docReady ? <title>{`${title.trim() || "Untitled document"} - Inline`}</title> : null}
       <header className="header">
         <button className="logo logo-button" type="button" aria-label="Inline home" onClick={onGoHome}>
           <InlineMark />
@@ -2347,6 +2322,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
           <input
             className="title-input"
             value={title}
+            size={Math.max(10, title.length + 2)}
             aria-label="Document title"
             onChange={(event) => setTitle(event.target.value)}
           />
@@ -2381,13 +2357,6 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
       </header>
 
       <div className="toolbar-wrap">
-        <div className="toolbar-measure" ref={toolbarMeasureRef} aria-hidden inert>
-          {TOOLBAR_OVERFLOW_GROUPS.map((id) => (
-            <span key={id} className="toolbar-group" data-measure-group={id}>
-              {renderOverflowGroup(id)}
-            </span>
-          ))}
-        </div>
         <div className="toolbar" ref={toolbarRef} role="toolbar" aria-label="Formatting">
           <span className="toolbar-group" data-toolbar-group="history">
             <button className="tool" type="button" title="Undo" onClick={() => void handleAction("undo")}>
@@ -3040,6 +3009,10 @@ const PALETTE_COMMANDS: PaletteCommand[] = [
   { id: "ask-inline", label: "Open chat", group: "Agent", shortcut: "⌘J" },
   { id: "inline-edit", label: "Inline edit", group: "Agent", shortcut: "⌘K", hint: "Edit the selection without opening chat" },
   { id: "fix-grammar", label: "Fix grammar", group: "Agent", shortcut: "⌘⇧G" },
+  { id: "clean-ai", label: "Clean AI writing", group: "Agent", hint: "Tropes, em dashes, watermarks" },
+  { id: "writing-lint", label: "Writing lint", group: "Agent", shortcut: "⌘⇧L" },
+  { id: "suggest-tone", label: "Suggest tone", group: "Agent" },
+  { id: "summarize", label: "Summarize and ideate", group: "Agent" },
   { id: "address-comments", label: "Address all comments", group: "Agent" },
   { id: "history", label: "Version history", group: "Document", shortcut: "⌘⇧H" },
   { id: "focus-mode", label: "Focus mode", group: "Document", shortcut: "⌘⇧F" },

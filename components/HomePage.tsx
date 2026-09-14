@@ -29,12 +29,8 @@ export function HomePage({ onOpenDocument }: Props) {
   const refresh = () => setDocuments(listDocuments({ includeTrashed: true }));
 
   useEffect(() => {
-    if (!new URLSearchParams(window.location.search).get("doc")) {
-      document.title = "Inline";
-    }
-  }, []);
-
-  useEffect(() => {
+    document.title = "Inline";
+    delete document.documentElement.dataset.chat;
     refresh();
     const storedView = window.localStorage.getItem("inline-home-view");
     if (storedView === "grid" || storedView === "list") setView(storedView);
@@ -154,6 +150,7 @@ export function HomePage({ onOpenDocument }: Props) {
 
   return (
     <div className="home-shell" onClick={() => setMenuId(null)}>
+      <title>Inline</title>
       <header className="home-header">
         <a
           className="home-brand"

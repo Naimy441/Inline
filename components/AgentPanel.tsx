@@ -168,7 +168,7 @@ export function AgentPanel({
   const pending = chat?.turns.flatMap((turn) => turn.edits.filter((edit) => edit.status === "pending")) ?? [];
   const tasks = chat?.tasks ?? [];
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const stored = Number(window.localStorage.getItem(CHAT_WIDTH_KEY));
     if (Number.isFinite(stored) && stored > 0) setWidth(clampChatWidth(stored));
     setWidthReady(true);
@@ -245,18 +245,17 @@ export function AgentPanel({
     if (!row || !measure) return;
     const update = () => {
       const budget = row.clientWidth;
+      if (budget < 80) return;
       const attach = measure.querySelector("[data-measure='attach']") as HTMLElement | null;
       const more = measure.querySelector("[data-measure='more']") as HTMLElement | null;
       const items = COMPOSER_CONTROLS.map((id) => measure.querySelector(`[data-measure='${id}']`) as HTMLElement | null);
-      const widths = items.map((item) => item?.offsetWidth ?? 0);
-      if (budget < 80 || widths.some((value) => value <= 0)) return;
       const gap = 2;
-      const attachWidth = attach?.offsetWidth || 28;
-      const moreWidth = more?.offsetWidth || 28;
+      const attachWidth = attach?.offsetWidth ?? 28;
+      const moreWidth = more?.offsetWidth ?? 28;
       let best = 0;
       for (let count = items.length; count >= 0; count -= 1) {
         let used = attachWidth;
-        for (let i = 0; i < count; i += 1) used += widths[i] + gap;
+        for (let i = 0; i < count; i += 1) used += (items[i]?.offsetWidth ?? 0) + gap;
         if (count < items.length) used += moreWidth + gap;
         if (used <= budget) {
           best = count;
@@ -269,17 +268,12 @@ export function AgentPanel({
     const observer = new ResizeObserver(update);
     observer.observe(row);
     update();
-    let nested = 0;
-    const frame = window.requestAnimationFrame(() => {
-      update();
-      nested = window.requestAnimationFrame(update);
-    });
+    const frame = window.requestAnimationFrame(update);
     return () => {
       observer.disconnect();
       window.cancelAnimationFrame(frame);
-      window.cancelAnimationFrame(nested);
     };
-  }, [width, chat?.mode, chat?.model, preserveTone]);
+  }, [width, chat?.mode, chat?.model, preserveTone, open]);
 
   useEffect(() => {
     if (menu === "more" && overflowIds.length === 0) setMenu(null);
