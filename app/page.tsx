@@ -17,9 +17,13 @@ function InlineApp() {
   return <HomePage onOpenDocument={(id) => router.push(`/?doc=${encodeURIComponent(id)}`)} />;
 }
 
+function BootShell() {
+  return <div className="app" aria-busy="true" />;
+}
+
 export default function Home() {
   return (
-    <Suspense fallback={<HomePage onOpenDocument={() => undefined} />}>
+    <Suspense fallback={<BootShell />}>
       <InlineApp />
     </Suspense>
   );

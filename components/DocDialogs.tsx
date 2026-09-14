@@ -501,7 +501,6 @@ export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
         <li><kbd>⌘/Ctrl</kbd>+<kbd>J</kbd> Open chat</li>
         <li><kbd>⌘/Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> Command palette</li>
         <li><kbd>⌘/Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> Fix grammar</li>
-        <li><kbd>⌘/Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd> Writing lint</li>
         <li><kbd>⌘/Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> Version history</li>
         <li><kbd>⌘/Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> Focus mode</li>
         <li><kbd>⌘/Ctrl</kbd>+<kbd>Y</kbd> Keep hovered change</li>

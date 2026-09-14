@@ -72,16 +72,21 @@ export function saveChats(
     .slice()
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, MAX_CHATS);
-  window.localStorage.setItem(
-    chatKey(documentId),
-    JSON.stringify({
-      chats: trimmed,
-      activeId: session.activeId,
-      open: session.open,
-      minimized: session.minimized,
-      drafts: cleanDrafts(session.drafts, trimmed),
-    }),
-  );
+  if (!trimmed.length) return;
+  try {
+    window.localStorage.setItem(
+      chatKey(documentId),
+      JSON.stringify({
+        chats: trimmed,
+        activeId: session.activeId,
+        open: session.open,
+        minimized: session.minimized,
+        drafts: cleanDrafts(session.drafts, trimmed),
+      }),
+    );
+  } catch {
+    /* Keep the previous backup if storage is full or blocked. */
+  }
 }
 
 export function clearChats(documentId: string) {

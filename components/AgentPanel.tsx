@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { relativeTime } from "@/lib/agent/chats";
 import {
   AGENT_MODES,
@@ -10,7 +10,14 @@ import {
   thinkingLabel,
   type AgentModelOption,
 } from "@/lib/agent/models";
-import type { AgentAttachment, AgentChat, AgentCitation, AgentMode, AgentQueueItem, AgentSelection, AgentTurn, PendingEdit, ThinkingLevel } from "@/lib/agent/types";
+import { ChainOfThought, ChainOfThoughtContent, ChainOfThoughtHeader, ChainOfThoughtStep, stepsFromLive } from "@/components/agent/ChainOfThought";
+import { CitedMessage } from "@/components/agent/CitedMessage";
+import { ContextUsage } from "@/components/agent/ContextUsage";
+import { InstructionQueue } from "@/components/agent/InstructionQueue";
+import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/agent/Reasoning";
+import { Shimmer } from "@/components/agent/Shimmer";
+import { TaskPanel } from "@/components/agent/TaskPanel";
+import type { AgentAttachment, AgentChat, AgentCitation, AgentMode, AgentQueueItem, AgentSelection, AgentStep, AgentTurn, AgentUsage, PendingEdit, ThinkingLevel } from "@/lib/agent/types";
 import { PROMPT_TEMPLATES, QUICK_PROMPTS } from "@/lib/writing/templates";
 
 const CHAT_WIDTH_KEY = "inline-chat-width";
@@ -43,7 +50,8 @@ type Props = {
   context: AgentSelection[];
   chats: AgentChat[];
   queued: AgentQueueItem[];
-  contextUsage: { used: number; limit: number };
+  contextUsage: { used: number; limit: number; usage?: AgentUsage };
+  liveSteps?: AgentStep[];
   activeChatId: string;
   models: AgentModelOption[];
   providers: { openai: boolean; anthropic: boolean };
@@ -96,6 +104,7 @@ export function AgentPanel({
   chats,
   queued,
   contextUsage,
+  liveSteps,
   activeChatId,
   models,
   providers,
@@ -208,7 +217,7 @@ export function AgentPanel({
       thread.scrollTop = thread.scrollHeight;
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [chat?.turns, busy, liveThinking, livePhase, livePrompt, liveMessage, liveEdits, historyOpen]);
+  }, [chat?.turns, busy, liveThinking, livePhase, livePrompt, liveMessage, liveEdits, liveSteps, historyOpen]);
 
   useEffect(() => {
     if (!menu) return;
@@ -239,13 +248,15 @@ export function AgentPanel({
       const attach = measure.querySelector("[data-measure='attach']") as HTMLElement | null;
       const more = measure.querySelector("[data-measure='more']") as HTMLElement | null;
       const items = COMPOSER_CONTROLS.map((id) => measure.querySelector(`[data-measure='${id}']`) as HTMLElement | null);
+      const widths = items.map((item) => item?.offsetWidth ?? 0);
+      if (budget < 80 || widths.some((value) => value <= 0)) return;
       const gap = 2;
-      const attachWidth = attach?.offsetWidth ?? 28;
-      const moreWidth = more?.offsetWidth ?? 28;
+      const attachWidth = attach?.offsetWidth || 28;
+      const moreWidth = more?.offsetWidth || 28;
       let best = 0;
       for (let count = items.length; count >= 0; count -= 1) {
         let used = attachWidth;
-        for (let i = 0; i < count; i += 1) used += (items[i]?.offsetWidth ?? 0) + gap;
+        for (let i = 0; i < count; i += 1) used += widths[i] + gap;
         if (count < items.length) used += moreWidth + gap;
         if (used <= budget) {
           best = count;
@@ -258,7 +269,16 @@ export function AgentPanel({
     const observer = new ResizeObserver(update);
     observer.observe(row);
     update();
-    return () => observer.disconnect();
+    let nested = 0;
+    const frame = window.requestAnimationFrame(() => {
+      update();
+      nested = window.requestAnimationFrame(update);
+    });
+    return () => {
+      observer.disconnect();
+      window.cancelAnimationFrame(frame);
+      window.cancelAnimationFrame(nested);
+    };
   }, [width, chat?.mode, chat?.model, preserveTone]);
 
   useEffect(() => {
@@ -341,6 +361,7 @@ export function AgentPanel({
           )}
         </div>
         <div className="chat-head-actions">
+          {!historyOpen && <ContextUsage used={contextUsage.used} limit={contextUsage.limit} usage={contextUsage.usage} />}
           <button
             type="button"
             className="chat-icon-btn"
@@ -417,99 +438,24 @@ export function AgentPanel({
             />
           ))}
           {busy && (
-            <div className="chat-live">
-              {livePrompt ? (
-                <div className="chat-live-prompt chat-prompt">
-                  <div className="chat-prompt-body is-open">
-                    <p>{livePrompt}</p>
-                    {liveSelection ? (
-                      <div className="chat-user-chip">
-                        <SelectionIcon />
-                        <span>{clipHunk(liveSelection)}</span>
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              ) : null}
-              {!liveMessage && (
-                <div className="chat-status">
-                  <span className="chat-shimmer">{phase}</span>
-                </div>
-              )}
-              {liveTools.length ? (
-                <p className="chat-tools-silent">{liveTools.map((name) => name.replace(/_/g, " ")).join(" · ")}</p>
-              ) : null}
-              {liveThinking ? (
-                <p className="chat-trace is-live">
-                  {liveThinking}
-                  {!liveEdits.length && !liveMessage ? <span className="chat-caret" /> : null}
-                </p>
-              ) : null}
-              {liveEdits.length > 0 && (
-                <>
-                  <div className="chat-tool">
-                    <DocIcon />
-                    Edited the document
-                    <em>
-                      {liveEdits.length} {liveEdits.length === 1 ? "change" : "changes"}
-                    </em>
-                  </div>
-                  {liveEdits.map((edit) => (
-                    <Hunk key={edit.id} edit={edit} onJump={onJump} onAccept={onAccept} onReject={onReject} />
-                  ))}
-                </>
-              )}
-              {liveMessage ? (
-                <div className="chat-assistant">
-                  {liveMessage.split("\n").map((line, index, lines) => (
-                    <p key={`live-${index}`}>
-                      {line || "\u00a0"}
-                      {index === lines.length - 1 ? <span className="chat-caret" /> : null}
-                    </p>
-                  ))}
-                </div>
-              ) : null}
-              {liveCitations.length > 0 && (
-                <CitationList citations={liveCitations} onInsert={onInsertCitation} />
-              )}
-            </div>
+            <LiveTurn
+              phase={phase}
+              prompt={livePrompt}
+              selection={liveSelection}
+              thinking={liveThinking}
+              steps={liveSteps ?? stepsFromLive({ phase, tools: liveTools, editCount: liveEdits.length, hasMessage: Boolean(liveMessage) })}
+              edits={liveEdits}
+              message={liveMessage}
+              citations={liveCitations}
+              onJump={onJump}
+              onAccept={onAccept}
+              onReject={onReject}
+              onInsertCitation={onInsertCitation}
+            />
           )}
           {error && <p className="chat-error">{error}</p>}
-          {tasks.length > 0 && (
-            <div className="chat-tasks">
-              <p>Tasks</p>
-              {tasks.map((task) => (
-                <label key={task.id} className={task.status === "done" ? "is-done" : undefined}>
-                  <input
-                    type="checkbox"
-                    checked={task.status === "done"}
-                    onChange={() => onToggleTask(task.id)}
-                  />
-                  <span>
-                    <strong>{task.title}</strong>
-                    {task.kind ? <em>{task.kind}</em> : null}
-                  </span>
-                </label>
-              ))}
-            </div>
-          )}
-          {queued.length > 0 && (
-            <div className="chat-queue" aria-label="Queued instructions">
-              <div className="chat-queue-head">
-                <p>Up next</p>
-                <span>{queued.length}</span>
-              </div>
-              {queued.map((item, index) => (
-                <div key={item.id} className="chat-queue-row">
-                  <span className="chat-queue-index">{index + 1}</span>
-                  <span className="chat-queue-prompt">{item.prompt}</span>
-                  <button type="button" onClick={() => onCancelQueued(item.id)} aria-label={`Remove queued instruction ${index + 1}`}>
-                    <CloseIcon />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+          <TaskPanel tasks={tasks} onToggle={onToggleTask} />
+          <InstructionQueue items={queued} onCancel={onCancelQueued} />
         </div>
       )}
 
@@ -571,7 +517,6 @@ export function AgentPanel({
               ))}
             </div>
           )}
-          <ContextMeter used={contextUsage.used} limit={contextUsage.limit} />
           <div className={`chat-composer-field${inputFade || busy ? " is-fade" : ""}`}>
             <textarea
               ref={inputRef}
@@ -1137,6 +1082,78 @@ function useOpenTransition(open: boolean, ms = 160) {
   return shown;
 }
 
+function LiveTurn({
+  phase,
+  prompt,
+  selection,
+  thinking,
+  steps,
+  edits,
+  message,
+  citations,
+  onJump,
+  onAccept,
+  onReject,
+  onInsertCitation,
+}: {
+  phase: string;
+  prompt: string;
+  selection: string | null;
+  thinking: string;
+  steps: AgentStep[];
+  edits: PendingEdit[];
+  message: string;
+  citations: AgentCitation[];
+  onJump: (id: string) => void;
+  onAccept: (id: string) => void;
+  onReject: (id: string) => void;
+  onInsertCitation: (citation: AgentCitation) => void;
+}) {
+  return (
+    <div className="chat-live">
+      {prompt ? (
+        <div className="chat-live-prompt chat-prompt">
+          <div className="chat-prompt-body is-open">
+            <p>{prompt}</p>
+            {selection ? (
+              <div className="chat-user-chip">
+                <SelectionIcon />
+                <span>{clipHunk(selection)}</span>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+      {thinking ? (
+        <Reasoning isStreaming={!message && !edits.length}>
+          <ReasoningTrigger />
+          <ReasoningContent>{thinking}</ReasoningContent>
+        </Reasoning>
+      ) : !message && !edits.length ? (
+        <div className="chat-status">
+          <Shimmer>{phase}</Shimmer>
+        </div>
+      ) : null}
+      {steps.length ? (
+        <ChainOfThought defaultOpen>
+          <ChainOfThoughtHeader>{phase}</ChainOfThoughtHeader>
+          <ChainOfThoughtContent>
+            {steps.map((step) => (
+              <ChainOfThoughtStep key={step.id} label={step.title} description={step.detail} status={step.status} hits={step.hits} />
+            ))}
+          </ChainOfThoughtContent>
+        </ChainOfThought>
+      ) : null}
+      {edits.map((edit) => (
+        <Hunk key={edit.id} edit={edit} onJump={onJump} onAccept={onAccept} onReject={onReject} />
+      ))}
+      {message ? (
+        <CitedMessage text={message} citations={citations} onInsert={onInsertCitation} streaming />
+      ) : null}
+    </div>
+  );
+}
+
 function TurnBlock({
   turn,
   canRevert,
@@ -1154,10 +1171,13 @@ function TurnBlock({
   onRevert: () => void;
   onInsertCitation: (citation: AgentCitation) => void;
 }) {
-  const [traceOpen, setTraceOpen] = useState(false);
   const [promptOpen, setPromptOpen] = useState(false);
-  const applied = turn.edits.filter((edit) => edit.status !== "missed").length;
   const longPrompt = turn.prompt.length > 160 || turn.prompt.split("\n").length > 4;
+  const toolSteps = turn.tools?.map((tool, index) => ({
+    id: `${turn.id}-${tool.name}-${index}`,
+    title: tool.name.replace(/_/g, " "),
+    status: "complete" as const,
+  }));
   return (
     <section className="chat-turn">
       <div className="chat-prompt">
@@ -1188,34 +1208,34 @@ function TurnBlock({
           </div>
         )}
       </div>
-      {turn.thinking && (
-        <div className="chat-trace-wrap">
-          <button type="button" className="chat-trace-toggle" onClick={() => setTraceOpen((value) => !value)}>
-            <span className="chat-trace-label">{traceLabel(turn.mode, turn.durationMs)}</span>
-            <ChevronIcon />
-          </button>
-          {traceOpen && <p className="chat-trace">{turn.thinking}</p>}
-        </div>
-      )}
-      {applied > 0 && (
-        <div className="chat-tool">
-          <DocIcon />
-          Edited the document
-          <em>
-            {applied} {applied === 1 ? "change" : "changes"}
-          </em>
-        </div>
-      )}
+      {turn.thinking ? (
+        <Reasoning isStreaming={false} duration={turn.durationMs ? Math.max(1, Math.round(turn.durationMs / 1000)) : undefined}>
+          <ReasoningTrigger />
+          <ReasoningContent>{turn.thinking}</ReasoningContent>
+        </Reasoning>
+      ) : null}
+      {toolSteps?.length ? (
+        <ChainOfThought defaultOpen={false}>
+          <ChainOfThoughtHeader>Steps</ChainOfThoughtHeader>
+          <ChainOfThoughtContent>
+            {toolSteps.map((step) => (
+              <ChainOfThoughtStep key={step.id} label={step.title} status={step.status} />
+            ))}
+          </ChainOfThoughtContent>
+        </ChainOfThought>
+      ) : null}
       {turn.edits.map((edit) => (
         <Hunk key={edit.id} edit={edit} onJump={onJump} onAccept={onAccept} onReject={onReject} />
       ))}
-      <div className="chat-assistant">
-        {turn.message.split("\n").map((line, index) => (
-          <p key={`${turn.id}-${index}`}>{line || "\u00a0"}</p>
-        ))}
-        {turn.mock && <p className="chat-muted">Mock proposal — add an API key for a model response.</p>}
-      </div>
-      {turn.citations?.length ? <CitationList citations={turn.citations} onInsert={onInsertCitation} /> : null}
+      {turn.message ? (
+        <CitedMessage
+          text={turn.message}
+          citations={turn.citations ?? []}
+          onInsert={onInsertCitation}
+          footer={turn.mock ? <p className="chat-muted">Mock proposal — add an API key for a model response.</p> : null}
+        />
+      ) : null}
+      {turn.error ? <p className="chat-error">{turn.error}</p> : null}
     </section>
   );
 }
@@ -1224,51 +1244,6 @@ const MemoTurnBlock = memo(
   TurnBlock,
   (previous, next) => previous.turn === next.turn && previous.canRevert === next.canRevert,
 );
-
-function CitationList({
-  citations,
-  onInsert,
-}: {
-  citations: AgentCitation[];
-  onInsert: (citation: AgentCitation) => void;
-}) {
-  return (
-    <div className="chat-citations" aria-label="Sources">
-      <div className="chat-citations-head">
-        <span>Sources</span>
-        <small>Verified from Inline&apos;s catalog</small>
-      </div>
-      <div className="chat-citations-list">
-        {citations.map((citation) => (
-          <div key={citation.id} className="chat-citation-card">
-            <div className="chat-citation-copy">
-              <strong>{citation.title}</strong>
-              <span>{citation.author} · {citation.year}</span>
-            </div>
-            <button type="button" onClick={() => onInsert(citation)} title={`Insert ${citation.inline}`}>
-              {citation.inline}
-            </button>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function ContextMeter({ used, limit }: { used: number; limit: number }) {
-  const percentage = Math.min(100, Math.round((used / Math.max(1, limit)) * 100));
-  return (
-    <div className="chat-context-meter" title={`${used.toLocaleString()} of ${limit.toLocaleString()} estimated tokens`}>
-      <span className="chat-context-ring" style={{ "--context-progress": `${percentage * 3.6}deg` } as CSSProperties} />
-      <span>Context {formatTokens(used)} / {formatTokens(limit)}</span>
-    </div>
-  );
-}
-
-function formatTokens(value: number) {
-  if (value >= 1000) return `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
-  return String(value);
-}
 
 function Hunk({
   edit,
@@ -1343,13 +1318,6 @@ function hunkIsLong(edit: PendingEdit) {
 function clipHunk(text: unknown) {
   const clean = typeof text === "string" ? text.replace(/\s+/g, " ").trim() : "";
   return clean.length > 92 ? `${clean.slice(0, 92).trim()}…` : clean;
-}
-
-function traceLabel(mode: AgentMode, durationMs?: number) {
-  const verb = mode === "plan" ? "Planned" : "Thought";
-  if (!durationMs || durationMs < 400) return verb;
-  const seconds = durationMs < 1000 ? Math.round(durationMs / 100) / 10 : Math.round(durationMs / 1000);
-  return `${verb} for ${seconds}s`;
 }
 
 function statusLabel(status: PendingEdit["status"]) {
@@ -1428,15 +1396,6 @@ function ChevronIcon() {
   return (
     <svg viewBox="0 0 12 12" aria-hidden="true">
       <path d="M3 4.4 6 7.4 9 4.4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function DocIcon() {
-  return (
-    <svg viewBox="0 0 16 16" aria-hidden="true">
-      <path d="M5 2.6h4.2L12.4 6v7.4H5V2.6Z" fill="none" stroke="currentColor" strokeWidth="1.3" />
-      <path d="M9.1 2.6V6h3.2" fill="none" stroke="currentColor" strokeWidth="1.3" />
     </svg>
   );
 }

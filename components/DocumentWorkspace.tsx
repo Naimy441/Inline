@@ -77,10 +77,12 @@ import { acceptMissingEdits, createChat, loadChats, patchChat, pendingEditIds, r
 import { InlineMark } from "@/components/InlineMark";
 import { duplicateDocument, loadDocument, saveDocument, trashDocument, type HeaderAlign, type PageNumberLocation } from "@/lib/documentStore";
 import { downloadDocument } from "@/lib/documentExport";
-import { acceptAgentEdit, applyAgentEdits, applySilentEdits, captureAgentSelection, clearGrammarFlash, documentEditIds, jumpToAgentEdit, rejectAgentEdit, replaceAgentEdits, sameAgentSelection, selectionFromOffsets, settleAgentEdits } from "@/lib/agent/edits";
+import { acceptAgentEdit, appendAgentEdits, applyAgentEdits, applySilentEdits, captureAgentSelection, clearGrammarFlash, documentEditIds, jumpToAgentEdit, rejectAgentEdit, sameAgentSelection, selectionFromOffsets, settleAgentEdits } from "@/lib/agent/edits";
 import { AGENT_MODELS, DEFAULT_MODEL } from "@/lib/agent/models";
+import { collectDocumentPages } from "@/lib/agent/pages";
+import { isAbortError, isRateLimitText, publicModelError, retryAfterMsFromError } from "@/lib/agent/retry";
 import { runAgentJob } from "@/lib/agent/runJob";
-import type { AgentAttachment, AgentChat, AgentCitation, AgentEditDraft, AgentMode, AgentQueueItem, AgentSelection, AgentTask, PendingEdit, ThinkingLevel } from "@/lib/agent/types";
+import type { AgentAttachment, AgentChat, AgentCitation, AgentEditDraft, AgentMode, AgentQueueItem, AgentSelection, AgentStep, AgentTask, AgentUsage, PendingEdit, ThinkingLevel } from "@/lib/agent/types";
 import { loadHistory, pushSnapshot, saveHistory, snapshotLabel, type HistorySnapshot } from "@/lib/historyStore";
 import { listLockedRanges, wrapLockedRegion } from "@/lib/locks";
 import { lintWriting } from "@/lib/writing/lint";
@@ -151,6 +153,12 @@ const TOOLBAR_GROUP_FALLBACK: Record<ToolbarOverflowId, number> = {
   align: 172,
   lists: 144,
 };
+
+function toolbarPackWidth(parts: number[], sepW: number, gap: number) {
+  if (!parts.length) return 0;
+  const seps = parts.length - 1;
+  return parts.reduce((sum, part) => sum + part, 0) + seps * (sepW + 2 * gap);
+}
 
 const CHROME_FROM_PX = 0.5 * DPI;
 const CHROME_LINE_PX = 20;
@@ -287,10 +295,14 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [toast, setToast] = useState<{ text: string; action?: () => void } | null>(null);
   const [liveTools, setLiveTools] = useState<string[]>([]);
+  const [liveSteps, setLiveSteps] = useState<AgentStep[]>([]);
+  const [liveUsage, setLiveUsage] = useState<AgentUsage | undefined>();
   const toastTimer = useRef(0);
   const chatPersistTimer = useRef(0);
   const jobAbortRef = useRef<AbortController | null>(null);
   const jobRunningRef = useRef(false);
+  const applyingAgentRef = useRef(false);
+  const agentReflowTimer = useRef(0);
   const grammarBusyRef = useRef(false);
   const grammarDoneTimer = useRef(0);
   const grammarFlashTimer = useRef(0);
@@ -301,23 +313,30 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
   const inlineContextRef = useRef<AgentSelection | null>(null);
   const suppressContextSyncRef = useRef(false);
   const toolbarRef = useRef<HTMLDivElement>(null);
+  const toolbarMeasureRef = useRef<HTMLDivElement>(null);
   const toolbarWidths = useRef<Partial<Record<ToolbarOverflowId, number>>>({});
   const [toolbarOverflow, setToolbarOverflow] = useState<ToolbarOverflowId[]>([]);
   const [toolbarMoreOpen, setToolbarMoreOpen] = useState(false);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (!docReady) return;
     const next = `${title || "Untitled document"} - Inline`;
-    document.title = next;
-    const frame = window.requestAnimationFrame(() => {
-      document.title = next;
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [title]);
+    const apply = () => {
+      if (document.title !== next) document.title = next;
+    };
+    apply();
+    const titleEl = document.querySelector("title");
+    const observer = new MutationObserver(apply);
+    if (titleEl) observer.observe(titleEl, { childList: true, characterData: true, subtree: true });
+    observer.observe(document.head, { childList: true });
+    return () => observer.disconnect();
+  }, [docReady, title]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const storedDoc = loadDocument(workspaceId);
     if (storedDoc) {
       setTitle(storedDoc.title);
+      document.title = `${storedDoc.title} - Inline`;
       setInitialHtml(storedDoc.html);
       setHeaderText(storedDoc.headerText);
       setFooterText(storedDoc.footerText);
@@ -342,7 +361,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
     setDocReady(true);
   }, [workspaceId]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const stored = loadChats(workspaceId);
     if (stored) {
       setChats(stored.chats);
@@ -699,6 +718,30 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
   }, []);
 
   const editorEl = useCallback(() => editorRef.current?.getElement() ?? null, []);
+
+  const withAgentMutation = <T,>(fn: () => T) => {
+    applyingAgentRef.current = true;
+    try {
+      return fn();
+    } finally {
+      window.setTimeout(() => {
+        applyingAgentRef.current = false;
+      }, 0);
+    }
+  };
+
+  useEffect(() => {
+    const el = editorEl();
+    if (!el) return;
+    const onBeforeInput = () => {
+      if (applyingAgentRef.current) return;
+      if (!jobRunningRef.current && !jobAbortRef.current) return;
+      jobAbortRef.current?.abort();
+    };
+    el.addEventListener("beforeinput", onBeforeInput);
+    return () => el.removeEventListener("beforeinput", onBeforeInput);
+  }, [editorEl, editorReady]);
+
   const activeChat = chats.find((chat) => chat.id === activeChatId) ?? chats[0];
   const reviewIds = pendingEditIds(chats);
 
@@ -861,7 +904,16 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
   const executeJob = async (options: AgentJobOptions) => {
     const el = editorEl();
     const prompt = options.prompt.trim();
-    const chat = chats.find((item) => item.id === options.chatId) ?? activeChat ?? createChat();
+    const listed = chats.find((item) => item.id === options.chatId) ?? activeChat;
+    const chat = listed ?? createChat({
+      mode: options.mode,
+      model: activeChat?.model,
+      thinkingLevel: activeChat?.thinkingLevel,
+    });
+    if (!listed) {
+      setChats((list) => (list.some((item) => item.id === chat.id) ? list : [chat, ...list]));
+      setActiveChatId(chat.id);
+    }
     if (!el || !prompt || mode === "viewing") return false;
     if (pendingRevertRef.current) {
       const revertId = pendingRevertRef.current;
@@ -877,6 +929,8 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
     setAskBusy(true);
     setAskError(null);
     setLiveTools([]);
+    setLiveSteps([]);
+    setLiveUsage(undefined);
     setLivePhase((options.mode ?? chat.mode) === "plan" ? "planning" : "thinking");
     setLiveThinking("");
     setLivePrompt(prompt);
@@ -910,6 +964,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
         occurrence,
         status: status as "pending" | "accepted",
       }));
+    let queueDelayMs = 0;
     const persistTurn = (data: {
       message: string;
       thinking?: string;
@@ -919,6 +974,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
       tasks?: AgentTask[];
       tools?: { name: string; hidden?: boolean }[];
       citations?: AgentCitation[];
+      error?: string;
     }) => {
       const nextTitle = data.chatTitle?.trim() || (chat.titled ? chat.title : titleFromPrompt(prompt));
       const nextTasks: AgentTask[] = data.tasks?.length ? data.tasks : chat.tasks;
@@ -951,6 +1007,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
                     tools: data.tools,
                     citations: data.citations,
                     snapshotId,
+                    error: data.error,
                   },
                 ],
               }
@@ -965,6 +1022,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
           title,
           prompt,
           document: getPlainText(el, true),
+          pages: collectDocumentPages(el),
           selection: primaryContext
             ? { text: primaryContext.text, before: primaryContext.before, after: primaryContext.after }
             : null,
@@ -1001,39 +1059,56 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
           },
           onEdits: (drafts) => {
             if (jobMode !== "agent") return;
-            appliedEdits = replaceAgentEdits(
-              el,
-              suppressRepeatedEdits(drafts, priorEditLedger, prompt),
-              primaryContext,
-              appliedEdits ?? [],
+            appliedEdits = withAgentMutation(() =>
+              appendAgentEdits(
+                el,
+                suppressRepeatedEdits(drafts, priorEditLedger, prompt),
+                primaryContext,
+                appliedEdits ?? [],
+              ),
             );
             setLiveEdits(appliedEdits);
             setLivePhase("editing");
             setChats((list) => acceptMissingEdits(list, documentEditIds(el)));
             collapseEditorSelection(el);
-            afterEdit();
+            window.clearTimeout(agentReflowTimer.current);
+            agentReflowTimer.current = window.setTimeout(() => afterEdit(), 90);
           },
           onTool: (name) => {
             setLiveTools((list) => (list.includes(name) ? list : [...list, name]));
           },
+          onStep: (step) => {
+            setLiveSteps((list) => {
+              const index = list.findIndex((item) => item.id === step.id);
+              if (index < 0) return [...list, step];
+              const next = [...list];
+              next[index] = step;
+              return next;
+            });
+          },
+          onUsage: setLiveUsage,
           onCitations: (citations) => setLiveCitations(citations),
         },
       );
       const edits =
         appliedEdits ??
         (jobMode === "agent"
-          ? applyAgentEdits(el, suppressRepeatedEdits(data.edits ?? [], priorEditLedger, prompt), primaryContext)
+          ? withAgentMutation(() =>
+              applyAgentEdits(el, suppressRepeatedEdits(data.edits ?? [], priorEditLedger, prompt), primaryContext),
+            )
           : []);
       collapseEditorSelection(el);
       if (data.tools?.length) {
-        applyClientTools(el, data.tools, {
-          print: () => window.print(),
-          setHeader: setHeaderText,
-          showHeader: () => setShowHeader(true),
-          showPageNumbers: () => {
-            setShowPageNumbers(true);
-          },
-        });
+        withAgentMutation(() =>
+          applyClientTools(el, data.tools, {
+            print: () => window.print(),
+            setHeader: setHeaderText,
+            showHeader: () => setShowHeader(true),
+            showPageNumbers: () => {
+              setShowPageNumbers(true);
+            },
+          }),
+        );
       }
       persistTurn({
         message: data.message || "Review the proposed edits.",
@@ -1069,8 +1144,18 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
         afterEdit();
         return false;
       }
-      const message = error instanceof Error ? error.message : "The agent could not propose edits.";
+      const raw = error instanceof Error ? error.message : "The agent could not propose edits.";
+      const message = publicModelError(raw);
+      persistTurn({
+        message: streamedMessage,
+        thinking: streamedThinking,
+        edits: appliedEdits ?? [],
+        error: message,
+      });
       setAskError(message);
+      queueDelayMs = retryAfterMsFromError(raw) ?? (isRateLimitText(raw) ? 8_000 : 0);
+      setAskPrompt(prompt);
+      setChatDrafts((drafts) => ({ ...drafts, [chat.id]: prompt }));
       if (!options.silent) {
         setAgentOpen(true);
         setAgentMinimized(false);
@@ -1089,6 +1174,8 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
       setLiveEdits([]);
       setLiveCitations([]);
       setLiveTools([]);
+      setLiveSteps([]);
+      setLiveUsage(undefined);
       jobRunningRef.current = false;
       const next = jobQueueRef.current.shift();
       setQueuedJobs(jobQueueRef.current.map((item) => ({ id: item.queueId, prompt: item.prompt, selection: item.selection })));
@@ -1096,7 +1183,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
         window.setTimeout(() => {
           jobRunningRef.current = true;
           void executeJob(next);
-        }, 0);
+        }, queueDelayMs);
       }
     }
   };
@@ -1809,16 +1896,20 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
   useLayoutEffect(() => {
     const toolbar = toolbarRef.current;
     if (!toolbar) return;
+    const measure = toolbarMeasureRef.current;
     const update = () => {
+      if (toolbar.clientWidth < 160) return;
       for (const id of TOOLBAR_OVERFLOW_GROUPS) {
-        const el = toolbar.querySelector(`:scope > [data-toolbar-group="${id}"]`);
-        if (el instanceof HTMLElement) toolbarWidths.current[id] = el.offsetWidth;
+        const probed =
+          measure?.querySelector(`[data-measure-group="${id}"]`) ??
+          toolbar.querySelector(`:scope > [data-toolbar-group="${id}"]`);
+        if (probed instanceof HTMLElement && probed.offsetWidth > 0) toolbarWidths.current[id] = probed.offsetWidth;
       }
       const history = toolbar.querySelector(':scope > [data-toolbar-group="history"]');
       const more = toolbar.querySelector(":scope > .toolbar-more");
       const sepEl = toolbar.querySelector(":scope > .toolbar-sep");
       const historyW = history instanceof HTMLElement ? history.offsetWidth : 56;
-      const moreW = more instanceof HTMLElement ? more.offsetWidth : 28;
+      const moreW = more instanceof HTMLElement && more.offsetWidth > 0 ? more.offsetWidth : 28;
       const gap = Number.parseFloat(getComputedStyle(toolbar).gap) || 1;
       let sepW = 9;
       if (sepEl instanceof HTMLElement) {
@@ -1827,20 +1918,17 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
       }
       const aiGroup = toolbar.querySelector(':scope > [data-toolbar-group="ai"]');
       const aiW = aiGroup instanceof HTMLElement ? aiGroup.offsetWidth : 58;
-      const budget = toolbar.clientWidth - aiW - sepW - gap;
+      const groupWidth = (id: ToolbarOverflowId) => toolbarWidths.current[id] ?? TOOLBAR_GROUP_FALLBACK[id];
       let best = 0;
       for (let count = TOOLBAR_OVERFLOW_GROUPS.length; count >= 0; count -= 1) {
         const hasMore = count < TOOLBAR_OVERFLOW_GROUPS.length;
-        let content = historyW + (hasMore ? moreW : 0);
-        for (let i = 0; i < count; i += 1) {
-          const id = TOOLBAR_OVERFLOW_GROUPS[i];
-          content += toolbarWidths.current[id] ?? TOOLBAR_GROUP_FALLBACK[id];
-        }
-        const leftParts = 1 + count + (hasMore ? 1 : 0);
-        const seps = Math.max(0, leftParts - 1);
-        const children = leftParts + seps;
-        const used = content + seps * sepW + (children - 1) * gap;
-        if (used <= budget - 2) {
+        const parts = [
+          historyW,
+          ...TOOLBAR_OVERFLOW_GROUPS.slice(0, count).map(groupWidth),
+          ...(hasMore ? [moreW] : []),
+          aiW,
+        ];
+        if (toolbarPackWidth(parts, sepW, gap) <= toolbar.clientWidth) {
           best = count;
           break;
         }
@@ -1853,8 +1941,45 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
     const observer = new ResizeObserver(update);
     observer.observe(toolbar);
     update();
-    return () => observer.disconnect();
-  }, [font, fontSize, agentOpen, agentMinimized, focusMode]);
+    let nested = 0;
+    const frame = window.requestAnimationFrame(() => {
+      update();
+      nested = window.requestAnimationFrame(update);
+    });
+    return () => {
+      observer.disconnect();
+      window.cancelAnimationFrame(frame);
+      window.cancelAnimationFrame(nested);
+    };
+  }, [font, fontSize, agentOpen, agentMinimized, focusMode, chatsReady]);
+
+  useLayoutEffect(() => {
+    const app = toolbarRef.current?.closest(".app");
+    if (!app) return;
+    const apply = () => {
+      const header = app.querySelector(".header");
+      const wrap = app.querySelector(".toolbar-wrap");
+      const bottom = Math.max(
+        header instanceof HTMLElement ? header.getBoundingClientRect().bottom : 0,
+        wrap instanceof HTMLElement ? wrap.getBoundingClientRect().bottom : 0,
+      );
+      if (bottom > 40) {
+        document.documentElement.style.setProperty("--chat-top", `${Math.round(bottom)}px`);
+      }
+    };
+    apply();
+    const observer = new ResizeObserver(apply);
+    const header = app.querySelector(".header");
+    const wrap = app.querySelector(".toolbar-wrap");
+    if (header) observer.observe(header);
+    if (wrap) observer.observe(wrap);
+    window.addEventListener("resize", apply);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", apply);
+      document.documentElement.style.removeProperty("--chat-top");
+    };
+  }, [agentOpen, agentMinimized, focusMode, docReady]);
 
   useEffect(() => {
     if (!toolbarMoreOpen) return;
@@ -2256,6 +2381,13 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
       </header>
 
       <div className="toolbar-wrap">
+        <div className="toolbar-measure" ref={toolbarMeasureRef} aria-hidden inert>
+          {TOOLBAR_OVERFLOW_GROUPS.map((id) => (
+            <span key={id} className="toolbar-group" data-measure-group={id}>
+              {renderOverflowGroup(id)}
+            </span>
+          ))}
+        </div>
         <div className="toolbar" ref={toolbarRef} role="toolbar" aria-label="Formatting">
           <span className="toolbar-group" data-toolbar-group="history">
             <button className="tool" type="button" title="Undo" onClick={() => void handleAction("undo")}>
@@ -2543,7 +2675,8 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
         chats={chats}
         activeChatId={activeChat?.id ?? activeChatId}
         queued={queuedJobs}
-        contextUsage={{ used: contextUsed, limit: contextLimit }}
+        contextUsage={{ used: contextUsed, limit: contextLimit, usage: liveUsage }}
+        liveSteps={liveSteps.length ? liveSteps : undefined}
         models={modelCatalog}
         providers={availableProviders}
         onPromptChange={setAskPrompt}
@@ -2907,10 +3040,6 @@ const PALETTE_COMMANDS: PaletteCommand[] = [
   { id: "ask-inline", label: "Open chat", group: "Agent", shortcut: "⌘J" },
   { id: "inline-edit", label: "Inline edit", group: "Agent", shortcut: "⌘K", hint: "Edit the selection without opening chat" },
   { id: "fix-grammar", label: "Fix grammar", group: "Agent", shortcut: "⌘⇧G" },
-  { id: "clean-ai", label: "Clean AI writing", group: "Agent", hint: "Tropes, em dashes, watermarks" },
-  { id: "writing-lint", label: "Writing lint", group: "Agent", shortcut: "⌘⇧L" },
-  { id: "suggest-tone", label: "Suggest tone", group: "Agent" },
-  { id: "summarize", label: "Summarize and ideate", group: "Agent" },
   { id: "address-comments", label: "Address all comments", group: "Agent" },
   { id: "history", label: "Version history", group: "Document", shortcut: "⌘⇧H" },
   { id: "focus-mode", label: "Focus mode", group: "Document", shortcut: "⌘⇧F" },
@@ -2923,13 +3052,6 @@ const PALETTE_COMMANDS: PaletteCommand[] = [
     group: "Templates",
   })),
 ];
-
-function isAbortError(error: unknown) {
-  return (
-    (error instanceof DOMException && error.name === "AbortError") ||
-    (error instanceof Error && (error.name === "AbortError" || /aborted|AbortError/i.test(error.message)))
-  );
-}
 
 function GrammarIcon() {
   return (

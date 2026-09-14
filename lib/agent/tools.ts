@@ -5,6 +5,15 @@ import { countText, reviewProposedWriting, targetsFromToolArgs } from "@/lib/wri
 import { detectAiTropes, summarizeTropes } from "@/lib/writing/tropes";
 
 export type AgentToolName =
+  | "get_outline"
+  | "search_document"
+  | "read_document"
+  | "replace_text"
+  | "insert_text"
+  | "delete_text"
+  | "propose_tasks"
+  | "set_chat_title"
+  | "seed_document"
   | "lint_writing"
   | "count_words"
   | "detect_ai_tropes"
@@ -61,26 +70,6 @@ export const CLIENT_TOOLS: AgentToolName[] = [
   "set_alignment",
   "insert_horizontal_line",
 ];
-
-export const TOOL_GUIDE = [
-  "lint_writing { text?, words?, paragraphs?, pages?, sentences? } — metrics on a draft (or the proposed document). Pass targets to get pass/fail. Call this when the user asked for a length or you want a diagnosis.",
-  "count_words { text } — word, sentence, and paragraph counts for text you provide. Call this when the user wants a specific number of words in a sentence or passage.",
-  "detect_ai_tropes — em dashes, stock phrases, watermarks",
-  "retrieve_passages { query } — relevant chunks from long documents",
-  "search_citations { query } — catalog works for bibliographies",
-  "run_code { code } — small JavaScript for counts or transforms; no DOM",
-  "export_pdf — print / save as PDF",
-  "undo / redo — document history",
-  "insert_link { url, text? }",
-  "insert_image { url }",
-  "highlight_text { find, color? }",
-  "set_font_size { size }",
-  "toggle_list { type: ul|ol }",
-  "add_header { text }",
-  "add_page_numbers",
-  "set_alignment { align: left|center|right|justify }",
-  "insert_horizontal_line",
-].join("\n");
 
 export function isToolName(value: unknown): value is AgentToolName {
   return typeof value === "string" && (SERVER_TOOLS.includes(value as AgentToolName) || CLIENT_TOOLS.includes(value as AgentToolName));
@@ -204,24 +193,4 @@ function formatResult(value: unknown) {
   } catch {
     return String(value);
   }
-}
-
-export function parseToolCalls(raw: unknown): AgentToolCall[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((item): AgentToolCall | null => {
-      if (!item || typeof item !== "object") return null;
-      const row = item as { name?: unknown; args?: unknown; hidden?: unknown };
-      if (!isToolName(row.name)) return null;
-      const args = row.args && typeof row.args === "object" && !Array.isArray(row.args)
-        ? (row.args as Record<string, unknown>)
-        : {};
-      return {
-        id: crypto.randomUUID(),
-        name: row.name,
-        args,
-        hidden: row.hidden !== false,
-      };
-    })
-    .filter((item): item is AgentToolCall => item !== null);
 }

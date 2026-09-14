@@ -73,10 +73,18 @@ export type AgentCitation = {
   bibliography: string;
 };
 
+export type DocumentPageSlice = {
+  number: number;
+  start: number;
+  end: number;
+  text: string;
+};
+
 export type AgentRequest = {
   title: string;
   prompt: string;
   document: string;
+  pages?: DocumentPageSlice[];
   selection: Omit<AgentSelection, "start" | "end"> | null;
   selections?: Array<Omit<AgentSelection, "start" | "end">>;
   mode: AgentMode;
@@ -104,6 +112,24 @@ export type AgentResponse = {
   mock: boolean;
 };
 
+export type AgentStepStatus = "pending" | "active" | "complete";
+
+export type AgentStep = {
+  id: string;
+  name?: string;
+  title: string;
+  detail?: string;
+  status: AgentStepStatus;
+  hits?: string[];
+};
+
+export type AgentUsage = {
+  input: number;
+  output: number;
+  reasoning?: number;
+  cached?: number;
+};
+
 export type AgentStreamEvent =
   | { type: "phase"; phase: "thinking" | "planning" | "editing" | "reviewing" }
   | { type: "thinking"; delta: string }
@@ -111,6 +137,8 @@ export type AgentStreamEvent =
   | { type: "edits"; edits: AgentEditDraft[] }
   | { type: "tool"; name: string; hidden?: boolean }
   | { type: "tool_result"; name: string; hidden?: boolean }
+  | { type: "step"; step: AgentStep }
+  | { type: "usage"; usage: AgentUsage }
   | { type: "tasks"; tasks: AgentTask[] }
   | { type: "citations"; citations: AgentCitation[] }
   | { type: "done"; result: AgentResponse }
@@ -137,6 +165,7 @@ export type AgentTurn = {
   tools?: Array<{ name: string; hidden?: boolean }>;
   citations?: AgentCitation[];
   snapshotId?: string;
+  error?: string;
 };
 
 export type AgentChat = {

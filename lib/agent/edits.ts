@@ -58,6 +58,24 @@ export function replaceAgentEdits(
   return applyAgentEdits(editor, drafts, selection);
 }
 
+export function appendAgentEdits(
+  editor: HTMLElement,
+  drafts: AgentEditDraft[],
+  selection: AgentSelection | null,
+  previous: PendingEdit[] = [],
+): PendingEdit[] {
+  const fresh = drafts.filter((draft) =>
+    !previous.some((edit) =>
+      edit.find === draft.find &&
+      edit.replace === draft.replace &&
+      (edit.occurrence ?? 0) === (draft.occurrence ?? 0) &&
+      edit.status !== "rejected",
+    ),
+  );
+  if (!fresh.length) return previous;
+  return [...previous, ...applyAgentEdits(editor, fresh, selection)];
+}
+
 export function applyAgentEdits(
   editor: HTMLElement,
   drafts: Array<{ find: string; replace: string; reason?: string; operation?: "replace" | "insert" | "delete"; occurrence?: number }>,

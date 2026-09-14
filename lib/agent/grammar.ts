@@ -1,4 +1,5 @@
 import { GRAMMAR_MODEL, GRAMMAR_MODEL_FALLBACKS } from "@/lib/agent/models";
+import { fetchWithBackoff, publicModelError } from "@/lib/agent/retry";
 import type { AgentEditDraft } from "@/lib/agent/types";
 
 const SYSTEM = [
@@ -45,31 +46,39 @@ async function requestGrammarEdits(
   source: string,
   signal?: AbortSignal,
 ): Promise<{ ok: true; edits: unknown } | { ok: false; error: string }> {
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    signal,
-    body: JSON.stringify({
-      model,
-      temperature: 0,
-      max_tokens: 2048,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: SYSTEM },
-        { role: "user", content: source },
-      ],
-    }),
-  });
+  let res: Response;
+  try {
+    res = await fetchWithBackoff(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          temperature: 0,
+          max_tokens: 2048,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: SYSTEM },
+            { role: "user", content: source },
+          ],
+        }),
+      },
+      { signal, maxAttempts: 4 },
+    );
+  } catch (error) {
+    return {
+      ok: false,
+      error: publicModelError(error instanceof Error ? error.message : `Grammar model ${model} failed.`),
+    };
+  }
   const payload = (await res.json().catch(() => ({}))) as {
     choices?: Array<{ message?: { content?: string } }>;
     error?: { message?: string };
   };
-  if (!res.ok) {
-    return { ok: false, error: payload.error?.message || `Grammar model ${res.status}` };
-  }
   const parsed = parseEditsJson(payload.choices?.[0]?.message?.content ?? "");
   if (!parsed) return { ok: false, error: "Empty grammar response." };
   return { ok: true, edits: parsed };

@@ -1,5 +1,5 @@
 import { readSseData } from "@/lib/agent/sse";
-import type { AgentCitation, AgentEditDraft, AgentRequest, AgentResponse, AgentStreamEvent, AgentTask } from "@/lib/agent/types";
+import type { AgentCitation, AgentEditDraft, AgentRequest, AgentResponse, AgentStep, AgentStreamEvent, AgentTask, AgentUsage } from "@/lib/agent/types";
 
 export type AgentJobHandlers = {
   signal?: AbortSignal;
@@ -8,6 +8,8 @@ export type AgentJobHandlers = {
   onMessage?: (text: string) => void;
   onEdits?: (edits: AgentEditDraft[]) => void;
   onTool?: (name: string, hidden?: boolean) => void;
+  onStep?: (step: AgentStep) => void;
+  onUsage?: (usage: AgentUsage) => void;
   onTasks?: (tasks: AgentTask[]) => void;
   onCitations?: (citations: AgentCitation[]) => void;
 };
@@ -47,6 +49,8 @@ export async function runAgentJob(request: AgentRequest, handlers: AgentJobHandl
     }
     if (event.type === "edits") handlers.onEdits?.(event.edits);
     if (event.type === "tool") handlers.onTool?.(event.name, event.hidden);
+    if (event.type === "step") handlers.onStep?.(event.step);
+    if (event.type === "usage") handlers.onUsage?.(event.usage);
     if (event.type === "tasks") handlers.onTasks?.(event.tasks);
     if (event.type === "citations") handlers.onCitations?.(event.citations);
     if (event.type === "error") throw new Error(event.error);

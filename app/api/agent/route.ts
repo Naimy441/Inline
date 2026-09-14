@@ -1,7 +1,7 @@
 import { isAgentMode, isThinkingLevel, resolveAgentModel } from "@/lib/agent/models";
 import { runAgentStream } from "@/lib/agent/runAgent";
 import { encodeSse } from "@/lib/agent/sse";
-import type { AgentAttachment, AgentComment, AgentEditDraft, AgentHistoryMessage, AgentLockedRange, AgentPriorEdit, AgentRequest } from "@/lib/agent/types";
+import type { AgentAttachment, AgentComment, AgentEditDraft, AgentHistoryMessage, AgentLockedRange, AgentPriorEdit, AgentRequest, DocumentPageSlice } from "@/lib/agent/types";
 
 export async function POST(request: Request) {
   let body: Partial<AgentRequest>;
@@ -43,6 +43,7 @@ export async function POST(request: Request) {
           return { role: item.role, content: item.content };
         })
         .filter((item): item is AgentHistoryMessage => item !== null)
+        .slice(-16)
     : [];
 
   const comments = Array.isArray(body.comments)
@@ -112,10 +113,26 @@ export async function POST(request: Request) {
         .slice(-8)
     : [];
 
+  const pages = (Array.isArray(body.pages) ? body.pages : [])
+    .map((item): DocumentPageSlice | null => {
+      if (!item || typeof item !== "object") return null;
+      const row = item as { number?: unknown; start?: unknown; end?: unknown; text?: unknown };
+      if (typeof row.start !== "number" || typeof row.end !== "number" || typeof row.text !== "string") return null;
+      return {
+        number: typeof row.number === "number" && row.number > 0 ? Math.round(row.number) : 0,
+        start: Math.max(0, Math.round(row.start)),
+        end: Math.max(0, Math.round(row.end)),
+        text: row.text.slice(0, 20_000),
+      };
+    })
+    .filter((item): item is DocumentPageSlice => item !== null)
+    .slice(0, 80);
+
   const agentRequest: AgentRequest = {
     title: typeof body.title === "string" ? body.title : "Untitled document",
     prompt,
     document,
+    pages: pages.length ? pages : undefined,
     selection,
     selections: normalizedSelections,
     mode: isAgentMode(body.mode) ? body.mode : "agent",

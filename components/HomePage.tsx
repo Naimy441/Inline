@@ -29,6 +29,12 @@ export function HomePage({ onOpenDocument }: Props) {
   const refresh = () => setDocuments(listDocuments({ includeTrashed: true }));
 
   useEffect(() => {
+    if (!new URLSearchParams(window.location.search).get("doc")) {
+      document.title = "Inline";
+    }
+  }, []);
+
+  useEffect(() => {
     refresh();
     const storedView = window.localStorage.getItem("inline-home-view");
     if (storedView === "grid" || storedView === "list") setView(storedView);
