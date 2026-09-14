@@ -74,6 +74,7 @@ type Props = {
   onActiveChange?: () => void;
   onContentChange?: (html: string) => void;
   onSlashQuery?: (query: string | null, rect: DOMRect | null) => void;
+  onReady?: () => void;
 };
 
 function applyEditorMinHeight(editor: HTMLElement, pageCount: number) {
@@ -94,6 +95,7 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
     onActiveChange,
     onContentChange,
     onSlashQuery,
+    onReady,
   },
   ref,
 ) {
@@ -104,14 +106,17 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
   const initialHtmlRef = useRef(initialHtml);
   const onContentChangeRef = useRef(onContentChange);
   const onSlashQueryRef = useRef(onSlashQuery);
+  const onReadyRef = useRef(onReady);
   onContentChangeRef.current = onContentChange;
   onSlashQueryRef.current = onSlashQuery;
+  onReadyRef.current = onReady;
   const dragRef = useRef<{
     img: HTMLImageElement;
     handle: string;
     startX: number;
     startW: number;
   } | null>(null);
+  const selectingRef = useRef<{ node: Node; offset: number } | null>(null);
   const modeRef = useRef(mode);
   const substitutionsRef = useRef(substitutions);
   modeRef.current = mode;
@@ -121,7 +126,9 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
     (pageCount: number) => {
       const editor = editorRef.current;
       if (!editor) return;
-      const text = getPlainText(editor);
+      // Pending suggestions represent the proposed document to users, so
+      // counts must ignore deleted text and include inserted text.
+      const text = getPlainText(editor, true);
       applyEditorMinHeight(editor, pageCount);
       onMetricsChange({
         pageCount,
@@ -163,6 +170,7 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
       }
       editor.focus();
       reflow();
+      onReadyRef.current?.();
     }
     return () => cancelAnimationFrame(rafRef.current);
   }, [reflow]);
@@ -177,22 +185,55 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
   }, [columns, lineSpacing, scheduleReflow]);
 
   useEffect(() => {
-    const onMove = (event: MouseEvent) => {
-      const drag = dragRef.current;
+    const onDown = (event: MouseEvent) => {
       const editor = editorRef.current;
-      if (!drag || !editor) return;
-      const scale = visualScale(editor);
-      const dx = (event.clientX - drag.startX) / scale;
-      const signed = drag.handle.includes("w") ? -dx : dx;
-      const ratio = (drag.img.naturalHeight || 1) / (drag.img.naturalWidth || 1);
-      const maxW = Math.min(PAGE_CONTENT_WIDTH, editor.clientWidth || PAGE_CONTENT_WIDTH);
-      const maxH = PAGE_CONTENT_HEIGHT;
-      const nextW = Math.min(maxW, Math.max(48, drag.startW + signed));
-      const nextH = nextW * ratio;
-      const width = nextH > maxH ? maxH / ratio : nextW;
-      drag.img.style.width = `${Math.round(width)}px`;
+      if (!editor || modeRef.current === "viewing" || event.button !== 0) return;
+      const target = event.target;
+      if (!(target instanceof Node) || editor.contains(target)) return;
+      if (!(target instanceof HTMLElement)) return;
+      if (target.closest("input, textarea, button, .paper-chrome")) return;
+      if (!target.closest(".paper, .document")) return;
+      event.preventDefault();
+      editor.focus({ preventScroll: true });
+      const rect = editor.getBoundingClientRect();
+      const caret =
+        rangeFromPoint(
+          clampPoint(event.clientX, rect.left + 1, rect.right - 1),
+          clampPoint(event.clientY, rect.top + 1, rect.bottom - 1),
+        ) ?? rangeFromPoint(rect.left + 1, clampPoint(event.clientY, rect.top + 1, rect.bottom - 1));
+      if (!caret || !editor.contains(caret.startContainer)) return;
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(caret);
+      selectingRef.current = { node: caret.startContainer, offset: caret.startOffset };
+    };
+    window.addEventListener("mousedown", onDown, true);
+    return () => window.removeEventListener("mousedown", onDown, true);
+  }, []);
+
+  useEffect(() => {
+    const onMove = (event: MouseEvent) => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      const drag = dragRef.current;
+      if (drag) {
+        const scale = visualScale(editor);
+        const dx = (event.clientX - drag.startX) / scale;
+        const signed = drag.handle.includes("w") ? -dx : dx;
+        const ratio = (drag.img.naturalHeight || 1) / (drag.img.naturalWidth || 1);
+        const maxW = Math.min(PAGE_CONTENT_WIDTH, editor.clientWidth || PAGE_CONTENT_WIDTH);
+        const maxH = PAGE_CONTENT_HEIGHT;
+        const nextW = Math.min(maxW, Math.max(48, drag.startW + signed));
+        const nextH = nextW * ratio;
+        const width = nextH > maxH ? maxH / ratio : nextW;
+        drag.img.style.width = `${Math.round(width)}px`;
+        return;
+      }
+      if (event.buttons !== 1 || !selectingRef.current) return;
+      extendEditorSelection(editor, selectingRef.current, event.clientX, event.clientY);
     };
     const onUp = () => {
+      selectingRef.current = null;
       if (!dragRef.current) return;
       const img = dragRef.current.img;
       dragRef.current = null;
@@ -256,7 +297,7 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
     reflow: scheduleReflow,
     getText: () => {
       const editor = editorRef.current;
-      return editor ? getPlainText(editor) : "";
+      return editor ? getPlainText(editor, true) : "";
     },
     getHtml: () => {
       const editor = editorRef.current;
@@ -313,7 +354,13 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
             startX: event.clientX,
             startW: img.getBoundingClientRect().width / scale,
           };
+          return;
         }
+        window.requestAnimationFrame(() => {
+          const selection = window.getSelection();
+          if (!selection?.anchorNode || !editor.contains(selection.anchorNode)) return;
+          selectingRef.current = { node: selection.anchorNode, offset: selection.anchorOffset };
+        });
       }}
       onBeforeInput={(event) => {
         if (modeRef.current !== "suggesting") return;
@@ -414,6 +461,53 @@ export const EditorSurface = forwardRef<EditorHandle, Props>(function EditorSurf
     />
   );
 });
+
+function extendEditorSelection(
+  editor: HTMLElement,
+  anchor: { node: Node; offset: number },
+  clientX: number,
+  clientY: number,
+) {
+  const over = document.elementFromPoint(clientX, clientY);
+  if (over && editor.contains(over)) return;
+  const rect = editor.getBoundingClientRect();
+  if (!anchor.node.isConnected) return;
+  const x = clampPoint(clientX, rect.left + 1, rect.right - 1);
+  const y = clampPoint(clientY, rect.top + 1, rect.bottom - 1);
+  const caret = rangeFromPoint(x, y) ?? rangeFromPoint(x, y - 12) ?? rangeFromPoint(x, y + 12);
+  if (!caret || !editor.contains(caret.startContainer)) return;
+  const selection = window.getSelection();
+  if (!selection) return;
+  try {
+    selection.setBaseAndExtent(anchor.node, anchor.offset, caret.startContainer, caret.startOffset);
+  } catch {
+    /* The editor may have reflowed mid-drag. */
+  }
+}
+
+function rangeFromPoint(x: number, y: number): Range | null {
+  const doc = document as Document & {
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+  };
+  if (typeof doc.caretRangeFromPoint === "function") {
+    return doc.caretRangeFromPoint(x, y);
+  }
+  const pos = doc.caretPositionFromPoint?.(x, y);
+  if (!pos) return null;
+  const range = document.createRange();
+  try {
+    range.setStart(pos.offsetNode, pos.offset);
+    range.collapse(true);
+  } catch {
+    return null;
+  }
+  return range;
+}
+
+function clampPoint(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
 
 function blockText(selection: Selection | null) {
   if (!selection?.anchorNode) return "";

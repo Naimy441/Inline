@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { relativeTime } from "@/lib/agent/chats";
 import {
   AGENT_MODES,
@@ -10,7 +10,7 @@ import {
   thinkingLabel,
   type AgentModelOption,
 } from "@/lib/agent/models";
-import type { AgentAttachment, AgentChat, AgentMode, AgentSelection, AgentTurn, PendingEdit, ThinkingLevel } from "@/lib/agent/types";
+import type { AgentAttachment, AgentChat, AgentCitation, AgentMode, AgentQueueItem, AgentSelection, AgentTurn, PendingEdit, ThinkingLevel } from "@/lib/agent/types";
 import { PROMPT_TEMPLATES, QUICK_PROMPTS } from "@/lib/writing/templates";
 
 const CHAT_WIDTH_KEY = "inline-chat-width";
@@ -37,10 +37,13 @@ type Props = {
   liveSelection: string | null;
   liveMessage: string;
   liveEdits: PendingEdit[];
+  liveCitations: AgentCitation[];
   error: string | null;
   prompt: string;
-  context: AgentSelection | null;
+  context: AgentSelection[];
   chats: AgentChat[];
+  queued: AgentQueueItem[];
+  contextUsage: { used: number; limit: number };
   activeChatId: string;
   models: AgentModelOption[];
   providers: { openai: boolean; anthropic: boolean };
@@ -48,8 +51,9 @@ type Props = {
   onSubmit: () => void;
   onStop: () => void;
   onRevert: (turnId: string) => void;
-  revertSnapshotIds: string[];
   onClearContext: () => void;
+  onRevealContext: (context: AgentSelection) => void;
+  onRemoveContext: (index: number) => void;
   onMinimizedChange: (value: boolean) => void;
   onClose: () => void;
   onNewChat: () => void;
@@ -71,6 +75,8 @@ type Props = {
   onRemoveAttachment: (id: string) => void;
   onTemplate: (prompt: string) => void;
   onToggleTask: (id: string) => void;
+  onCancelQueued: (id: string) => void;
+  onInsertCitation: (citation: AgentCitation) => void;
 };
 
 export function AgentPanel({
@@ -80,12 +86,16 @@ export function AgentPanel({
   livePhase,
   liveThinking,
   livePrompt,
+  liveSelection,
   liveMessage,
   liveEdits,
+  liveCitations,
   error,
   prompt,
   context,
   chats,
+  queued,
+  contextUsage,
   activeChatId,
   models,
   providers,
@@ -93,8 +103,9 @@ export function AgentPanel({
   onSubmit,
   onStop,
   onRevert,
-  revertSnapshotIds,
   onClearContext,
+  onRevealContext,
+  onRemoveContext,
   onMinimizedChange,
   onClose,
   onNewChat,
@@ -116,11 +127,14 @@ export function AgentPanel({
   onRemoveAttachment,
   onTemplate,
   onToggleTask,
+  onCancelQueued,
+  onInsertCitation,
 }: Props) {
   const threadRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const inputEventRef = useRef(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [menu, setMenu] = useState<"mode" | "model" | "templates" | "more" | null>(null);
+  const [menu, setMenu] = useState<ComposerMenuId | null>(null);
   const [inputFade, setInputFade] = useState(false);
   const [confirmRevert, setConfirmRevert] = useState<{ id: string; later: boolean } | null>(null);
   const [overflowIds, setOverflowIds] = useState<ComposerControlId[]>([]);
@@ -180,13 +194,20 @@ export function AgentPanel({
   }, [open, minimized, historyOpen, busy, syncInputHeight]);
 
   useEffect(() => {
+    if (inputEventRef.current) {
+      inputEventRef.current = false;
+      return;
+    }
     syncInputHeight();
   }, [prompt, syncInputHeight]);
 
   useEffect(() => {
     const thread = threadRef.current;
     if (!thread) return;
-    thread.scrollTop = thread.scrollHeight;
+    const frame = window.requestAnimationFrame(() => {
+      thread.scrollTop = thread.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [chat?.turns, busy, liveThinking, livePhase, livePrompt, liveMessage, liveEdits, historyOpen]);
 
   useEffect(() => {
@@ -255,7 +276,7 @@ export function AgentPanel({
     return (
       <aside className="comments-rail chat-rail">
         <button type="button" className="comments-rail-btn" onClick={() => onMinimizedChange(false)}>
-          Chat{pending.length ? ` - ${pending.length}` : ""}
+          Chat{queued.length ? ` · ${queued.length} queued` : pending.length ? ` · ${pending.length}` : ""}
         </button>
       </aside>
     );
@@ -379,10 +400,10 @@ export function AgentPanel({
       ) : (
         <div className="chat-thread" ref={threadRef}>
           {chat?.turns.map((turn, index) => (
-            <TurnBlock
+            <MemoTurnBlock
               key={turn.id}
               turn={turn}
-              canRevert={!busy && Boolean(turn.snapshotId && revertSnapshotIds.includes(turn.snapshotId))}
+              canRevert={!busy && Boolean(turn.snapshotId)}
               onJump={onJump}
               onAccept={onAccept}
               onReject={onReject}
@@ -392,10 +413,24 @@ export function AgentPanel({
                   later: index < (chat.turns.length - 1),
                 })
               }
+              onInsertCitation={onInsertCitation}
             />
           ))}
           {busy && (
             <div className="chat-live">
+              {livePrompt ? (
+                <div className="chat-live-prompt chat-prompt">
+                  <div className="chat-prompt-body is-open">
+                    <p>{livePrompt}</p>
+                    {liveSelection ? (
+                      <div className="chat-user-chip">
+                        <SelectionIcon />
+                        <span>{clipHunk(liveSelection)}</span>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
               {!liveMessage && (
                 <div className="chat-status">
                   <span className="chat-shimmer">{phase}</span>
@@ -434,6 +469,9 @@ export function AgentPanel({
                   ))}
                 </div>
               ) : null}
+              {liveCitations.length > 0 && (
+                <CitationList citations={liveCitations} onInsert={onInsertCitation} />
+              )}
             </div>
           )}
           {error && <p className="chat-error">{error}</p>}
@@ -452,6 +490,23 @@ export function AgentPanel({
                     {task.kind ? <em>{task.kind}</em> : null}
                   </span>
                 </label>
+              ))}
+            </div>
+          )}
+          {queued.length > 0 && (
+            <div className="chat-queue" aria-label="Queued instructions">
+              <div className="chat-queue-head">
+                <p>Up next</p>
+                <span>{queued.length}</span>
+              </div>
+              {queued.map((item, index) => (
+                <div key={item.id} className="chat-queue-row">
+                  <span className="chat-queue-index">{index + 1}</span>
+                  <span className="chat-queue-prompt">{item.prompt}</span>
+                  <button type="button" onClick={() => onCancelQueued(item.id)} aria-label={`Remove queued instruction ${index + 1}`}>
+                    <CloseIcon />
+                  </button>
+                </div>
               ))}
             </div>
           )}
@@ -475,19 +530,33 @@ export function AgentPanel({
           onSubmit={(event) => {
             event.preventDefault();
             setMenu(null);
-            if (!busy) onSubmit();
+            onSubmit();
           }}
         >
-          {context && (
-            <div className="chat-context">
-              <button type="button" className="chat-context-chip" onClick={() => pending[0] && onJump(pending[0].id)}>
-                <SelectionIcon />
-                <span>Selection</span>
-                <em>{wordCount(context.text)}</em>
-              </button>
-              <button type="button" className="chat-context-remove" onClick={onClearContext} aria-label="Remove selection">
-                <CloseIcon />
-              </button>
+          {context.length > 0 && (
+            <div className="chat-context" aria-label={`${context.length} selected passage${context.length === 1 ? "" : "s"}`}>
+              {context.map((item, index) => (
+                <div className="chat-context-chip" key={`${item.start}-${item.end}-${index}`}>
+                  <button type="button" className="chat-context-main" onClick={() => onRevealContext(item)}>
+                    <SelectionIcon />
+                    <span className="chat-context-quote">“{clipHunk(item.text)}”</span>
+                    <em>{wordCount(item.text)}</em>
+                  </button>
+                  <button
+                    type="button"
+                    className="chat-context-remove"
+                    onClick={() => onRemoveContext(index)}
+                    aria-label={`Remove selection ${index + 1}`}
+                  >
+                    <CloseIcon />
+                  </button>
+                </div>
+              ))}
+              {context.length > 1 && (
+                <button type="button" className="chat-context-clear" onClick={onClearContext}>
+                  Clear all
+                </button>
+              )}
             </div>
           )}
           {attachments.length > 0 && (
@@ -502,21 +571,24 @@ export function AgentPanel({
               ))}
             </div>
           )}
+          <ContextMeter used={contextUsage.used} limit={contextUsage.limit} />
           <div className={`chat-composer-field${inputFade || busy ? " is-fade" : ""}`}>
             <textarea
               ref={inputRef}
               rows={1}
               value={prompt}
-              placeholder={placeholder}
-              readOnly={busy}
+              placeholder={busy ? "Queue another instruction…" : placeholder}
               aria-busy={busy}
               onChange={(event) => onPromptChange(event.target.value)}
-              onInput={syncInputHeight}
+              onInput={() => {
+                inputEventRef.current = true;
+                syncInputHeight();
+              }}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
                   setMenu(null);
-                  if (!busy) onSubmit();
+                  onSubmit();
                 }
               }}
             />
@@ -622,9 +694,14 @@ export function AgentPanel({
               )}
             </div>
             {busy ? (
-              <button type="button" className="chat-send is-stop" aria-label="Stop" onClick={onStop}>
-                <StopIcon />
-              </button>
+              <div className="chat-send-group">
+                <button type="button" className="chat-stop" aria-label="Stop" title="Stop current run" onClick={onStop}>
+                  <StopIcon />
+                </button>
+                <button type="submit" className="chat-send" disabled={!prompt.trim()} aria-label="Queue instruction" title="Queue instruction">
+                  <QueueIcon />
+                </button>
+              </div>
             ) : (
               <button type="submit" className="chat-send" disabled={!prompt.trim()} aria-label="Send">
                 <SendIcon />
@@ -1067,6 +1144,7 @@ function TurnBlock({
   onAccept,
   onReject,
   onRevert,
+  onInsertCitation,
 }: {
   turn: AgentTurn;
   canRevert: boolean;
@@ -1074,6 +1152,7 @@ function TurnBlock({
   onAccept: (id: string) => void;
   onReject: (id: string) => void;
   onRevert: () => void;
+  onInsertCitation: (citation: AgentCitation) => void;
 }) {
   const [traceOpen, setTraceOpen] = useState(false);
   const [promptOpen, setPromptOpen] = useState(false);
@@ -1087,7 +1166,7 @@ function TurnBlock({
           {turn.selection && (
             <div className="chat-user-chip">
               <SelectionIcon />
-              Selection
+              {turn.selections && turn.selections.length > 1 ? `${turn.selections.length} selections` : "Selection"}
             </div>
           )}
           {longPrompt && !promptOpen ? <div className="chat-prompt-fade" aria-hidden /> : null}
@@ -1136,8 +1215,59 @@ function TurnBlock({
         ))}
         {turn.mock && <p className="chat-muted">Mock proposal — add an API key for a model response.</p>}
       </div>
+      {turn.citations?.length ? <CitationList citations={turn.citations} onInsert={onInsertCitation} /> : null}
     </section>
   );
+}
+
+const MemoTurnBlock = memo(
+  TurnBlock,
+  (previous, next) => previous.turn === next.turn && previous.canRevert === next.canRevert,
+);
+
+function CitationList({
+  citations,
+  onInsert,
+}: {
+  citations: AgentCitation[];
+  onInsert: (citation: AgentCitation) => void;
+}) {
+  return (
+    <div className="chat-citations" aria-label="Sources">
+      <div className="chat-citations-head">
+        <span>Sources</span>
+        <small>Verified from Inline&apos;s catalog</small>
+      </div>
+      <div className="chat-citations-list">
+        {citations.map((citation) => (
+          <div key={citation.id} className="chat-citation-card">
+            <div className="chat-citation-copy">
+              <strong>{citation.title}</strong>
+              <span>{citation.author} · {citation.year}</span>
+            </div>
+            <button type="button" onClick={() => onInsert(citation)} title={`Insert ${citation.inline}`}>
+              {citation.inline}
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ContextMeter({ used, limit }: { used: number; limit: number }) {
+  const percentage = Math.min(100, Math.round((used / Math.max(1, limit)) * 100));
+  return (
+    <div className="chat-context-meter" title={`${used.toLocaleString()} of ${limit.toLocaleString()} estimated tokens`}>
+      <span className="chat-context-ring" style={{ "--context-progress": `${percentage * 3.6}deg` } as CSSProperties} />
+      <span>Context {formatTokens(used)} / {formatTokens(limit)}</span>
+    </div>
+  );
+}
+
+function formatTokens(value: number) {
+  if (value >= 1000) return `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
+  return String(value);
 }
 
 function Hunk({
@@ -1262,6 +1392,15 @@ function StopIcon() {
   return (
     <svg viewBox="0 0 16 16" aria-hidden="true">
       <rect x="4.2" y="4.2" width="7.6" height="7.6" rx="1.4" fill="currentColor" />
+    </svg>
+  );
+}
+
+function QueueIcon() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M4 4.2h8M4 7.9h8M4 11.6h5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="m11.2 10.3 2.2 1.7-2.2 1.7" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

@@ -102,7 +102,7 @@ function lineWalker(root: HTMLElement): TreeWalker {
 
 export function visualScale(root: HTMLElement): number {
   const visual = root.getBoundingClientRect().width;
-  const layout = root.offsetWidth || PAGE_CONTENT_WIDTH;
+  const layout = root.offsetWidth || PAGE_WIDTH;
   return visual / layout || 1;
 }
 
@@ -166,13 +166,83 @@ export function getRawText(root: HTMLElement, proposed = false): string {
   return text;
 }
 
-export function rangeFromTextOffsets(root: HTMLElement, start: number, end: number, proposed = false): Range | null {
-  const from = pointFromOffset(root, Math.min(start, end), proposed);
-  const to = pointFromOffset(root, Math.max(start, end), proposed);
+type DomPoint = { node: Node; offset: number };
+
+type TextIndex = {
+  text: string;
+  points: DomPoint[];
+};
+
+/**
+ * Build the editor's logical text coordinate space.
+ *
+ * `textContent` is not sufficient for a rich-text editor: block boundaries
+ * are meaningful characters to the agent even though they are not text nodes.
+ * Keeping the text and DOM points together makes selections, find/replace,
+ * deletion, and newline edits use exactly the same offsets.
+ */
+export function getTextIndex(root: HTMLElement, proposed = false): TextIndex {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
+    acceptNode(node) {
+      if (node instanceof HTMLElement && node.tagName === "BR") {
+        if (node.parentElement?.closest(`[${BREAK_ATTR}], [${PUSH_ATTR}], [${MANUAL_BREAK_ATTR}], .doc-image`)) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+      return rejectBreaks(node, proposed);
+    },
+  });
+  const textParts: string[] = [];
+  const points: DomPoint[] = [];
+  let previousBlock: Element | null = null;
+  let previousPoint: DomPoint | null = null;
+  let node: Node | null;
+
+  const appendChar = (value: string, start: DomPoint, end: DomPoint) => {
+    textParts.push(value);
+    if (!points.length) points.push(start);
+    points.push(end);
+    previousPoint = end;
+  };
+
+  while ((node = walker.nextNode())) {
+    if (node instanceof HTMLElement && node.tagName === "BR") {
+      const parent = node.parentNode;
+      if (!parent) continue;
+      const index = [...parent.childNodes].indexOf(node);
+      appendChar("\n", { node: parent, offset: index }, { node: parent, offset: index + 1 });
+      previousBlock = blockOf(node);
+      continue;
+    }
+    if (node.nodeType !== Node.TEXT_NODE || !node.textContent) continue;
+    const textNode = node as Text;
+    const block = blockOf(textNode);
+    if (textParts.length && !textParts[textParts.length - 1].endsWith("\n") && block !== previousBlock && previousPoint) {
+      appendChar("\n", previousPoint, { node: textNode, offset: 0 });
+    }
+    for (let offset = 0; offset < textNode.data.length; offset += 1) {
+      appendChar(textNode.data[offset], { node: textNode, offset }, { node: textNode, offset: offset + 1 });
+    }
+    previousBlock = block;
+  }
+
+  if (!points.length) points.push({ node: root, offset: 0 });
+  return { text: textParts.join(""), points };
+}
+
+export function rangeFromTextOffsets(root: HTMLElement, start: number, end: number, proposed = true): Range | null {
+  const index = getTextIndex(root, proposed);
+  const from = pointFromOffset(index, Math.min(start, end));
+  const to = pointFromOffset(index, Math.max(start, end));
   if (!from || !to) return null;
   const range = document.createRange();
-  range.setStart(from.node, from.offset);
-  range.setEnd(to.node, to.offset);
+  try {
+    range.setStart(from.node, from.offset);
+    range.setEnd(to.node, to.offset);
+  } catch {
+    return null;
+  }
   return range;
 }
 
@@ -183,71 +253,56 @@ export function countWords(text: string): number {
 
 export type TextRange = { start: number; end: number };
 
-function textOffsetAt(root: HTMLElement, container: Node, offset: number): number | null {
+function textOffsetAt(root: HTMLElement, container: Node, offset: number, proposed: boolean): number | null {
   if (container !== root && !root.contains(container)) return null;
-  const marker = document.createRange();
-  try {
-    marker.setStart(root, 0);
-    marker.setEnd(container, offset);
-  } catch {
-    return null;
+  const index = getTextIndex(root, proposed);
+  const target = { node: container, offset };
+  for (let position = index.points.length - 1; position >= 0; position -= 1) {
+    if (compareDomPoints(index.points[position], target) <= 0) return position;
   }
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode: rejectBreaks,
-  });
-  let acc = 0;
-  let node: Node | null;
-  while ((node = walker.nextNode())) {
-    const text = node as Text;
-    if (marker.comparePoint(text, 0) > 0) return acc;
-    if (marker.comparePoint(text, text.data.length) > 0) {
-      return acc + (marker.endContainer === text ? marker.endOffset : 0);
-    }
-    acc += text.data.length;
-  }
-  return acc;
+  return 0;
 }
 
-function pointFromOffset(root: HTMLElement, offset: number, proposed = false): { node: Text; offset: number } | null {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode: (node) => rejectBreaks(node, proposed),
-  });
-  let remaining = offset;
-  let node: Node | null;
-  let lastText: Text | null = null;
-  while ((node = walker.nextNode())) {
-    const text = node as Text;
-    lastText = text;
-    const length = text.data.length;
-    if (remaining <= length) {
-      return { node: text, offset: Math.max(0, remaining) };
-    }
-    remaining -= length;
+function pointFromOffset(index: TextIndex, offset: number): DomPoint | null {
+  if (!index.points.length) return null;
+  return index.points[Math.max(0, Math.min(offset, index.points.length - 1))];
+}
+
+function compareDomPoints(left: DomPoint, right: DomPoint) {
+  const a = document.createRange();
+  const b = document.createRange();
+  try {
+    a.setStart(left.node, left.offset);
+    a.collapse(true);
+    b.setStart(right.node, right.offset);
+    b.collapse(true);
+    return a.compareBoundaryPoints(Range.START_TO_START, b);
+  } catch {
+    return 0;
   }
-  if (!lastText) return null;
-  return { node: lastText, offset: lastText.data.length };
 }
 
 export function saveCaretOffset(root: HTMLElement): number | null {
-  const range = saveSelectionRange(root);
+  const range = saveSelectionRange(root, true);
   return range ? range.start : null;
 }
 
-export function saveSelectionRange(root: HTMLElement): TextRange | null {
+export function saveSelectionRange(root: HTMLElement, proposed = true): TextRange | null {
   const selection = window.getSelection();
   if (!selection || selection.rangeCount === 0) return null;
   const range = selection.getRangeAt(0);
-  const start = textOffsetAt(root, range.startContainer, range.startOffset);
-  const end = textOffsetAt(root, range.endContainer, range.endOffset);
+  const start = textOffsetAt(root, range.startContainer, range.startOffset, proposed);
+  const end = textOffsetAt(root, range.endContainer, range.endOffset, proposed);
   if (start == null || end == null) return null;
   return { start, end };
 }
 
-export function restoreSelectionRange(root: HTMLElement, range: TextRange) {
+export function restoreSelectionRange(root: HTMLElement, range: TextRange, proposed = true) {
   const selection = window.getSelection();
   if (!selection) return;
-  const start = pointFromOffset(root, Math.min(range.start, range.end));
-  const end = pointFromOffset(root, Math.max(range.start, range.end));
+  const index = getTextIndex(root, proposed);
+  const start = pointFromOffset(index, Math.min(range.start, range.end));
+  const end = pointFromOffset(index, Math.max(range.start, range.end));
   if (!start || !end) return;
   const next = document.createRange();
   next.setStart(start.node, start.offset);
@@ -452,13 +507,29 @@ function hoistBreaksFromMarks(root: HTMLElement) {
 
 function splitMarkAround(node: Node) {
   let parent = node.parentElement;
-  while (parent?.matches(".agent-edit, .suggestion-add, .suggestion-del")) {
+  while (parent && !parent.matches(".agent-edit, .suggestion-add, .suggestion-del")) {
+    parent = parent.parentElement;
+  }
+  while (parent) {
     const after = parent.cloneNode(false) as HTMLElement;
-    while (node.nextSibling) after.appendChild(node.nextSibling);
+    const tail = document.createDocumentFragment();
+    const range = document.createRange();
+    try {
+      range.setStartAfter(node);
+      range.setEnd(parent, parent.childNodes.length);
+      tail.appendChild(range.extractContents());
+    } catch {
+      return;
+    }
+    node.parentNode?.removeChild(node);
+    after.appendChild(tail);
     parent.after(node, after);
     if (!parent.hasChildNodes()) parent.remove();
     if (!after.hasChildNodes()) after.remove();
     parent = node.parentElement;
+    while (parent && !parent.matches(".agent-edit, .suggestion-add, .suggestion-del")) {
+      parent = parent.parentElement;
+    }
   }
 }
 

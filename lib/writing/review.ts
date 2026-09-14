@@ -132,7 +132,7 @@ export function previewEdits(document: string, edits: AgentEditDraft[]) {
       next = next.trim() ? `${next.replace(/\s*$/, "")}\n\n${edit.replace}` : edit.replace;
       continue;
     }
-    const at = indexOfLoose(next, edit.find);
+    const at = indexOfLoose(next, edit.find, edit.occurrence);
     if (at < 0) continue;
     next = next.slice(0, at) + edit.replace + next.slice(at + edit.find.length);
   }
@@ -254,8 +254,15 @@ function labelFor(key: "words" | "paragraphs" | "sentences" | "pages") {
   return key;
 }
 
-function indexOfLoose(haystack: string, needle: string) {
-  const exact = haystack.indexOf(needle);
-  if (exact >= 0) return exact;
+function indexOfLoose(haystack: string, needle: string, occurrence = 0) {
+  const wanted = Math.max(0, Math.floor(occurrence ?? 0));
+  let from = 0;
+  let exact = -1;
+  for (let index = 0; index <= wanted; index += 1) {
+    exact = haystack.indexOf(needle, from);
+    if (exact < 0) break;
+    if (index === wanted) return exact;
+    from = exact + Math.max(1, needle.length);
+  }
   return haystack.replace(/\s+/g, " ").indexOf(needle.replace(/\s+/g, " "));
 }

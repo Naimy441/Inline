@@ -1,33 +1,56 @@
-import type { AgentSelection, PendingEdit } from "@/lib/agent/types";
+import type { AgentEditDraft, AgentSelection, PendingEdit } from "@/lib/agent/types";
 import { rangeTouchesLock } from "@/lib/locks";
-import { getPlainText, getRawText, rangeFromTextOffsets, saveSelectionRange } from "@/lib/pagination";
+import { getPlainText, getTextIndex, rangeFromTextOffsets, saveSelectionRange } from "@/lib/pagination";
+
+const structuralRestores = new Map<string, {
+  parent: Node;
+  startIndex: number;
+  nodes: HTMLElement[];
+  html: string[];
+}>();
 
 export function captureAgentSelection(editor: HTMLElement): AgentSelection | null {
-  const range = saveSelectionRange(editor);
+  const range = saveSelectionRange(editor, true);
   if (!range || range.start === range.end) return null;
-  const start = Math.min(range.start, range.end);
-  const end = Math.max(range.start, range.end);
-  const raw = getRawText(editor);
   const live = window.getSelection()?.toString() ?? "";
-  const text = (live.trim() ? live : raw.slice(start, end)).replace(/\u00a0/g, " ");
+  return selectionFromOffsets(editor, range.start, range.end, live);
+}
+
+export function selectionFromOffsets(
+  editor: HTMLElement,
+  start: number,
+  end: number,
+  liveText = "",
+): AgentSelection | null {
+  const from = Math.min(start, end);
+  const to = Math.max(start, end);
+  if (from === to) return null;
+  const documentText = getTextIndex(editor, true).text;
+  const text = (liveText || documentText.slice(from, to)).replace(/\u00a0/g, " ");
   if (!text.trim()) return null;
-  const readable = getPlainText(editor, true);
+  const readable = getTextIndex(editor, true).text;
   const readableIndex = indexOfLoose(readable, text);
   return {
-    text: text.replace(/\u00a0/g, " "),
-    start,
-    end,
-    before: (readableIndex >= 0 ? readable.slice(Math.max(0, readableIndex - 240), readableIndex) : raw.slice(Math.max(0, start - 240), start)).trimStart(),
+    text,
+    start: from,
+    end: to,
+    before: (readableIndex >= 0 ? readable.slice(Math.max(0, readableIndex - 240), readableIndex) : documentText.slice(Math.max(0, from - 240), from)).trimStart(),
     after: (readableIndex >= 0
       ? readable.slice(readableIndex + text.length, readableIndex + text.length + 240)
-      : raw.slice(end, end + 240)
+      : documentText.slice(to, to + 240)
     ).trimEnd(),
   };
 }
 
+export function sameAgentSelection(a: AgentSelection | null, b: AgentSelection | null) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.start === b.start && a.end === b.end && a.text === b.text;
+}
+
 export function replaceAgentEdits(
   editor: HTMLElement,
-  drafts: Array<{ find: string; replace: string; reason?: string }>,
+  drafts: AgentEditDraft[],
   selection: AgentSelection | null,
   previous: PendingEdit[] = [],
 ): PendingEdit[] {
@@ -37,10 +60,11 @@ export function replaceAgentEdits(
 
 export function applyAgentEdits(
   editor: HTMLElement,
-  drafts: Array<{ find: string; replace: string; reason?: string }>,
+  drafts: Array<{ find: string; replace: string; reason?: string; operation?: "replace" | "insert" | "delete"; occurrence?: number }>,
   selection: AgentSelection | null,
 ): PendingEdit[] {
-  const prepared = drafts.map((draft) => ({
+  ensureBlockStructure(editor);
+  const prepared = coalesceAdjacentDrafts(editor, drafts).map((draft) => ({
     ...draft,
     id: crypto.randomUUID(),
     status: "pending" as const,
@@ -54,8 +78,93 @@ export function applyAgentEdits(
   return edits;
 }
 
+/**
+ * Turn consecutive line-level patches into one range replacement before any
+ * DOM mutation. This keeps the page suggestion and chat hunk in sync and
+ * prevents a paragraph-sized rewrite from becoming one card per line.
+ */
+function coalesceAdjacentDrafts(
+  editor: HTMLElement,
+  drafts: Array<{ find: string; replace: string; reason?: string; operation?: "replace" | "insert" | "delete"; occurrence?: number }>,
+) {
+  const source = getTextIndex(editor, true).text.replace(/\u00a0/g, " ");
+  const positioned = drafts.map((draft, index) => ({
+    draft,
+    index,
+    start: draft.find ? findDraftOccurrence(source, draft.find.replace(/\u00a0/g, " "), draft.occurrence ?? 0) : -1,
+  }));
+  const merged: typeof drafts = [];
+  let lastStart = -1;
+  let lastEnd = -1;
+
+  for (const item of positioned) {
+    const previous = merged[merged.length - 1];
+    const gap = lastEnd >= 0 && item.start >= lastEnd ? source.slice(lastEnd, item.start) : "";
+    const canMerge = Boolean(
+      previous &&
+        lastStart >= 0 &&
+        item.start >= lastEnd &&
+        gap.includes("\n") &&
+        gap.length <= 4 &&
+        previous.find &&
+        item.draft.find &&
+        (previous.operation ?? (previous.replace === "" ? "delete" : "replace")) !== "insert" &&
+        (item.draft.operation ?? (item.draft.replace === "" ? "delete" : "replace")) !== "insert",
+    );
+
+    if (!canMerge) {
+      merged.push(item.draft);
+      lastStart = item.start;
+      lastEnd = item.start >= 0 ? item.start + item.draft.find.length : -1;
+      continue;
+    }
+
+    const firstOperation = previous.operation ?? (previous.replace === "" ? "delete" : "replace");
+    const secondOperation = item.draft.operation ?? (item.draft.replace === "" ? "delete" : "replace");
+    const bothDelete = firstOperation === "delete" && secondOperation === "delete";
+    const firstStart = lastStart;
+    const combinedEnd = item.start + item.draft.find.length;
+    const combinedFind = source.slice(firstStart, combinedEnd);
+    const combinedReplace = bothDelete
+      ? ""
+      : `${previous.replace}${gap}${item.draft.replace}`;
+    merged[merged.length - 1] = {
+      find: combinedFind,
+      replace: combinedReplace,
+      operation: bothDelete ? "delete" : "replace",
+      reason: [previous.reason, item.draft.reason].filter(Boolean).join(" · ") || "Consecutive document changes",
+    };
+    lastEnd = combinedEnd;
+  }
+  return merged;
+}
+
+function findDraftOccurrence(haystack: string, needle: string, occurrence: number) {
+  if (!needle) return -1;
+  const wanted = Math.max(0, Math.floor(occurrence));
+  let from = 0;
+  for (let index = 0; index <= wanted; index += 1) {
+    const hit = haystack.indexOf(needle, from);
+    if (hit < 0) return -1;
+    if (index === wanted) return hit;
+    from = hit + Math.max(1, needle.length);
+  }
+  return -1;
+}
+
+/** Keep agent operations block-addressable even when contenteditable emitted root text nodes. */
+function ensureBlockStructure(editor: HTMLElement) {
+  for (const node of [...editor.childNodes]) {
+    if (node.nodeType !== Node.TEXT_NODE || !node.textContent) continue;
+    const block = document.createElement("div");
+    node.replaceWith(block);
+    block.appendChild(node);
+  }
+}
+
 export function acceptAgentEdit(editor: HTMLElement, id: string) {
   editor.querySelectorAll(`.agent-edit[data-edit-id="${cssId(id)}"]`).forEach((wrap) => {
+    structuralRestores.delete(id);
     unwrapAgentEdit(wrap);
   });
 }
@@ -79,6 +188,7 @@ export function rejectAgentEdit(editor: HTMLElement, id: string) {
       wrap.remove();
       return;
     }
+    if (wrap.classList.contains("agent-edit-structural") && restoreStructuralEdit(editor, wrap)) return;
     const del = wrap.querySelector(".suggestion-del");
     wrap.replaceWith(...(del ? [...del.childNodes] : []));
   });
@@ -131,20 +241,37 @@ export function highlightAgentEdit(editor: HTMLElement, id: string | null) {
 
 function applyOneEdit(
   editor: HTMLElement,
-  edit: { id: string; find: string; replace: string },
+  edit: { id: string; find: string; replace: string; operation?: "replace" | "insert" | "delete"; occurrence?: number },
   selection: AgentSelection | null,
 ): boolean {
-  const parts = splitParagraphs(edit.replace);
-    if (!edit.find.trim()) {
+  const operation = edit.operation ?? (edit.replace === "" ? "delete" : edit.find === "" ? "insert" : "replace");
+  const replacement = operation === "delete" ? "" : edit.replace;
+  const parts = splitParagraphs(replacement);
+  if (operation === "insert" && edit.find === "") {
     insertParagraphsAfter(editor, editor.lastElementChild ?? editor, edit.id, parts.length ? parts : [edit.replace]);
     return parts.length > 0 || Boolean(edit.replace);
   }
 
-  let range = locateEditRange(editor, edit.find, selection);
+  let range = locateEditRange(editor, edit.find, selection, edit.occurrence);
   if (!range || range.collapsed || rangeTouchesLock(range)) return false;
+  if (operation === "delete" && /^\s*\n[\s\n]*$/.test(edit.find) && applyBoundaryDeletion(editor, range, edit.id)) {
+    return true;
+  }
   if (flattenIntersectingEdits(editor, range).length) {
-    range = locateEditRange(editor, edit.find, selection);
+    range = locateEditRange(editor, edit.find, selection, edit.occurrence);
     if (!range || range.collapsed || rangeTouchesLock(range)) return false;
+  }
+
+  const firstBlock = blockOf(range.startContainer);
+  const lastBlock = blockOf(range.endContainer);
+  if (
+    firstBlock instanceof HTMLElement &&
+    lastBlock instanceof HTMLElement &&
+    firstBlock !== lastBlock &&
+    firstBlock.parentNode === lastBlock.parentNode
+  ) {
+    wrapStructuralReplacement(editor, range, edit.id, replacement);
+    return true;
   }
 
   const original = range.toString();
@@ -171,6 +298,7 @@ function locateEditRange(
   editor: HTMLElement,
   find: string,
   selection: AgentSelection | null,
+  occurrence = 0,
 ): Range | null {
   const needle = find.replace(/\u00a0/g, " ");
   if (selection) {
@@ -181,28 +309,40 @@ function locateEditRange(
     }
   }
 
-  const hit = findInRaw(editor, needle);
+  const hit = findInDocument(editor, needle, occurrence);
   return hit ? rangeFromTextOffsets(editor, hit.start, hit.end, true) : null;
 }
 
-function findInRaw(root: HTMLElement, needle: string): { start: number; end: number } | null {
-  const raw = getRawText(root, true);
-  const exact = raw.indexOf(needle);
+function findInDocument(root: HTMLElement, needle: string, occurrence = 0): { start: number; end: number } | null {
+  const text = getTextIndex(root, true).text.replace(/\u00a0/g, " ");
+  const exact = findOccurrence(text, needle, occurrence);
   if (exact >= 0) return { start: exact, end: exact + needle.length };
 
   const compactNeedle = needle.replace(/\s+/g, "");
   if (!compactNeedle) return null;
   let compact = "";
   const map: number[] = [];
-  for (let i = 0; i < raw.length; i += 1) {
-    if (/\s/.test(raw[i])) continue;
+  for (let i = 0; i < text.length; i += 1) {
+    if (/\s/.test(text[i])) continue;
     map.push(i);
-    compact += raw[i];
+    compact += text[i];
   }
-  let at = compact.indexOf(compactNeedle);
-  if (at < 0) at = compact.toLowerCase().indexOf(compactNeedle.toLowerCase());
+  let at = findOccurrence(compact, compactNeedle, occurrence);
+  if (at < 0) at = findOccurrence(compact.toLowerCase(), compactNeedle.toLowerCase(), occurrence);
   if (at < 0 || map[at] == null || map[at + compactNeedle.length - 1] == null) return null;
   return { start: map[at], end: map[at + compactNeedle.length - 1] + 1 };
+}
+
+function findOccurrence(haystack: string, needle: string, occurrence: number) {
+  const wanted = Math.max(0, Math.floor(occurrence));
+  let from = 0;
+  for (let index = 0; index <= wanted; index += 1) {
+    const hit = haystack.indexOf(needle, from);
+    if (hit < 0) return -1;
+    if (index === wanted) return hit;
+    from = hit + Math.max(1, needle.length);
+  }
+  return -1;
 }
 
 function liveNodes(from: Node | null): Node[] {
@@ -267,6 +407,151 @@ function wrapReplacement(range: Range, id: string, replacement: string) {
   add.textContent = replacement;
   wrap.append(del, add);
   range.insertNode(wrap);
+}
+
+/** Merge two adjacent blocks as a reviewable suggestion when deleting a paragraph break. */
+function applyBoundaryDeletion(editor: HTMLElement, range: Range, id: string) {
+  const first = blockOf(range.startContainer);
+  const second = blockOf(range.endContainer);
+  if (!(first instanceof HTMLElement) || !(second instanceof HTMLElement) || first === second) return false;
+  if (
+    first.closest(".locked-region, [contenteditable='false']") ||
+    second.closest(".locked-region, [contenteditable='false']") ||
+    first.querySelector(".locked-region, [contenteditable='false']") ||
+    second.querySelector(".locked-region, [contenteditable='false']")
+  ) return false;
+  if (first.parentNode !== second.parentNode) return false;
+
+  const parent = first.parentNode;
+  if (!parent) return false;
+  const children = [...parent.childNodes];
+  const firstIndex = children.indexOf(first);
+  const secondIndex = children.indexOf(second);
+  if (firstIndex < 0 || secondIndex !== firstIndex + 1) return false;
+
+  const old = document.createElement("div");
+  old.className = "suggestion-del";
+  old.append(first.cloneNode(true), second.cloneNode(true));
+
+  const merged = first.cloneNode(false) as HTMLElement;
+  merged.append(...[...first.childNodes, ...second.childNodes].map((node) => node.cloneNode(true)));
+  const added = document.createElement("div");
+  added.className = "suggestion-add";
+  added.append(merged);
+
+  const wrap = document.createElement("div");
+  wrap.className = "agent-edit agent-edit-structural";
+  wrap.dataset.editId = id;
+  wrap.append(old, added);
+  parent.insertBefore(wrap, first);
+  first.remove();
+  second.remove();
+  return true;
+}
+
+/** Keep cross-block replacements valid HTML and make Undo restore the exact blocks. */
+function wrapStructuralReplacement(editor: HTMLElement, range: Range, id: string, replacement: string) {
+  const first = blockOf(range.startContainer);
+  const last = blockOf(range.endContainer);
+  if (!(first instanceof HTMLElement) || !(last instanceof HTMLElement) || first === last || first.parentNode !== last.parentNode) return;
+  const parent = first.parentNode;
+  if (!parent) return;
+  const children = [...parent.childNodes];
+  const start = children.indexOf(first);
+  const end = children.indexOf(last);
+  if (start < 0 || end < start) return;
+  const sourceBlocks = children
+    .slice(start, end + 1)
+    .filter((node): node is HTMLElement => node instanceof HTMLElement);
+  const restoreBlocks = sourceBlocks.map((node) => node.outerHTML);
+  structuralRestores.set(id, {
+    parent,
+    startIndex: start,
+    nodes: sourceBlocks,
+    html: restoreBlocks,
+  });
+
+  const wrap = document.createElement("div");
+  wrap.className = "agent-edit agent-edit-structural";
+  wrap.dataset.editId = id;
+  wrap.dataset.restoreBlocks = JSON.stringify(restoreBlocks);
+  const del = document.createElement("div");
+  del.className = "suggestion-del";
+  del.append(...sourceBlocks.map((node) => node.cloneNode(true)));
+  const add = document.createElement("div");
+  add.className = "suggestion-add";
+  const prefix = cloneRangeContents(first, range.startContainer, range.startOffset, "start");
+  const suffix = cloneRangeContents(last, range.endContainer, range.endOffset, "end");
+  const lines = replacement ? replacement.split("\n") : [""];
+  lines.forEach((line, index) => {
+    const block = first.cloneNode(false) as HTMLElement;
+    if (index === 0) block.append(prefix.cloneNode(true));
+    if (line) block.append(document.createTextNode(line));
+    else if (lines.length === 1 && !prefix.textContent && !suffix.textContent) block.append(document.createElement("br"));
+    if (index === lines.length - 1) block.append(suffix.cloneNode(true));
+    add.append(block);
+  });
+  wrap.append(del, add);
+  parent.insertBefore(wrap, first);
+  sourceBlocks.forEach((node) => node.remove());
+  if (!editor.contains(wrap)) return;
+}
+
+function cloneRangeContents(block: HTMLElement, node: Node, offset: number, side: "start" | "end") {
+  const range = document.createRange();
+  range.selectNodeContents(block);
+  if (side === "start") range.setEnd(node, offset);
+  else range.setStart(node, offset);
+  return range.cloneContents();
+}
+
+function restoreStructuralEdit(editor: HTMLElement, wrap: Element) {
+  const id = wrap instanceof HTMLElement ? wrap.dataset.editId : undefined;
+  const saved = id ? structuralRestores.get(id) : undefined;
+  const raw = wrap instanceof HTMLElement ? wrap.dataset.restoreBlocks : undefined;
+  if (saved) {
+    const fragment = document.createElement("template");
+    fragment.innerHTML = saved.html.join("");
+    const current = [...saved.parent.childNodes];
+    const liveNodes = saved.nodes.filter((node) => node.isConnected && node.parentNode === saved.parent);
+    const index = liveNodes.length ? current.indexOf(liveNodes[0]) : saved.startIndex;
+    if (index < 0) return false;
+    const count = liveNodes.length || saved.html.length;
+    for (const node of current.slice(index, index + count)) node.remove();
+    saved.parent.insertBefore(fragment.content, saved.parent.childNodes[index] ?? null);
+    structuralRestores.delete(id as string);
+    return true;
+  }
+  if (!raw) return false;
+  let blocks: string[];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) return false;
+    blocks = parsed;
+  } catch {
+    return false;
+  }
+  const host = closestBlockOutsideMark(wrap, editor);
+  const parent = host?.parentNode;
+  if (!host || !parent || !blocks.length) return false;
+  const fragment = document.createElement("template");
+  fragment.innerHTML = blocks.join("");
+  const restored = [...fragment.content.childNodes];
+  const siblings = [...parent.childNodes];
+  const index = siblings.indexOf(host);
+  if (index < 0) return false;
+  for (const node of siblings.slice(index, index + blocks.length)) node.remove();
+  parent.insertBefore(fragment.content, parent.childNodes[index] ?? null);
+  return restored.length > 0;
+}
+
+function closestBlockOutsideMark(node: Element, editor: HTMLElement) {
+  let current = node.parentElement;
+  while (current && current !== editor) {
+    if (current.matches("div, p, h1, h2, h3, li")) return current;
+    current = current.parentElement;
+  }
+  return null;
 }
 
 function insertParagraphsAfter(editor: HTMLElement, anchor: Node, id: string, paragraphs: string[]) {

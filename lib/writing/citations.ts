@@ -105,8 +105,17 @@ export function searchCitations(query: string, limit = 5): CatalogWork[] {
 }
 
 export function formatInlineCite(work: CatalogWork) {
-  const last = work.author.split(",")[0].split(" and ")[0].split(" ").slice(-1)[0];
-  return `(${last}, ${work.year})`;
+  const authors = work.author.split(/\s+and\s+/i).map((author) => author.trim()).filter(Boolean);
+  const surnames = authors.map((author) => {
+    const words = author.replace(/[,]+/g, "").split(/\s+/).filter(Boolean);
+    return words.findLast((word) => !/^(jr\.?|sr\.?|i{1,3}|iv)$/i.test(word)) ?? words[words.length - 1] ?? author;
+  });
+  const label = surnames.length > 2
+    ? `${surnames[0]} et al.`
+    : surnames.length === 2
+      ? `${surnames[0]} & ${surnames[1]}`
+      : surnames[0] ?? work.author;
+  return `(${label}, ${work.year})`;
 }
 
 export function formatBibliography(work: CatalogWork) {

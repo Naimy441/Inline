@@ -1,7 +1,7 @@
 import { isAgentMode, isThinkingLevel, resolveAgentModel } from "@/lib/agent/models";
 import { runAgentStream } from "@/lib/agent/runAgent";
 import { encodeSse } from "@/lib/agent/sse";
-import type { AgentAttachment, AgentComment, AgentHistoryMessage, AgentLockedRange, AgentRequest } from "@/lib/agent/types";
+import type { AgentAttachment, AgentComment, AgentEditDraft, AgentHistoryMessage, AgentLockedRange, AgentPriorEdit, AgentRequest } from "@/lib/agent/types";
 
 export async function POST(request: Request) {
   let body: Partial<AgentRequest>;
@@ -15,29 +15,34 @@ export async function POST(request: Request) {
   if (!prompt) {
     return Response.json({ error: "Prompt is required." }, { status: 400 });
   }
-  if (prompt.length > 4000) {
-    return Response.json({ error: "Prompt is too long." }, { status: 400 });
-  }
 
-  const document = typeof body.document === "string" ? body.document.slice(0, 80_000) : "";
-  const selection =
-    body.selection && typeof body.selection.text === "string" && body.selection.text.trim()
-      ? {
-          text: body.selection.text.slice(0, 12_000),
-          before: String(body.selection.before ?? "").slice(0, 600),
-          after: String(body.selection.after ?? "").slice(0, 600),
-        }
-      : null;
+  const document = typeof body.document === "string" ? body.document : "";
+  const parseSelection = (value: unknown) => {
+    if (!value || typeof value !== "object") return null;
+    const item = value as { text?: unknown; before?: unknown; after?: unknown };
+    if (typeof item.text !== "string" || !item.text.trim()) return null;
+    return {
+      text: item.text.slice(0, 12_000),
+      before: String(item.before ?? "").slice(-600),
+      after: String(item.after ?? "").slice(0, 600),
+    };
+  };
+  const selections = (Array.isArray(body.selections) ? body.selections : [])
+    .map(parseSelection)
+    .filter((item): item is { text: string; before: string; after: string } => item !== null)
+    .slice(0, 12);
+  const legacySelection = parseSelection(body.selection);
+  const normalizedSelections = selections.length ? selections : legacySelection ? [legacySelection] : [];
+  const selection = normalizedSelections[normalizedSelections.length - 1] ?? null;
 
   const history = Array.isArray(body.history)
     ? body.history
         .map((item): AgentHistoryMessage | null => {
           if (!item || (item.role !== "user" && item.role !== "assistant")) return null;
           if (typeof item.content !== "string" || !item.content.trim()) return null;
-          return { role: item.role, content: item.content.slice(0, 8000) };
+          return { role: item.role, content: item.content };
         })
         .filter((item): item is AgentHistoryMessage => item !== null)
-        .slice(-12)
     : [];
 
   const comments = Array.isArray(body.comments)
@@ -46,12 +51,11 @@ export async function POST(request: Request) {
           if (!item || typeof item.quote !== "string") return null;
           return {
             id: typeof item.id === "string" ? item.id : "",
-            quote: item.quote.slice(0, 2000),
-            body: typeof item.body === "string" ? item.body.slice(0, 2000) : "",
+            quote: item.quote,
+            body: typeof item.body === "string" ? item.body : "",
           };
         })
         .filter((item): item is AgentComment => item !== null)
-        .slice(0, 40)
     : [];
 
   const attachments = Array.isArray(body.attachments)
@@ -60,12 +64,11 @@ export async function POST(request: Request) {
           if (!item || typeof item.name !== "string" || typeof item.text !== "string") return null;
           return {
             id: typeof item.id === "string" ? item.id : "",
-            name: item.name.slice(0, 120),
-            text: item.text.slice(0, 20_000),
+            name: item.name,
+            text: item.text,
           };
         })
         .filter((item): item is AgentAttachment => item !== null)
-        .slice(0, 4)
     : [];
 
   const lockedRanges = Array.isArray(body.lockedRanges)
@@ -74,18 +77,47 @@ export async function POST(request: Request) {
           if (!item || typeof item.text !== "string" || !item.text.trim()) return null;
           return {
             id: typeof item.id === "string" ? item.id : "",
-            text: item.text.slice(0, 4000),
+            text: item.text,
           };
         })
         .filter((item): item is AgentLockedRange => item !== null)
-        .slice(0, 40)
+    : [];
+
+  const previousEdits = Array.isArray(body.previousEdits)
+    ? body.previousEdits
+        .map((item): AgentPriorEdit | null => {
+          if (!item || typeof item !== "object") return null;
+          const row = item as {
+            find?: unknown;
+            replace?: unknown;
+            operation?: unknown;
+            occurrence?: unknown;
+            status?: unknown;
+          };
+          if (typeof row.find !== "string" || typeof row.replace !== "string") return null;
+          if (row.status !== "pending" && row.status !== "accepted") return null;
+          return {
+            find: row.find.slice(0, 1_500),
+            replace: row.replace.slice(0, 1_500),
+            operation: row.operation === "replace" || row.operation === "insert" || row.operation === "delete"
+              ? row.operation as AgentEditDraft["operation"]
+              : undefined,
+            occurrence: typeof row.occurrence === "number" && Number.isInteger(row.occurrence) && row.occurrence >= 0
+              ? row.occurrence
+              : undefined,
+            status: row.status,
+          };
+        })
+        .filter((item): item is AgentPriorEdit => item !== null)
+        .slice(-8)
     : [];
 
   const agentRequest: AgentRequest = {
-    title: typeof body.title === "string" ? body.title.slice(0, 200) : "Untitled document",
+    title: typeof body.title === "string" ? body.title : "Untitled document",
     prompt,
     document,
     selection,
+    selections: normalizedSelections,
     mode: isAgentMode(body.mode) ? body.mode : "agent",
     model: resolveAgentModel(typeof body.model === "string" ? body.model : undefined),
     thinkingLevel: isThinkingLevel(body.thinkingLevel) ? body.thinkingLevel : "medium",
@@ -94,8 +126,9 @@ export async function POST(request: Request) {
     comments,
     attachments,
     lockedRanges,
+    previousEdits,
     preserveTone: body.preserveTone !== false,
-    pageCount: typeof body.pageCount === "number" && body.pageCount > 0 ? Math.min(200, Math.round(body.pageCount)) : 1,
+    pageCount: typeof body.pageCount === "number" && body.pageCount > 0 ? Math.round(body.pageCount) : 1,
   };
 
   const stream = new ReadableStream({

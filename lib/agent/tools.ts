@@ -181,7 +181,6 @@ export function executeServerTool(
 export function runSandboxedJs(code: string) {
   const trimmed = code.trim();
   if (!trimmed) return { error: "No code." };
-  if (trimmed.length > 4000) return { error: "Code is too long." };
   if (/\b(process|require|fetch|XMLHttpRequest|document|window|globalThis|Function|eval)\b/.test(trimmed)) {
     return { error: "That code uses blocked APIs." };
   }
@@ -199,9 +198,9 @@ export function runSandboxedJs(code: string) {
 
 function formatResult(value: unknown) {
   if (value == null) return "undefined";
-  if (typeof value === "string") return value.slice(0, 4000);
+  if (typeof value === "string") return value;
   try {
-    return JSON.stringify(value).slice(0, 4000);
+    return JSON.stringify(value);
   } catch {
     return String(value);
   }
@@ -224,6 +223,5 @@ export function parseToolCalls(raw: unknown): AgentToolCall[] {
         hidden: row.hidden !== false,
       };
     })
-    .filter((item): item is AgentToolCall => item !== null)
-    .slice(0, 8);
+    .filter((item): item is AgentToolCall => item !== null);
 }

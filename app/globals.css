@@ -681,6 +681,7 @@ input {
   height: var(--page-height);
   background: var(--paper-bg);
   box-shadow: var(--paper-shadow);
+  user-select: none;
 }
 
 .paper-header,
@@ -722,9 +723,11 @@ input {
 .editor {
   position: absolute;
   top: var(--page-margin);
-  left: var(--page-margin);
-  width: var(--page-content-width);
+  left: 0;
+  box-sizing: border-box;
+  width: var(--page-width);
   min-height: var(--page-content-height);
+  padding: 0 var(--page-margin);
   outline: none;
   font-family: var(--doc-font);
   font-size: 11pt;
@@ -964,7 +967,7 @@ html[data-theme="dark"] .comment-mark {
 
 .suggestion-add,
 .suggestion-del {
-  display: block;
+  display: inline;
   padding: 0.12em 0.28em;
   text-decoration: none;
   border: none;
@@ -982,12 +985,61 @@ html[data-theme="dark"] .comment-mark {
   color: #0b4d2e;
 }
 
+/* Structural diffs contain block children. Keep the container itself clear so
+   its background cannot fill the manual page-gap; the inline marks inside it
+   carry the actual diff color. */
+.agent-edit-structural > .suggestion-del,
+.agent-edit-structural > .suggestion-add {
+  display: block;
+  background: transparent;
+  padding: 0;
+}
+
+.agent-edit-structural > .suggestion-del > *,
+.agent-edit-structural > .suggestion-add > * {
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.agent-edit-structural > .suggestion-del > * {
+  background: #f3d0cd;
+  color: #2b1212;
+  padding: 0.12em 0.28em;
+}
+
+.agent-edit-structural > .suggestion-add > * {
+  background: #8fdcb0;
+  color: #0b4d2e;
+  padding: 0.12em 0.28em;
+}
+
+/* Pagination markers are layout only, never part of the proposed text. Keep
+   them clear even though the structural child rule above paints its blocks. */
+.agent-edit-structural > .suggestion-del > .page-break,
+.agent-edit-structural > .suggestion-del > .page-push,
+.agent-edit-structural > .suggestion-add > .page-break,
+.agent-edit-structural > .suggestion-add > .page-push {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
 html[data-theme="dark"] .suggestion-del {
   background: #4a2224;
   color: #d8d4d4;
 }
 
 html[data-theme="dark"] .suggestion-add {
+  background: #1c5a3c;
+  color: #8ee0b3;
+}
+
+html[data-theme="dark"] .agent-edit-structural > .suggestion-del > * {
+  background: #4a2224;
+  color: #d8d4d4;
+}
+
+html[data-theme="dark"] .agent-edit-structural > .suggestion-add > * {
   background: #1c5a3c;
   color: #8ee0b3;
 }
@@ -1019,12 +1071,70 @@ html[data-theme="dark"] .suggestion-add {
   background: #8fdcb0;
 }
 
+.agent-edit.is-reviewing.agent-edit-structural > .suggestion-del,
+.agent-edit.is-reviewing.agent-edit-structural > .suggestion-add {
+  background: transparent;
+}
+
+.agent-edit.is-reviewing.agent-edit-structural > .suggestion-del > * {
+  background: #ebb8b4;
+}
+
+.agent-edit.is-reviewing.agent-edit-structural > .suggestion-add > * {
+  background: #8fdcb0;
+}
+
+.agent-edit.is-reviewing.agent-edit-structural > .suggestion-del > .page-break,
+.agent-edit.is-reviewing.agent-edit-structural > .suggestion-del > .page-push,
+.agent-edit.is-reviewing.agent-edit-structural > .suggestion-add > .page-break,
+.agent-edit.is-reviewing.agent-edit-structural > .suggestion-add > .page-push {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
 html[data-theme="dark"] .agent-edit.is-reviewing .suggestion-del {
   background: #5a2a2c;
 }
 
 html[data-theme="dark"] .agent-edit.is-reviewing .suggestion-add {
   background: #247048;
+}
+
+html[data-theme="dark"] .agent-edit.is-reviewing.agent-edit-structural > .suggestion-del,
+html[data-theme="dark"] .agent-edit.is-reviewing.agent-edit-structural > .suggestion-add {
+  background: transparent;
+}
+
+html[data-theme="dark"] .agent-edit.is-reviewing.agent-edit-structural > .suggestion-del > * {
+  background: #5a2a2c;
+}
+
+html[data-theme="dark"] .agent-edit.is-reviewing.agent-edit-structural > .suggestion-add > * {
+  background: #247048;
+}
+
+html[data-theme="dark"] .agent-edit.is-reviewing.agent-edit-structural > .suggestion-del > .page-break,
+html[data-theme="dark"] .agent-edit.is-reviewing.agent-edit-structural > .suggestion-del > .page-push,
+html[data-theme="dark"] .agent-edit.is-reviewing.agent-edit-structural > .suggestion-add > .page-break,
+html[data-theme="dark"] .agent-edit.is-reviewing.agent-edit-structural > .suggestion-add > .page-push {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+/* A split at the start/end of a block can leave an empty shell around the
+   boundary. It has no reviewable content and must not render as a green bar. */
+.agent-edit-structural > .suggestion-del > :empty,
+.agent-edit-structural > .suggestion-add > :empty {
+  background: transparent;
+  padding: 0;
+}
+
+html[data-theme="dark"] .agent-edit-structural > .suggestion-del > :empty,
+html[data-theme="dark"] .agent-edit-structural > .suggestion-add > :empty {
+  background: transparent;
+  padding: 0;
 }
 
 .diff-review {
@@ -1579,6 +1689,10 @@ html[data-theme="dark"] .chat-confirm-actions .is-danger {
   margin-top: 4px;
 }
 
+.chat-live-prompt {
+  margin-bottom: 12px;
+}
+
 .chat-turn + .chat-live {
   margin-top: 22px;
 }
@@ -1595,6 +1709,31 @@ html[data-theme="dark"] .chat-confirm-actions .is-danger {
 
 .chat-trace.is-live {
   min-height: 1.5em;
+}
+
+.chat-context-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 2px 8px;
+  color: var(--docs-muted);
+  font-size: 10px;
+}
+
+.chat-context-ring {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: conic-gradient(var(--docs-blue) var(--context-progress, 0deg), var(--docs-line) 0deg);
+  position: relative;
+}
+
+.chat-context-ring::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: var(--chat-composer);
 }
 
 .chat-caret {
@@ -1620,6 +1759,84 @@ html[data-theme="dark"] .chat-confirm-actions .is-danger {
 
 .chat-assistant p {
   margin: 0 0 10px;
+}
+
+.chat-citations {
+  margin: 10px 0 2px;
+  padding: 9px 10px;
+  border: 1px solid var(--docs-line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--chat-bg) 82%, transparent);
+}
+
+.chat-citations-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+  color: var(--docs-ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chat-citations-head small {
+  color: var(--docs-muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.chat-citations-list {
+  display: grid;
+  gap: 5px;
+}
+
+.chat-citation-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.chat-citation-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.chat-citation-copy strong,
+.chat-citation-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-citation-copy strong {
+  color: var(--docs-ink);
+  font-size: 11px;
+  font-weight: 550;
+}
+
+.chat-citation-copy span {
+  color: var(--docs-muted);
+  font-size: 10px;
+}
+
+.chat-citation-card > button {
+  appearance: none;
+  border: 1px solid color-mix(in srgb, var(--docs-blue) 38%, var(--docs-line));
+  border-radius: 999px;
+  padding: 3px 7px;
+  background: color-mix(in srgb, var(--docs-blue) 10%, transparent);
+  color: var(--docs-blue);
+  font-size: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chat-citation-card > button:hover {
+  background: color-mix(in srgb, var(--docs-blue) 18%, transparent);
 }
 
 .chat-error {
@@ -1829,18 +2046,76 @@ html[data-theme="dark"] .chat-confirm-actions .is-danger {
 .chat-context {
   display: flex;
   align-items: center;
-  gap: 4px;
+  flex-wrap: wrap;
+  gap: 5px;
   margin-bottom: 6px;
 }
 
 .chat-context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  max-width: 100%;
   margin: 0;
+  padding: 2px 4px 2px 6px;
+  border: 1px solid var(--docs-line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chat-bg) 70%, transparent);
+}
+
+.chat-context-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 0;
+  border: none;
+  background: transparent;
+  color: var(--docs-ink);
+  font: inherit;
+  font-size: 12px;
   cursor: pointer;
+}
+
+.chat-context-main:hover {
+  color: var(--docs-ink);
+}
+
+.chat-context-remove {
+  width: 20px;
+  height: 20px;
+  padding: 2px;
+  border-radius: 50%;
+}
+
+.chat-context-clear {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--docs-muted);
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 6px;
+  cursor: pointer;
+}
+
+.chat-context-clear:hover {
+  color: var(--docs-ink);
 }
 
 .chat-context-chip em {
   font-style: normal;
   color: var(--docs-muted);
+  flex: 0 0 auto;
+}
+
+.chat-context-quote {
+  max-width: 180px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-composer-field {
@@ -2172,6 +2447,29 @@ html[data-theme="dark"] .chat-confirm-actions .is-danger {
   background: var(--docs-ink);
   color: var(--docs-surface);
   border-radius: 999px;
+}
+
+.chat-send-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-stop {
+  width: 28px;
+  height: 28px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--docs-line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--docs-muted);
+  cursor: pointer;
+}
+
+.chat-stop:hover {
+  background: var(--docs-hover);
+  color: var(--docs-ink);
 }
 
 .chat-send:disabled {
@@ -2557,7 +2855,6 @@ html[data-theme="dark"] .locked-region {
   background: rgba(138, 180, 248, 0.08);
 }
 
-.sel-hud,
 .inline-composer,
 .slash-menu,
 .agent-toast,
@@ -2566,42 +2863,6 @@ html[data-theme="dark"] .locked-region {
 .lint-drawer,
 .history-panel {
   font-family: var(--ui-font);
-}
-
-.sel-hud {
-  position: fixed;
-  z-index: 35;
-  display: flex;
-  gap: 2px;
-  padding: 3px;
-  border-radius: 10px;
-  background: var(--docs-surface);
-  box-shadow: var(--docs-shadow);
-  border: 1px solid var(--docs-line);
-}
-
-.sel-hud button {
-  border: none;
-  background: transparent;
-  color: var(--docs-ink);
-  border-radius: 8px;
-  padding: 6px 9px;
-  font-size: 12px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.sel-hud button:hover,
-.sel-hud button[data-active="true"] {
-  background: var(--docs-hover);
-}
-
-.sel-hud kbd {
-  font: inherit;
-  font-size: 10px;
-  color: var(--docs-muted);
 }
 
 .inline-composer {
@@ -2932,6 +3193,78 @@ html[data-theme="dark"] .locked-region {
   background: var(--chat-composer);
 }
 
+.chat-queue {
+  margin: 12px 12px 0;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--docs-blue) 20%, var(--docs-line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--docs-blue) 6%, var(--chat-composer));
+}
+
+.chat-queue-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  color: var(--docs-blue);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chat-queue-head p {
+  margin: 0;
+}
+
+.chat-queue-head span {
+  display: inline-grid;
+  min-width: 17px;
+  height: 17px;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--docs-blue) 16%, transparent);
+  font-size: 10px;
+}
+
+.chat-queue-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 0;
+  border-top: 1px solid color-mix(in srgb, var(--docs-line) 70%, transparent);
+}
+
+.chat-queue-index {
+  color: var(--docs-blue);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.chat-queue-prompt {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--docs-ink);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-queue-row button {
+  width: 18px;
+  height: 18px;
+  padding: 2px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--docs-muted);
+  cursor: pointer;
+}
+
+.chat-queue-row button:hover {
+  background: var(--docs-hover);
+  color: var(--docs-ink);
+}
+
 .chat-tasks label {
   display: flex;
   gap: 8px;
@@ -3033,7 +3366,6 @@ html[data-theme="dark"] .locked-region {
 .app.is-focus .comments-rail,
 .app.is-focus .history-panel,
 .app.is-focus .lint-drawer,
-.app.is-focus .sel-hud,
 .app.is-focus .inline-composer {
   display: none !important;
 }
@@ -3095,7 +3427,6 @@ html[data-theme="dark"] .locked-region {
   .dialog-backdrop,
   .papers,
   .ctx-menu,
-  .sel-hud,
   .inline-composer,
   .slash-menu,
   .palette-backdrop,
@@ -3132,6 +3463,7 @@ html[data-theme="dark"] .locked-region {
     left: auto;
     width: 100% !important;
     min-height: 0 !important;
+    padding: 0 !important;
     color: #000;
     caret-color: transparent;
   }

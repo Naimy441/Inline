@@ -539,7 +539,7 @@ export function indentBlocks(editor: HTMLElement, direction: 1 | -1) {
 
   const listItems = blocks
     .map((block) => block.closest("li"))
-    .filter((item): item is HTMLElement => item instanceof HTMLElement);
+    .filter((item): item is HTMLLIElement => item instanceof HTMLLIElement);
   if (listItems.length === blocks.length) {
     document.execCommand(direction > 0 ? "indent" : "outdent");
     return;

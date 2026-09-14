@@ -13,7 +13,7 @@ import {
   TOOL_GUIDE,
   type AgentToolCall,
 } from "@/lib/agent/tools";
-import type { AgentEditDraft, AgentHistoryMessage, AgentRequest, AgentResponse, AgentStreamEvent, AgentTask } from "@/lib/agent/types";
+import type { AgentCitation, AgentEditDraft, AgentHistoryMessage, AgentRequest, AgentResponse, AgentStreamEvent, AgentTask } from "@/lib/agent/types";
 import { lintWriting, summarizeLint } from "@/lib/writing/lint";
 import { previewEdits } from "@/lib/writing/review";
 import { documentOutline, retrieveChunks, shouldRetrieve } from "@/lib/writing/retrieve";
@@ -122,6 +122,17 @@ export function mockAgent(request: AgentRequest): Omit<AgentResponse, "mock"> {
     };
   }
 
+  if (!requestAllowsEdits(request)) {
+    return {
+      chatTitle,
+      thinking,
+      message: `${askSummary(request.prompt, document)}\n\nNo document edits were proposed because this request is read-only.`,
+      edits: [],
+      tasks: [],
+      tools,
+    };
+  }
+
   if (!document) {
     return { chatTitle, thinking, message: "The document is empty.", edits: [], tasks: [], tools };
   }
@@ -145,8 +156,26 @@ export function mockAgent(request: AgentRequest): Omit<AgentResponse, "mock"> {
     };
   }
 
+  if (/(?:delete|remove|erase|cut|strip)\b/.test(intent)) {
+    const selected = selectedContextText(request);
+    const newline = /(?:line\s*break|paragraph\s*break|blank\s*line|new\s*line)/.test(intent)
+      ? document.match(/\n{1,}/)?.[0] ?? ""
+      : "";
+    const target = selected || newline || mockEditSource(request, document);
+    if (target) {
+      return {
+        chatTitle,
+        thinking,
+        message: "Prepared a deletion for review. Keep or undo it in the page.",
+        edits: [{ find: target, replace: "", operation: "delete", reason: "Delete requested content" }],
+        tasks: [],
+        tools,
+      };
+    }
+  }
+
   if (intent.includes("grammar") || intent.includes("spelling") || intent.includes("formatting")) {
-    const source = request.selection?.text.trim() || lastParagraph(document);
+    const source = mockEditSource(request, document);
     return {
       chatTitle,
       thinking,
@@ -158,7 +187,7 @@ export function mockAgent(request: AgentRequest): Omit<AgentResponse, "mock"> {
   }
 
   if (intent.includes("trope") || intent.includes("watermark") || intent.includes("em dash") || intent.includes("ai writing")) {
-    const source = request.selection?.text.trim() || lastParagraph(document);
+    const source = mockEditSource(request, document);
     return {
       chatTitle,
       thinking,
@@ -186,7 +215,7 @@ export function mockAgent(request: AgentRequest): Omit<AgentResponse, "mock"> {
       tools,
     };
   }
-  const source = request.selection?.text.trim() || lastParagraph(document);
+  const source = mockEditSource(request, document);
   return {
     chatTitle,
     thinking,
@@ -197,12 +226,33 @@ export function mockAgent(request: AgentRequest): Omit<AgentResponse, "mock"> {
       {
         find: source,
         replace: mockRewrite(source, request.prompt),
-        reason: request.selection ? "Uses the highlighted passage as context" : "Document edit",
+        reason: request.selection ? "Uses the highlighted passage as extra context" : "Document edit",
       },
     ],
     tasks: [],
     tools,
   };
+}
+
+function requestSelections(request: AgentRequest) {
+  return request.selections?.length ? request.selections : request.selection ? [request.selection] : [];
+}
+
+function selectedContextText(request: AgentRequest) {
+  return requestSelections(request)
+    .map((selection) => selection.text)
+    .filter((text) => text.trim())
+    .join("\n\n");
+}
+
+function mockEditSource(request: AgentRequest, document: string) {
+  const selections = requestSelections(request);
+  const selected = selections[selections.length - 1]?.text.trim();
+  const intent = request.prompt.toLowerCase();
+  if (selected && /\b(this|selection|selected|passage|highlight|highlighted)\b/.test(intent)) {
+    return selected;
+  }
+  return lastParagraph(document);
 }
 
 function mockThinking(request: AgentRequest) {
@@ -212,7 +262,7 @@ function mockThinking(request: AgentRequest) {
   if (request.mode === "plan") {
     return "I will outline the work first: what to keep, what to change, and when the user should switch back to Agent.";
   }
-  if (request.selection?.text.trim()) {
+  if (requestSelections(request).length > 0) {
     return "The selection is extra context. I will still ground the edit in the full document and keep the change small enough to review.";
   }
   return "I will make a single, reviewable replacement and leave the rest of the draft alone.";
@@ -259,7 +309,7 @@ function askSummary(prompt: string, document: string) {
 }
 
 function systemPrompt(request: AgentRequest) {
-  const canEdit = request.mode === "agent";
+  const canEdit = requestAllowsEdits(request);
   const lines = [
     "You are Inline, a writing agent inside a Google Docs-style editor.",
     `Current mode: ${request.mode}.`,
@@ -267,20 +317,23 @@ function systemPrompt(request: AgentRequest) {
       ? "Preserve the author's tone, diction, and rhythm unless the user asks to change style."
       : "You may adjust tone if it helps the instruction.",
     canEdit
-      ? "You may propose targeted document edits and hidden document tools."
+      ? "You may propose as many document edits and hidden document tools as the task needs. There is no cap on the number or size of edits."
       : "Do not propose document edits. Return an empty edits array.",
-    'Return ONLY a JSON object, keys in this exact order: {"thinking"?: string, "edits": [{"find": string, "replace": string, "reason": string}], "tasks"?: [{"title": string, "status": "pending"|"in_progress"|"done", "kind"?: "research"|"draft"|"edit"|"cite"|"review"}], "tools"?: [{"name": string, "args"?: object}], "message": string, "chatTitle"?: string}',
-    "The DOCUMENT is the source of truth. A SELECTION is extra context, not the only place you may change.",
+    'Return ONLY a JSON object, keys in this exact order: {"thinking"?: string, "edits": [{"find": string, "replace": string, "operation"?: "replace"|"insert"|"delete", "occurrence"?: number, "reason": string}], "tasks"?: [{"title": string, "status": "pending"|"in_progress"|"done", "kind"?: "research"|"draft"|"edit"|"cite"|"review"}], "tools"?: [{"name": string, "args"?: object}], "citations"?: [{"id": string, "author": string, "title": string, "year": string, "inline": string, "bibliography": string}], "message": string, "chatTitle"?: string}',
+    "The DOCUMENT is the source of truth. SELECTIONS are optional context attachments. They do not limit the document and are not the only places you may change.",
     "LOCKED passages must not appear in any find/replace.",
     "Comments are instructions about specific quotes. Address every provided comment.",
     "Style attachments are samples to mimic, not text to copy wholesale.",
     "Rules:",
-    '- Each "find" must be an exact substring of the DOCUMENT. Do not invent text that is not already there.',
-    '- To add a new paragraph, find the paragraph it should follow and set "replace" to that same paragraph, then \\n\\n, then the new paragraph.',
-    '- To append at the end, find the last paragraph, or use find "" and put only the new paragraph in replace.',
-    "- Prefer small, targeted edits. Keep names, facts, and meaning.",
+    '- Each non-empty "find" must be an exact substring of the DOCUMENT, including spaces and \\n characters. Do not invent text that is not already there.',
+    '- To delete content, use the exact content as "find", set "replace" to "", and set operation to "delete". Deleting a paragraph break means finding "\\n" or "\\n\\n" exactly.',
+    '- To add a new paragraph, find the paragraph it should follow and set "replace" to that same paragraph, then \\n\\n, then the new paragraph; or use operation "insert" with find "" to append.',
+    '- If the same find text appears more than once, set zero-based "occurrence" to identify the intended match.',
+    "- Make every edit the instruction requires. Keep names, facts, and meaning unless the user asks to change them.",
     "- Do not invent citations. Use search_citations or attached sources only.",
-    '- "message" comes last. It is 1–3 sentences to the user about what changed and why. Never paste, quote, or rewrite the new document text — the edits already show the prose. In plan mode it should be a numbered plan. In ask mode it should answer or ideate without rewriting the page.',
+    "- When search_citations returns sources, include the useful sources in citations with the exact inline and bibliography strings.",
+    '- "message" comes last. Tell the user what changed and why. Never paste, quote, or rewrite the new document text — the edits already show the prose. In plan mode it should be a numbered plan. In ask mode it should answer or ideate without rewriting the page.',
+    "The latest user instruction is the active task. Treat earlier conversation turns as background only; do not repeat an earlier action unless the latest instruction explicitly asks for it.",
     "- tools are executed silently. The user does not need to see them. Call a tool only when you need it — do not call lint or counts by default.",
     "- count_words and lint_writing are how you check length. If the user asked for N words, sentences, paragraphs, or pages, write the draft, call the tool on that text, and fix the edit if the result misses. Do not mention tools unless asked.",
     "Available tools:",
@@ -479,13 +532,14 @@ function extractOpenAIThinking(
 }
 
 function buildUserPrompt(request: AgentRequest) {
-  const selection = request.selection;
+  const selections = requestSelections(request);
   const full = request.document;
   const long = shouldRetrieve(full);
   const lint = lintWriting(full, request.pageCount ?? 1);
   const tropes = detectAiTropes(full);
   const lines = [
     `Document title: ${request.title || "Untitled document"}`,
+    "ACTIVE REQUEST: Follow only the instruction below. Earlier turns are already handled background, not additional tasks.",
     request.preserveTone ? "Tone lock: preserve existing voice." : "Tone lock: off.",
     "",
     "Instruction:",
@@ -499,36 +553,61 @@ function buildUserPrompt(request: AgentRequest) {
   if (long) {
     const chunks = retrieveChunks(full, request.prompt, 6);
     lines.push(
-      "The document is long. Full text is not pasted. Use this outline and retrieved passages as the source of truth:",
-      "<<<OUTLINE>>>",
-      documentOutline(full),
-      "<<<END_OUTLINE>>>",
+    "The document is long. Retrieval is only a navigation aid. The complete document below remains the source of truth for every edit:",
+    "<<<DOCUMENT_INDEX>>>",
+    documentIndex(full),
+    "<<<END_DOCUMENT_INDEX>>>",
+    "",
+    "<<<OUTLINE>>>",
+    documentOutline(full),
+    "<<<END_OUTLINE>>>",
       "",
       "<<<RETRIEVED>>>",
       chunks.map((chunk, index) => `[${index + 1}] ${chunk.text}`).join("\n\n"),
       "<<<END_RETRIEVED>>>",
+      "",
+      "Full document (source of truth):",
+      "<<<DOCUMENT>>>",
+      full || "(empty)",
+      "<<<END_DOCUMENT>>>",
       "",
     );
   } else {
     lines.push(
       "Full document (source of truth):",
       "<<<DOCUMENT>>>",
-      clip(full, 40_000) || "(empty)",
+      full || "(empty)",
       "<<<END_DOCUMENT>>>",
       "",
     );
   }
-  if (selection?.text.trim()) {
+  if (selections.length > 0) {
     lines.push(
-      "The user also highlighted this passage as extra context. It is not the whole document:",
-      "<<<SELECTION>>>",
-      selection.text,
-      "<<<END_SELECTION>>>",
+      `The user attached ${selections.length} highlighted passage${selections.length === 1 ? "" : "s"} as extra context only. They do not limit where you may edit:`,
+      "<<<SELECTIONS>>>",
+      selections
+        .map(
+          (selection, index) =>
+            `Selection ${index + 1}:\n${selection.text}\nNearby before: ${selection.before || "(start)"}\nNearby after: ${selection.after || "(end)"}`,
+        )
+        .join("\n\n"),
+      "<<<END_SELECTIONS>>>",
     );
-    if (selection.before || selection.after) {
-      lines.push("", `Nearby before: ${selection.before || "(start)"}`, `Nearby after: ${selection.after || "(end)"}`);
-    }
     lines.push("");
+  }
+  if (request.previousEdits?.length) {
+    lines.push(
+      "Earlier document edits already handled in this chat. Do not emit these edits again unless the active request explicitly asks to repeat or undo them:",
+      "<<<PRIOR_EDITS>>>",
+      request.previousEdits
+        .map((edit, index) => {
+          const operation = edit.operation ?? (edit.replace === "" ? "delete" : "replace");
+          return `${index + 1}. ${edit.status} ${operation}: find=${JSON.stringify(edit.find)} replace=${JSON.stringify(edit.replace)}${edit.occurrence == null ? "" : ` occurrence=${edit.occurrence}`}`;
+        })
+        .join("\n"),
+      "<<<END_PRIOR_EDITS>>>",
+      "",
+    );
   }
   if (request.comments?.length) {
     lines.push(
@@ -562,6 +641,21 @@ function buildUserPrompt(request: AgentRequest) {
   return lines.join("\n");
 }
 
+function documentIndex(text: string) {
+  let offset = 0;
+  return text
+    .split(/\n+/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+    .map((paragraph, index) => {
+      const start = text.indexOf(paragraph, offset);
+      const end = start >= 0 ? start + paragraph.length : offset + paragraph.length;
+      offset = Math.max(offset, end);
+      return `[P${index + 1}] chars ${start >= 0 ? start : 0}-${end}: ${paragraph.slice(0, 180)}`;
+    })
+    .join("\n");
+}
+
 function clip(text: string, max: number) {
   if (text.length <= max) return text;
   return `${text.slice(0, max)}\n\n[Document truncated]`;
@@ -579,8 +673,9 @@ function parseAgentJson(
     edits?: unknown;
     tasks?: unknown;
     tools?: unknown;
+    citations?: unknown;
   };
-  const allowEdits = request.mode === "agent";
+  const allowEdits = requestAllowsEdits(request);
   const edits = allowEdits ? normalizeEdits(json.edits) : [];
   const thinking =
     request.thinkingLevel === "none"
@@ -601,6 +696,9 @@ function parseAgentJson(
     edits,
     tasks: parseTasks(json.tasks),
     tools: parseToolCalls(json.tools),
+    // Citations are trusted only when they come back from the server-side source tool.
+    // The model may request them in JSON, but it must not be able to manufacture source cards.
+    citations: [],
   };
 }
 
@@ -640,18 +738,25 @@ function normalizeEdits(raw: unknown): AgentEditDraft[] {
   return raw
     .map((item): AgentEditDraft | null => {
       if (!item || typeof item !== "object") return null;
-      const row = item as { find?: unknown; replace?: unknown; reason?: unknown };
+      const row = item as { find?: unknown; replace?: unknown; reason?: unknown; operation?: unknown; occurrence?: unknown };
       if (typeof row.replace !== "string") return null;
       const find = typeof row.find === "string" ? row.find : "";
       if (!find && !row.replace) return null;
+      const operation = row.operation === "replace" || row.operation === "insert" || row.operation === "delete"
+        ? row.operation
+        : undefined;
+      const occurrence = typeof row.occurrence === "number" && Number.isInteger(row.occurrence) && row.occurrence >= 0
+        ? row.occurrence
+        : undefined;
       return {
         find,
         replace: row.replace,
+        operation,
+        occurrence,
         reason: typeof row.reason === "string" ? row.reason : undefined,
       };
     })
-    .filter((item): item is AgentEditDraft => item !== null)
-    .slice(0, 8);
+    .filter((item): item is AgentEditDraft => item !== null);
 }
 
 function unwrapFence(raw: string) {
@@ -953,7 +1058,7 @@ function* emitJsonProgress(
     yield { type: "thinking", delta: thinking.slice(state.thinking.length) };
     state.thinking = thinking;
   }
-  if (!state.editsEmitted && request.mode === "agent") {
+  if (!state.editsEmitted && requestAllowsEdits(request)) {
     const rawEdits = growingJsonArray(output, "edits");
     if (rawEdits) {
       state.editsEmitted = true;
@@ -971,6 +1076,11 @@ function* emitJsonProgress(
       state.message = message;
     }
   }
+}
+
+function requestAllowsEdits(request: AgentRequest) {
+  if (request.mode !== "agent") return false;
+  return !/\b(?:do\s+not|don't|dont|without|no)\s+(?:edit|editing|change|changes|rewrite|rewriting)\b/i.test(request.prompt);
 }
 
 async function* revealResult(parsed: Omit<AgentResponse, "mock">, signal?: AbortSignal): AsyncGenerator<AgentStreamEvent> {
@@ -1104,13 +1214,38 @@ function parseTasks(raw: unknown): AgentTask[] {
           : undefined;
       return {
         id: typeof row.id === "string" && row.id ? row.id : crypto.randomUUID(),
-        title: row.title.trim().slice(0, 160),
+        title: row.title.trim(),
         status,
         kind,
       };
     })
-    .filter((item): item is AgentTask => item !== null)
-    .slice(0, 12);
+    .filter((item): item is AgentTask => item !== null);
+}
+
+function normalizeCitations(raw: unknown): AgentCitation[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item): AgentCitation | null => {
+      if (!item || typeof item !== "object") return null;
+      const row = item as Record<string, unknown>;
+      if (typeof row.title !== "string" || typeof row.author !== "string") return null;
+      const year = typeof row.year === "string" || typeof row.year === "number" ? String(row.year) : "";
+      const inline = typeof row.inline === "string" && row.inline.trim() ? row.inline : `(${row.author}, ${year})`;
+      const bibliography = typeof row.bibliography === "string" && row.bibliography.trim()
+        ? row.bibliography
+        : [row.author, row.title, row.publisher, year].filter(Boolean).join(". ") + ".";
+      return {
+        id: typeof row.id === "string" && row.id ? row.id : crypto.randomUUID(),
+        author: row.author,
+        title: row.title,
+        year,
+        publisher: typeof row.publisher === "string" ? row.publisher : undefined,
+        url: typeof row.url === "string" && /^https?:\/\//i.test(row.url) ? row.url : undefined,
+        inline,
+        bibliography,
+      };
+    })
+    .filter((item): item is AgentCitation => item !== null);
 }
 
 function mockTasks(request: AgentRequest): AgentTask[] {
@@ -1148,12 +1283,63 @@ async function* withResolvedTools(
       yield event;
       continue;
     }
-    for (const tool of event.result.tools ?? []) {
-      yield { type: "tool", name: tool.name, hidden: tool.hidden };
-      yield { type: "tool_result", name: tool.name, hidden: tool.hidden };
+    let current = event.result;
+    let round = 0;
+    const clientTools: AgentToolCall[] = [];
+    const citations = [...(current.citations ?? [])];
+    let prompt = request.prompt;
+
+    while (round < 24) {
+      const serverCalls = (current.tools ?? []).filter((tool) => isServerTool(tool.name));
+      if (requestAllowsEdits(request)) {
+        clientTools.push(...(current.tools ?? []).filter((tool) => isClientTool(tool.name)));
+      }
+      if (!serverCalls.length) break;
+      yield { type: "phase", phase: "reviewing" };
+      for (const tool of serverCalls) {
+        yield { type: "tool", name: tool.name, hidden: tool.hidden };
+      }
+      const proposed = current.edits.length ? previewEdits(request.document, current.edits) : request.document;
+      const results = serverCalls.map((call) => executeServerTool(call, {
+        document: proposed,
+        prompt: request.prompt,
+        pageCount: request.pageCount,
+      }));
+      for (const tool of serverCalls) {
+        yield { type: "tool_result", name: tool.name, hidden: tool.hidden };
+      }
+      citations.push(...citationResults(results));
+      round += 1;
+      prompt = `${prompt}\n\nHidden tool results (use them, do not mention tools unless asked):\n${JSON.stringify(results)}`;
+      try {
+        const parsed = await completeFollowUp({
+          ...request,
+          nameChat: false,
+          reviewAttempt: round,
+          prompt,
+        });
+        current = {
+          message: parsed.message || current.message,
+          thinking: parsed.thinking || current.thinking,
+          chatTitle: current.chatTitle || parsed.chatTitle,
+          edits: parsed.edits.length ? parsed.edits : current.edits,
+          tasks: parsed.tasks.length ? parsed.tasks : current.tasks,
+          tools: parsed.tools,
+          citations: current.citations,
+          mock: current.mock,
+        };
+      } catch {
+        break;
+      }
     }
-    const next = await resolveServerTools(request, event.result);
-    if (next.edits !== event.result.edits && next.edits.length) {
+
+    const next: AgentResponse = {
+      ...current,
+      tools: clientTools,
+      citations: dedupeCitations(citations),
+      tasks: current.tasks ?? [],
+    };
+    if (next.edits.length && next.edits !== event.result.edits) {
       yield { type: "phase", phase: "editing" };
       yield { type: "edits", edits: next.edits };
       await wait(160, signal);
@@ -1162,41 +1348,28 @@ async function* withResolvedTools(
       yield* typewriteMessage(next.message, true, signal);
     }
     if (next.tasks.length) yield { type: "tasks", tasks: next.tasks };
+    if (next.citations?.length) yield { type: "citations", citations: next.citations };
     yield { type: "done", result: next };
   }
 }
 
-async function resolveServerTools(request: AgentRequest, result: AgentResponse): Promise<AgentResponse> {
-  const serverCalls = (result.tools ?? []).filter((tool) => isServerTool(tool.name));
-  const clientCalls = (result.tools ?? []).filter((tool) => isClientTool(tool.name));
-  if (!serverCalls.length || (request.reviewAttempt ?? 0) > 0) {
-    return { ...result, tools: clientCalls, tasks: result.tasks ?? [] };
+function citationResults(results: Array<{ name: string; result: unknown }>): AgentCitation[] {
+  const found: AgentCitation[] = [];
+  for (const item of results) {
+    if (item.name !== "search_citations" || !Array.isArray(item.result)) continue;
+    found.push(...normalizeCitations(item.result));
   }
+  return found;
+}
 
-  const proposed = result.edits.length ? previewEdits(request.document, result.edits) : request.document;
-  const ctx = { document: proposed, prompt: request.prompt, pageCount: request.pageCount };
-  const results = serverCalls.map((call) => executeServerTool(call, ctx));
-  const followRequest: AgentRequest = {
-    ...request,
-    nameChat: false,
-    reviewAttempt: 1,
-    prompt: `${request.prompt}\n\nHidden tool results (use them, do not mention tools unless asked):\n${JSON.stringify(results).slice(0, 12_000)}`,
-  };
-
-  try {
-    const parsed = await completeFollowUp(followRequest);
-    return {
-      message: parsed.message || result.message,
-      thinking: parsed.thinking || result.thinking,
-      chatTitle: result.chatTitle || parsed.chatTitle,
-      edits: parsed.edits.length ? parsed.edits : result.edits,
-      tasks: parsed.tasks.length ? parsed.tasks : result.tasks,
-      tools: [...clientCalls, ...(parsed.tools ?? []).filter((tool) => isClientTool(tool.name))],
-      mock: result.mock,
-    };
-  } catch {
-    return { ...result, tools: clientCalls, tasks: result.tasks ?? [] };
-  }
+function dedupeCitations(citations: AgentCitation[]) {
+  const seen = new Set<string>();
+  return citations.filter((citation) => {
+    const key = citation.id || `${citation.author}:${citation.title}:${citation.year}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 async function completeFollowUp(request: AgentRequest): Promise<Omit<AgentResponse, "mock">> {

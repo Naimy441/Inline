@@ -1,5 +1,5 @@
 import { readSseData } from "@/lib/agent/sse";
-import type { AgentEditDraft, AgentRequest, AgentResponse, AgentStreamEvent, AgentTask } from "@/lib/agent/types";
+import type { AgentCitation, AgentEditDraft, AgentRequest, AgentResponse, AgentStreamEvent, AgentTask } from "@/lib/agent/types";
 
 export type AgentJobHandlers = {
   signal?: AbortSignal;
@@ -9,6 +9,7 @@ export type AgentJobHandlers = {
   onEdits?: (edits: AgentEditDraft[]) => void;
   onTool?: (name: string, hidden?: boolean) => void;
   onTasks?: (tasks: AgentTask[]) => void;
+  onCitations?: (citations: AgentCitation[]) => void;
 };
 
 export async function runAgentJob(request: AgentRequest, handlers: AgentJobHandlers = {}): Promise<AgentResponse> {
@@ -25,6 +26,8 @@ export async function runAgentJob(request: AgentRequest, handlers: AgentJobHandl
   let data: AgentResponse | null = null;
   let streamedThinking = "";
   let streamedMessage = "";
+  const thinkingStream = createStreamUpdater((text) => handlers.onThinking?.(text));
+  const messageStream = createStreamUpdater((text) => handlers.onMessage?.(text));
   for await (const raw of readSseData(response)) {
     if (handlers.signal?.aborted) throw abortError();
     let event: AgentStreamEvent;
@@ -36,18 +39,21 @@ export async function runAgentJob(request: AgentRequest, handlers: AgentJobHandl
     if (event.type === "phase") handlers.onPhase?.(event.phase);
     if (event.type === "thinking") {
       streamedThinking += event.delta;
-      handlers.onThinking?.(streamedThinking);
+      thinkingStream.push(streamedThinking);
     }
     if (event.type === "message") {
       streamedMessage = event.reset ? event.delta : streamedMessage + event.delta;
-      handlers.onMessage?.(streamedMessage);
+      messageStream.push(streamedMessage);
     }
     if (event.type === "edits") handlers.onEdits?.(event.edits);
     if (event.type === "tool") handlers.onTool?.(event.name, event.hidden);
     if (event.type === "tasks") handlers.onTasks?.(event.tasks);
+    if (event.type === "citations") handlers.onCitations?.(event.citations);
     if (event.type === "error") throw new Error(event.error);
     if (event.type === "done") data = event.result;
   }
+  thinkingStream.flush();
+  messageStream.flush();
   if (handlers.signal?.aborted) throw abortError();
   if (!data) throw new Error("The agent could not propose edits.");
   return {
@@ -56,6 +62,31 @@ export async function runAgentJob(request: AgentRequest, handlers: AgentJobHandl
     thinking: data.thinking || streamedThinking || undefined,
     tasks: data.tasks ?? [],
     tools: data.tools ?? [],
+    citations: data.citations ?? [],
+  };
+}
+
+function createStreamUpdater(onUpdate: (text: string) => void, intervalMs = 48) {
+  let pending = "";
+  let emitted = "";
+  let lastUpdate = 0;
+
+  return {
+    push(text: string) {
+      pending = text;
+      const now = performance.now();
+      if (now - lastUpdate >= intervalMs) {
+        emitted = pending;
+        lastUpdate = now;
+        onUpdate(emitted);
+      }
+    },
+    flush() {
+      if (pending !== emitted) {
+        emitted = pending;
+        onUpdate(emitted);
+      }
+    },
   };
 }
 

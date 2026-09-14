@@ -16,6 +16,10 @@ export type AgentEditDraft = {
   find: string;
   replace: string;
   reason?: string;
+  /** Optional explicit intent. The text payload remains the source of truth. */
+  operation?: "replace" | "insert" | "delete";
+  /** Zero-based occurrence when the same text appears more than once. */
+  occurrence?: number;
 };
 
 export type AgentHistoryMessage = {
@@ -40,6 +44,14 @@ export type AgentLockedRange = {
   text: string;
 };
 
+export type AgentPriorEdit = {
+  find: string;
+  replace: string;
+  operation?: AgentEditDraft["operation"];
+  occurrence?: number;
+  status: "pending" | "accepted";
+};
+
 export type AgentTaskStatus = "pending" | "in_progress" | "done";
 export type AgentTaskKind = "research" | "draft" | "edit" | "cite" | "review";
 
@@ -50,11 +62,23 @@ export type AgentTask = {
   kind?: AgentTaskKind;
 };
 
+export type AgentCitation = {
+  id: string;
+  author: string;
+  title: string;
+  year: string;
+  publisher?: string;
+  url?: string;
+  inline: string;
+  bibliography: string;
+};
+
 export type AgentRequest = {
   title: string;
   prompt: string;
   document: string;
   selection: Omit<AgentSelection, "start" | "end"> | null;
+  selections?: Array<Omit<AgentSelection, "start" | "end">>;
   mode: AgentMode;
   model: string;
   thinkingLevel: ThinkingLevel;
@@ -63,6 +87,7 @@ export type AgentRequest = {
   comments?: AgentComment[];
   attachments?: AgentAttachment[];
   lockedRanges?: AgentLockedRange[];
+  previousEdits?: AgentPriorEdit[];
   preserveTone?: boolean;
   pageCount?: number;
   reviewAttempt?: number;
@@ -75,6 +100,7 @@ export type AgentResponse = {
   edits: AgentEditDraft[];
   tasks: AgentTask[];
   tools: AgentToolCall[];
+  citations?: AgentCitation[];
   mock: boolean;
 };
 
@@ -86,6 +112,7 @@ export type AgentStreamEvent =
   | { type: "tool"; name: string; hidden?: boolean }
   | { type: "tool_result"; name: string; hidden?: boolean }
   | { type: "tasks"; tasks: AgentTask[] }
+  | { type: "citations"; citations: AgentCitation[] }
   | { type: "done"; result: AgentResponse }
   | { type: "error"; error: string };
 
@@ -98,6 +125,7 @@ export type AgentTurn = {
   id: string;
   prompt: string;
   selection: string | null;
+  selections?: string[];
   message: string;
   thinking?: string;
   durationMs?: number;
@@ -107,6 +135,7 @@ export type AgentTurn = {
   edits: PendingEdit[];
   tasks?: AgentTask[];
   tools?: Array<{ name: string; hidden?: boolean }>;
+  citations?: AgentCitation[];
   snapshotId?: string;
 };
 
@@ -121,4 +150,10 @@ export type AgentChat = {
   thinkingLevel: ThinkingLevel;
   turns: AgentTurn[];
   tasks: AgentTask[];
+};
+
+export type AgentQueueItem = {
+  id: string;
+  prompt: string;
+  selection?: string | null;
 };

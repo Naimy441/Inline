@@ -10,7 +10,6 @@ import { CommentsPanel, type DocComment } from "@/components/CommentsPanel";
 import { HistoryPanel } from "@/components/HistoryPanel";
 import { InlineComposer } from "@/components/InlineComposer";
 import { LintPanel } from "@/components/LintPanel";
-import { SelectionHud } from "@/components/SelectionHud";
 import { SlashMenu } from "@/components/SlashMenu";
 import { ColorPicker } from "@/components/ColorPicker";
 import {
@@ -71,10 +70,10 @@ import {
 import { applyClientTools } from "@/lib/agent/clientTools";
 import { acceptMissingEdits, createChat, loadChats, patchChat, pendingEditIds, removeTurnsFrom, saveChats, setEditStatus, titleFromPrompt } from "@/lib/agent/chats";
 import { loadDocument, saveDocument } from "@/lib/documentStore";
-import { acceptAgentEdit, applyAgentEdits, captureAgentSelection, documentEditIds, jumpToAgentEdit, rejectAgentEdit, replaceAgentEdits, settleAgentEdits } from "@/lib/agent/edits";
+import { acceptAgentEdit, applyAgentEdits, captureAgentSelection, documentEditIds, jumpToAgentEdit, rejectAgentEdit, replaceAgentEdits, sameAgentSelection, selectionFromOffsets, settleAgentEdits } from "@/lib/agent/edits";
 import { AGENT_MODELS, DEFAULT_MODEL } from "@/lib/agent/models";
 import { runAgentJob } from "@/lib/agent/runJob";
-import type { AgentAttachment, AgentChat, AgentMode, AgentSelection, AgentTask, PendingEdit, ThinkingLevel } from "@/lib/agent/types";
+import type { AgentAttachment, AgentChat, AgentCitation, AgentEditDraft, AgentMode, AgentQueueItem, AgentSelection, AgentTask, PendingEdit, ThinkingLevel } from "@/lib/agent/types";
 import { loadHistory, pushSnapshot, saveHistory, snapshotLabel, type HistorySnapshot } from "@/lib/historyStore";
 import { listLockedRanges, wrapLockedRegion } from "@/lib/locks";
 import { lintWriting } from "@/lib/writing/lint";
@@ -104,6 +103,32 @@ type DialogName =
   | "signature"
   | "shortcuts"
   | null;
+
+type AgentJobOptions = {
+  prompt: string;
+  context?: AgentSelection[];
+  comments?: DocComment[];
+  mode?: AgentMode;
+  openPanel?: boolean;
+  silent?: boolean;
+  clearPrompt?: boolean;
+  chatId?: string;
+};
+
+function editFingerprint(edit: Pick<AgentEditDraft, "find" | "replace" | "operation" | "occurrence">) {
+  const operation = edit.operation ?? (edit.replace === "" ? "delete" : edit.find === "" ? "insert" : "replace");
+  return JSON.stringify([operation, edit.find, edit.replace, edit.occurrence ?? 0]);
+}
+
+function suppressRepeatedEdits(
+  drafts: AgentEditDraft[],
+  previousEdits: Array<Pick<AgentEditDraft, "find" | "replace" | "operation" | "occurrence">>,
+  prompt: string,
+) {
+  if (!previousEdits.length || /\b(again|repeat|redo|reapply|re-?do)\b/i.test(prompt)) return drafts;
+  const prior = new Set(previousEdits.map(editFingerprint));
+  return drafts.filter((draft) => !prior.has(editFingerprint(draft)));
+}
 
 const TOOLBAR_OVERFLOW_GROUPS = ["font", "style", "insert", "align", "lists", "ai"] as const;
 type ToolbarOverflowId = (typeof TOOLBAR_OVERFLOW_GROUPS)[number];
@@ -158,6 +183,7 @@ export function DocumentWorkspace() {
   const [commentsMinimized, setCommentsMinimized] = useState(false);
   const [comments, setComments] = useState<DocComment[]>([]);
   const [docReady, setDocReady] = useState(false);
+  const [editorReady, setEditorReady] = useState(false);
   const [initialHtml, setInitialHtml] = useState("");
   const persistTimer = useRef(0);
   const [agentOpen, setAgentOpen] = useState(false);
@@ -172,7 +198,9 @@ export function DocumentWorkspace() {
   const [liveSelection, setLiveSelection] = useState<string | null>(null);
   const [liveMessage, setLiveMessage] = useState("");
   const [liveEdits, setLiveEdits] = useState<PendingEdit[]>([]);
-  const [agentContext, setAgentContext] = useState<AgentSelection | null>(null);
+  const [liveCitations, setLiveCitations] = useState<AgentCitation[]>([]);
+  const [queuedJobs, setQueuedJobs] = useState<AgentQueueItem[]>([]);
+  const [agentContext, setAgentContext] = useState<AgentSelection[]>([]);
   const [chats, setChats] = useState<AgentChat[]>([]);
   const [activeChatId, setActiveChatId] = useState("");
   const [chatsReady, setChatsReady] = useState(false);
@@ -192,21 +220,24 @@ export function DocumentWorkspace() {
   const [preserveTone, setPreserveTone] = useState(true);
   const [attachments, setAttachments] = useState<AgentAttachment[]>([]);
   const [history, setHistory] = useState<HistorySnapshot[]>([]);
+  const historyRef = useRef<HistorySnapshot[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [lintOpen, setLintOpen] = useState(false);
   const [inlineOpen, setInlineOpen] = useState(false);
   const [inlinePrompt, setInlinePrompt] = useState("");
   const [inlineBox, setInlineBox] = useState<{ top: number; left: number; width: number } | null>(null);
-  const [hudBox, setHudBox] = useState<{ top: number; left: number; width: number } | null>(null);
-  const [selectionLocked, setSelectionLocked] = useState(false);
   const [slash, setSlash] = useState<{ query: string; top: number; left: number } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [toast, setToast] = useState<{ text: string; action?: () => void } | null>(null);
   const [liveTools, setLiveTools] = useState<string[]>([]);
   const toastTimer = useRef(0);
+  const chatPersistTimer = useRef(0);
   const jobAbortRef = useRef<AbortController | null>(null);
+  const jobRunningRef = useRef(false);
+  const jobQueueRef = useRef<Array<AgentJobOptions & { queueId: string; selection?: string | null }>>([]);
   const pendingRevertRef = useRef<string | null>(null);
   const inlineContextRef = useRef<AgentSelection | null>(null);
+  const suppressContextSyncRef = useRef(false);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const toolbarWidths = useRef<Partial<Record<ToolbarOverflowId, number>>>({});
   const [toolbarOverflow, setToolbarOverflow] = useState<ToolbarOverflowId[]>([]);
@@ -265,7 +296,9 @@ export function DocumentWorkspace() {
       setActiveChatId(chat.id);
     }
     setChatsReady(true);
-    setHistory(loadHistory());
+    const storedHistory = loadHistory();
+    historyRef.current = storedHistory;
+    setHistory(storedHistory);
     const storedFocus = window.localStorage.getItem("inline-focus");
     const storedTone = window.localStorage.getItem("inline-preserve-tone");
     if (storedFocus === "1") setFocusMode(true);
@@ -274,13 +307,18 @@ export function DocumentWorkspace() {
 
   useEffect(() => {
     if (!chatsReady || !chats.length || !activeChatId) return;
-    saveChats({
-      chats,
-      activeId: activeChatId,
-      open: agentOpen,
-      minimized: agentMinimized,
-      drafts: { ...chatDrafts, [activeChatId]: askPrompt },
-    });
+    window.clearTimeout(chatPersistTimer.current);
+    chatPersistTimer.current = window.setTimeout(() => {
+      saveChats({
+        chats,
+        activeId: activeChatId,
+        open: agentOpen,
+        minimized: agentMinimized,
+        drafts: { ...chatDrafts, [activeChatId]: askPrompt },
+      });
+      chatPersistTimer.current = 0;
+    }, 180);
+    return () => window.clearTimeout(chatPersistTimer.current);
   }, [activeChatId, agentMinimized, agentOpen, askPrompt, chatDrafts, chats, chatsReady]);
 
   useEffect(() => {
@@ -297,7 +335,7 @@ export function DocumentWorkspace() {
 
   const persistDocument = useCallback(
     (html?: string) => {
-      if (!docReady) return;
+      if (!docReady || !editorReady) return;
       const nextHtml = html ?? editorRef.current?.getHtml() ?? initialHtml;
       saveDocument({
         title,
@@ -316,6 +354,7 @@ export function DocumentWorkspace() {
       comments,
       columns,
       docReady,
+      editorReady,
       footerText,
       headerText,
       initialHtml,
@@ -336,12 +375,13 @@ export function DocumentWorkspace() {
   );
 
   useEffect(() => {
-    if (!docReady) return;
+    if (!docReady || !editorReady) return;
     schedulePersist();
   }, [
     comments,
     columns,
     docReady,
+    editorReady,
     footerText,
     headerText,
     lineSpacing,
@@ -405,17 +445,19 @@ export function DocumentWorkspace() {
         return;
       }
       savedSelectionRef.current = range;
-      if (range.start !== range.end) expandedSelectionRef.current = range;
-      if (selection && !selection.isCollapsed && range.start !== range.end) {
-        const rect = selection.getRangeAt(0).getBoundingClientRect();
-        if (rect.width || rect.height) {
-          setHudBox({ top: rect.top, left: rect.left, width: rect.width });
-          const node = selection.anchorNode;
-          const el = node instanceof Element ? node : node?.parentElement;
-          setSelectionLocked(Boolean(el?.closest(".locked-region")));
+      if (range.start !== range.end) {
+        expandedSelectionRef.current = range;
+        if (!suppressContextSyncRef.current && !inlineOpen) {
+          const captured = captureAgentSelection(el);
+          if (captured) {
+            setAgentContext((current) => {
+              if (current.length > 0) return current;
+              return [captured];
+            });
+          }
         }
-      } else if (!inlineOpen) {
-        setHudBox(null);
+      } else if (document.activeElement === el) {
+        expandedSelectionRef.current = null;
       }
     };
     document.addEventListener("selectionchange", saveSelection);
@@ -549,6 +591,11 @@ export function DocumentWorkspace() {
     speak("Comment added.");
   };
 
+  const selectionContext = (el: HTMLElement | null): AgentSelection[] => {
+    const selected = el ? captureAgentSelection(el) : null;
+    return selected ? [selected] : [];
+  };
+
   const openAsk = () => {
     if (mode === "viewing") return;
     setAgentOpen(true);
@@ -558,15 +605,47 @@ export function DocumentWorkspace() {
 
   const addSelectionToChat = () => {
     if (mode === "viewing") return;
-    restoreSelection(true);
     const el = editorEl();
-    const context = el ? captureAgentSelection(el) : null;
-    if (!context) {
+    const live = el ? captureAgentSelection(el) : null;
+    const stored = el && expandedSelectionRef.current
+      ? selectionFromOffsets(el, expandedSelectionRef.current.start, expandedSelectionRef.current.end)
+      : null;
+    const selected = live ?? stored;
+    if (!selected && agentContext.length === 0) {
       speak("Select text to add to chat.");
       return;
     }
-    setAgentContext(context);
+    if (selected) {
+      setAgentContext((current) =>
+        current.some((item) => sameAgentSelection(item, selected)) ? current : [...current, selected],
+      );
+    }
     openAsk();
+  };
+
+  const revealAgentContext = (context?: AgentSelection) => {
+    const el = editorEl();
+    if (!el || !context) return;
+    suppressContextSyncRef.current = true;
+    restoreSelectionRange(el, { start: context.start, end: context.end });
+    const selection = window.getSelection();
+    const node = selection?.rangeCount ? selection.getRangeAt(0).startContainer : null;
+    const host = node instanceof Element ? node : node?.parentElement;
+    host?.scrollIntoView({ block: "center", behavior: "smooth" });
+    window.setTimeout(() => {
+      suppressContextSyncRef.current = false;
+    }, 0);
+  };
+
+  const collapseEditorSelection = (el: HTMLElement) => {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return;
+    if (!selection.anchorNode || !el.contains(selection.anchorNode)) return;
+    suppressContextSyncRef.current = true;
+    selection.collapseToEnd();
+    window.setTimeout(() => {
+      suppressContextSyncRef.current = false;
+    }, 0);
   };
 
   const stopJob = () => {
@@ -575,29 +654,26 @@ export function DocumentWorkspace() {
 
   const captureSnapshot = (label: string) => {
     const el = editorEl();
-    let id = "";
-    setHistory((list) => {
-      const result = pushSnapshot(list, {
-        label,
-        title,
-        html: el ? el.innerHTML : initialHtml,
-        headerText,
-        footerText,
-        showHeader,
-        showFooter,
-        showPageNumbers,
-        columns,
-        lineSpacing,
-        comments,
-      });
-      id = result.snapshot.id;
-      return result.list;
+    const result = pushSnapshot(historyRef.current, {
+      label,
+      title,
+      html: el ? el.innerHTML : initialHtml,
+      headerText,
+      footerText,
+      showHeader,
+      showFooter,
+      showPageNumbers,
+      columns,
+      lineSpacing,
+      comments,
     });
-    return id;
+    historyRef.current = result.list;
+    setHistory(result.list);
+    return result.snapshot.id;
   };
 
   const restoreSnapshot = (id: string, options?: { announce?: string }) => {
-    const snap = history.find((item) => item.id === id);
+    const snap = historyRef.current.find((item) => item.id === id);
     if (!snap) return false;
     captureSnapshot(snapshotLabel("restore"));
     editorRef.current?.setHtml(snap.html);
@@ -623,26 +699,19 @@ export function DocumentWorkspace() {
     toastTimer.current = window.setTimeout(() => setToast(null), 7000);
   };
 
-  const runJob = async (options: {
-    prompt: string;
-    context?: AgentSelection | null;
-    comments?: DocComment[];
-    mode?: AgentMode;
-    openPanel?: boolean;
-    silent?: boolean;
-    clearPrompt?: boolean;
-  }) => {
+  const executeJob = async (options: AgentJobOptions) => {
     const el = editorEl();
     const prompt = options.prompt.trim();
-    const chat = activeChat ?? createChat();
-    if (!el || !prompt || askBusy || mode === "viewing") return false;
+    const chat = chats.find((item) => item.id === options.chatId) ?? activeChat ?? createChat();
+    if (!el || !prompt || mode === "viewing") return false;
     if (pendingRevertRef.current) {
       const revertId = pendingRevertRef.current;
       pendingRevertRef.current = null;
       restoreSnapshot(revertId, { announce: "" });
     }
-    restoreSelection(true);
-    const context = options.context === undefined ? agentContext : options.context;
+    const contexts = options.context === undefined ? agentContext : options.context;
+    const primaryContext = contexts[contexts.length - 1] ?? null;
+    const combinedSelectionText = contexts.map((item) => item.text).join("\n\n");
     const snapshotId = captureSnapshot(snapshotLabel("agent"));
     const controller = new AbortController();
     jobAbortRef.current = controller;
@@ -652,9 +721,10 @@ export function DocumentWorkspace() {
     setLivePhase((options.mode ?? chat.mode) === "plan" ? "planning" : "thinking");
     setLiveThinking("");
     setLivePrompt(prompt);
-    setLiveSelection(context?.text ?? null);
+    setLiveSelection(combinedSelectionText || null);
     setLiveMessage("");
     setLiveEdits([]);
+    setLiveCitations([]);
     if (options.clearPrompt !== false) {
       setAskPrompt("");
       setChatDrafts((drafts) => {
@@ -668,6 +738,19 @@ export function DocumentWorkspace() {
     let appliedEdits: PendingEdit[] | null = null;
     let streamedMessage = "";
     let streamedThinking = "";
+    const priorEditLedger = chat.turns
+      .flatMap((turn) => turn.edits)
+      .filter((edit) => edit.status === "pending" || edit.status === "accepted")
+      .slice(-16)
+    const previousEdits = priorEditLedger
+      .slice(-8)
+      .map(({ find, replace, operation, occurrence, status }) => ({
+        find: find.slice(0, 1_500),
+        replace: replace.slice(0, 1_500),
+        operation,
+        occurrence,
+        status: status as "pending" | "accepted",
+      }));
     const persistTurn = (data: {
       message: string;
       thinking?: string;
@@ -676,6 +759,7 @@ export function DocumentWorkspace() {
       chatTitle?: string;
       tasks?: AgentTask[];
       tools?: { name: string; hidden?: boolean }[];
+      citations?: AgentCitation[];
     }) => {
       const nextTitle = data.chatTitle?.trim() || (chat.titled ? chat.title : titleFromPrompt(prompt));
       const nextTasks: AgentTask[] = data.tasks?.length ? data.tasks : chat.tasks;
@@ -695,7 +779,8 @@ export function DocumentWorkspace() {
                   {
                     id: crypto.randomUUID(),
                     prompt,
-                    selection: context?.text ?? null,
+                    selection: combinedSelectionText || null,
+                    selections: contexts.map((item) => item.text),
                     message: data.message,
                     thinking: data.thinking,
                     durationMs: Date.now() - started,
@@ -705,6 +790,7 @@ export function DocumentWorkspace() {
                     edits: data.edits,
                     tasks: data.tasks,
                     tools: data.tools,
+                    citations: data.citations,
                     snapshotId,
                   },
                 ],
@@ -720,14 +806,15 @@ export function DocumentWorkspace() {
           title,
           prompt,
           document: getPlainText(el, true),
-          selection: context
-            ? { text: context.text, before: context.before, after: context.after }
+          selection: primaryContext
+            ? { text: primaryContext.text, before: primaryContext.before, after: primaryContext.after }
             : null,
+          selections: contexts.map(({ text, before, after }) => ({ text, before, after })),
           mode: jobMode,
           model: chat.model,
           thinkingLevel: chat.thinkingLevel,
           nameChat: !chat.titled,
-          history: chat.turns.slice(-8).flatMap((turn) => [
+          history: chat.turns.flatMap((turn) => [
             { role: "user" as const, content: turn.prompt },
             { role: "assistant" as const, content: turn.message },
           ]),
@@ -738,6 +825,7 @@ export function DocumentWorkspace() {
           })),
           attachments,
           lockedRanges: listLockedRanges(el),
+          previousEdits,
           preserveTone,
           pageCount: metrics.pageCount,
         },
@@ -754,18 +842,30 @@ export function DocumentWorkspace() {
           },
           onEdits: (drafts) => {
             if (jobMode !== "agent") return;
-            appliedEdits = replaceAgentEdits(el, drafts, context, appliedEdits ?? []);
+            appliedEdits = replaceAgentEdits(
+              el,
+              suppressRepeatedEdits(drafts, priorEditLedger, prompt),
+              primaryContext,
+              appliedEdits ?? [],
+            );
             setLiveEdits(appliedEdits);
             setLivePhase("editing");
             setChats((list) => acceptMissingEdits(list, documentEditIds(el)));
+            collapseEditorSelection(el);
             afterEdit();
           },
           onTool: (name) => {
             setLiveTools((list) => (list.includes(name) ? list : [...list, name]));
           },
+          onCitations: (citations) => setLiveCitations(citations),
         },
       );
-      const edits = appliedEdits ?? (jobMode === "agent" ? applyAgentEdits(el, data.edits ?? [], context) : []);
+      const edits =
+        appliedEdits ??
+        (jobMode === "agent"
+          ? applyAgentEdits(el, suppressRepeatedEdits(data.edits ?? [], priorEditLedger, prompt), primaryContext)
+          : []);
+      collapseEditorSelection(el);
       if (data.tools?.length) {
         applyClientTools(el, data.tools, {
           print: () => window.print(),
@@ -785,6 +885,7 @@ export function DocumentWorkspace() {
         chatTitle: data.chatTitle,
         tasks: data.tasks,
         tools: data.tools?.map((tool) => ({ name: tool.name, hidden: tool.hidden })),
+        citations: data.citations,
       });
       if (options.openPanel) {
         setAgentOpen(true);
@@ -828,18 +929,67 @@ export function DocumentWorkspace() {
       setLiveSelection(null);
       setLiveMessage("");
       setLiveEdits([]);
+      setLiveCitations([]);
       setLiveTools([]);
+      jobRunningRef.current = false;
+      const next = jobQueueRef.current.shift();
+      setQueuedJobs(jobQueueRef.current.map((item) => ({ id: item.queueId, prompt: item.prompt, selection: item.selection })));
+      if (next) {
+        window.setTimeout(() => {
+          jobRunningRef.current = true;
+          void executeJob(next);
+        }, 0);
+      }
     }
   };
 
+  const runJob = async (options: AgentJobOptions) => {
+    const prompt = options.prompt.trim();
+    const el = editorEl();
+    if (!el || !prompt || mode === "viewing") return false;
+    const context = options.context === undefined ? agentContext : options.context;
+    const chatId = options.chatId ?? activeChat?.id;
+    if (jobRunningRef.current || askBusy) {
+      const queued = {
+        ...options,
+        prompt,
+        context,
+        chatId,
+        queueId: crypto.randomUUID(),
+        selection: context.map((item) => item.text).join("\n\n") || null,
+      };
+      jobQueueRef.current.push(queued);
+      setQueuedJobs(jobQueueRef.current.map((item) => ({ id: item.queueId, prompt: item.prompt, selection: item.selection })));
+      setAskError(null);
+      speak("Instruction queued.");
+      return true;
+    }
+    jobRunningRef.current = true;
+    return executeJob({ ...options, prompt, context, chatId });
+  };
+
+  const cancelQueuedJob = (id: string) => {
+    jobQueueRef.current = jobQueueRef.current.filter((item) => item.queueId !== id);
+    setQueuedJobs(jobQueueRef.current.map((item) => ({ id: item.queueId, prompt: item.prompt, selection: item.selection })));
+  };
+
+  const insertAgentCitation = (citation: AgentCitation) => {
+    const el = editorEl();
+    if (!el || mode === "viewing") return;
+    insertText(el, ` ${citation.inline}`);
+    afterEdit();
+    speak(`Inserted citation for ${citation.title}.`);
+  };
+
+  const contextLimit = activeChat?.model.includes("nano") ? 32_000 : 128_000;
+  const contextUsed = Math.ceil(
+    (metrics.charCount + askPrompt.length + attachments.reduce((sum, item) => sum + item.text.length, 0) + 2_000) / 4,
+  );
+
   const submitAsk = async () => {
-    const ok = await runJob({
-      prompt: askPrompt,
-      context: agentContext,
-      openPanel: true,
-      clearPrompt: false,
-    });
-    if (!ok) return;
+    const prompt = askPrompt;
+    const context = agentContext;
+    if (!prompt.trim()) return;
     setAskPrompt("");
     if (activeChatId) {
       setChatDrafts((drafts) => {
@@ -848,7 +998,14 @@ export function DocumentWorkspace() {
         return next;
       });
     }
-    setAgentContext(null);
+    setAgentContext([]);
+    const ok = await runJob({
+      prompt,
+      context,
+      openPanel: true,
+      clearPrompt: false,
+    });
+    if (!ok) return;
   };
 
   const openInlineEdit = () => {
@@ -863,10 +1020,9 @@ export function DocumentWorkspace() {
     inlineContextRef.current = context;
     const selection = window.getSelection();
     const rect = selection?.rangeCount ? selection.getRangeAt(0).getBoundingClientRect() : null;
-    setInlineBox(rect ? { top: rect.bottom, left: rect.left, width: rect.width } : hudBox);
+    setInlineBox(rect ? { top: rect.bottom, left: rect.left, width: rect.width } : { top: 120, left: 24, width: 320 });
     setInlinePrompt("");
     setInlineOpen(true);
-    setHudBox(null);
   };
 
   const refreshLint = () => {
@@ -924,14 +1080,14 @@ export function DocumentWorkspace() {
     setAskPrompt(turn.prompt);
     setAskError(null);
     if (turn.selection) {
-      setAgentContext(null);
+      setAgentContext([]);
     }
   };
 
   const addAttachments = (files: FileList | null) => {
     if (!files?.length) return;
     void Promise.all(
-      [...files].slice(0, 4).map(
+      [...files].map(
         (file) =>
           new Promise<AgentAttachment>((resolve) => {
             const reader = new FileReader();
@@ -939,12 +1095,12 @@ export function DocumentWorkspace() {
               resolve({
                 id: crypto.randomUUID(),
                 name: file.name,
-                text: String(reader.result ?? "").slice(0, 20_000),
+                text: String(reader.result ?? ""),
               });
             reader.readAsText(file);
           }),
       ),
-    ).then((next) => setAttachments((list) => [...list, ...next].slice(0, 4)));
+    ).then((next) => setAttachments((list) => [...list, ...next]));
   };
 
   const reviewEdit = (id: string, action: "accept" | "reject") => {
@@ -1209,7 +1365,7 @@ export function DocumentWorkspace() {
         if (!readOnly) {
           void runJob({
             prompt: QUICK_PROMPTS.find((item) => item.id === "grammar")!.prompt,
-            context: editorEl() ? captureAgentSelection(editorEl()!) : null,
+            context: selectionContext(editorEl()),
             mode: "agent",
             silent: true,
             clearPrompt: false,
@@ -1222,7 +1378,7 @@ export function DocumentWorkspace() {
           afterEdit();
           void runJob({
             prompt: QUICK_PROMPTS.find((item) => item.id === "tropes")!.prompt,
-            context: captureAgentSelection(el),
+            context: selectionContext(el),
             mode: "agent",
             silent: true,
             clearPrompt: false,
@@ -1828,6 +1984,7 @@ export function DocumentWorkspace() {
                   onMetricsChange={onMetricsChange}
                   onActiveChange={refreshActive}
                   onContentChange={schedulePersist}
+                  onReady={() => setEditorReady(true)}
                   onSlashQuery={(query, rect) => {
                     if (focusMode || mode === "viewing") {
                       setSlash(null);
@@ -1930,19 +2087,23 @@ export function DocumentWorkspace() {
         liveSelection={liveSelection}
         liveMessage={liveMessage}
         liveEdits={liveEdits}
+        liveCitations={liveCitations}
         error={askError}
         prompt={askPrompt}
         context={agentContext}
         chats={chats}
         activeChatId={activeChat?.id ?? activeChatId}
+        queued={queuedJobs}
+        contextUsage={{ used: contextUsed, limit: contextLimit }}
         models={modelCatalog}
         providers={availableProviders}
         onPromptChange={setAskPrompt}
         onSubmit={() => void submitAsk()}
         onStop={stopJob}
         onRevert={revertTurn}
-        revertSnapshotIds={history.map((item) => item.id)}
-        onClearContext={() => setAgentContext(null)}
+        onClearContext={() => setAgentContext([])}
+        onRevealContext={(context) => revealAgentContext(context)}
+        onRemoveContext={(index) => setAgentContext((current) => current.filter((_, itemIndex) => itemIndex !== index))}
         onMinimizedChange={setAgentMinimized}
         onClose={() => setAgentOpen(false)}
         onNewChat={() => {
@@ -1958,7 +2119,7 @@ export function DocumentWorkspace() {
           setActiveChatId(chat.id);
           setAskPrompt("");
           setAskError(null);
-          setAgentContext(null);
+          setAgentContext([]);
         }}
         onSelectChat={(id) => {
           setChatDrafts((drafts) => {
@@ -2014,6 +2175,8 @@ export function DocumentWorkspace() {
         attachments={attachments}
         preserveTone={preserveTone}
         liveTools={liveTools}
+        onCancelQueued={cancelQueuedJob}
+        onInsertCitation={insertAgentCitation}
         onPreserveToneChange={setPreserveTone}
         onAttach={addAttachments}
         onRemoveAttachment={(id) => setAttachments((list) => list.filter((file) => file.id !== id))}
@@ -2175,16 +2338,6 @@ export function DocumentWorkspace() {
       )}
       {dialog === "shortcuts" && <ShortcutsDialog onClose={() => setDialog(null)} />}
 
-      {!focusMode && !inlineOpen && hudBox && mode !== "viewing" && selectedText().trim() && (
-        <SelectionHud
-          box={hudBox}
-          locked={selectionLocked}
-          onEdit={openInlineEdit}
-          onAsk={openAsk}
-          onComment={addComment}
-          onLock={() => void handleAction("lock-region")}
-        />
-      )}
       {inlineOpen && inlineBox && (
         <InlineComposer
           box={inlineBox}
@@ -2196,7 +2349,7 @@ export function DocumentWorkspace() {
           onSubmit={() =>
             void runJob({
               prompt: inlinePrompt,
-              context: inlineContextRef.current,
+              context: inlineContextRef.current ? [inlineContextRef.current] : [],
               mode: "agent",
               silent: true,
               clearPrompt: false,
@@ -2204,6 +2357,13 @@ export function DocumentWorkspace() {
           }
           onOpenChat={() => {
             setAskPrompt(inlinePrompt);
+            if (inlineContextRef.current) {
+              setAgentContext((current) =>
+                current.some((item) => sameAgentSelection(item, inlineContextRef.current!))
+                  ? current
+                  : [...current, inlineContextRef.current!],
+              );
+            }
             setInlineOpen(false);
             openAsk();
           }}
@@ -2544,4 +2704,3 @@ function IndentIcon() {
     </svg>
   );
 }
-
