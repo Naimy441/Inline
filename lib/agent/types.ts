@@ -1,4 +1,4 @@
-import type { AgentToolCall } from "@/lib/agent/tools";
+import type { AgentToolCall } from "@/lib/agent/toolCatalog";
 
 export type AgentMode = "agent" | "plan" | "ask";
 export type ThinkingLevel = "none" | "low" | "medium" | "high" | "xhigh";
@@ -80,6 +80,14 @@ export type DocumentPageSlice = {
   text: string;
 };
 
+export type AgentContinuation = {
+  provider: AgentProvider;
+  model: string;
+  mode: AgentMode;
+  openaiResponseId?: string;
+  documentFingerprint?: string;
+};
+
 export type AgentRequest = {
   title: string;
   prompt: string;
@@ -98,7 +106,9 @@ export type AgentRequest = {
   previousEdits?: AgentPriorEdit[];
   preserveTone?: boolean;
   pageCount?: number;
-  reviewAttempt?: number;
+  chatId?: string;
+  continuation?: AgentContinuation;
+  recentTools?: string[];
 };
 
 export type AgentResponse = {
@@ -110,6 +120,7 @@ export type AgentResponse = {
   tools: AgentToolCall[];
   citations?: AgentCitation[];
   mock: boolean;
+  continuation?: AgentContinuation;
 };
 
 export type AgentStepStatus = "pending" | "active" | "complete";
@@ -123,6 +134,10 @@ export type AgentStep = {
   hits?: string[];
 };
 
+export type AgentTimelineItem =
+  | { id: string; kind: "thinking"; text: string; startedAt?: number; durationSec?: number }
+  | { id: string; kind: "step"; step: AgentStep };
+
 export type AgentUsage = {
   input: number;
   output: number;
@@ -135,8 +150,9 @@ export type AgentStreamEvent =
   | { type: "thinking"; delta: string }
   | { type: "message"; delta: string; reset?: boolean }
   | { type: "edits"; edits: AgentEditDraft[] }
-  | { type: "tool"; name: string; hidden?: boolean }
+  | { type: "tool"; name: string; hidden?: boolean; args?: Record<string, unknown> }
   | { type: "tool_result"; name: string; hidden?: boolean }
+  | { type: "client_tool"; call: AgentToolCall }
   | { type: "step"; step: AgentStep }
   | { type: "usage"; usage: AgentUsage }
   | { type: "tasks"; tasks: AgentTask[] }
@@ -147,6 +163,20 @@ export type AgentStreamEvent =
 export type PendingEdit = AgentEditDraft & {
   id: string;
   status: "pending" | "accepted" | "rejected" | "missed";
+};
+
+export type AgentLiveTurn = {
+  phase: "thinking" | "planning" | "editing" | "reviewing";
+  thinking: string;
+  prompt: string;
+  selection: string | null;
+  message: string;
+  edits: PendingEdit[];
+  citations: AgentCitation[];
+  tools: string[];
+  steps: AgentStep[];
+  timeline: AgentTimelineItem[];
+  usage?: AgentUsage;
 };
 
 export type AgentTurn = {
@@ -163,6 +193,7 @@ export type AgentTurn = {
   edits: PendingEdit[];
   tasks?: AgentTask[];
   tools?: Array<{ name: string; hidden?: boolean }>;
+  timeline?: AgentTimelineItem[];
   citations?: AgentCitation[];
   snapshotId?: string;
   error?: string;
@@ -179,10 +210,12 @@ export type AgentChat = {
   thinkingLevel: ThinkingLevel;
   turns: AgentTurn[];
   tasks: AgentTask[];
+  continuation?: AgentContinuation;
 };
 
 export type AgentQueueItem = {
   id: string;
   prompt: string;
   selection?: string | null;
+  chatId?: string;
 };

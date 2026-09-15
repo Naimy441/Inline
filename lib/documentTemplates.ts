@@ -194,11 +194,11 @@ function mlaHtml(date: string) {
     `<div>Instructor Name</div>`,
     `<div>Course Title</div>`,
     `<div>${date}</div>`,
-    `<div class="mla-title">Paper Title</div>`,
-    `<div class="mla-indent">The opening paragraph states the claim in plain language and names the text or question you are answering. Keep Times New Roman, 12 point, and double spacing as you write.</div>`,
-    `<div class="mla-indent">The next paragraph develops one idea with evidence. When you quote or paraphrase a source, add an in-text citation (Author 12) and list the full work on the Works Cited page.</div>`,
-    `<div class="mla-works">Works Cited</div>`,
-    `<div class="mla-hanging">Author, First. “Title of Source.” <em>Title of Container</em>, Publisher, Day Month Year, URL.</div>`,
+    `<div style="text-align:center">Paper Title</div>`,
+    `<div class="indent-first">The opening paragraph states the claim in plain language and names the text or question you are answering. Keep Times New Roman, 12 point, and double spacing as you write.</div>`,
+    `<div class="indent-first">The next paragraph develops one idea with evidence. When you quote or paraphrase a source, add an in-text citation (Author 12) and list the full work on the Works Cited page.</div>`,
+    `<div style="text-align:center">Works Cited</div>`,
+    `<div class="indent-hanging">Author, First. “Title of Source.” <em>Title of Container</em>, Publisher, Day Month Year, URL.</div>`,
   ].join("");
 }
 

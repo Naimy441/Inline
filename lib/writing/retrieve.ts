@@ -44,13 +44,34 @@ export function embedText(text: string) {
 export function retrieveChunks(document: string, query: string, limit = 6): RetrievedChunk[] {
   const chunks = chunkDocument(document);
   if (!chunks.length) return [];
-  const qVec = embedText(query);
-  const qTokens = new Set(tokenize(query));
+  const qTokens = tokenize(query);
+  if (!qTokens.length) return chunks.slice(0, limit);
+
+  const df = new Map<string, number>();
+  const chunkTokens = chunks.map((chunk) => tokenize(chunk.text));
+  for (const tokens of chunkTokens) {
+    for (const token of new Set(tokens)) df.set(token, (df.get(token) ?? 0) + 1);
+  }
+  const n = chunks.length;
+  const avgLen = chunkTokens.reduce((sum, tokens) => sum + tokens.length, 0) / Math.max(1, n);
+  const k1 = 1.2;
+  const b = 0.75;
+
   return chunks
-    .map((chunk) => {
-      const lexical = tokenize(chunk.text).reduce((score, token) => score + (qTokens.has(token) ? 1 : 0), 0);
-      const cosine = dot(qVec, embedText(chunk.text));
-      return { ...chunk, score: cosine * 2 + lexical * 0.15 };
+    .map((chunk, index) => {
+      const tokens = chunkTokens[index];
+      const tf = new Map<string, number>();
+      for (const token of tokens) tf.set(token, (tf.get(token) ?? 0) + 1);
+      let bm25 = 0;
+      for (const q of qTokens) {
+        const freq = tf.get(q) ?? 0;
+        if (!freq) continue;
+        const docs = df.get(q) ?? 0;
+        const idf = Math.log(1 + (n - docs + 0.5) / (docs + 0.5));
+        bm25 += idf * ((freq * (k1 + 1)) / (freq + k1 * (1 - b + b * (tokens.length / Math.max(1, avgLen)))));
+      }
+      const headingBoost = chunk.text.length < 90 && !/[.!?]$/.test(chunk.text) ? 0.2 : 0;
+      return { ...chunk, score: bm25 + headingBoost };
     })
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
@@ -91,10 +112,4 @@ function hash(value: string) {
 function normalize(vec: number[]) {
   const mag = Math.sqrt(vec.reduce((sum, n) => sum + n * n, 0)) || 1;
   return vec.map((n) => n / mag);
-}
-
-function dot(a: number[], b: number[]) {
-  let sum = 0;
-  for (let i = 0; i < a.length; i += 1) sum += a[i] * b[i];
-  return sum;
 }

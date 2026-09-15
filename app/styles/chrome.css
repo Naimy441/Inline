@@ -200,6 +200,24 @@ html[data-chat="min"] .app .header {
   color: #1967d2;
 }
 
+.debug-copy-btn {
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px dashed var(--docs-muted);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--docs-muted);
+  font-size: 11px;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.debug-copy-btn:hover {
+  color: var(--docs-ink);
+  border-color: var(--docs-ink);
+}
+
 .toolbar-wrap {
   background: var(--docs-chrome);
   padding: 0 12px 6px;
@@ -803,6 +821,88 @@ span.paper-chrome {
   font: inherit;
   background: var(--docs-surface);
   color: var(--docs-ink);
+}
+
+.find-bar {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 360px;
+  max-width: min(440px, calc(100% - 24px));
+  padding: 8px 10px;
+  border: 1px solid var(--docs-line);
+  border-radius: 8px;
+  background: var(--docs-surface);
+  box-shadow: var(--docs-shadow);
+}
+
+.find-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.find-bar-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--docs-field);
+  border-radius: 6px;
+  background: var(--docs-chrome);
+  color: var(--docs-ink);
+}
+
+.find-bar-row input:focus {
+  outline: 2px solid color-mix(in srgb, var(--docs-blue) 45%, transparent);
+  outline-offset: 0;
+}
+
+.find-bar-count {
+  flex: 0 0 auto;
+  min-width: 4.5em;
+  color: var(--docs-muted);
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.find-bar-icon,
+.find-bar-text {
+  flex: 0 0 auto;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--docs-ink);
+  cursor: pointer;
+}
+
+.find-bar-icon {
+  width: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+
+.find-bar-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.find-bar-text {
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.find-bar-icon:hover,
+.find-bar-text:hover,
+.find-bar-text.is-active {
+  background: var(--docs-hover);
 }
 
 .dialog-backdrop {
@@ -1454,6 +1554,7 @@ span.paper-chrome {
   .sr-panel,
   .agent-panel,
   .diff-review,
+  .find-bar,
   .dialog-backdrop,
   .papers,
   .chrome-layer,

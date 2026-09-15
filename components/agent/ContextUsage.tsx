@@ -1,22 +1,41 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
+import type { ContextBucket } from "@/lib/agent/context";
 import type { AgentUsage } from "@/lib/agent/types";
+
+const BUCKET_COLORS: Record<string, string> = {
+  system: "#9aa0a6",
+  tools: "#c58af9",
+  document: "#81c995",
+  conversation: "#f6ad55",
+  input: "#8ab4f8",
+  output: "#f28b82",
+  reasoning: "#fdd663",
+  cached: "#78d9ec",
+};
 
 function formatTokens(value: number) {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1000) return `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
+  if (value >= 10_000) return `${Math.round(value / 1000)}K`;
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}K`;
   return String(value);
+}
+
+function bucketColor(id: string, index: number) {
+  return BUCKET_COLORS[id] ?? ["#9aa0a6", "#c58af9", "#81c995", "#f6ad55", "#78d9ec"][index % 5];
 }
 
 export function ContextUsage({
   used,
   limit,
   usage,
+  buckets,
 }: {
   used: number;
   limit: number;
   usage?: AgentUsage;
+  buckets?: ContextBucket[];
 }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -25,6 +44,15 @@ export function ContextUsage({
   const radius = 10;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference * (1 - used / Math.max(1, limit));
+  const segments = (buckets?.length
+    ? buckets
+    : [
+        usage?.input ? { id: "input", label: "Input", tokens: usage.input } : null,
+        usage?.output ? { id: "output", label: "Output", tokens: usage.output } : null,
+        usage?.reasoning ? { id: "reasoning", label: "Reasoning", tokens: usage.reasoning } : null,
+        usage?.cached ? { id: "cached", label: "Cache", tokens: usage.cached } : null,
+      ].filter((item): item is ContextBucket => Boolean(item))) ?? [];
+  const segmentTotal = Math.max(1, segments.reduce((sum, item) => sum + item.tokens, 0));
 
   useEffect(() => {
     if (!open) return;
@@ -42,7 +70,7 @@ export function ContextUsage({
         className="agent-context-trigger"
         aria-expanded={open}
         aria-controls={panelId}
-        title={`${used.toLocaleString()} of ${limit.toLocaleString()} estimated tokens`}
+        title={`${used.toLocaleString()} of ${limit.toLocaleString()} tokens`}
         onClick={() => setOpen((value) => !value)}
       >
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
@@ -65,44 +93,39 @@ export function ContextUsage({
       {open && (
         <div className="agent-context-card" id={panelId} role="dialog" aria-label="Context usage">
           <div className="agent-context-head">
-            <strong>{percentage}%</strong>
+            <strong>Context Usage</strong>
+            <button type="button" className="agent-context-close" aria-label="Close" onClick={() => setOpen(false)}>
+              ×
+            </button>
+          </div>
+          <div className="agent-context-meta">
+            <span>{percentage}% Full</span>
             <span>
-              {formatTokens(used)} / {formatTokens(limit)}
+              ~{formatTokens(used)} / {formatTokens(limit)} Tokens
             </span>
           </div>
           <div className="agent-context-bar" aria-hidden="true">
-            <i style={{ width: `${percentage}%` }} />
+            {segments.map((bucket, index) => (
+              <i
+                key={bucket.id}
+                style={{
+                  width: `${(bucket.tokens / segmentTotal) * 100}%`,
+                  background: bucketColor(bucket.id, index),
+                }}
+              />
+            ))}
           </div>
-          {usage ? (
-            <dl>
-              {usage.input ? (
-                <div>
-                  <dt>Input</dt>
-                  <dd>{formatTokens(usage.input)}</dd>
-                </div>
-              ) : null}
-              {usage.output ? (
-                <div>
-                  <dt>Output</dt>
-                  <dd>{formatTokens(usage.output)}</dd>
-                </div>
-              ) : null}
-              {usage.reasoning ? (
-                <div>
-                  <dt>Reasoning</dt>
-                  <dd>{formatTokens(usage.reasoning)}</dd>
-                </div>
-              ) : null}
-              {usage.cached ? (
-                <div>
-                  <dt>Cache</dt>
-                  <dd>{formatTokens(usage.cached)}</dd>
-                </div>
-              ) : null}
-            </dl>
-          ) : (
-            <p>Estimated tokens for this chat, including the document and prompt.</p>
-          )}
+          <ul className="agent-context-legend">
+            {segments.map((bucket, index) => (
+              <li key={bucket.id}>
+                <span>
+                  <i style={{ background: bucketColor(bucket.id, index) }} />
+                  {bucket.label}
+                </span>
+                <em>{formatTokens(bucket.tokens)}</em>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </div>

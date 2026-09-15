@@ -1,6 +1,11 @@
+import { isAgentApiAuthorized } from "@/lib/agent/apiAuth";
 import { fixGrammarText } from "@/lib/agent/grammar";
 
 export async function POST(request: Request) {
+  if (!isAgentApiAuthorized(request)) {
+    return Response.json({ error: "Unauthorized." }, { status: 401 });
+  }
+
   let body: { text?: unknown };
   try {
     body = (await request.json()) as { text?: unknown };

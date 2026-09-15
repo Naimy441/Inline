@@ -64,7 +64,6 @@ export const ChainOfThoughtStep = memo(function ChainOfThoughtStep({
 }) {
   return (
     <div className={`agent-cot-step is-${status}`}>
-      <span className="agent-cot-dot" aria-hidden="true" />
       <div>
         <div className="agent-cot-label">{label}</div>
         {description ? <div className="agent-cot-detail">{description}</div> : null}

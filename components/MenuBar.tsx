@@ -23,6 +23,7 @@ type Props = {
   lineSpacing: string;
   focusMode: boolean;
   preserveTone: boolean;
+  showDevTools?: boolean;
   onAction: (action: string, value?: string) => void;
 };
 
@@ -144,6 +145,8 @@ export function MenuBar(props: Props) {
         { label: "Justify", action: "align", value: "justify", writes: true },
         { label: "Increase indent", action: "indent", writes: true },
         { label: "Decrease indent", action: "outdent", writes: true },
+        { label: "First line indent", action: "indent-first", writes: true },
+        { label: "Hanging indent", action: "indent-hanging", writes: true },
         "sep",
         { label: "Line spacing 1", action: "spacing", value: "1", checked: props.lineSpacing === "1" },
         { label: "Line spacing 1.15", action: "spacing", value: "1.15", checked: props.lineSpacing === "1.15" },
@@ -179,9 +182,18 @@ export function MenuBar(props: Props) {
         { label: "eSignature", action: "signature", writes: true },
         { label: "Substitutions", action: "substitutions", checked: props.substitutions },
         { label: "Screen reader", action: "screen-reader", checked: props.screenReader },
+        ...(props.showDevTools
+          ? ([
+              "sep",
+              { label: "Copy document and chat snapshot", action: "copy-debug-snapshot" },
+            ] as MenuItem[])
+          : []),
       ])}
       {menu("help", "Help", [
         { label: "Keyboard shortcuts", action: "shortcuts" },
+        ...(props.showDevTools
+          ? ([{ label: "Copy document and chat snapshot", action: "copy-debug-snapshot" }] as MenuItem[])
+          : []),
       ])}
     </nav>
   );

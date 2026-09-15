@@ -1,9 +1,15 @@
+import { isAgentApiAuthorized } from "@/lib/agent/apiAuth";
+import { parseChatId, parseContinuation } from "@/lib/agent/continuation";
 import { isAgentMode, isThinkingLevel, resolveAgentModel } from "@/lib/agent/models";
 import { runAgentStream } from "@/lib/agent/runAgent";
 import { encodeSse } from "@/lib/agent/sse";
 import type { AgentAttachment, AgentComment, AgentEditDraft, AgentHistoryMessage, AgentLockedRange, AgentPriorEdit, AgentRequest, DocumentPageSlice } from "@/lib/agent/types";
 
 export async function POST(request: Request) {
+  if (!isAgentApiAuthorized(request)) {
+    return Response.json({ error: "Unauthorized." }, { status: 401 });
+  }
+
   let body: Partial<AgentRequest>;
   try {
     body = (await request.json()) as Partial<AgentRequest>;
@@ -146,6 +152,11 @@ export async function POST(request: Request) {
     previousEdits,
     preserveTone: body.preserveTone !== false,
     pageCount: typeof body.pageCount === "number" && body.pageCount > 0 ? Math.round(body.pageCount) : 1,
+    chatId: parseChatId(body.chatId),
+    continuation: parseContinuation(body.continuation),
+    recentTools: Array.isArray(body.recentTools)
+      ? body.recentTools.filter((item): item is string => typeof item === "string" && item.trim().length > 0).slice(0, 24)
+      : undefined,
   };
 
   const stream = new ReadableStream({
@@ -176,6 +187,7 @@ export async function POST(request: Request) {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
     },
   });
 }

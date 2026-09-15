@@ -1,6 +1,8 @@
-export const MAX_BACKOFF_ATTEMPTS = 5;
+export const MAX_BACKOFF_ATTEMPTS = 6;
 const BASE_DELAY_MS = 1_000;
-const MAX_DELAY_MS = 45_000;
+const MAX_DELAY_MS = 60_000;
+const RATE_LIMIT_MIN_DELAY_MS = 4_000;
+const RATE_LIMIT_MAX_DELAY_MS = 60_000;
 
 export type BackoffEvent = {
   type: "retry";
@@ -48,31 +50,33 @@ export function isAuthError(error: unknown) {
 }
 
 export function parseRetryAfterFromText(text: string): number | undefined {
-  const match = text.match(/try again in\s+([\d.]+)\s*(ms|milliseconds|s|sec|secs|seconds)?/i);
+  const match =
+    text.match(/(?:try again|retry(?:\s+again)?|please retry)\s+in\s+([\d.]+)\s*(ms|milliseconds|s|sec|secs|seconds)?/i) ||
+    text.match(/\bin\s+([\d.]+)\s*(ms|milliseconds|s|sec|secs|seconds)\b/i);
   if (!match) return undefined;
   const value = Number(match[1]);
   if (!Number.isFinite(value) || value < 0) return undefined;
   const unit = (match[2] || "s").toLowerCase();
   const ms = unit.startsWith("ms") || unit.startsWith("millisecond") ? value : value * 1000;
-  return Math.min(MAX_DELAY_MS, Math.max(250, ms));
+  return Math.min(RATE_LIMIT_MAX_DELAY_MS, Math.max(250, ms));
 }
 
 export function parseRetryAfterMs(res: Response, body: string): number | undefined {
   const header = res.headers.get("retry-after");
   if (header) {
     const seconds = Number(header);
-    if (Number.isFinite(seconds) && seconds >= 0) return Math.min(MAX_DELAY_MS, Math.max(250, seconds * 1000));
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.min(RATE_LIMIT_MAX_DELAY_MS, Math.max(250, seconds * 1000));
     const date = Date.parse(header);
-    if (Number.isFinite(date)) return Math.min(MAX_DELAY_MS, Math.max(250, date - Date.now()));
+    if (Number.isFinite(date)) return Math.min(RATE_LIMIT_MAX_DELAY_MS, Math.max(250, date - Date.now()));
   }
   const resetTokens = res.headers.get("x-ratelimit-reset-tokens") || res.headers.get("x-ratelimit-reset-requests");
   if (resetTokens) {
     if (/^\d+(\.\d+)?s$/i.test(resetTokens)) {
-      return Math.min(MAX_DELAY_MS, Math.max(250, Number.parseFloat(resetTokens) * 1000));
+      return Math.min(RATE_LIMIT_MAX_DELAY_MS, Math.max(250, Number.parseFloat(resetTokens) * 1000));
     }
     const seconds = Number(resetTokens);
     if (Number.isFinite(seconds) && seconds >= 0 && seconds < 3600) {
-      return Math.min(MAX_DELAY_MS, Math.max(250, seconds * 1000));
+      return Math.min(RATE_LIMIT_MAX_DELAY_MS, Math.max(250, seconds * 1000));
     }
   }
   return parseRetryAfterFromText(body);
@@ -109,10 +113,20 @@ export function publicModelError(raw: string) {
   return raw.replace(/organization org-[A-Za-z0-9]+/gi, "your organization").replace(/\s+/g, " ").trim();
 }
 
-export function retryDelayMs(attempt: number, hintedMs?: number) {
-  const expo = Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1));
-  const jitter = Math.floor(Math.random() * 300);
-  return Math.min(MAX_DELAY_MS, Math.max(hintedMs ?? 0, expo) + jitter);
+export function isRetryableError(error: unknown) {
+  if (isAbortError(error) || isAuthError(error)) return false;
+  if (isRateLimitError(error)) return true;
+  if (error instanceof HttpError) return isRetryableStatus(error.status);
+  if (error instanceof Error) return isTransientNetwork(error) || isRateLimitText(error.message);
+  return false;
+}
+
+export function retryDelayMs(attempt: number, hintedMs?: number, rateLimit = false) {
+  const cap = rateLimit ? RATE_LIMIT_MAX_DELAY_MS : MAX_DELAY_MS;
+  const expo = Math.min(cap, BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1));
+  const floor = rateLimit ? RATE_LIMIT_MIN_DELAY_MS : 0;
+  const jitter = Math.floor(Math.random() * 400);
+  return Math.min(cap, Math.max(floor, hintedMs ?? 0, expo) + jitter);
 }
 
 export function sleep(ms: number, signal?: AbortSignal) {
@@ -131,6 +145,26 @@ export function sleep(ms: number, signal?: AbortSignal) {
     };
     signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+export async function* backoffWait(
+  delayMs: number,
+  meta: { attempt: number; maxAttempts: number; raw: string },
+  signal?: AbortSignal,
+): AsyncGenerator<BackoffEvent> {
+  const total = Math.max(250, delayMs);
+  const end = Date.now() + total;
+  while (true) {
+    const remaining = end - Date.now();
+    if (remaining <= 0) return;
+    yield {
+      type: "retry",
+      attempt: meta.attempt,
+      delayMs: remaining,
+      message: retryStepTitle(meta.raw, remaining, meta.attempt, meta.maxAttempts),
+    };
+    await sleep(Math.min(4_000, remaining), signal);
+  }
 }
 
 export function abortError() {
@@ -159,14 +193,8 @@ export async function* backoffFetch(
       lastError = new HttpError(res.status, message, body, retryAfterMs);
       if (!isRetryableStatus(res.status) && !isRateLimitText(message)) throw lastError;
       if (attempt >= maxAttempts) throw lastError;
-      const delayMs = retryDelayMs(attempt, retryAfterMs);
-      yield {
-        type: "retry",
-        attempt,
-        delayMs,
-        message: retryStepTitle(message, delayMs, attempt, maxAttempts),
-      };
-      await sleep(delayMs, signal);
+      const delayMs = retryDelayMs(attempt, retryAfterMs, isRateLimitText(message));
+      yield* backoffWait(delayMs, { attempt, maxAttempts, raw: message }, signal);
     } catch (error) {
       if (isAbortError(error)) throw error;
       if (error instanceof HttpError) {
@@ -174,26 +202,14 @@ export async function* backoffFetch(
         if (attempt >= maxAttempts || (!isRetryableStatus(error.status) && !isRateLimitText(error.message))) {
           throw error;
         }
-        const delayMs = retryDelayMs(attempt, error.retryAfterMs);
-        yield {
-          type: "retry",
-          attempt,
-          delayMs,
-          message: retryStepTitle(error.message, delayMs, attempt, maxAttempts),
-        };
-        await sleep(delayMs, signal);
+        const delayMs = retryDelayMs(attempt, error.retryAfterMs, isRateLimitText(error.message));
+        yield* backoffWait(delayMs, { attempt, maxAttempts, raw: error.message }, signal);
         continue;
       }
       lastError = error instanceof Error ? error : new Error("Network request failed.");
       if (attempt >= maxAttempts || !isTransientNetwork(lastError)) throw lastError;
-      const delayMs = retryDelayMs(attempt);
-      yield {
-        type: "retry",
-        attempt,
-        delayMs,
-        message: retryStepTitle(lastError.message, delayMs, attempt, maxAttempts),
-      };
-      await sleep(delayMs, signal);
+      const delayMs = retryDelayMs(attempt, undefined, isRateLimitText(lastError.message));
+      yield* backoffWait(delayMs, { attempt, maxAttempts, raw: lastError.message }, signal);
     }
   }
 

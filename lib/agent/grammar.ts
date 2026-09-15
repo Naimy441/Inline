@@ -117,6 +117,10 @@ function sanitizeEdits(source: string, raw: unknown): Array<{ find: string; repl
   return edits;
 }
 
+export function sanitizeGrammarEdits(source: string, raw: unknown) {
+  return sanitizeEdits(source, raw);
+}
+
 function localGrammarEdits(source: string): Array<{ find: string; replace: string }> {
   const next = source
     .replace(/[^\S\n]{2,}/g, " ")

@@ -5,6 +5,7 @@ export type AgentModelOption = {
   label: string;
   provider: AgentProvider;
   thinking: boolean;
+  contextWindow: number;
 };
 
 export const DEFAULT_MODEL = "gpt-5.4-nano";
@@ -12,15 +13,15 @@ export const GRAMMAR_MODEL = "gpt-4o-mini";
 export const GRAMMAR_MODEL_FALLBACKS = ["gpt-4.1-mini", "gpt-4.1-nano", "gpt-4.1"] as const;
 
 export const AGENT_MODELS: AgentModelOption[] = [
-  { id: "gpt-5.4", label: "GPT-5.4", provider: "openai", thinking: true },
-  { id: "gpt-5.4-mini", label: "GPT-5.4 Mini", provider: "openai", thinking: true },
-  { id: "gpt-5.4-nano", label: "GPT-5.4 Nano", provider: "openai", thinking: true },
-  { id: "gpt-5.6", label: "GPT-5.6", provider: "openai", thinking: true },
-  { id: "gpt-4.1", label: "GPT-4.1", provider: "openai", thinking: false },
-  { id: "gpt-4.1-mini", label: "GPT-4.1 Mini", provider: "openai", thinking: false },
-  { id: "claude-opus-5", label: "Opus 5", provider: "anthropic", thinking: true },
-  { id: "claude-sonnet-5", label: "Sonnet 5", provider: "anthropic", thinking: true },
-  { id: "claude-haiku-4-5", label: "Haiku 4.5", provider: "anthropic", thinking: true },
+  { id: "gpt-5.4", label: "GPT-5.4", provider: "openai", thinking: true, contextWindow: 256_000 },
+  { id: "gpt-5.4-mini", label: "GPT-5.4 Mini", provider: "openai", thinking: true, contextWindow: 256_000 },
+  { id: "gpt-5.4-nano", label: "GPT-5.4 Nano", provider: "openai", thinking: true, contextWindow: 128_000 },
+  { id: "gpt-5.6", label: "GPT-5.6", provider: "openai", thinking: true, contextWindow: 256_000 },
+  { id: "gpt-4.1", label: "GPT-4.1", provider: "openai", thinking: false, contextWindow: 1_047_576 },
+  { id: "gpt-4.1-mini", label: "GPT-4.1 Mini", provider: "openai", thinking: false, contextWindow: 1_047_576 },
+  { id: "claude-opus-5", label: "Opus 5", provider: "anthropic", thinking: true, contextWindow: 200_000 },
+  { id: "claude-sonnet-5", label: "Sonnet 5", provider: "anthropic", thinking: true, contextWindow: 200_000 },
+  { id: "claude-haiku-4-5", label: "Haiku 4.5", provider: "anthropic", thinking: true, contextWindow: 200_000 },
 ];
 
 export const AGENT_MODES: Array<{ id: AgentMode; label: string; hint: string }> = [

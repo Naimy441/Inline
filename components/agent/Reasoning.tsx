@@ -1,14 +1,16 @@
 "use client";
 
 import { createContext, memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { MdExpandMore, MdPsychology } from "react-icons/md";
+import { MdChevronRight } from "react-icons/md";
+import { ChatText } from "@/components/agent/ChatText";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/agent/Collapsible";
 import { Shimmer } from "@/components/agent/Shimmer";
+import { formatThoughtLabel } from "@/lib/agent/timeline";
 
 type ReasoningContextValue = {
   isStreaming: boolean;
   isOpen: boolean;
-  duration?: number;
+  durationSec?: number;
 };
 
 const ReasoningContext = createContext<ReasoningContextValue | null>(null);
@@ -22,42 +24,37 @@ function useReasoning() {
 export const Reasoning = memo(function Reasoning({
   isStreaming = false,
   duration,
+  defaultOpen,
   children,
 }: {
   isStreaming?: boolean;
   duration?: number;
+  defaultOpen?: boolean;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(isStreaming);
+  const [open, setOpen] = useState(isStreaming || Boolean(defaultOpen));
   const [elapsed, setElapsed] = useState<number | undefined>(duration);
   const started = useRef<number | null>(isStreaming ? Date.now() : null);
   const streamed = useRef(isStreaming);
-  const closedOnce = useRef(false);
 
   useEffect(() => {
     if (isStreaming) {
       streamed.current = true;
       if (started.current == null) started.current = Date.now();
       setOpen(true);
-      closedOnce.current = false;
       return;
     }
     if (started.current != null) {
-      setElapsed(Math.max(1, Math.ceil((Date.now() - started.current) / 1000)));
+      setElapsed(Math.max(0, Math.round((Date.now() - started.current) / 1000)));
       started.current = null;
     }
-    if (streamed.current && !closedOnce.current) {
-      const timer = window.setTimeout(() => {
-        setOpen(false);
-        closedOnce.current = true;
-      }, 800);
-      return () => window.clearTimeout(timer);
-    }
+    if (streamed.current) setOpen(false);
   }, [isStreaming]);
 
+  const durationSec = duration ?? elapsed;
   const value = useMemo(
-    () => ({ isStreaming, isOpen: open, duration: duration ?? elapsed }),
-    [isStreaming, open, duration, elapsed],
+    () => ({ isStreaming, isOpen: open, durationSec }),
+    [isStreaming, open, durationSec],
   );
 
   return (
@@ -70,25 +67,23 @@ export const Reasoning = memo(function Reasoning({
 });
 
 export const ReasoningTrigger = memo(function ReasoningTrigger() {
-  const { isStreaming, isOpen, duration } = useReasoning();
-  const label = isStreaming
-    ? "Thinking"
-    : duration
-      ? `Thought for ${duration}s`
-      : "Thought for a few seconds";
+  const { isStreaming, isOpen, durationSec } = useReasoning();
+  const label = formatThoughtLabel({ streaming: isStreaming, durationSec });
   return (
     <CollapsibleTrigger className="agent-reasoning-trigger">
-      <MdPsychology aria-hidden="true" />
-      {isStreaming ? <Shimmer>{label}…</Shimmer> : <span>{label}</span>}
-      <MdExpandMore aria-hidden="true" className={isOpen ? "is-open" : undefined} />
+      {isStreaming ? <Shimmer>{label}</Shimmer> : <span>{label}</span>}
+      <MdChevronRight aria-hidden="true" className={isOpen ? "is-open" : undefined} />
     </CollapsibleTrigger>
   );
 });
 
 export const ReasoningContent = memo(function ReasoningContent({ children }: { children: string }) {
+  const { isStreaming } = useReasoning();
   return (
     <CollapsibleContent className="agent-reasoning-body">
-      <p>{children}</p>
+      <div className="agent-reasoning-stream">
+        <ChatText text={children} caret={isStreaming} />
+      </div>
     </CollapsibleContent>
   );
 });

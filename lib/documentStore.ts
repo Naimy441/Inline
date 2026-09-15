@@ -308,6 +308,9 @@ export function sanitizeStoredHtml(html: string): string {
   wrap.querySelectorAll(".grammar-flash").forEach((node) => {
     node.replaceWith(...node.childNodes);
   });
+  wrap.querySelectorAll(".manual-page-break").forEach((node) => {
+    if (node instanceof HTMLElement) node.style.height = "";
+  });
   wrap.querySelectorAll("*").forEach((node) => {
     if (!(node instanceof HTMLElement)) return;
     for (const attr of [...node.attributes]) {

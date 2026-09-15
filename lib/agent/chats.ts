@@ -17,6 +17,7 @@ export type StoredChats = {
   open: boolean;
   minimized: boolean;
   drafts: Record<string, string>;
+  openIds: string[];
 };
 
 const MAX_DRAFT = 20_000;
@@ -49,12 +50,14 @@ export function loadChats(documentId: string): StoredChats | null {
     const chats = parsed.chats.filter(isChat);
     if (!chats.length) return null;
     const activeId = chats.some((chat) => chat.id === parsed.activeId) ? (parsed.activeId as string) : chats[0].id;
+    const openIds = cleanOpenIds(parsed.openIds, chats, activeId);
     return {
       chats,
       activeId,
       open: Boolean(parsed.open),
       minimized: Boolean(parsed.minimized),
       drafts: cleanDrafts(parsed.drafts, chats),
+      openIds,
     };
   } catch {
     return null;
@@ -69,6 +72,7 @@ export function saveChats(
     open: boolean;
     minimized: boolean;
     drafts?: Record<string, string>;
+    openIds?: string[];
   },
 ) {
   if (typeof window === "undefined" || !documentId) return;
@@ -86,6 +90,7 @@ export function saveChats(
         open: session.open,
         minimized: session.minimized,
         drafts: cleanDrafts(session.drafts, trimmed),
+        openIds: cleanOpenIds(session.openIds, trimmed, session.activeId),
       }),
     );
   } catch {
@@ -96,6 +101,16 @@ export function saveChats(
 export function clearChats(documentId: string) {
   if (typeof window === "undefined" || !documentId) return;
   window.localStorage.removeItem(chatKey(documentId));
+}
+
+export function cleanOpenIds(value: unknown, chats: AgentChat[], activeId: string) {
+  const ids = new Set(chats.map((chat) => chat.id));
+  const listed = Array.isArray(value)
+    ? value.filter((id): id is string => typeof id === "string" && ids.has(id))
+    : [];
+  const unique = [...new Set(listed)];
+  if (ids.has(activeId) && !unique.includes(activeId)) unique.unshift(activeId);
+  return unique.length ? unique : chats[0] ? [chats[0].id] : [];
 }
 
 export function cleanDrafts(value: unknown, chats: AgentChat[]) {
@@ -127,7 +142,14 @@ export function cleanChatTitle(value: unknown) {
 }
 
 export function patchChat(chats: AgentChat[], id: string, patch: Partial<AgentChat>): AgentChat[] {
-  return chats.map((chat) => (chat.id === id ? { ...chat, ...patch, updatedAt: Date.now() } : chat));
+  return chats.map((chat) => {
+    if (chat.id !== id) return chat;
+    const next: AgentChat = { ...chat, ...patch, updatedAt: Date.now() };
+    if ((patch.mode && patch.mode !== chat.mode) || (patch.model && patch.model !== chat.model)) {
+      next.continuation = undefined;
+    }
+    return next;
+  });
 }
 
 export function setEditStatus(
@@ -154,7 +176,7 @@ export function removeTurnsFrom(chats: AgentChat[], chatId: string, turnId: stri
     if (chat.id !== chatId) return chat;
     const index = chat.turns.findIndex((turn) => turn.id === turnId);
     if (index < 0) return chat;
-    return { ...chat, turns: chat.turns.slice(0, index), updatedAt: Date.now() };
+    return { ...chat, turns: chat.turns.slice(0, index), continuation: undefined, updatedAt: Date.now() };
   });
 }
 
@@ -187,6 +209,7 @@ function isChat(value: unknown): value is AgentChat {
   const chat = value as AgentChat;
   if (typeof chat.id !== "string" || typeof chat.title !== "string" || !Array.isArray(chat.turns)) return false;
   if (!Array.isArray(chat.tasks)) chat.tasks = [];
+  if (chat.continuation && typeof chat.continuation !== "object") chat.continuation = undefined;
   return true;
 }
 

@@ -1,4 +1,5 @@
 import { readSseData } from "@/lib/agent/sse";
+import type { AgentToolCall } from "@/lib/agent/toolCatalog";
 import type { AgentCitation, AgentEditDraft, AgentRequest, AgentResponse, AgentStep, AgentStreamEvent, AgentTask, AgentUsage } from "@/lib/agent/types";
 
 export type AgentJobHandlers = {
@@ -6,8 +7,9 @@ export type AgentJobHandlers = {
   onPhase?: (phase: "thinking" | "planning" | "editing" | "reviewing") => void;
   onThinking?: (text: string) => void;
   onMessage?: (text: string) => void;
-  onEdits?: (edits: AgentEditDraft[]) => void;
+  onEdits?: (edits: AgentEditDraft[]) => void | Promise<void>;
   onTool?: (name: string, hidden?: boolean) => void;
+  onClientTool?: (call: AgentToolCall) => void | Promise<void>;
   onStep?: (step: AgentStep) => void;
   onUsage?: (usage: AgentUsage) => void;
   onTasks?: (tasks: AgentTask[]) => void;
@@ -47,8 +49,9 @@ export async function runAgentJob(request: AgentRequest, handlers: AgentJobHandl
       streamedMessage = event.reset ? event.delta : streamedMessage + event.delta;
       messageStream.push(streamedMessage);
     }
-    if (event.type === "edits") handlers.onEdits?.(event.edits);
+    if (event.type === "edits") await handlers.onEdits?.(event.edits);
     if (event.type === "tool") handlers.onTool?.(event.name, event.hidden);
+    if (event.type === "client_tool") await handlers.onClientTool?.(event.call);
     if (event.type === "step") handlers.onStep?.(event.step);
     if (event.type === "usage") handlers.onUsage?.(event.usage);
     if (event.type === "tasks") handlers.onTasks?.(event.tasks);
@@ -67,6 +70,7 @@ export async function runAgentJob(request: AgentRequest, handlers: AgentJobHandl
     tasks: data.tasks ?? [],
     tools: data.tools ?? [],
     citations: data.citations ?? [],
+    continuation: data.continuation,
   };
 }
 

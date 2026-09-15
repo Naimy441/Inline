@@ -109,6 +109,11 @@ function isAtomicBlock(node: Node | null): boolean {
   return node.classList.contains("doc-image") || node.tagName === "IMG" || node.tagName === "TABLE";
 }
 
+function atomicSplitTarget(node: Node): Node {
+  const el = node instanceof Element ? node : node.parentElement;
+  return el?.closest("table") ?? node;
+}
+
 function isSuggestionDel(node: Node): boolean {
   const el = node instanceof Element ? node : node.parentElement;
   return Boolean(el?.closest(".suggestion-del"));
@@ -502,15 +507,22 @@ function findSplitAt(root: HTMLElement, pageBottomY: number): SplitPoint | null 
 function insertBreakAt(root: HTMLElement, point: SplitPoint, pageBottom: number) {
   const br = createPageBreak();
   if (point.kind === "before") {
-    if (isAtomicBlock(point.node)) {
+    const target = atomicSplitTarget(point.node);
+    if (isAtomicBlock(target)) {
       const scale = visualScale(root);
-      const top = localY(root, (point.node as Element).getBoundingClientRect().top, scale);
+      const top = localY(root, (target as Element).getBoundingClientRect().top, scale);
       const remaining = pageBottom - top;
       if (remaining > 8) {
-        point.node.parentNode?.insertBefore(createPagePush(remaining), point.node);
+        target.parentNode?.insertBefore(createPagePush(remaining), target);
       }
     }
-    point.node.parentNode?.insertBefore(br, point.node);
+    target.parentNode?.insertBefore(br, target);
+    return;
+  }
+
+  const table = point.node.parentElement?.closest("table");
+  if (table) {
+    insertBreakAt(root, { kind: "before", node: table }, pageBottom);
     return;
   }
 
@@ -560,6 +572,7 @@ export function getContentBottom(root: HTMLElement): number {
 
 export function reflowPages(root: HTMLElement, layout: PageLayout = DEFAULT_PAGE_LAYOUT): number {
   stripPageBreaks(root);
+  hoistBreaksFromTables(root);
   const scale = visualScale(root);
 
   root.querySelectorAll(`[${MANUAL_BREAK_ATTR}]`).forEach((el) => {
@@ -622,10 +635,21 @@ export function reflowPages(root: HTMLElement, layout: PageLayout = DEFAULT_PAGE
 
     insertBreakAt(root, point, pageBottom);
     hoistBreaksFromMarks(root);
+    hoistBreaksFromTables(root);
   }
 
   hoistBreaksFromMarks(root);
+  hoistBreaksFromTables(root);
   return root.querySelectorAll(`[${BREAK_ATTR}]`).length + 1;
+}
+
+function hoistBreaksFromTables(root: HTMLElement) {
+  root
+    .querySelectorAll(`table [${BREAK_ATTR}], table [${PUSH_ATTR}], table [${MANUAL_BREAK_ATTR}]`)
+    .forEach((node) => {
+      const table = node.closest("table");
+      table?.after(node);
+    });
 }
 
 function hoistBreaksFromMarks(root: HTMLElement) {

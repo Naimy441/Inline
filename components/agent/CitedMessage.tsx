@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { ChatText } from "@/components/agent/ChatText";
 import type { AgentCitation } from "@/lib/agent/types";
 
 function splitCited(text: string, citations: AgentCitation[]) {
@@ -102,7 +103,10 @@ export function CitedMessage({
             part.type === "cite" ? (
               <CitationPill key={`cite-${lineIndex}-${partIndex}`} citation={part.citation} index={part.index} onInsert={onInsert} />
             ) : (
-              <span key={`text-${lineIndex}-${partIndex}`}>{part.value === " " && !line ? "\u00a0" : part.value}</span>
+              <ChatText
+                key={`text-${lineIndex}-${partIndex}`}
+                text={part.value === " " && !line ? "\u00a0" : part.value}
+              />
             ),
           )}
           {streaming && lineIndex === lines.length - 1 ? <span className="chat-caret" /> : null}

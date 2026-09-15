@@ -474,10 +474,12 @@
   margin-top: 1em;
 }
 
+.editor .indent-first,
 .editor .mla-indent {
   text-indent: 0.5in;
 }
 
+.editor .indent-hanging,
 .editor .mla-hanging {
   padding-left: 0.5in;
   text-indent: -0.5in;
@@ -488,6 +490,8 @@
   border-collapse: collapse;
   width: 100%;
   margin: 8px 0;
+  break-inside: avoid;
+  page-break-inside: avoid;
 }
 
 .editor td {

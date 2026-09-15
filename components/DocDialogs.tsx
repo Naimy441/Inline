@@ -34,56 +34,6 @@ export function Dialog({ title, onClose, children, wide }: DialogProps) {
   );
 }
 
-export function SearchReplaceDialog({
-  onClose,
-  onFind,
-  onReplace,
-  onReplaceAll,
-}: {
-  onClose: () => void;
-  onFind: (query: string) => boolean;
-  onReplace: (query: string, replacement: string) => boolean;
-  onReplaceAll: (query: string, replacement: string) => number;
-}) {
-  const [query, setQuery] = useState("");
-  const [replacement, setReplacement] = useState("");
-  const [status, setStatus] = useState("");
-
-  return (
-    <Dialog title="Find and replace" onClose={onClose}>
-      <label className="field">
-        Find
-        <input value={query} onChange={(event) => setQuery(event.target.value)} autoFocus />
-      </label>
-      <label className="field">
-        Replace with
-        <input value={replacement} onChange={(event) => setReplacement(event.target.value)} />
-      </label>
-      <p className="dialog-status">{status}</p>
-      <div className="dialog-actions">
-        <button
-          type="button"
-          onClick={() => setStatus(onFind(query) ? "Found a match." : "No more matches.")}
-        >
-          Next
-        </button>
-        <button
-          type="button"
-          onClick={() => setStatus(onReplace(query, replacement) ? "Replaced." : "Nothing to replace.")}
-        >
-          Replace
-        </button>
-        <button
-          type="button"
-          onClick={() => setStatus(`Replaced ${onReplaceAll(query, replacement)} matches.`)}
-        >
-          Replace all
-        </button>
-      </div>
-    </Dialog>
-  );
-}
-
 export function WordCountDialog({
   words,
   chars,
@@ -496,7 +446,7 @@ export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
         <li><kbd>⌘/Ctrl</kbd>+<kbd>X</kbd> / <kbd>C</kbd> / <kbd>V</kbd> Cut, copy, paste</li>
         <li><kbd>⌘/Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> Paste without formatting</li>
         <li><kbd>⌘/Ctrl</kbd>+<kbd>A</kbd> Select all</li>
-        <li><kbd>⌘/Ctrl</kbd>+<kbd>F</kbd> Find and replace</li>
+        <li><kbd>⌘/Ctrl</kbd>+<kbd>F</kbd> Find (open Replace in the bar)</li>
         <li><kbd>⌘/Ctrl</kbd>+<kbd>K</kbd> Inline edit (selection) or insert link</li>
         <li><kbd>⌘/Ctrl</kbd>+<kbd>J</kbd> Open chat</li>
         <li><kbd>⌘/Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> Command palette</li>

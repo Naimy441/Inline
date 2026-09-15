@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "test": "tsx --test lib/agent/*.test.ts lib/agent/mcp/*.test.ts lib/agent/eval/*.test.ts lib/writing/*.test.ts lib/debug/*.test.ts lib/editorUndo.test.ts lib/editorSpell.test.ts",
+    "test:eval": "INLINE_LIVE_EVAL=1 tsx --test lib/agent/eval/live.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",
@@ -18,9 +20,12 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^26.5.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
+    "jsdom": "^29.1.1",
+    "tsx": "^4.20.5",
     "typescript": "^5.9.3"
   }
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type MutableRefObject, type Ref } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type MutableRefObject, type Ref } from "react";
 import { MdOutlineFormatClear } from "react-icons/md";
 import { AgentPanel } from "@/components/AgentPanel";
 import { AgentToast } from "@/components/AgentToast";
@@ -23,13 +23,13 @@ import {
   type ZoomValue,
 } from "@/components/FontControls";
 import { ContextMenu } from "@/components/ContextMenu";
+import { FindBar } from "@/components/FindBar";
 import {
   CitationDialog,
   CompareDialog,
   EmojiDialog,
   LinkDialog,
   PageSetupDialog,
-  SearchReplaceDialog,
   ShortcutsDialog,
   SignatureDialog,
   SpecialCharsDialog,
@@ -45,6 +45,7 @@ import { MenuBar, type ViewMode } from "@/components/MenuBar";
 import {
   applyBlockStyle,
   applyCapitalization,
+  applyParagraphIndent,
   applySubstitutionsAll,
   findNext,
   handleTab,
@@ -60,8 +61,6 @@ import {
   paragraphCount,
   pastePlain,
   pasteRich,
-  replaceAll,
-  replaceCurrent,
   runCommand,
   selectedText,
   setAlignment,
@@ -72,7 +71,9 @@ import {
   toggleList,
   wrapSelectionMark,
 } from "@/lib/editorApi";
-import { applyClientTools } from "@/lib/agent/clientTools";
+import { applyClientTools, type ClientToolIO } from "@/lib/agent/clientTools";
+import { estimateContextUsage } from "@/lib/agent/context";
+import { documentFingerprint } from "@/lib/agent/continuation";
 import { acceptMissingEdits, createChat, loadChats, patchChat, pendingEditIds, removeTurnsFrom, saveChats, setEditStatus, titleFromPrompt } from "@/lib/agent/chats";
 import { InlineMark } from "@/components/InlineMark";
 import { duplicateDocument, loadDocument, saveDocument, trashDocument, type HeaderAlign, type PageNumberLocation } from "@/lib/documentStore";
@@ -80,14 +81,19 @@ import { downloadDocument } from "@/lib/documentExport";
 import { acceptAgentEdit, appendAgentEdits, applyAgentEdits, applySilentEdits, captureAgentSelection, clearGrammarFlash, documentEditIds, jumpToAgentEdit, rejectAgentEdit, sameAgentSelection, selectionFromOffsets, settleAgentEdits } from "@/lib/agent/edits";
 import { AGENT_MODELS, DEFAULT_MODEL } from "@/lib/agent/models";
 import { collectDocumentPages } from "@/lib/agent/pages";
-import { isAbortError, isRateLimitText, publicModelError, retryAfterMsFromError } from "@/lib/agent/retry";
+import { isAbortError, isRateLimitError, isRateLimitText, isRetryableError, publicModelError, retryAfterMsFromError, retryDelayMs, sleep } from "@/lib/agent/retry";
 import { runAgentJob } from "@/lib/agent/runJob";
-import type { AgentAttachment, AgentChat, AgentCitation, AgentEditDraft, AgentMode, AgentQueueItem, AgentSelection, AgentStep, AgentTask, AgentUsage, PendingEdit, ThinkingLevel } from "@/lib/agent/types";
+import { pushThinking, sealOpenThinking, upsertStep } from "@/lib/agent/timeline";
+import type { AgentAttachment, AgentChat, AgentCitation, AgentEditDraft, AgentLiveTurn, AgentMode, AgentQueueItem, AgentSelection, AgentStep, AgentTask, AgentTimelineItem, PendingEdit, ThinkingLevel } from "@/lib/agent/types";
 import { loadHistory, pushSnapshot, saveHistory, snapshotLabel, type HistorySnapshot } from "@/lib/historyStore";
+import { createUndoStack } from "@/lib/editorUndo";
+import { ignoreSpellingRange, spellingTargetAtPoint } from "@/lib/editorSpell";
 import { listLockedRanges, wrapLockedRegion } from "@/lib/locks";
 import { lintWriting } from "@/lib/writing/lint";
 import { PROMPT_TEMPLATES, QUICK_PROMPTS, templateById } from "@/lib/writing/templates";
 import { cleanAiArtifactsInEditor, detectAiTropes } from "@/lib/writing/tropes";
+import { IS_DEV } from "@/lib/debug/isDev";
+import { copyText, formatInlineDebugSnapshot } from "@/lib/debug/snapshot";
 import { useInlineTheme } from "@/lib/theme";
 import {
   countWords,
@@ -104,7 +110,6 @@ import {
 } from "@/lib/pagination";
 
 type DialogName =
-  | "search"
   | "word-count"
   | "link"
   | "table"
@@ -127,6 +132,30 @@ type AgentJobOptions = {
   clearPrompt?: boolean;
   chatId?: string;
 };
+
+function emptyLive(phase: AgentLiveTurn["phase"] = "thinking"): AgentLiveTurn {
+  return {
+    phase,
+    thinking: "",
+    prompt: "",
+    selection: null,
+    message: "",
+    edits: [],
+    citations: [],
+    tools: [],
+    steps: [],
+    timeline: [],
+  };
+}
+
+function queuedSnapshot(items: Array<AgentJobOptions & { queueId: string; selection?: string | null }>): AgentQueueItem[] {
+  return items.map((item) => ({
+    id: item.queueId,
+    prompt: item.prompt,
+    selection: item.selection,
+    chatId: item.chatId,
+  }));
+}
 
 function editFingerprint(edit: Pick<AgentEditDraft, "find" | "replace" | "operation" | "occurrence">) {
   const operation = edit.operation ?? (edit.replace === "" ? "delete" : edit.find === "" ? "insert" : "replace");
@@ -163,6 +192,30 @@ type DocumentWorkspaceProps = {
   onGoHome?: () => void;
 };
 
+type DocUndoState = {
+  html: string;
+  title: string;
+  chats: AgentChat[];
+  activeChatId: string;
+  headerText: string;
+  footerText: string;
+  firstHeaderText: string;
+  firstFooterText: string;
+  showHeader: boolean;
+  showFooter: boolean;
+  showPageNumbers: boolean;
+  differentFirstPage: boolean;
+  pageNumberLocation: PageNumberLocation;
+  headerAlign: HeaderAlign;
+  footerAlign: HeaderAlign;
+  fontFamily: string;
+  fontSize: string;
+  columns: number;
+  lineSpacing: string;
+  pageLayout: PageLayout;
+  comments: DocComment[];
+};
+
 export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspaceProps = {}) {
   const workspaceId = documentId || "doc-legacy";
   const editorRef = useRef<EditorHandle>(null);
@@ -183,7 +236,6 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
     endOffset: number;
   } | null>(null);
   const selectionOffsetTimer = useRef(0);
-  const agentContextLenRef = useRef(0);
   const [linkText, setLinkText] = useState("");
   const [title, setTitle] = useState("Untitled document");
   const [metrics, setMetrics] = useState<EditorMetrics>({
@@ -249,28 +301,25 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
   const [agentMinimized, setAgentMinimized] = useState(false);
   const [askPrompt, setAskPrompt] = useState("");
   const [chatDrafts, setChatDrafts] = useState<Record<string, string>>({});
-  const [askBusy, setAskBusy] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
-  const [livePhase, setLivePhase] = useState<"thinking" | "planning" | "editing" | "reviewing" | null>(null);
-  const [liveThinking, setLiveThinking] = useState("");
-  const [livePrompt, setLivePrompt] = useState("");
-  const [liveSelection, setLiveSelection] = useState<string | null>(null);
-  const [liveMessage, setLiveMessage] = useState("");
-  const [liveEdits, setLiveEdits] = useState<PendingEdit[]>([]);
-  const [liveCitations, setLiveCitations] = useState<AgentCitation[]>([]);
+  const [lives, setLives] = useState<Record<string, AgentLiveTurn>>({});
   const [queuedJobs, setQueuedJobs] = useState<AgentQueueItem[]>([]);
   const [agentContext, setAgentContext] = useState<AgentSelection[]>([]);
   const [chats, setChats] = useState<AgentChat[]>([]);
   const [activeChatId, setActiveChatId] = useState("");
+  const [openChatIds, setOpenChatIds] = useState<string[]>([]);
   const [chatsReady, setChatsReady] = useState(false);
   const [modelCatalog, setModelCatalog] = useState(AGENT_MODELS);
   const [availableProviders, setAvailableProviders] = useState({ openai: true, anthropic: false });
   const [dialog, setDialog] = useState<DialogName>(null);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findReplaceOpen, setFindReplaceOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
     hasSelection: boolean;
+    spelling?: { word: string; ignored: boolean };
   } | null>(null);
   const { darkMode, toggleTheme } = useInlineTheme();
   const [textColor, setTextColorValue] = useState("auto");
@@ -288,14 +337,12 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
   const [slash, setSlash] = useState<{ query: string; top: number; left: number } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [toast, setToast] = useState<{ text: string; action?: () => void } | null>(null);
-  const [liveTools, setLiveTools] = useState<string[]>([]);
-  const [liveSteps, setLiveSteps] = useState<AgentStep[]>([]);
-  const [liveUsage, setLiveUsage] = useState<AgentUsage | undefined>();
   const toastTimer = useRef(0);
   const chatPersistTimer = useRef(0);
-  const jobAbortRef = useRef<AbortController | null>(null);
-  const jobRunningRef = useRef(false);
+  const jobAbortsRef = useRef<Record<string, AbortController>>({});
+  const runningRef = useRef(new Set<string>());
   const applyingAgentRef = useRef(false);
+  const mutateChainRef = useRef(Promise.resolve());
   const agentReflowTimer = useRef(0);
   const grammarBusyRef = useRef(false);
   const grammarDoneTimer = useRef(0);
@@ -304,7 +351,12 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
   const [grammarNote, setGrammarNote] = useState("");
   const jobQueueRef = useRef<Array<AgentJobOptions & { queueId: string; selection?: string | null }>>([]);
   const pendingRevertRef = useRef<string | null>(null);
+  const nativeDirtyRef = useRef(false);
+  const docUndoRef = useRef(createUndoStack<DocUndoState>());
+  const undoDocRef = useRef<() => void>(() => {});
+  const redoDocRef = useRef<() => void>(() => {});
   const inlineContextRef = useRef<AgentSelection | null>(null);
+  const spellRangeRef = useRef<Range | null>(null);
   const suppressContextSyncRef = useRef(false);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const toolbarWidths = useRef<Partial<Record<ToolbarOverflowId, number>>>({});
@@ -376,10 +428,12 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
       setAgentMinimized(stored.minimized);
       setChatDrafts(stored.drafts);
       setAskPrompt(stored.drafts[stored.activeId] ?? "");
+      setOpenChatIds(stored.openIds);
     } else {
       const chat = createChat();
       setChats([chat]);
       setActiveChatId(chat.id);
+      setOpenChatIds([chat.id]);
       setAgentOpen(false);
       setAgentMinimized(false);
       setChatDrafts({});
@@ -405,11 +459,12 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
         open: agentOpen,
         minimized: agentMinimized,
         drafts: { ...chatDrafts, [activeChatId]: askPrompt },
+        openIds: openChatIds,
       });
       chatPersistTimer.current = 0;
     }, 180);
     return () => window.clearTimeout(chatPersistTimer.current);
-  }, [activeChatId, agentMinimized, agentOpen, askPrompt, chatDrafts, chats, chatsReady, workspaceId]);
+  }, [activeChatId, agentMinimized, agentOpen, askPrompt, chatDrafts, chats, chatsReady, openChatIds, workspaceId]);
 
   useEffect(() => {
     window.localStorage.setItem("inline-focus", focusMode ? "1" : "0");
@@ -556,8 +611,6 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
       .catch(() => undefined);
   }, []);
 
-  agentContextLenRef.current = agentContext.length;
-
   useEffect(() => {
     const saveSelection = () => {
       const el = editorRef.current?.getElement();
@@ -577,13 +630,6 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
       window.clearTimeout(selectionOffsetTimer.current);
       if (!range.collapsed) {
         liveExpandedRef.current = live;
-        if (!suppressContextSyncRef.current && !inlineOpen && agentContextLenRef.current === 0) {
-          const captured = captureAgentSelection(el);
-          if (captured) {
-            agentContextLenRef.current = 1;
-            setAgentContext([captured]);
-          }
-        }
         selectionOffsetTimer.current = window.setTimeout(() => {
           const next = editorRef.current?.getElement();
           if (!next) return;
@@ -604,7 +650,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
       document.removeEventListener("selectionchange", saveSelection);
       window.clearTimeout(selectionOffsetTimer.current);
     };
-  }, [inlineOpen]);
+  }, []);
 
   const restoreSelection = (preferExpanded = false) => {
     const el = editorRef.current?.getElement();
@@ -726,14 +772,22 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
   const editorEl = useCallback(() => editorRef.current?.getElement() ?? null, []);
 
   const withAgentMutation = <T,>(fn: () => T) => {
-    applyingAgentRef.current = true;
-    try {
-      return fn();
-    } finally {
-      window.setTimeout(() => {
-        applyingAgentRef.current = false;
-      }, 0);
-    }
+    const run = async () => {
+      applyingAgentRef.current = true;
+      try {
+        return fn();
+      } finally {
+        window.setTimeout(() => {
+          applyingAgentRef.current = false;
+        }, 0);
+      }
+    };
+    const next = mutateChainRef.current.then(run, run);
+    mutateChainRef.current = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
   };
 
   useEffect(() => {
@@ -741,8 +795,9 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
     if (!el) return;
     const onBeforeInput = () => {
       if (applyingAgentRef.current) return;
-      if (!jobRunningRef.current && !jobAbortRef.current) return;
-      jobAbortRef.current?.abort();
+      nativeDirtyRef.current = true;
+      if (!runningRef.current.size) return;
+      for (const controller of Object.values(jobAbortsRef.current)) controller.abort();
     };
     el.addEventListener("beforeinput", onBeforeInput);
     return () => el.removeEventListener("beforeinput", onBeforeInput);
@@ -750,6 +805,28 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
 
   const activeChat = chats.find((chat) => chat.id === activeChatId) ?? chats[0];
   const reviewIds = pendingEditIds(chats);
+  const activeLive = lives[activeChat?.id ?? activeChatId];
+  const anyBusy = Object.keys(lives).length > 0;
+
+  const patchLive = (
+    id: string,
+    patch: Partial<AgentLiveTurn> | ((prev: AgentLiveTurn) => Partial<AgentLiveTurn>),
+  ) => {
+    setLives((current) => {
+      const prev = current[id] ?? emptyLive();
+      const nextPatch = typeof patch === "function" ? patch(prev) : patch;
+      return { ...current, [id]: { ...prev, ...nextPatch } };
+    });
+  };
+
+  const clearLive = (id: string) => {
+    setLives((current) => {
+      if (!current[id]) return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+  };
 
   const speak = useCallback((text: string) => {
     setAnnounce(text);
@@ -837,7 +914,8 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
   };
 
   const stopJob = () => {
-    jobAbortRef.current?.abort();
+    const id = activeChat?.id;
+    if (id) jobAbortsRef.current[id]?.abort();
   };
 
   const captureSnapshot = (label: string) => {
@@ -901,11 +979,165 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
     return true;
   };
 
+  const captureLiveDoc = (): DocUndoState => ({
+    html: editorEl()?.innerHTML ?? initialHtml,
+    title,
+    chats: structuredClone(chats),
+    activeChatId,
+    headerText,
+    footerText,
+    firstHeaderText,
+    firstFooterText,
+    showHeader,
+    showFooter,
+    showPageNumbers,
+    differentFirstPage,
+    pageNumberLocation,
+    headerAlign,
+    footerAlign,
+    fontFamily: docFont,
+    fontSize: docFontSize,
+    columns,
+    lineSpacing,
+    pageLayout,
+    comments,
+  });
+
+  const restoreLiveDoc = (snap: DocUndoState) => {
+    editorRef.current?.setHtml(snap.html);
+    setTitle(snap.title);
+    setChats(snap.chats);
+    setActiveChatId(snap.activeChatId);
+    setHeaderText(snap.headerText);
+    setFooterText(snap.footerText);
+    setFirstHeaderText(snap.firstHeaderText);
+    setFirstFooterText(snap.firstFooterText);
+    setShowHeader(snap.showHeader);
+    setShowFooter(snap.showFooter);
+    setShowPageNumbers(snap.showPageNumbers);
+    setDifferentFirstPage(snap.differentFirstPage);
+    setPageNumberLocation(snap.pageNumberLocation);
+    setHeaderAlign(snap.headerAlign);
+    setFooterAlign(snap.footerAlign);
+    setDocFont(snap.fontFamily);
+    setDocFontSize(snap.fontSize);
+    setFont((snap.fontFamily ?? "Arial").split(",")[0]?.replace(/["']/g, "") || "Arial");
+    setFontSize(snap.fontSize);
+    setColumnCount(snap.columns);
+    setSpacing(snap.lineSpacing);
+    setPageLayout(snap.pageLayout);
+    setComments(snap.comments);
+    afterEdit();
+  };
+
+  const pushDocUndo = () => {
+    docUndoRef.current.push(captureLiveDoc());
+    nativeDirtyRef.current = false;
+  };
+
+  const undoDoc = () => {
+    if (mode === "viewing") return;
+    const el = editorEl();
+    if (!el) return;
+    if (nativeDirtyRef.current) {
+      const before = el.innerHTML;
+      runCommand(el, "undo");
+      afterEdit();
+      if (el.innerHTML !== before) return;
+      nativeDirtyRef.current = false;
+    }
+    const prev = docUndoRef.current.undo(captureLiveDoc());
+    if (!prev) {
+      runCommand(el, "undo");
+      afterEdit();
+      return;
+    }
+    restoreLiveDoc(prev);
+  };
+
+  const redoDoc = () => {
+    if (mode === "viewing") return;
+    const next = docUndoRef.current.redo(captureLiveDoc());
+    if (!next) {
+      const el = editorEl();
+      if (el) runCommand(el, "redo");
+      afterEdit();
+      return;
+    }
+    restoreLiveDoc(next);
+  };
+  undoDocRef.current = undoDoc;
+  redoDocRef.current = redoDoc;
+
   const showToast = (text: string, action?: () => void) => {
     window.clearTimeout(toastTimer.current);
     setToast({ text, action });
     toastTimer.current = window.setTimeout(() => setToast(null), 7000);
   };
+
+  const copyDebugSnapshot = async () => {
+    const el = editorEl();
+    const text = formatInlineDebugSnapshot({
+      capturedAt: new Date().toISOString(),
+      url: typeof window === "undefined" ? "" : window.location.href,
+      documentId: workspaceId,
+      title,
+      pages: metrics.pageCount,
+      words: metrics.wordCount,
+      chars: metrics.charCount,
+      chrome: {
+        fontFamily: docFont,
+        fontSize: docFontSize,
+        lineSpacing,
+        columns,
+        pageLayout,
+        header: { show: showHeader, text: headerText, align: headerAlign, firstPageText: firstHeaderText },
+        footer: { show: showFooter, text: footerText, align: footerAlign, firstPageText: firstFooterText },
+        pageNumbers: { show: showPageNumbers, location: pageNumberLocation },
+        differentFirstPage,
+      },
+      comments: comments.map((comment) => ({ id: comment.id, quote: comment.quote, body: comment.body })),
+      text: el ? getPlainText(el, true) : editorRef.current?.getText() || "",
+      html: editorRef.current?.getHtml() || initialHtml,
+      chats,
+      activeChatId: activeChat?.id || activeChatId,
+      composerDraft: askPrompt,
+      attachments: attachments.map((item) => ({ name: item.name, chars: item.text.length })),
+      live: {
+        busy: Boolean(activeLive),
+        phase: activeLive?.phase ?? null,
+        prompt: activeLive?.prompt ?? "",
+        thinking: activeLive?.thinking ?? "",
+        message: activeLive?.message ?? "",
+        tools: activeLive?.tools ?? [],
+        error: askError,
+        timeline: activeLive?.timeline,
+      },
+    });
+    try {
+      await copyText(text);
+      showToast("Copied document and chat snapshot.");
+      speak("Copied debug snapshot.");
+    } catch {
+      showToast("Could not copy the snapshot. Check clipboard permission.");
+    }
+  };
+
+  const clientToolIo = (): ClientToolIO => ({
+    print: () => window.print(),
+    setHeader: setHeaderText,
+    showHeader: () => setShowHeader(true),
+    setFooter: setFooterText,
+    showFooter: () => setShowFooter(true),
+    showPageNumbers: () => setShowPageNumbers(true),
+    setPageNumberLocation,
+    setHeaderAlign,
+    setDocumentChrome: (patch) => {
+      if (patch.fontFamily) setDocFont(patch.fontFamily);
+      if (patch.fontSize) setDocFontSize(patch.fontSize);
+      if (patch.lineSpacing) setSpacing(patch.lineSpacing);
+    },
+  });
 
   const executeJob = async (options: AgentJobOptions) => {
     const el = editorEl();
@@ -919,6 +1151,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
     if (!listed) {
       setChats((list) => (list.some((item) => item.id === chat.id) ? list : [chat, ...list]));
       setActiveChatId(chat.id);
+      setOpenChatIds((ids) => (ids.includes(chat.id) ? ids : [...ids, chat.id]));
     }
     if (!el || !prompt || mode === "viewing") return false;
     if (pendingRevertRef.current) {
@@ -929,21 +1162,19 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
     const contexts = options.context === undefined ? agentContext : options.context;
     const primaryContext = contexts[contexts.length - 1] ?? null;
     const combinedSelectionText = contexts.map((item) => item.text).join("\n\n");
+    const jobMode = options.mode ?? chat.mode;
     const snapshotId = captureSnapshot(snapshotLabel("agent"));
+    if (jobMode === "agent") pushDocUndo();
     const controller = new AbortController();
-    jobAbortRef.current = controller;
-    setAskBusy(true);
+    runningRef.current.add(chat.id);
+    jobAbortsRef.current[chat.id] = controller;
     setAskError(null);
-    setLiveTools([]);
-    setLiveSteps([]);
-    setLiveUsage(undefined);
-    setLivePhase((options.mode ?? chat.mode) === "plan" ? "planning" : "thinking");
-    setLiveThinking("");
-    setLivePrompt(prompt);
-    setLiveSelection(combinedSelectionText || null);
-    setLiveMessage("");
-    setLiveEdits([]);
-    setLiveCitations([]);
+    patchLive(chat.id, {
+      ...emptyLive((options.mode ?? chat.mode) === "plan" ? "planning" : "thinking"),
+      prompt,
+      selection: combinedSelectionText || null,
+    });
+    setOpenChatIds((ids) => (ids.includes(chat.id) ? ids : [...ids, chat.id]));
     if (options.clearPrompt !== false) {
       setAskPrompt("");
       setChatDrafts((drafts) => {
@@ -953,10 +1184,12 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
       });
     }
     const started = Date.now();
-    const jobMode = options.mode ?? chat.mode;
     let appliedEdits: PendingEdit[] | null = null;
+    const appliedClientIds = new Set<string>();
+    let wroteDocument = false;
     let streamedMessage = "";
     let streamedThinking = "";
+    let streamedTimeline: AgentTimelineItem[] = [];
     const priorEditLedger = chat.turns
       .flatMap((turn) => turn.edits)
       .filter((edit) => edit.status === "pending" || edit.status === "accepted")
@@ -979,7 +1212,9 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
       chatTitle?: string;
       tasks?: AgentTask[];
       tools?: { name: string; hidden?: boolean }[];
+      timeline?: AgentTimelineItem[];
       citations?: AgentCitation[];
+      continuation?: AgentChat["continuation"];
       error?: string;
     }) => {
       const nextTitle = data.chatTitle?.trim() || (chat.titled ? chat.title : titleFromPrompt(prompt));
@@ -995,6 +1230,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
                 titled: true,
                 updatedAt: Date.now(),
                 tasks: nextTasks,
+                continuation: data.error ? item.continuation : data.continuation,
                 turns: [
                   ...item.turns,
                   {
@@ -1011,6 +1247,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
                     edits: data.edits,
                     tasks: data.tasks,
                     tools: data.tools,
+                    timeline: data.timeline ? sealOpenThinking(data.timeline) : data.timeline,
                     citations: data.citations,
                     snapshotId,
                     error: data.error,
@@ -1020,10 +1257,13 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
             : item,
         );
       });
-      setActiveChatId(chat.id);
     };
     try {
-      const data = await runAgentJob(
+      const clientAttempts = 3;
+      let data: Awaited<ReturnType<typeof runAgentJob>> | undefined;
+      for (let attempt = 1; attempt <= clientAttempts; attempt += 1) {
+        try {
+          data = await runAgentJob(
         {
           title,
           prompt,
@@ -1051,21 +1291,28 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
           previousEdits,
           preserveTone,
           pageCount: metrics.pageCount,
+          chatId: chat.id,
+          continuation: chat.continuation,
+          recentTools: chat.turns.at(-1)?.tools?.map((tool) => tool.name),
         },
         {
           signal: controller.signal,
-          onPhase: setLivePhase,
+          onPhase: (phase) => patchLive(chat.id, { phase }),
           onThinking: (text) => {
             streamedThinking = text;
-            setLiveThinking(text);
+            streamedTimeline = pushThinking(streamedTimeline, text);
+            patchLive(chat.id, { thinking: text, timeline: streamedTimeline });
           },
           onMessage: (text) => {
             streamedMessage = text;
-            setLiveMessage(text);
+            if (streamedTimeline.at(-1)?.kind === "thinking") {
+              streamedTimeline = sealOpenThinking(streamedTimeline);
+            }
+            patchLive(chat.id, { message: text, timeline: streamedTimeline });
           },
-          onEdits: (drafts) => {
+          onEdits: async (drafts) => {
             if (jobMode !== "agent") return;
-            appliedEdits = withAgentMutation(() =>
+            appliedEdits = await withAgentMutation(() =>
               appendAgentEdits(
                 el,
                 suppressRepeatedEdits(drafts, priorEditLedger, prompt),
@@ -1073,47 +1320,85 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
                 appliedEdits ?? [],
               ),
             );
-            setLiveEdits(appliedEdits);
-            setLivePhase("editing");
+            wroteDocument = Boolean(appliedEdits?.length);
+            patchLive(chat.id, { edits: appliedEdits, phase: "editing" });
             setChats((list) => acceptMissingEdits(list, documentEditIds(el)));
             collapseEditorSelection(el);
             window.clearTimeout(agentReflowTimer.current);
             agentReflowTimer.current = window.setTimeout(() => afterEdit(), 90);
           },
           onTool: (name) => {
-            setLiveTools((list) => (list.includes(name) ? list : [...list, name]));
+            patchLive(chat.id, (prev) => ({
+              tools: prev.tools.includes(name) ? prev.tools : [...prev.tools, name],
+            }));
+          },
+          onClientTool: async (call) => {
+            appliedClientIds.add(call.id);
+            wroteDocument = true;
+            await withAgentMutation(() =>
+              applyClientTools(el, [call], clientToolIo()),
+            );
+            window.clearTimeout(agentReflowTimer.current);
+            agentReflowTimer.current = window.setTimeout(() => afterEdit(), 90);
           },
           onStep: (step) => {
-            setLiveSteps((list) => {
-              const index = list.findIndex((item) => item.id === step.id);
-              if (index < 0) return [...list, step];
-              const next = [...list];
-              next[index] = step;
-              return next;
+            streamedTimeline = upsertStep(streamedTimeline, step);
+            patchLive(chat.id, (prev) => {
+              const index = prev.steps.findIndex((item) => item.id === step.id);
+              const steps = index < 0 ? [...prev.steps, step] : prev.steps.map((item, itemIndex) => (itemIndex === index ? step : item));
+              return { timeline: streamedTimeline, steps };
             });
           },
-          onUsage: setLiveUsage,
-          onCitations: (citations) => setLiveCitations(citations),
+          onUsage: (usage) => patchLive(chat.id, { usage }),
+          onCitations: (citations) => patchLive(chat.id, { citations }),
         },
       );
+          break;
+        } catch (error) {
+          if (isAbortError(error)) throw error;
+          const canRetry =
+            isRetryableError(error) &&
+            !wroteDocument &&
+            attempt < clientAttempts;
+          if (!canRetry) throw error;
+          const delayMs = retryDelayMs(attempt, retryAfterMsFromError(error), isRateLimitError(error));
+          const seconds = Math.max(1, Math.ceil(delayMs / 1000));
+          const retryStep: AgentStep = {
+            id: `client-retry-${attempt}`,
+            name: "retry",
+            title: isRateLimitError(error)
+              ? `Rate limited — waiting ${seconds}s (try ${attempt + 1}/${clientAttempts})`
+              : `Retrying in ${seconds}s (try ${attempt + 1}/${clientAttempts})`,
+            status: "active",
+          };
+          streamedTimeline = upsertStep(streamedTimeline, retryStep);
+          patchLive(chat.id, (prev) => {
+            const index = prev.steps.findIndex((item) => item.id === retryStep.id);
+            const steps = index < 0 ? [...prev.steps, retryStep] : prev.steps.map((item, itemIndex) => (itemIndex === index ? retryStep : item));
+            return { timeline: streamedTimeline, steps };
+          });
+          await sleep(delayMs, controller.signal);
+          streamedTimeline = upsertStep(streamedTimeline, {
+            ...retryStep,
+            title: "Resumed after retry",
+            status: "complete",
+          });
+          patchLive(chat.id, { timeline: streamedTimeline });
+        }
+      }
+      if (!data) throw new Error("The agent could not propose edits.");
       const edits =
         appliedEdits ??
         (jobMode === "agent"
-          ? withAgentMutation(() =>
+          ? await withAgentMutation(() =>
               applyAgentEdits(el, suppressRepeatedEdits(data.edits ?? [], priorEditLedger, prompt), primaryContext),
             )
           : []);
       collapseEditorSelection(el);
-      if (data.tools?.length) {
-        withAgentMutation(() =>
-          applyClientTools(el, data.tools, {
-            print: () => window.print(),
-            setHeader: setHeaderText,
-            showHeader: () => setShowHeader(true),
-            showPageNumbers: () => {
-              setShowPageNumbers(true);
-            },
-          }),
+      const pendingClient = (data.tools ?? []).filter((tool) => !appliedClientIds.has(tool.id));
+      if (pendingClient.length) {
+        await withAgentMutation(() =>
+          applyClientTools(el, pendingClient, clientToolIo()),
         );
       }
       persistTurn({
@@ -1124,7 +1409,9 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
         chatTitle: data.chatTitle,
         tasks: data.tasks,
         tools: data.tools?.map((tool) => ({ name: tool.name, hidden: tool.hidden })),
+        timeline: streamedTimeline,
         citations: data.citations,
+        continuation: data.continuation,
       });
       if (options.openPanel) {
         setAgentOpen(true);
@@ -1146,7 +1433,13 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
       return true;
     } catch (error) {
       if (isAbortError(error)) {
-        pendingRevertRef.current = snapshotId;
+        persistTurn({
+          message: streamedMessage,
+          thinking: streamedThinking,
+          timeline: streamedTimeline.length ? sealOpenThinking(streamedTimeline) : streamedTimeline,
+          edits: appliedEdits ?? [],
+          continuation: chat.continuation,
+        });
         afterEdit();
         return false;
       }
@@ -1155,6 +1448,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
       persistTurn({
         message: streamedMessage,
         thinking: streamedThinking,
+        timeline: streamedTimeline,
         edits: appliedEdits ?? [],
         error: message,
       });
@@ -1170,24 +1464,14 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
       }
       return false;
     } finally {
-      if (jobAbortRef.current === controller) jobAbortRef.current = null;
-      setAskBusy(false);
-      setLivePhase(null);
-      setLiveThinking("");
-      setLivePrompt("");
-      setLiveSelection(null);
-      setLiveMessage("");
-      setLiveEdits([]);
-      setLiveCitations([]);
-      setLiveTools([]);
-      setLiveSteps([]);
-      setLiveUsage(undefined);
-      jobRunningRef.current = false;
-      const next = jobQueueRef.current.shift();
-      setQueuedJobs(jobQueueRef.current.map((item) => ({ id: item.queueId, prompt: item.prompt, selection: item.selection })));
+      if (jobAbortsRef.current[chat.id] === controller) delete jobAbortsRef.current[chat.id];
+      runningRef.current.delete(chat.id);
+      clearLive(chat.id);
+      const nextIndex = jobQueueRef.current.findIndex((item) => item.chatId === chat.id);
+      const next = nextIndex >= 0 ? jobQueueRef.current.splice(nextIndex, 1)[0] : undefined;
+      setQueuedJobs(queuedSnapshot(jobQueueRef.current));
       if (next) {
         window.setTimeout(() => {
-          jobRunningRef.current = true;
           void executeJob(next);
         }, queueDelayMs);
       }
@@ -1200,7 +1484,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
     if (!el || !prompt || mode === "viewing") return false;
     const context = options.context === undefined ? agentContext : options.context;
     const chatId = options.chatId ?? activeChat?.id;
-    if (jobRunningRef.current || askBusy) {
+    if (chatId && runningRef.current.has(chatId)) {
       const queued = {
         ...options,
         prompt,
@@ -1210,12 +1494,11 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
         selection: context.map((item) => item.text).join("\n\n") || null,
       };
       jobQueueRef.current.push(queued);
-      setQueuedJobs(jobQueueRef.current.map((item) => ({ id: item.queueId, prompt: item.prompt, selection: item.selection })));
+      setQueuedJobs(queuedSnapshot(jobQueueRef.current));
       setAskError(null);
       speak("Instruction queued.");
       return true;
     }
-    jobRunningRef.current = true;
     return executeJob({ ...options, prompt, context, chatId });
   };
 
@@ -1278,6 +1561,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
         return;
       }
       captureSnapshot(snapshotLabel("agent"));
+      pushDocUndo();
       const applied = applySilentEdits(el, edits, selected);
       afterEdit();
       const note = applied ? `Fixed ${applied}` : "No changes applied";
@@ -1296,7 +1580,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
 
   const cancelQueuedJob = (id: string) => {
     jobQueueRef.current = jobQueueRef.current.filter((item) => item.queueId !== id);
-    setQueuedJobs(jobQueueRef.current.map((item) => ({ id: item.queueId, prompt: item.prompt, selection: item.selection })));
+    setQueuedJobs(queuedSnapshot(jobQueueRef.current));
   };
 
   const insertAgentCitation = (citation: AgentCitation) => {
@@ -1307,10 +1591,28 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
     speak(`Inserted citation for ${citation.title}.`);
   };
 
-  const contextLimit = activeChat?.model.includes("nano") ? 32_000 : 128_000;
-  const contextUsed = Math.ceil(
-    (metrics.charCount + askPrompt.length + attachments.reduce((sum, item) => sum + item.text.length, 0) + 2_000) / 4,
-  );
+  const contextUsage = estimateContextUsage({
+    model: activeChat?.model,
+    prompt: activeLive?.prompt || askPrompt,
+    documentChars: metrics.charCount,
+    history: (activeChat?.turns ?? []).flatMap((turn) => [
+      { role: "user" as const, content: turn.prompt },
+      { role: "assistant" as const, content: turn.message },
+    ]),
+    attachments,
+    previousEdits: (activeChat?.turns ?? [])
+      .flatMap((turn) => turn.edits)
+      .filter((edit) => edit.status === "pending" || edit.status === "accepted")
+      .slice(-8),
+    continuing: Boolean(activeChat?.continuation),
+    sameDraft: Boolean(
+      activeChat?.continuation?.documentFingerprint &&
+        activeChat.continuation.documentFingerprint === documentFingerprint(editorRef.current?.getText() ?? ""),
+    ),
+    liveThinking: activeLive?.thinking,
+    liveMessage: activeLive?.message,
+    usage: activeLive?.usage,
+  });
 
   const submitAsk = async () => {
     const prompt = askPrompt;
@@ -1432,6 +1734,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
   const reviewEdit = (id: string, action: "accept" | "reject") => {
     const el = editorEl();
     if (!el) return;
+    pushDocUndo();
     if (action === "accept") acceptAgentEdit(el, id);
     else rejectAgentEdit(el, id);
     settleAgentEdits(el);
@@ -1444,6 +1747,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
     const el = editorEl();
     if (!el) return;
     const ids = reviewIds;
+    pushDocUndo();
     for (const id of ids) {
       if (action === "accept") acceptAgentEdit(el, id);
       else rejectAgentEdit(el, id);
@@ -1463,9 +1767,11 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
       action !== "agent-panel" &&
       action !== "add-to-chat" &&
       action !== "inline-edit" &&
-      action !== "palette"
+      action !== "palette" &&
+      action !== "copy-debug-snapshot" &&
+      action !== "ignore-spelling"
     ) {
-      restoreSelection();
+      restoreSelection(true);
     }
     const el = editorEl();
     const readOnly = mode === "viewing";
@@ -1504,7 +1810,13 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
         }
         return;
       case "undo":
+        if (readOnly) return;
+        undoDoc();
+        return;
       case "redo":
+        if (readOnly) return;
+        redoDoc();
+        return;
       case "cut":
       case "copy":
       case "select-all":
@@ -1519,12 +1831,27 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
         if (el) runCommand(el, action === "select-all" ? "selectAll" : action);
         afterEdit();
         return;
+      case "ignore-spelling":
+        if (el && !readOnly && spellRangeRef.current) {
+          ignoreSpellingRange(el, spellRangeRef.current);
+          spellRangeRef.current = null;
+          afterEdit();
+        }
+        return;
       case "indent":
         if (el && !readOnly) indentBlocks(el, 1);
         afterEdit();
         return;
       case "outdent":
         if (el && !readOnly) indentBlocks(el, -1);
+        afterEdit();
+        return;
+      case "indent-first":
+        if (el && !readOnly) applyParagraphIndent(el, "first-line");
+        afterEdit();
+        return;
+      case "indent-hanging":
+        if (el && !readOnly) applyParagraphIndent(el, "hanging");
         afterEdit();
         return;
       case "ul":
@@ -1541,7 +1868,8 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
         afterEdit();
         return;
       case "search":
-        setDialog("search");
+        setFindReplaceOpen(true);
+        setFindOpen(true);
         return;
       case "mode":
         setMode((value as ViewMode) || "editing");
@@ -1732,6 +2060,9 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
       case "shortcuts":
         setDialog("shortcuts");
         return;
+      case "copy-debug-snapshot":
+        await copyDebugSnapshot();
+        return;
       case "ask-inline":
       case "agent-panel":
         if (!readOnly) openAsk();
@@ -1835,9 +2166,16 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
       }
       if (!meta) return;
       const key = event.key.toLowerCase();
+      if (key === "z" && !inField) {
+        event.preventDefault();
+        if (event.shiftKey) redoDocRef.current();
+        else undoDocRef.current();
+        return;
+      }
       if (key === "f" && !event.shiftKey) {
         event.preventDefault();
-        setDialog("search");
+        setFindReplaceOpen(false);
+        setFindOpen(true);
       }
       if (key === "j" && !event.shiftKey && !event.altKey) {
         event.preventDefault();
@@ -1883,7 +2221,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
   }, [mode]);
 
   useEffect(() => {
-    const onClick = (event: MouseEvent) => {
+    const onClick = (event: globalThis.MouseEvent) => {
       const target = event.target;
       if (!(target instanceof HTMLElement)) return;
       const button = target.closest("[data-agent-action]");
@@ -1957,7 +2295,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
 
   useEffect(() => {
     if (!toolbarMoreOpen) return;
-    const onDown = (event: MouseEvent) => {
+    const onDown = (event: globalThis.MouseEvent) => {
       const target = event.target;
       if (target instanceof HTMLElement && target.closest("[data-toolbar-more]")) return;
       setToolbarMoreOpen(false);
@@ -2154,7 +2492,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
               type="button"
               title="Align left"
               data-active={chromeAlign === "left"}
-              onMouseDown={(event: MouseEvent<HTMLButtonElement>) => {
+              onMouseDown={(event: ReactMouseEvent<HTMLButtonElement>) => {
                 if (chromeFocus) event.preventDefault();
               }}
               onClick={() => void handleAction("align", "left")}
@@ -2166,7 +2504,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
               type="button"
               title="Align center"
               data-active={chromeAlign === "center"}
-              onMouseDown={(event: MouseEvent<HTMLButtonElement>) => {
+              onMouseDown={(event: ReactMouseEvent<HTMLButtonElement>) => {
                 if (chromeFocus) event.preventDefault();
               }}
               onClick={() => void handleAction("align", "center")}
@@ -2178,7 +2516,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
               type="button"
               title="Align right"
               data-active={chromeAlign === "right"}
-              onMouseDown={(event: MouseEvent<HTMLButtonElement>) => {
+              onMouseDown={(event: ReactMouseEvent<HTMLButtonElement>) => {
                 if (chromeFocus) event.preventDefault();
               }}
               onClick={() => void handleAction("align", "right")}
@@ -2190,7 +2528,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
               type="button"
               title="Justify"
               data-active={chromeAlign === "justify"}
-              onMouseDown={(event: MouseEvent<HTMLButtonElement>) => {
+              onMouseDown={(event: ReactMouseEvent<HTMLButtonElement>) => {
                 if (chromeFocus) event.preventDefault();
               }}
               onClick={() => void handleAction("align", "justify")}
@@ -2331,6 +2669,16 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
               {mode === "suggesting" ? "Suggesting" : "Viewing"}
             </span>
           )}
+          {IS_DEV ? (
+            <button
+              className="debug-copy-btn"
+              type="button"
+              title="Copy document and chat snapshot"
+              onClick={() => void handleAction("copy-debug-snapshot")}
+            >
+              Copy debug
+            </button>
+          ) : null}
         </div>
         <MenuBar
           mode={mode}
@@ -2351,6 +2699,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
           lineSpacing={lineSpacing}
           focusMode={focusMode}
           preserveTone={preserveTone}
+          showDevTools={IS_DEV}
           onAction={(action, value) => void handleAction(action, value)}
         />
         </div>
@@ -2439,13 +2788,28 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
                 selection.anchorNode &&
                 el.contains(selection.anchorNode),
             );
+            const target = el ? spellingTargetAtPoint(el, event.clientX, event.clientY) : null;
+            const spelling = target && !target.hit.inSuggestion ? target.hit : undefined;
+            spellRangeRef.current = spelling && target ? target.range.cloneRange() : null;
             setContextMenu({
               x: Math.min(event.clientX, window.innerWidth - 260),
               y: Math.min(event.clientY, window.innerHeight - 280),
               hasSelection,
+              spelling: spelling ? { word: spelling.word, ignored: spelling.ignored } : undefined,
             });
           }}
         >
+        <FindBar
+          open={findOpen}
+          replaceOpen={findReplaceOpen}
+          getEditor={editorEl}
+          onClose={() => {
+            setFindOpen(false);
+            setFindReplaceOpen(false);
+          }}
+          onReplaceOpenChange={setFindReplaceOpen}
+          onMutate={afterEdit}
+        />
         <main className="canvas" ref={canvasRef} onScroll={updateCurrentPage}>
           <div className="document-scale" style={{ width: scaledWidth, height: scaledHeight }}>
             <div className="document" style={documentStyle}>
@@ -2564,7 +2928,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
           <CommentsPanel
             comments={comments}
             minimized={commentsMinimized}
-            busy={askBusy}
+            busy={anyBusy}
             onMinimizedChange={setCommentsMinimized}
             onChange={(id, body) =>
               setComments((list) => list.map((comment) => (comment.id === id ? { ...comment, body } : comment)))
@@ -2630,22 +2994,25 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
       <AgentPanel
         open={agentOpen}
         minimized={agentMinimized}
-        busy={askBusy}
-        livePhase={livePhase}
-        liveThinking={liveThinking}
-        livePrompt={livePrompt}
-        liveSelection={liveSelection}
-        liveMessage={liveMessage}
-        liveEdits={liveEdits}
-        liveCitations={liveCitations}
+        busy={Boolean(activeLive)}
+        livePhase={activeLive?.phase ?? null}
+        liveThinking={activeLive?.thinking ?? ""}
+        livePrompt={activeLive?.prompt ?? ""}
+        liveSelection={activeLive?.selection ?? null}
+        liveMessage={activeLive?.message ?? ""}
+        liveEdits={activeLive?.edits ?? []}
+        liveCitations={activeLive?.citations ?? []}
         error={askError}
         prompt={askPrompt}
         context={agentContext}
         chats={chats}
         activeChatId={activeChat?.id ?? activeChatId}
-        queued={queuedJobs}
-        contextUsage={{ used: contextUsed, limit: contextLimit, usage: liveUsage }}
-        liveSteps={liveSteps.length ? liveSteps : undefined}
+        openChatIds={openChatIds}
+        runningChatIds={Object.keys(lives)}
+        queued={queuedJobs.filter((item) => !item.chatId || item.chatId === (activeChat?.id ?? activeChatId))}
+        contextUsage={contextUsage}
+        liveSteps={activeLive?.steps.length ? activeLive.steps : undefined}
+        liveTimeline={activeLive?.timeline.length ? activeLive.timeline : undefined}
         models={modelCatalog}
         providers={availableProviders}
         onPromptChange={setAskPrompt}
@@ -2667,6 +3034,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
             setChatDrafts((drafts) => ({ ...drafts, [activeChatId]: askPrompt }));
           }
           setChats((list) => [chat, ...list]);
+          setOpenChatIds((ids) => [...ids, chat.id]);
           setActiveChatId(chat.id);
           setAskPrompt("");
           setAskError(null);
@@ -2678,8 +3046,37 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
             setAskPrompt(next[id] ?? "");
             return next;
           });
+          setOpenChatIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
           setActiveChatId(id);
           setAskError(null);
+        }}
+        onCloseTab={(id) => {
+          const remaining = openChatIds.filter((item) => item !== id);
+          if (id === activeChatId) {
+            const index = openChatIds.indexOf(id);
+            const fallback = remaining[index] ?? remaining[index - 1] ?? remaining[0];
+            if (fallback) {
+              setChatDrafts((drafts) => ({ ...drafts, [activeChatId]: askPrompt }));
+              setActiveChatId(fallback);
+              setAskPrompt(chatDrafts[fallback] ?? "");
+              setAskError(null);
+              setOpenChatIds(remaining);
+              return;
+            }
+            const chat = createChat({
+              mode: activeChat?.mode,
+              model: activeChat?.model,
+              thinkingLevel: activeChat?.thinkingLevel,
+            });
+            setChats((list) => [chat, ...list]);
+            setActiveChatId(chat.id);
+            setAskPrompt("");
+            setAskError(null);
+            setAgentContext([]);
+            setOpenChatIds([chat.id]);
+            return;
+          }
+          setOpenChatIds(remaining);
         }}
         onDeleteChat={(id) => {
           setChatDrafts((drafts) => {
@@ -2687,6 +3084,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
             delete next[id];
             return next;
           });
+          setOpenChatIds((ids) => ids.filter((item) => item !== id));
           setChats((list) => {
             const next = list.filter((chat) => chat.id !== id);
             if (!next.length) {
@@ -2696,12 +3094,14 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
                 thinkingLevel: activeChat?.thinkingLevel,
               });
               setActiveChatId(chat.id);
+              setOpenChatIds([chat.id]);
               setAskPrompt("");
               return [chat];
             }
             if (id === activeChatId) {
               setActiveChatId(next[0].id);
               setAskPrompt(chatDrafts[next[0].id] ?? "");
+              setOpenChatIds((ids) => (ids.includes(next[0].id) ? ids.filter((item) => item !== id) : [next[0].id, ...ids.filter((item) => item !== id)]));
             }
             return next;
           });
@@ -2725,7 +3125,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
         onRejectAll={() => reviewAll("reject")}
         attachments={attachments}
         preserveTone={preserveTone}
-        liveTools={liveTools}
+        liveTools={activeLive?.tools ?? []}
         onCancelQueued={cancelQueuedJob}
         onInsertCitation={insertAgentCitation}
         onPreserveToneChange={setPreserveTone}
@@ -2773,29 +3173,6 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
         }}
       />
 
-      {dialog === "search" && (
-        <SearchReplaceDialog
-          onClose={() => setDialog(null)}
-          onFind={(query) => {
-            const el = editorEl();
-            return el ? findNext(el, query) : false;
-          }}
-          onReplace={(query, replacement) => {
-            const el = editorEl();
-            if (!el) return false;
-            const ok = replaceCurrent(el, query, replacement);
-            afterEdit();
-            return ok;
-          }}
-          onReplaceAll={(query, replacement) => {
-            const el = editorEl();
-            if (!el) return 0;
-            const count = replaceAll(el, query, replacement);
-            afterEdit();
-            return count;
-          }}
-        />
-      )}
       {dialog === "word-count" && (
         <WordCountDialog
           words={metrics.wordCount}
@@ -2904,7 +3281,7 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
         <InlineComposer
           box={inlineBox}
           prompt={inlinePrompt}
-          busy={askBusy}
+          busy={anyBusy}
           preserveTone={preserveTone}
           onPromptChange={setInlinePrompt}
           onPreserveToneChange={setPreserveTone}
@@ -2975,6 +3352,16 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
           onClose={() => setContextMenu(null)}
           onAction={(action) => void handleAction(action)}
           items={[
+            ...(contextMenu.spelling
+              ? [
+                  {
+                    label: contextMenu.spelling.ignored
+                      ? `Stop ignoring “${contextMenu.spelling.word}”`
+                      : `Ignore “${contextMenu.spelling.word}”`,
+                    action: "ignore-spelling",
+                  },
+                ]
+              : []),
             { label: "Cut", action: "cut", shortcut: "⌘X", disabled: !contextMenu.hasSelection },
             { label: "Copy", action: "copy", shortcut: "⌘C", disabled: !contextMenu.hasSelection },
             { label: "Paste", action: "paste", shortcut: "⌘V" },
@@ -3015,6 +3402,9 @@ const PALETTE_COMMANDS: PaletteCommand[] = [
   { id: "summarize", label: "Summarize and ideate", group: "Agent" },
   { id: "address-comments", label: "Address all comments", group: "Agent" },
   { id: "history", label: "Version history", group: "Document", shortcut: "⌘⇧H" },
+  ...(IS_DEV
+    ? [{ id: "copy-debug-snapshot", label: "Copy document and chat snapshot", group: "Dev", hint: "Clipboard dump for debugging" }]
+    : []),
   { id: "focus-mode", label: "Focus mode", group: "Document", shortcut: "⌘⇧F" },
   { id: "preserve-tone", label: "Toggle preserve tone", group: "Agent" },
   { id: "citation", label: "Insert citation", group: "Document" },

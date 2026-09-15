@@ -1,87 +1,23 @@
+import { runSandboxedJs } from "@/lib/agent/sandbox";
+import type { AgentToolCall, AgentToolName, AgentToolResult } from "@/lib/agent/toolCatalog";
 import { searchCitations, formatBibliography, formatInlineCite } from "@/lib/writing/citations";
 import { lintWriting, summarizeLint } from "@/lib/writing/lint";
 import { retrieveChunks, shouldRetrieve } from "@/lib/writing/retrieve";
 import { countText, reviewProposedWriting, targetsFromToolArgs } from "@/lib/writing/review";
 import { detectAiTropes, summarizeTropes } from "@/lib/writing/tropes";
 
-export type AgentToolName =
-  | "get_outline"
-  | "search_document"
-  | "read_document"
-  | "replace_text"
-  | "insert_text"
-  | "delete_text"
-  | "propose_tasks"
-  | "set_chat_title"
-  | "seed_document"
-  | "lint_writing"
-  | "count_words"
-  | "detect_ai_tropes"
-  | "retrieve_passages"
-  | "search_citations"
-  | "run_code"
-  | "export_pdf"
-  | "undo"
-  | "redo"
-  | "insert_link"
-  | "insert_image"
-  | "highlight_text"
-  | "set_font_size"
-  | "toggle_list"
-  | "add_header"
-  | "add_page_numbers"
-  | "set_alignment"
-  | "insert_horizontal_line";
-
-export type AgentToolCall = {
-  id: string;
-  name: AgentToolName;
-  args: Record<string, unknown>;
-  hidden?: boolean;
-};
-
-export type AgentToolResult = {
-  id: string;
-  name: AgentToolName;
-  result: unknown;
-  hidden?: boolean;
-};
-
-export const SERVER_TOOLS: AgentToolName[] = [
-  "lint_writing",
-  "count_words",
-  "detect_ai_tropes",
-  "retrieve_passages",
-  "search_citations",
-  "run_code",
-];
-
-export const CLIENT_TOOLS: AgentToolName[] = [
-  "export_pdf",
-  "undo",
-  "redo",
-  "insert_link",
-  "insert_image",
-  "highlight_text",
-  "set_font_size",
-  "toggle_list",
-  "add_header",
-  "add_page_numbers",
-  "set_alignment",
-  "insert_horizontal_line",
-];
-
-export function isToolName(value: unknown): value is AgentToolName {
-  return typeof value === "string" && (SERVER_TOOLS.includes(value as AgentToolName) || CLIENT_TOOLS.includes(value as AgentToolName));
-}
-
-export function isServerTool(name: AgentToolName) {
-  return SERVER_TOOLS.includes(name);
-}
-
-export function isClientTool(name: AgentToolName) {
-  return CLIENT_TOOLS.includes(name);
-}
+export type { AgentToolCall, AgentToolName, AgentToolResult };
+export {
+  ALL_TOOL_NAMES,
+  CLIENT_TOOLS,
+  DOCUMENT_TOOLS,
+  SERVER_TOOLS,
+  isClientTool,
+  isDocumentTool,
+  isServerTool,
+  isToolName,
+} from "@/lib/agent/toolCatalog";
+export { runSandboxedJs } from "@/lib/agent/sandbox";
 
 export function executeServerTool(
   call: AgentToolCall,
@@ -141,16 +77,16 @@ export function executeServerTool(
       };
     }
     if (call.name === "search_citations") {
-      const works = searchCitations(String(args.query ?? ctx.prompt));
+      const works = searchCitations(String(args.query ?? ctx.prompt)).map((work) => ({
+        ...work,
+        inline: formatInlineCite(work),
+        bibliography: formatBibliography(work),
+      }));
       return {
         id: call.id,
         name: call.name,
         hidden: call.hidden,
-        result: works.map((work) => ({
-          ...work,
-          inline: formatInlineCite(work),
-          bibliography: formatBibliography(work),
-        })),
+        result: { works, source: "inline-catalog" },
       };
     }
     if (call.name === "run_code") {
@@ -165,32 +101,4 @@ export function executeServerTool(
     };
   }
   return { id: call.id, name: call.name, hidden: call.hidden, result: { error: "Unknown server tool." } };
-}
-
-export function runSandboxedJs(code: string) {
-  const trimmed = code.trim();
-  if (!trimmed) return { error: "No code." };
-  if (/\b(process|require|fetch|XMLHttpRequest|document|window|globalThis|Function|eval)\b/.test(trimmed)) {
-    return { error: "That code uses blocked APIs." };
-  }
-  try {
-    const fn = new Function(
-      "Math",
-      `"use strict"; const console = { log: () => undefined }; ${trimmed}`,
-    );
-    const value = fn(Math);
-    return { result: formatResult(value) };
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : "Code failed." };
-  }
-}
-
-function formatResult(value: unknown) {
-  if (value == null) return "undefined";
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
 }

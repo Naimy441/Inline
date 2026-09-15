@@ -24,7 +24,7 @@ export type WritingLint = {
   issues: LintIssue[];
 };
 
-const PAGE_WORDS = 500;
+export const PAGE_WORDS = 500;
 
 export function lintWriting(text: string, pageCount = 1): WritingLint {
   const clean = text.replace(/\s+/g, " ").trim();

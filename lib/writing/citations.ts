@@ -88,14 +88,50 @@ export const CITATION_CATALOG: CatalogWork[] = [
     year: "1788",
     tags: ["history", "politics", "public-domain"],
   },
+  {
+    id: "didion-white",
+    author: "Joan Didion",
+    title: "The White Album",
+    year: "1979",
+    publisher: "Simon & Schuster",
+    tags: ["writing", "essay", "nonfiction"],
+  },
+  {
+    id: "king-on-writing",
+    author: "Stephen King",
+    title: "On Writing",
+    year: "2000",
+    publisher: "Scribner",
+    tags: ["writing", "memoir", "craft"],
+  },
+  {
+    id: "pinker-style",
+    author: "Steven Pinker",
+    title: "The Sense of Style",
+    year: "2014",
+    publisher: "Viking",
+    tags: ["writing", "style", "grammar"],
+  },
+  {
+    id: "williams-style",
+    author: "Joseph M. Williams and Joseph Bizup",
+    title: "Style: Lessons in Clarity and Grace",
+    year: "2016",
+    publisher: "Pearson",
+    tags: ["writing", "style", "clarity"],
+  },
 ];
 
 export function searchCitations(query: string, limit = 5): CatalogWork[] {
-  const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const tokens = query.toLowerCase().split(/\s+/).filter((token) => token.length > 1);
   if (!tokens.length) return CITATION_CATALOG.slice(0, limit);
   return CITATION_CATALOG.map((work) => {
-    const hay = `${work.author} ${work.title} ${work.tags.join(" ")} ${work.year}`.toLowerCase();
-    const score = tokens.reduce((sum, token) => sum + (hay.includes(token) ? 1 : 0), 0);
+    const hay = `${work.author} ${work.title} ${work.tags.join(" ")} ${work.year} ${work.publisher ?? ""}`.toLowerCase();
+    const score = tokens.reduce((sum, token) => {
+      if (hay.includes(token)) return sum + 2;
+      if (hay.split(/\s+/).some((word) => word.startsWith(token))) return sum + 1;
+      return sum;
+    }, 0);
     return { work, score };
   })
     .filter((row) => row.score > 0)

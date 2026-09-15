@@ -137,7 +137,3 @@ GENERAL FEATURES
 - Focus Mode (no or less AI)
 - Collaborative Editing
 - Light/Dark Mode
-
-TODO:
-Switch to Tailwind
-Make something like an MCP tool system where the AI makes changes in real time and you see them update the document. Because currently it sends the whole doc and history every single time... and processes the entire response all at once, which is a horrible system

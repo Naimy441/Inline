@@ -1,6 +1,9 @@
 import type { AgentEditDraft, AgentSelection, PendingEdit } from "@/lib/agent/types";
+import { muteSpellcheck, muteSuggestionSpellcheck } from "@/lib/editorSpell";
+import { tidyBrokenParagraphs } from "@/lib/editorTidy";
 import { rangeTouchesLock } from "@/lib/locks";
-import { getPlainText, getTextIndex, rangeFromTextOffsets, saveSelectionRange } from "@/lib/pagination";
+import { createManualPageBreak, getPlainText, getTextIndex, rangeFromTextOffsets, saveSelectionRange } from "@/lib/pagination";
+import { isStandaloneHeadingLine, splitEditorParagraphs } from "@/lib/writing/paragraphs";
 
 const structuralRestores = new Map<string, {
   parent: Node;
@@ -93,6 +96,7 @@ export function applyAgentEdits(
     return { ...edit, status: "missed" as const };
   });
   settleAgentEdits(editor);
+  tidyBrokenParagraphs(editor);
   return edits;
 }
 
@@ -209,10 +213,14 @@ function unwrapAgentEdit(wrap: Element, flash = false) {
   const add = wrap.querySelector(":scope > .suggestion-add") ?? wrap.querySelector(".suggestion-add");
   const live = liveNodes(add ?? wrap);
   if (wrap.classList.contains("agent-edit-insert")) {
-    const block = document.createElement("div");
-    if (live.length) block.append(...live);
-    else block.append(document.createElement("br"));
-    wrap.replaceWith(block);
+    if (live.length === 1 && live[0] instanceof HTMLElement && live[0].hasAttribute("data-manual-break")) {
+      wrap.replaceWith(live[0]);
+      return;
+    }
+    if (add instanceof HTMLElement) copyBlockFormat(add, wrap);
+    if (add) add.replaceWith(...liveNodes(add));
+    if (!wrap.childNodes.length) wrap.append(document.createElement("br"));
+    stripEditChrome(wrap);
     return;
   }
   const canFlash =
@@ -275,6 +283,7 @@ export function settleAgentEdits(editor: HTMLElement) {
     if (node.closest(".agent-edit")) return;
     node.remove();
   });
+  muteSuggestionSpellcheck(editor);
 }
 
 export function highlightAgentEdit(editor: HTMLElement, id: string | null) {
@@ -393,6 +402,27 @@ function findOccurrence(haystack: string, needle: string, occurrence: number) {
   return -1;
 }
 
+function stripEditChrome(node: Element) {
+  node.classList.remove("agent-edit", "agent-edit-insert", "agent-edit-structural", "is-reviewing");
+  if (!(node instanceof HTMLElement)) return;
+  delete node.dataset.editId;
+  delete node.dataset.restoreBlocks;
+}
+
+function copyBlockFormat(from: Element, to: Element) {
+  if (!(to instanceof HTMLElement)) return;
+  for (const name of from.classList) {
+    if (name === "suggestion-add" || name === "suggestion-del" || name === "agent-edit" || name.startsWith("agent-edit") || name === "is-reviewing") {
+      continue;
+    }
+    to.classList.add(name);
+  }
+  if (!(from instanceof HTMLElement)) return;
+  for (const prop of from.style) {
+    if (!to.style.getPropertyValue(prop)) to.style.setProperty(prop, from.style.getPropertyValue(prop));
+  }
+}
+
 function liveNodes(from: Node | null): Node[] {
   if (!from) return [];
   if (from instanceof Element) {
@@ -437,6 +467,7 @@ function rangeIntersectsNode(range: Range, node: Node): boolean {
 }
 
 function wrapReplacement(range: Range, id: string, replacement: string) {
+  range = retargetWholeBlockRange(range);
   const wrap = document.createElement("span");
   wrap.className = "agent-edit";
   wrap.dataset.editId = id;
@@ -449,12 +480,44 @@ function wrapReplacement(range: Range, id: string, replacement: string) {
     del.textContent = range.toString();
     range.deleteContents();
   }
+  flattenInlineMark(del);
 
   const add = document.createElement("span");
   add.className = "suggestion-add";
-  add.textContent = replacement;
+  add.append(...nodesFromPlainLine(replacement));
   wrap.append(del, add);
+  muteSuggestion(wrap);
   range.insertNode(wrap);
+}
+
+/** Keep whole-line heading swaps inside the original block so they don't leave an empty sibling. */
+function retargetWholeBlockRange(range: Range): Range {
+  const startBlock = blockOf(range.startContainer);
+  const endBlock = blockOf(range.endContainer);
+  if (!(endBlock instanceof HTMLElement)) return range;
+  const block =
+    startBlock instanceof HTMLElement && startBlock !== endBlock && startBlock.contains(endBlock)
+      ? endBlock
+      : startBlock instanceof HTMLElement && startBlock === endBlock
+        ? startBlock
+        : endBlock;
+  if (!(block instanceof HTMLElement)) return range;
+  const matched = normalize(range.toString());
+  const blockText = normalize(block.textContent || "");
+  if (!matched || matched !== blockText) return range;
+  try {
+    const inner = range.cloneRange();
+    inner.selectNodeContents(block);
+    return inner;
+  } catch {
+    return range;
+  }
+}
+
+function flattenInlineMark(side: HTMLElement) {
+  const only = side.children.length === 1 ? side.firstElementChild : null;
+  if (!only || !/^(DIV|P|H1|H2|H3)$/.test(only.tagName) || side.childNodes.length !== 1) return;
+  side.replaceChildren(...only.childNodes);
 }
 
 /** Merge two adjacent blocks as a reviewable suggestion when deleting a paragraph break. */
@@ -491,6 +554,7 @@ function applyBoundaryDeletion(editor: HTMLElement, range: Range, id: string) {
   wrap.className = "agent-edit agent-edit-structural";
   wrap.dataset.editId = id;
   wrap.append(old, added);
+  muteSuggestion(wrap);
   parent.insertBefore(wrap, first);
   first.remove();
   second.remove();
@@ -530,16 +594,18 @@ function wrapStructuralReplacement(editor: HTMLElement, range: Range, id: string
   add.className = "suggestion-add";
   const prefix = cloneRangeContents(first, range.startContainer, range.startOffset, "start");
   const suffix = cloneRangeContents(last, range.endContainer, range.endOffset, "end");
-  const lines = replacement ? replacement.split("\n") : [""];
-  lines.forEach((line, index) => {
+  const lines = replacement ? splitParagraphs(replacement) : [""];
+  const blocks = lines.length ? lines : [""];
+  blocks.forEach((line, index) => {
     const block = first.cloneNode(false) as HTMLElement;
     if (index === 0) block.append(prefix.cloneNode(true));
     if (line) block.append(document.createTextNode(line));
-    else if (lines.length === 1 && !prefix.textContent && !suffix.textContent) block.append(document.createElement("br"));
-    if (index === lines.length - 1) block.append(suffix.cloneNode(true));
+    else if (blocks.length === 1 && !prefix.textContent && !suffix.textContent) block.append(document.createElement("br"));
+    if (index === blocks.length - 1) block.append(suffix.cloneNode(true));
     add.append(block);
   });
   wrap.append(del, add);
+  muteSuggestion(wrap);
   parent.insertBefore(wrap, first);
   sourceBlocks.forEach((node) => node.remove());
   if (!editor.contains(wrap)) return;
@@ -605,17 +671,55 @@ function closestBlockOutsideMark(node: Element, editor: HTMLElement) {
 function insertParagraphsAfter(editor: HTMLElement, anchor: Node, id: string, paragraphs: string[]) {
   let after: Node | null = editor.contains(anchor) && anchor !== editor ? anchor : editor.lastChild;
   for (const para of paragraphs) {
+    if (isBibliographyHeading(para)) {
+      after = insertNodeAfter(editor, after, wrapInsertedNode(id, createManualPageBreak()));
+    }
     const insert = document.createElement("div");
     insert.className = "agent-edit agent-edit-insert";
     insert.dataset.editId = id;
     const add = document.createElement("span");
     add.className = "suggestion-add";
-    add.textContent = para;
+    add.append(...nodesFromPlainLine(para));
     insert.append(add);
-    if (after instanceof Element && editor.contains(after) && after !== editor) after.after(insert);
-    else editor.append(insert);
-    after = insert;
+    muteSuggestion(insert);
+    after = insertNodeAfter(editor, after, insert);
   }
+}
+
+function insertNodeAfter(editor: HTMLElement, after: Node | null, node: Node) {
+  if (after instanceof Element && editor.contains(after) && after !== editor) after.after(node);
+  else editor.append(node);
+  return node;
+}
+
+function wrapInsertedNode(id: string, node: HTMLElement) {
+  const wrap = document.createElement("div");
+  wrap.className = "agent-edit agent-edit-insert";
+  wrap.dataset.editId = id;
+  wrap.append(node);
+  muteSuggestion(wrap);
+  return wrap;
+}
+
+function nodesFromPlainLine(text: string): Node[] {
+  if (!text) return [document.createElement("br")];
+  const parts = text.split("\n");
+  if (parts.length === 1) return [document.createTextNode(text)];
+  const nodes: Node[] = [];
+  parts.forEach((part, index) => {
+    if (index) nodes.push(document.createElement("br"));
+    if (part) nodes.push(document.createTextNode(part));
+  });
+  return nodes.length ? nodes : [document.createElement("br")];
+}
+
+function muteSuggestion(wrap: HTMLElement) {
+  muteSpellcheck(wrap);
+  wrap.querySelectorAll<HTMLElement>(".suggestion-add, .suggestion-del").forEach(muteSpellcheck);
+}
+
+function isBibliographyHeading(text: string) {
+  return isStandaloneHeadingLine(text);
 }
 
 function blockOf(node: Node): Element | null {
@@ -623,11 +727,8 @@ function blockOf(node: Node): Element | null {
   return el?.closest("div, p, h1, h2, h3, li") ?? el;
 }
 
-function splitParagraphs(text: string) {
-  return text
-    .split(/\n{2,}/)
-    .map((part) => part.replace(/\n/g, " ").trim())
-    .filter(Boolean);
+export function splitParagraphs(text: string) {
+  return splitEditorParagraphs(text);
 }
 
 function indexOfLoose(haystack: string, needle: string) {

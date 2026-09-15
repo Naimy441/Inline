@@ -1,4 +1,5 @@
 import { createImageElement } from "@/lib/images";
+import { tidyBrokenParagraphs } from "@/lib/editorTidy";
 import { createManualPageBreak, getPlainText, restoreSelectionRange, saveSelectionRange } from "@/lib/pagination";
 
 const SUBSTITUTIONS: [RegExp, string][] = [
@@ -282,12 +283,14 @@ function styleClear(el: HTMLElement, property: "color" | "background-color") {
 
 export function insertHtml(editor: HTMLElement, html: string) {
   editor.focus();
-  document.execCommand("insertHTML", false, html);
+  if (tryExec(editor, "insertHTML", html)) return;
+  insertFragment(editor, html);
 }
 
 export function insertText(editor: HTMLElement, text: string) {
   editor.focus();
-  document.execCommand("insertText", false, text);
+  if (tryExec(editor, "insertText", text)) return;
+  insertFragment(editor, escapeHtml(text).replace(/\n/g, "<br>"));
 }
 
 export function selectedText(): string {
@@ -387,11 +390,18 @@ export function applyCapitalization(editor: HTMLElement, mode: "upper" | "lower"
   insertText(editor, next);
 }
 
-export function applyBlockStyle(
-  editor: HTMLElement,
-  style: "normal" | "title" | "subtitle" | "h1" | "h2" | "h3",
-) {
+export type BlockStyle = "normal" | "title" | "subtitle" | "h1" | "h2" | "h3";
+export type ParagraphIndent = "none" | "first-line" | "hanging";
+
+const BLOCK_STYLE_CLASSES = ["style-title", "style-subtitle", "style-h1", "style-h2", "style-h3"] as const;
+const INDENT_CLASSES = ["indent-first", "indent-hanging", "mla-indent", "mla-hanging"] as const;
+
+export function applyBlockStyle(editor: HTMLElement, style: BlockStyle) {
   editor.focus();
+  const selected = (() => {
+    const blocks = blocksInSelection(editor);
+    return blocks.length ? blocks : [closestBlock(editor)].filter((block): block is HTMLElement => Boolean(block));
+  })();
   const map = {
     normal: "div",
     title: "h1",
@@ -400,13 +410,47 @@ export function applyBlockStyle(
     h2: "h2",
     h3: "h3",
   } as const;
-  document.execCommand("formatBlock", false, map[style]);
-  const blocks = blocksInSelection(editor);
-  const selected = blocks.length ? blocks : [closestBlock(editor)].filter((block): block is HTMLElement => Boolean(block));
+  tryExec(editor, "formatBlock", map[style]);
   for (const block of selected) {
-    block.classList.remove("style-title", "style-subtitle", "style-h1", "style-h2", "style-h3");
-    if (style !== "normal") block.classList.add(`style-${style}`);
+    const next = replaceBlockTag(block, map[style]);
+    for (const cls of BLOCK_STYLE_CLASSES) next.classList.remove(cls);
+    if (style !== "normal") next.classList.add(`style-${style}`);
   }
+}
+
+export function applyParagraphIndent(
+  editor: HTMLElement,
+  kind: ParagraphIndent,
+  options?: { following?: boolean; scope?: "selection" | "body" | "bibliography" },
+) {
+  editor.focus();
+  if (options?.scope === "body" || options?.scope === "bibliography") {
+    tidyBrokenParagraphs(editor);
+    for (const block of indentScopeBlocks(editor, options.scope)) applyIndentToBlock(block, kind);
+    return;
+  }
+  const selected = (() => {
+    const blocks = blocksInSelection(editor);
+    return blocks.length ? blocks : [closestBlock(editor)].filter((block): block is HTMLElement => Boolean(block));
+  })();
+  const targets = options?.following && selected[0]
+    ? blocksThroughNextHeading(editor, selected[0])
+    : selected;
+  for (const block of targets) applyIndentToBlock(block, kind);
+}
+
+export function applyPaperStyle(editor: HTMLElement, preset: "mla" | "apa" | "letter") {
+  const family = '"Times New Roman", Times, serif';
+  const size = "12pt";
+  const spacing = preset === "letter" ? "1.15" : "2";
+  editor.style.fontFamily = family;
+  editor.style.fontSize = size;
+  setLineSpacing(editor, spacing);
+  editor.querySelectorAll<HTMLElement>("div, p, h1, h2, h3, li").forEach((block) => {
+    if (block.closest("[data-page-break],[data-manual-break]")) return;
+    block.style.fontFamily = family;
+    block.style.fontSize = size;
+  });
 }
 
 export function selectionBlockStyle(editor: HTMLElement): "normal" | "title" | "subtitle" | "h1" | "h2" | "h3" {
@@ -424,7 +468,17 @@ export function selectionBlockStyle(editor: HTMLElement): "normal" | "title" | "
 }
 
 export function setAlignment(editor: HTMLElement, align: "left" | "center" | "right" | "justify") {
-  runCommand(editor, `justify${align[0].toUpperCase()}${align.slice(1)}`);
+  editor.focus();
+  wrapOrphanText(editor);
+  tryExec(editor, `justify${align[0].toUpperCase()}${align.slice(1)}`);
+  const blocks = blocksInSelection(editor);
+  const fallback = closestBlock(editor);
+  const targets = blocks.length ? blocks : fallback ? [fallback] : [];
+  for (const block of targets) {
+    if (block === editor || block.closest("[data-page-break],[data-manual-break]")) continue;
+    block.style.textAlign = align;
+  }
+  if (!targets.length) editor.style.textAlign = align;
 }
 
 export function setLineSpacing(editor: HTMLElement, value: string) {
@@ -462,12 +516,98 @@ export function insertImage(editor: HTMLElement, src: string) {
   selection.addRange(caret);
 }
 
-export function insertTable(editor: HTMLElement, rows: number, cols: number) {
-  const safeRows = Math.min(12, Math.max(1, rows));
-  const safeCols = Math.min(8, Math.max(1, cols));
-  const cells = Array.from({ length: safeCols }, () => "<td><br></td>").join("");
-  const body = Array.from({ length: safeRows }, () => `<tr>${cells}</tr>`).join("");
-  insertHtml(editor, `<table class="doc-table"><tbody>${body}</tbody></table><div><br></div>`);
+export function insertTable(editor: HTMLElement, rows: number, cols: number, cells?: string[][]) {
+  const grid = normalizeTableGrid(rows, cols, cells);
+  if (cells?.length) {
+    const existing = tableNearCaret(editor);
+    if (existing && tableIsEmpty(existing)) {
+      writeTableGrid(existing, grid);
+      return;
+    }
+  }
+  placeCaretOutsideTable(editor);
+  insertHtml(editor, `${tableMarkup(grid)}<div><br></div>`);
+}
+
+function normalizeTableGrid(rows: number, cols: number, cells?: string[][]) {
+  const rowCount = Math.min(12, Math.max(1, cells?.length || rows || 2));
+  const colCount = Math.min(
+    8,
+    Math.max(1, cells?.reduce((max, row) => Math.max(max, row.length), 0) || cols || 2),
+  );
+  return Array.from({ length: rowCount }, (_, row) =>
+    Array.from({ length: colCount }, (_, col) => cells?.[row]?.[col] ?? ""),
+  );
+}
+
+function tableMarkup(grid: string[][]) {
+  const body = grid
+    .map((row) => `<tr>${row.map((cell) => `<td>${cellMarkup(cell)}</td>`).join("")}</tr>`)
+    .join("");
+  return `<table class="doc-table"><tbody>${body}</tbody></table>`;
+}
+
+function cellMarkup(value: string) {
+  const text = value.trim();
+  return text ? escapeHtml(text).replace(/\n/g, "<br>") : "<br>";
+}
+
+function tableIsEmpty(table: HTMLTableElement) {
+  return ![...table.querySelectorAll("td, th")].some((cell) => (cell.textContent ?? "").trim());
+}
+
+function writeTableGrid(table: HTMLTableElement, grid: string[][]) {
+  const body = document.createElement("tbody");
+  for (const row of grid) {
+    const tr = document.createElement("tr");
+    for (const cell of row) {
+      const td = document.createElement("td");
+      const text = cell.trim();
+      if (text) td.innerHTML = escapeHtml(text).replace(/\n/g, "<br>");
+      else td.appendChild(document.createElement("br"));
+      tr.appendChild(td);
+    }
+    body.appendChild(tr);
+  }
+  const current = table.tBodies[0];
+  if (current) current.replaceWith(body);
+  else {
+    table.querySelector("thead")?.remove();
+    table.appendChild(body);
+  }
+}
+
+function tableNearCaret(editor: HTMLElement): HTMLTableElement | null {
+  const selection = window.getSelection();
+  const node = selection?.anchorNode;
+  if (!node || !editor.contains(node)) return null;
+  const el = node instanceof Element ? node : node.parentElement;
+  if (!el) return null;
+  const inside = el.closest("table");
+  if (inside instanceof HTMLTableElement && editor.contains(inside)) return inside;
+  let current: Element | null = el;
+  while (current && current !== editor) {
+    const nested = [...current.children].find((child) => child.tagName === "TABLE");
+    if (nested instanceof HTMLTableElement) return nested;
+    if (current.nextElementSibling?.tagName === "TABLE") return current.nextElementSibling as HTMLTableElement;
+    if (current.previousElementSibling?.tagName === "TABLE") return current.previousElementSibling as HTMLTableElement;
+    current = current.parentElement;
+  }
+  return null;
+}
+
+function placeCaretOutsideTable(editor: HTMLElement) {
+  const selection = window.getSelection();
+  const node = selection?.anchorNode;
+  if (!node || !editor.contains(node)) return;
+  const el = node instanceof Element ? node : node.parentElement;
+  const table = el?.closest("table");
+  if (!(table instanceof HTMLTableElement) || !editor.contains(table)) return;
+  const caret = document.createRange();
+  caret.setStartAfter(table);
+  caret.collapse(true);
+  selection?.removeAllRanges();
+  selection?.addRange(caret);
 }
 
 export function insertLink(editor: HTMLElement, url: string, text?: string) {
@@ -490,14 +630,20 @@ export function insertLink(editor: HTMLElement, url: string, text?: string) {
       );
       return;
     }
-    document.execCommand("createLink", false, href);
-    const node = selection?.anchorNode;
-    const el = node instanceof HTMLElement ? node : node?.parentElement;
-    const anchor = el?.closest("a");
-    if (anchor) {
-      anchor.setAttribute("target", "_blank");
-      anchor.setAttribute("rel", "noreferrer");
+    if (tryExec(editor, "createLink", href)) {
+      const node = selection?.anchorNode;
+      const el = node instanceof HTMLElement ? node : node?.parentElement;
+      const anchor = el?.closest("a");
+      if (anchor) {
+        anchor.setAttribute("target", "_blank");
+        anchor.setAttribute("rel", "noreferrer");
+      }
+      return;
     }
+    insertHtml(
+      editor,
+      `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${escapeHtml(selected)}</a>`,
+    );
     return;
   }
 
@@ -516,6 +662,14 @@ export function insertPageBreak(editor: HTMLElement) {
   editor.focus();
   const breakEl = createManualPageBreak();
   const selection = window.getSelection();
+  const anchor = selection?.anchorNode;
+  const host = anchor instanceof Element ? anchor : anchor?.parentElement;
+  const table = host?.closest("table");
+  if (table instanceof HTMLTableElement && editor.contains(table)) {
+    table.after(breakEl);
+    placeCaretAfterBreak(breakEl, selection);
+    return;
+  }
   if (!selection || selection.rangeCount === 0) {
     editor.appendChild(breakEl);
     return;
@@ -523,9 +677,14 @@ export function insertPageBreak(editor: HTMLElement) {
   const range = selection.getRangeAt(0);
   range.collapse(false);
   range.insertNode(breakEl);
+  placeCaretAfterBreak(breakEl, selection);
+}
+
+function placeCaretAfterBreak(breakEl: HTMLElement, selection: Selection | null) {
   const after = document.createElement("div");
   after.innerHTML = "<br>";
   breakEl.after(after);
+  if (!selection) return;
   const caret = document.createRange();
   caret.setStart(after, 0);
   caret.collapse(true);
@@ -555,10 +714,12 @@ export function indentBlocks(editor: HTMLElement, direction: 1 | -1) {
 
   const listItems = blocks
     .map((block) => block.closest("li"))
-    .filter((item): item is HTMLLIElement => item instanceof HTMLLIElement);
+    .filter((item): item is HTMLLIElement => item instanceof HTMLElement && item.tagName === "LI");
   if (listItems.length === blocks.length) {
-    document.execCommand(direction > 0 ? "indent" : "outdent");
-    return;
+    const nestedBefore = editor.querySelectorAll("ul ul, ol ol, ul ol, ol ul").length;
+    tryExec(editor, direction > 0 ? "indent" : "outdent");
+    const nestedAfter = editor.querySelectorAll("ul ul, ol ol, ul ol, ol ul").length;
+    if (nestedAfter !== nestedBefore) return;
   }
 
   const saved = saveSelectionRange(editor);
@@ -589,13 +750,44 @@ export function wrapSelectionMark(editor: HTMLElement, id: string, quote: string
   return true;
 }
 
+export function findAllRanges(editor: HTMLElement, query: string): Range[] {
+  if (!query.trim()) return [];
+  return locateAll(editor, query);
+}
+
+export function selectRange(editor: HTMLElement, range: Range) {
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+  const host = range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement;
+  if (host && typeof host.scrollIntoView === "function") {
+    host.scrollIntoView({ block: "center", inline: "nearest" });
+  }
+}
+
+const FIND_MATCH = "inline-find";
+const FIND_CURRENT = "inline-find-current";
+
+export function highlightFind(ranges: Range[], currentIndex = 0) {
+  clearFindHighlights();
+  const HighlightCtor = (globalThis as { Highlight?: new (...items: Range[]) => Highlight }).Highlight;
+  const highlights = typeof CSS !== "undefined" ? CSS.highlights : undefined;
+  if (!HighlightCtor || !highlights) return;
+  if (ranges.length) highlights.set(FIND_MATCH, new HighlightCtor(...ranges));
+  const current = ranges[currentIndex];
+  if (current) highlights.set(FIND_CURRENT, new HighlightCtor(current));
+}
+
+export function clearFindHighlights() {
+  const highlights = typeof CSS !== "undefined" ? CSS.highlights : undefined;
+  highlights?.delete(FIND_MATCH);
+  highlights?.delete(FIND_CURRENT);
+}
+
 export function findNext(editor: HTMLElement, query: string): boolean {
   const match = locate(editor, query);
   if (!match) return false;
-  const selection = window.getSelection();
-  selection?.removeAllRanges();
-  selection?.addRange(match);
-  match.startContainer.parentElement?.scrollIntoView({ block: "center" });
+  selectRange(editor, match);
   return true;
 }
 
@@ -662,7 +854,7 @@ export function paragraphCount(editor: HTMLElement): number {
 }
 
 export function suggestionInsert(editor: HTMLElement, text: string) {
-  insertHtml(editor, `<span class="suggestion-add">${escapeHtml(text)}</span>`);
+  insertHtml(editor, `<span class="suggestion-add" spellcheck="false">${escapeHtml(text)}</span>`);
 }
 
 export function suggestionDelete(editor: HTMLElement) {
@@ -677,15 +869,50 @@ export function suggestionDelete(editor: HTMLElement) {
   }
   const deleted = selectedText();
   if (!deleted) return false;
-  insertHtml(editor, `<span class="suggestion-del">${escapeHtml(deleted)}</span>`);
+  insertHtml(editor, `<span class="suggestion-del" spellcheck="false">${escapeHtml(deleted)}</span>`);
   return true;
+}
+
+export function toggleInlineFormat(editor: HTMLElement, kind: "bold" | "italic" | "underline") {
+  editor.focus();
+  if (tryExec(editor, kind)) return;
+  const tag = kind === "bold" ? "strong" : kind === "italic" ? "em" : "u";
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return;
+  const range = selection.getRangeAt(0);
+  const el = document.createElement(tag);
+  try {
+    range.surroundContents(el);
+  } catch {
+    el.appendChild(range.extractContents());
+    range.insertNode(el);
+  }
 }
 
 export function toggleList(editor: HTMLElement, type: "ul" | "ol", variant?: "dash") {
   editor.focus();
-  document.execCommand(type === "ol" ? "insertOrderedList" : "insertUnorderedList");
+  const before = editor.querySelectorAll(type).length;
+  tryExec(editor, type === "ol" ? "insertOrderedList" : "insertUnorderedList");
+  const after = editor.querySelectorAll(type).length;
+  if (after === before) {
+    const blocks = blocksInSelection(editor);
+    const list = blocks[0]?.closest("ul, ol") as HTMLElement | null;
+    const same =
+      list &&
+      blocks.every((block) => block.closest("ul, ol") === list) &&
+      list.tagName === (type === "ol" ? "OL" : "UL");
+    if (same && list) unwrapList(list);
+    else if (blocks.length) wrapBlocksInList(editor, blocks, type, variant);
+    else {
+      ensureParagraphBlocks(editor);
+      const fallback = [...editor.querySelectorAll<HTMLElement>("div, p, h1, h2, h3")].filter(
+        (el) => el.parentElement === editor,
+      );
+      if (fallback.length) wrapBlocksInList(editor, fallback, type, variant);
+    }
+  }
   if (type === "ul" && variant === "dash") {
-    const list = closestList(editor);
+    const list = closestList(editor) ?? [...editor.querySelectorAll("ul")].at(-1);
     list?.classList.add("dash-list");
   }
 }
@@ -810,6 +1037,76 @@ function locate(editor: HTMLElement, query: string): Range | null {
   return null;
 }
 
+function applyIndentToBlock(block: HTMLElement, kind: ParagraphIndent) {
+  for (const cls of INDENT_CLASSES) block.classList.remove(cls);
+  if (kind === "first-line") {
+    block.classList.add("indent-first");
+    block.style.textIndent = "0.5in";
+    if (block.style.paddingLeft === "0.5in") block.style.paddingLeft = "";
+    return;
+  }
+  if (kind === "hanging") {
+    block.classList.add("indent-hanging");
+    block.style.textIndent = "-0.5in";
+    block.style.paddingLeft = "0.5in";
+    return;
+  }
+  block.style.textIndent = "";
+  if (block.style.paddingLeft === "0.5in") block.style.paddingLeft = "";
+}
+
+function blockPlainText(block: HTMLElement) {
+  return (block.innerText || block.textContent || "").replace(/\s+/g, " ").trim();
+}
+
+function looksLikeHeadingBlock(block: HTMLElement) {
+  const text = blockPlainText(block);
+  if (!text) return false;
+  if (/^h[1-3]$/i.test(block.tagName) || /style-(title|subtitle|h1|h2|h3)/.test(block.className)) return true;
+  const align = (block.style.textAlign || block.getAttribute("align") || "").toLowerCase();
+  if (align === "center" && text.length < 90) return true;
+  return text.length < 90 && /^(#{1,3}\s|[A-Z0-9].{0,70})$/.test(text) && !/[.!?]$/.test(text);
+}
+
+function looksLikeBibliographyHeading(block: HTMLElement) {
+  return /^(works cited|references|bibliography|works consulted)$/i.test(blockPlainText(block));
+}
+
+function indentScopeBlocks(editor: HTMLElement, scope: "body" | "bibliography") {
+  const all = topLevelBlocks(editor);
+  const bibIdx = all.findIndex((block) => looksLikeBibliographyHeading(block));
+  const slice = scope === "bibliography"
+    ? bibIdx >= 0 ? all.slice(bibIdx + 1) : all
+    : all.slice(0, bibIdx >= 0 ? bibIdx : all.length);
+  return slice.filter((block) => blockPlainText(block) && !looksLikeHeadingBlock(block));
+}
+
+function topLevelBlocks(editor: HTMLElement) {
+  const blocks = [...editor.querySelectorAll<HTMLElement>("div, p, h1, h2, h3")].filter((block) => {
+    if (block === editor) return false;
+    return !block.closest("[data-page-break],[data-manual-break]");
+  });
+  return blocks.filter((block) => !blocks.some((other) => other !== block && other.contains(block)));
+}
+
+function blocksThroughNextHeading(editor: HTMLElement, start: HTMLElement) {
+  const all = topLevelBlocks(editor);
+  const startIdx = all.indexOf(start);
+  if (startIdx < 0) return [start];
+  const startHeading = looksLikeHeadingBlock(start);
+  const targets: HTMLElement[] = [];
+  for (let index = startIdx + (startHeading ? 1 : 0); index < all.length; index += 1) {
+    const block = all[index];
+    if (!block) continue;
+    if (looksLikeHeadingBlock(block)) {
+      if (targets.length) break;
+      continue;
+    }
+    targets.push(block);
+  }
+  return targets.length ? targets : startHeading ? [] : [start];
+}
+
 function closestBlock(editor: HTMLElement): HTMLElement | null {
   const selection = window.getSelection();
   const node = selection?.anchorNode;
@@ -839,7 +1136,17 @@ function blocksInSelection(editor: HTMLElement): HTMLElement[] {
   return fallback ? [fallback] : [];
 }
 
+function wrapOrphanText(editor: HTMLElement) {
+  for (const node of [...editor.childNodes]) {
+    if (node.nodeType !== Node.TEXT_NODE || !node.textContent) continue;
+    const block = document.createElement("div");
+    node.replaceWith(block);
+    block.appendChild(node);
+  }
+}
+
 function ensureParagraphBlocks(editor: HTMLElement) {
+  wrapOrphanText(editor);
   const hasBlock = [...editor.children].some((child) =>
     /^(DIV|P|H1|H2|H3|UL|OL|TABLE)$/.test(child.nodeName),
   );
@@ -859,4 +1166,78 @@ function parseIndentInches(block: HTMLElement) {
   if (raw.endsWith("in")) return value;
   if (raw.endsWith("px")) return value / 96;
   return 0;
+}
+
+function tryExec(editor: HTMLElement, command: string, value?: string) {
+  editor.focus();
+  if (typeof document.execCommand !== "function") return false;
+  try {
+    return Boolean(document.execCommand(command, false, value));
+  } catch {
+    return false;
+  }
+}
+
+function insertFragment(editor: HTMLElement, html: string) {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const selection = window.getSelection();
+  const inEditor = Boolean(
+    selection && selection.rangeCount > 0 && selection.anchorNode && editor.contains(selection.anchorNode),
+  );
+  if (!inEditor) {
+    editor.appendChild(template.content);
+    return;
+  }
+  const range = selection!.getRangeAt(0);
+  range.deleteContents();
+  const last = template.content.lastChild;
+  range.insertNode(template.content);
+  if (last && selection) {
+    const caret = document.createRange();
+    caret.setStartAfter(last);
+    caret.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(caret);
+  }
+}
+
+function wrapBlocksInList(editor: HTMLElement, blocks: HTMLElement[], type: "ul" | "ol", variant?: "dash") {
+  const list = document.createElement(type);
+  if (type === "ul" && variant === "dash") list.classList.add("dash-list");
+  const first = blocks[0];
+  first.parentNode?.insertBefore(list, first);
+  for (const block of blocks) {
+    if (block.tagName === "LI") {
+      list.appendChild(block);
+      continue;
+    }
+    const li = document.createElement("li");
+    while (block.firstChild) li.appendChild(block.firstChild);
+    if (!li.childNodes.length) li.appendChild(document.createElement("br"));
+    block.remove();
+    list.appendChild(li);
+  }
+  if (!list.parentNode) editor.appendChild(list);
+}
+
+function unwrapList(list: HTMLElement) {
+  const parent = list.parentNode;
+  if (!parent) return;
+  for (const li of [...list.querySelectorAll(":scope > li")] as HTMLElement[]) {
+    const div = document.createElement("div");
+    while (li.firstChild) div.appendChild(li.firstChild);
+    if (!div.childNodes.length) div.appendChild(document.createElement("br"));
+    parent.insertBefore(div, list);
+  }
+  list.remove();
+}
+
+function replaceBlockTag(block: HTMLElement, tag: string): HTMLElement {
+  if (block.tagName.toLowerCase() === tag) return block;
+  const next = document.createElement(tag);
+  for (const attr of [...block.attributes]) next.setAttribute(attr.name, attr.value);
+  while (block.firstChild) next.appendChild(block.firstChild);
+  block.replaceWith(next);
+  return next;
 }

@@ -1,5 +1,6 @@
 import { labelDocument, locateInText } from "@/lib/agent/documentMap";
 import type { AgentEditDraft, AgentLockedRange, AgentTask, DocumentPageSlice } from "@/lib/agent/types";
+import { tidyDocumentText } from "@/lib/writing/documentQuality";
 
 export const SHORT_DOC_CHARS = 4_000;
 export const READ_DOCUMENT_CHARS = 12_000;
@@ -122,7 +123,7 @@ export class DocumentSession {
 
     if (args.scope === "document") {
       if (this.text.length <= READ_DOCUMENT_CHARS) {
-        return { scope: "document", text: this.text, truncated: false, pageCount, chars };
+        return { scope: "document", text: this.text, truncated: false, pageCount, chars, paragraphs: this.paragraphs() };
       }
       const startPage = args.page && args.page > 1 ? args.page : 1;
       const slice = this.pageSlice(startPage);
@@ -145,7 +146,10 @@ export class DocumentSession {
     if (args.pages?.length) {
       const items = args.pages.map((number) => this.pageSlice(number)).filter(Boolean);
       return {
-        pages: items,
+        pages: items.map((slice) => slice && ({
+          ...slice,
+          paragraphs: this.paragraphsInRange(slice.start, slice.end),
+        })),
         pageCount,
         chars,
       };
@@ -156,6 +160,7 @@ export class DocumentSession {
       return {
         page: args.page,
         text: slice?.text ?? "",
+        paragraphs: slice ? this.paragraphsInRange(slice.start, slice.end) : [],
         pageCount,
         chars: slice?.text.length ?? 0,
         missing: !slice,
@@ -188,6 +193,7 @@ export class DocumentSession {
     return {
       page: 1,
       text: first?.text ?? this.text,
+      paragraphs: this.paragraphsInRange(first?.start ?? 0, first?.end ?? this.text.length),
       pageCount,
       chars,
       hint: pageCount > 1 ? "Pass page, pages, a paragraph range, or scope: \"document\"." : undefined,
@@ -231,6 +237,18 @@ export class DocumentSession {
     return this.commitWrite({ find, replace: "", occurrence, operation: "delete", reason });
   }
 
+  private paragraphsInRange(start: number, end: number) {
+    const items: { id: string; text: string }[] = [];
+    let from = 0;
+    for (const paragraph of this.paragraphs()) {
+      const at = this.text.indexOf(paragraph.text, from);
+      if (at < 0) continue;
+      from = at + Math.max(1, paragraph.text.length);
+      if (at >= start && at < end) items.push({ id: paragraph.id, text: paragraph.text });
+    }
+    return items;
+  }
+
   private pageSlice(number: number) {
     return this.pages.find((page) => page.number === number);
   }
@@ -250,35 +268,70 @@ export class DocumentSession {
     const located = locateOccurrence(this.text, draft.find, draft.occurrence ?? 0);
     if (!located) return { ok: false, error: "Find text was not in the document." };
 
-    const exact = this.text.slice(located.start, located.end);
-    const occurrence = occurrenceOf(this.text, exact, located.start);
+    const original = this.text;
+    const span = expandWrite(original, located.start, located.end, draft.replace);
+    const find = original.slice(span.start, span.end);
+    const occurrence = occurrenceOf(original, find, span.start);
     const edit: AgentEditDraft = {
       ...draft,
-      find: exact,
+      find,
+      replace: span.replacement,
       occurrence,
     };
-    this.splice(located.start, located.end, draft.replace);
+    this.splice(span.start, span.end, span.replacement);
     this.edits.push(edit);
     return { ok: true, edit, chars: this.text.length, pageCount: this.pageCount() };
   }
 
   private splice(start: number, end: number, replacement: string) {
-    this.text = `${this.text.slice(0, start)}${replacement}${this.text.slice(end)}`;
-    const delta = replacement.length - (end - start);
+    const next = tidyDocumentText(`${this.text.slice(0, start)}${replacement}${this.text.slice(end)}`);
+    const delta = next.length - this.text.length;
+    this.text = next;
     this.pages = this.pages.map((page) => {
-      if (page.end <= start) return { ...page, text: this.text.slice(page.start, page.end) };
+      if (page.end <= start) {
+        const endAt = Math.min(page.end, this.text.length);
+        return { ...page, end: endAt, text: this.text.slice(page.start, endAt) };
+      }
       if (page.start >= end) {
-        const nextStart = page.start + delta;
-        const nextEnd = page.end + delta;
+        const nextStart = Math.max(0, Math.min(this.text.length, page.start + delta));
+        const nextEnd = Math.max(nextStart, Math.min(this.text.length, page.end + delta));
         return { ...page, start: nextStart, end: nextEnd, text: this.text.slice(nextStart, nextEnd) };
       }
-      const nextEnd = Math.max(page.start, page.end + delta);
+      const nextEnd = Math.max(page.start, Math.min(this.text.length, page.end + delta));
       return { ...page, end: nextEnd, text: this.text.slice(page.start, nextEnd) };
     });
-    if (!this.pages.length) {
-      this.pages = [{ number: 1, start: 0, end: this.text.length, text: this.text }];
-    }
+    this.pages = dropEmptyPages(this.pages, this.text);
   }
+}
+
+function dropEmptyPages(pages: DocumentPageSlice[], text: string): DocumentPageSlice[] {
+  const kept = pages.filter((page) => text.slice(page.start, page.end).trim().length > 0);
+  if (!kept.length) {
+    return [{ number: 1, start: 0, end: text.length, text }];
+  }
+  return kept.map((page, index) => {
+    const start = Math.max(0, Math.min(page.start, text.length));
+    const end = Math.max(start, Math.min(page.end, text.length));
+    return { ...page, number: index + 1, start, end, text: text.slice(start, end) };
+  });
+}
+
+function expandWrite(text: string, start: number, end: number, replacement: string) {
+  if (replacement) return { start, end, replacement };
+  let from = start;
+  let to = end;
+  while (from > 0 && /[ \t]/.test(text[from - 1]!)) from -= 1;
+  while (to < text.length && /[ \t]/.test(text[to]!)) to += 1;
+  const leftChar = text[from - 1] ?? "";
+  const rightChar = text[to] ?? "";
+  let next = leftChar && rightChar && !/\s/.test(leftChar) && !/\s/.test(rightChar) ? " " : "";
+  const raw = `${text.slice(0, from)}${next}${text.slice(to)}`;
+  if (/\n{3,}/.test(raw)) {
+    while (from > 0 && text[from - 1] === "\n") from -= 1;
+    while (to < text.length && text[to] === "\n") to += 1;
+    next = text.slice(0, from).trim() && text.slice(to).trim() ? "\n\n" : "";
+  }
+  return { start: from, end: to, replacement: next };
 }
 
 function normalizePages(text: string, pages?: DocumentPageSlice[]): DocumentPageSlice[] {

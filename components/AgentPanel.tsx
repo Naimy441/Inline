@@ -10,14 +10,16 @@ import {
   thinkingLabel,
   type AgentModelOption,
 } from "@/lib/agent/models";
-import { ChainOfThought, ChainOfThoughtContent, ChainOfThoughtHeader, ChainOfThoughtStep, stepsFromLive } from "@/components/agent/ChainOfThought";
+import { ChainOfThoughtStep, stepsFromLive } from "@/components/agent/ChainOfThought";
 import { CitedMessage } from "@/components/agent/CitedMessage";
 import { ContextUsage } from "@/components/agent/ContextUsage";
 import { InstructionQueue } from "@/components/agent/InstructionQueue";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/agent/Reasoning";
 import { Shimmer } from "@/components/agent/Shimmer";
 import { TaskPanel } from "@/components/agent/TaskPanel";
-import type { AgentAttachment, AgentChat, AgentCitation, AgentMode, AgentQueueItem, AgentSelection, AgentStep, AgentTurn, AgentUsage, PendingEdit, ThinkingLevel } from "@/lib/agent/types";
+import type { ContextBucket } from "@/lib/agent/context";
+import type { AgentAttachment, AgentChat, AgentCitation, AgentMode, AgentQueueItem, AgentSelection, AgentStep, AgentTimelineItem, AgentTurn, AgentUsage, PendingEdit, ThinkingLevel } from "@/lib/agent/types";
+import { timelineFromTurn } from "@/lib/agent/timeline";
 import { PROMPT_TEMPLATES, QUICK_PROMPTS } from "@/lib/writing/templates";
 
 const CHAT_WIDTH_KEY = "inline-chat-width";
@@ -50,9 +52,12 @@ type Props = {
   context: AgentSelection[];
   chats: AgentChat[];
   queued: AgentQueueItem[];
-  contextUsage: { used: number; limit: number; usage?: AgentUsage };
+  contextUsage: { used: number; limit: number; usage?: AgentUsage; buckets?: ContextBucket[] };
   liveSteps?: AgentStep[];
+  liveTimeline?: AgentTimelineItem[];
   activeChatId: string;
+  openChatIds: string[];
+  runningChatIds: string[];
   models: AgentModelOption[];
   providers: { openai: boolean; anthropic: boolean };
   onPromptChange: (value: string) => void;
@@ -66,6 +71,7 @@ type Props = {
   onClose: () => void;
   onNewChat: () => void;
   onSelectChat: (id: string) => void;
+  onCloseTab: (id: string) => void;
   onDeleteChat: (id: string) => void;
   onModeChange: (mode: AgentMode) => void;
   onModelChange: (model: string) => void;
@@ -105,7 +111,10 @@ export function AgentPanel({
   queued,
   contextUsage,
   liveSteps,
+  liveTimeline,
   activeChatId,
+  openChatIds,
+  runningChatIds,
   models,
   providers,
   onPromptChange,
@@ -119,6 +128,7 @@ export function AgentPanel({
   onClose,
   onNewChat,
   onSelectChat,
+  onCloseTab,
   onDeleteChat,
   onModeChange,
   onModelChange,
@@ -140,6 +150,8 @@ export function AgentPanel({
   onInsertCitation,
 }: Props) {
   const threadRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
+  const ignoreScrollRef = useRef(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const inputEventRef = useRef(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -211,13 +223,33 @@ export function AgentPanel({
   }, [prompt, syncInputHeight]);
 
   useEffect(() => {
+    stickToBottomRef.current = true;
+  }, [activeChatId, historyOpen]);
+
+  useEffect(() => {
     const thread = threadRef.current;
     if (!thread) return;
+    const onScroll = () => {
+      if (ignoreScrollRef.current) return;
+      const gap = thread.scrollHeight - thread.scrollTop - thread.clientHeight;
+      stickToBottomRef.current = gap < 48;
+    };
+    thread.addEventListener("scroll", onScroll, { passive: true });
+    return () => thread.removeEventListener("scroll", onScroll);
+  }, [historyOpen, open, minimized]);
+
+  useEffect(() => {
+    const thread = threadRef.current;
+    if (!thread || historyOpen || !stickToBottomRef.current) return;
+    ignoreScrollRef.current = true;
     const frame = window.requestAnimationFrame(() => {
       thread.scrollTop = thread.scrollHeight;
+      window.requestAnimationFrame(() => {
+        ignoreScrollRef.current = false;
+      });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [chat?.turns, busy, liveThinking, livePhase, livePrompt, liveMessage, liveEdits, liveSteps, historyOpen]);
+  }, [chat?.turns, busy, liveThinking, livePhase, livePrompt, liveMessage, liveEdits, liveSteps, liveTimeline, historyOpen]);
 
   useEffect(() => {
     if (!menu) return;
@@ -283,6 +315,12 @@ export function AgentPanel({
     () => [...chats].sort((a, b) => b.updatedAt - a.updatedAt),
     [chats],
   );
+  const tabs = useMemo(() => {
+    const byId = new Map(chats.map((item) => [item.id, item]));
+    const listed = openChatIds.map((id) => byId.get(id)).filter((item): item is AgentChat => Boolean(item));
+    if (listed.length) return listed;
+    return chat ? [chat] : [];
+  }, [chats, openChatIds, chat]);
 
   if (!open) return null;
 
@@ -296,7 +334,6 @@ export function AgentPanel({
     );
   }
 
-  const title = chat?.title || "New chat";
   const placeholder =
     chat?.mode === "ask"
       ? "Ask about the document…"
@@ -345,17 +382,51 @@ export function AgentPanel({
         }}
       />
       <header className="chat-head">
-        <div className="chat-tabs">
+        <div className="chat-tabs" role="tablist" aria-label="Chats">
           {historyOpen ? (
-            <span className="chat-tab">History</span>
+            <span className="chat-tab-static">History</span>
           ) : (
-            <span className="chat-tab" title={title}>
-              {title}
-            </span>
+            tabs.map((item) => {
+              const running = runningChatIds.includes(item.id);
+              const active = item.id === chat?.id;
+              return (
+                <div
+                  key={item.id}
+                  role="tab"
+                  aria-selected={active}
+                  className={`chat-tab${active ? " is-active" : ""}`}
+                >
+                  {running ? <span className="chat-tab-dot" aria-hidden="true" /> : null}
+                  <button
+                    type="button"
+                    className="chat-tab-open"
+                    title={item.title}
+                    onClick={() => onSelectChat(item.id)}
+                  >
+                    <span className="chat-tab-label">{item.title}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="chat-tab-close"
+                    aria-label={`Close ${item.title}`}
+                    onClick={() => onCloseTab(item.id)}
+                  >
+                    ×
+                  </button>
+                </div>
+              );
+            })
           )}
         </div>
         <div className="chat-head-actions">
-          {!historyOpen && <ContextUsage used={contextUsage.used} limit={contextUsage.limit} usage={contextUsage.usage} />}
+          {!historyOpen && (
+            <ContextUsage
+              used={contextUsage.used}
+              limit={contextUsage.limit}
+              usage={contextUsage.usage}
+              buckets={contextUsage.buckets}
+            />
+          )}
           <button
             type="button"
             className="chat-icon-btn"
@@ -437,6 +508,7 @@ export function AgentPanel({
               prompt={livePrompt}
               selection={liveSelection}
               thinking={liveThinking}
+              timeline={liveTimeline?.length ? liveTimeline : undefined}
               steps={liveSteps ?? stepsFromLive({ phase, tools: liveTools, editCount: liveEdits.length, hasMessage: Boolean(liveMessage) })}
               edits={liveEdits}
               message={liveMessage}
@@ -1076,11 +1148,187 @@ function useOpenTransition(open: boolean, ms = 160) {
   return shown;
 }
 
+function Timeline({
+  items,
+  streaming,
+  expandThinking,
+}: {
+  items: AgentTimelineItem[];
+  streaming: boolean;
+  expandThinking?: boolean;
+}) {
+  if (!items.length) return null;
+  const liveId = streaming ? items.at(-1)?.id : undefined;
+  const lastThinkingId = [...items].reverse().find((item) => item.kind === "thinking")?.id;
+  return (
+    <div className="chat-timeline">
+      {items.map((item) => {
+        if (item.kind === "thinking") {
+          return (
+            <Reasoning
+              key={item.id}
+              isStreaming={item.id === liveId}
+              duration={item.durationSec}
+              defaultOpen={Boolean(expandThinking && item.id === lastThinkingId)}
+            >
+              <ReasoningTrigger />
+              <ReasoningContent>{item.text}</ReasoningContent>
+            </Reasoning>
+          );
+        }
+        return (
+          <ChainOfThoughtStep
+            key={item.id}
+            label={item.step.title}
+            description={item.step.detail}
+            status={item.step.status}
+            hits={item.step.hits}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function PromptPin({ children }: { children: ReactNode }) {
+  const pinRef = useRef<HTMLDivElement>(null);
+  const [stuck, setStuck] = useState(false);
+
+  useEffect(() => {
+    const pin = pinRef.current;
+    const thread = pin?.closest(".chat-thread");
+    if (!pin || !(thread instanceof HTMLElement)) return;
+    const observer = new IntersectionObserver(([entry]) => setStuck(entry.intersectionRatio < 1), {
+      root: thread,
+      threshold: [1],
+      rootMargin: "-1px 0px 0px 0px",
+    });
+    observer.observe(pin);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div ref={pinRef} className={`chat-prompt-pin${stuck ? " is-stuck" : ""}`}>
+      {children}
+    </div>
+  );
+}
+
+async function copyPromptText(text: string) {
+  try {
+    window.focus();
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+  } catch {
+    /* fall through to execCommand */
+  }
+  if (typeof document === "undefined") throw new Error("Clipboard is not available.");
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.top = "0";
+  area.style.left = "0";
+  area.style.opacity = "0";
+  document.body.append(area);
+  area.focus();
+  area.select();
+  area.setSelectionRange(0, text.length);
+  const ok = document.execCommand("copy");
+  area.remove();
+  if (!ok) throw new Error("Copy failed.");
+}
+
+function PromptCopy({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef(0);
+
+  useEffect(() => () => window.clearTimeout(timerRef.current), []);
+
+  return (
+    <button
+      type="button"
+      className="chat-prompt-copy"
+      aria-label={copied ? "Copied" : "Copy prompt"}
+      title={copied ? "Copied" : "Copy prompt"}
+      onClick={async (event) => {
+        event.stopPropagation();
+        try {
+          await copyPromptText(text);
+          setCopied(true);
+          window.clearTimeout(timerRef.current);
+          timerRef.current = window.setTimeout(() => setCopied(false), 1500);
+        } catch {
+          /* ignore */
+        }
+      }}
+    >
+      {copied ? <CheckIcon /> : <CopyIcon />}
+      <span>{copied ? "Copied" : "Copy"}</span>
+    </button>
+  );
+}
+
+function PromptCard({
+  text,
+  extra,
+  copyable,
+  canRevert,
+  onRevert,
+}: {
+  text: string;
+  extra?: ReactNode;
+  copyable?: boolean;
+  canRevert?: boolean;
+  onRevert?: () => void;
+}) {
+  const [promptOpen, setPromptOpen] = useState(false);
+  const longPrompt = text.length > 160 || text.split("\n").length > 4;
+  const showBar = longPrompt || copyable || canRevert;
+  return (
+    <PromptPin>
+      <div className="chat-prompt">
+        <div className={`chat-prompt-body${promptOpen || !longPrompt ? " is-open" : ""}`}>
+          <p>{text}</p>
+          {extra}
+          {longPrompt && !promptOpen ? <div className="chat-prompt-fade" aria-hidden /> : null}
+        </div>
+        {showBar ? (
+          <div className="chat-prompt-bar">
+            {longPrompt ? (
+              <button type="button" className="chat-prompt-more" onClick={() => setPromptOpen((value) => !value)}>
+                {promptOpen ? "Show less" : "Show more"}
+              </button>
+            ) : (
+              <span />
+            )}
+            <div className="chat-prompt-bar-end">
+              {copyable ? <PromptCopy text={text} /> : null}
+              {canRevert ? (
+                <button type="button" className="chat-prompt-revert" onClick={onRevert}>
+                  Revert
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </PromptPin>
+  );
+}
+
 function LiveTurn({
   phase,
   prompt,
   selection,
   thinking,
+  timeline,
   steps,
   edits,
   message,
@@ -1094,6 +1342,7 @@ function LiveTurn({
   prompt: string;
   selection: string | null;
   thinking: string;
+  timeline?: AgentTimelineItem[];
   steps: AgentStep[];
   edits: PendingEdit[];
   message: string;
@@ -1103,40 +1352,30 @@ function LiveTurn({
   onReject: (id: string) => void;
   onInsertCitation: (citation: AgentCitation) => void;
 }) {
+  const sequential = timeline?.length
+    ? timeline
+    : timelineFromTurn(thinking, steps);
   return (
     <div className="chat-live">
       {prompt ? (
-        <div className="chat-live-prompt chat-prompt">
-          <div className="chat-prompt-body is-open">
-            <p>{prompt}</p>
-            {selection ? (
+        <PromptCard
+          text={prompt}
+          extra={
+            selection ? (
               <div className="chat-user-chip">
                 <SelectionIcon />
                 <span>{clipHunk(selection)}</span>
               </div>
-            ) : null}
-          </div>
-        </div>
+            ) : null
+          }
+        />
       ) : null}
-      {thinking ? (
-        <Reasoning isStreaming={!message && !edits.length}>
-          <ReasoningTrigger />
-          <ReasoningContent>{thinking}</ReasoningContent>
-        </Reasoning>
+      {sequential.length ? (
+        <Timeline items={sequential} streaming={!message} />
       ) : !message && !edits.length ? (
         <div className="chat-status">
           <Shimmer>{phase}</Shimmer>
         </div>
-      ) : null}
-      {steps.length ? (
-        <ChainOfThought defaultOpen>
-          <ChainOfThoughtHeader>{phase}</ChainOfThoughtHeader>
-          <ChainOfThoughtContent>
-            {steps.map((step) => (
-              <ChainOfThoughtStep key={step.id} label={step.title} description={step.detail} status={step.status} hits={step.hits} />
-            ))}
-          </ChainOfThoughtContent>
-        </ChainOfThought>
       ) : null}
       {edits.map((edit) => (
         <Hunk key={edit.id} edit={edit} onJump={onJump} onAccept={onAccept} onReject={onReject} />
@@ -1165,58 +1404,32 @@ function TurnBlock({
   onRevert: () => void;
   onInsertCitation: (citation: AgentCitation) => void;
 }) {
-  const [promptOpen, setPromptOpen] = useState(false);
-  const longPrompt = turn.prompt.length > 160 || turn.prompt.split("\n").length > 4;
   const toolSteps = turn.tools?.map((tool, index) => ({
     id: `${turn.id}-${tool.name}-${index}`,
     title: tool.name.replace(/_/g, " "),
     status: "complete" as const,
   }));
+  const timeline = turn.timeline?.length
+    ? turn.timeline
+    : timelineFromTurn(turn.thinking, toolSteps);
   return (
     <section className="chat-turn">
-      <div className="chat-prompt">
-        <div className={`chat-prompt-body${promptOpen || !longPrompt ? " is-open" : ""}`}>
-          <p>{turn.prompt}</p>
-          {turn.selection && (
+      <PromptCard
+        text={turn.prompt}
+        copyable
+        canRevert={canRevert}
+        onRevert={onRevert}
+        extra={
+          turn.selection ? (
             <div className="chat-user-chip">
               <SelectionIcon />
               {turn.selections && turn.selections.length > 1 ? `${turn.selections.length} selections` : "Selection"}
             </div>
-          )}
-          {longPrompt && !promptOpen ? <div className="chat-prompt-fade" aria-hidden /> : null}
-        </div>
-        {(longPrompt || canRevert) && (
-          <div className="chat-prompt-bar">
-            {longPrompt ? (
-              <button type="button" className="chat-prompt-more" onClick={() => setPromptOpen((value) => !value)}>
-                {promptOpen ? "Show less" : "Show more"}
-              </button>
-            ) : (
-              <span />
-            )}
-            {canRevert ? (
-              <button type="button" className="chat-prompt-revert" onClick={onRevert}>
-                Revert
-              </button>
-            ) : null}
-          </div>
-        )}
-      </div>
-      {turn.thinking ? (
-        <Reasoning isStreaming={false} duration={turn.durationMs ? Math.max(1, Math.round(turn.durationMs / 1000)) : undefined}>
-          <ReasoningTrigger />
-          <ReasoningContent>{turn.thinking}</ReasoningContent>
-        </Reasoning>
-      ) : null}
-      {toolSteps?.length ? (
-        <ChainOfThought defaultOpen={false}>
-          <ChainOfThoughtHeader>Steps</ChainOfThoughtHeader>
-          <ChainOfThoughtContent>
-            {toolSteps.map((step) => (
-              <ChainOfThoughtStep key={step.id} label={step.title} status={step.status} />
-            ))}
-          </ChainOfThoughtContent>
-        </ChainOfThought>
+          ) : null
+        }
+      />
+      {timeline.length ? (
+        <Timeline items={timeline} streaming={false} expandThinking={!turn.message && !turn.error} />
       ) : null}
       {turn.edits.map((edit) => (
         <Hunk key={edit.id} edit={edit} onJump={onJump} onAccept={onAccept} onReject={onReject} />
@@ -1324,6 +1537,23 @@ function statusLabel(status: PendingEdit["status"]) {
 function wordCount(text: string) {
   const parts = text.trim().split(/\s+/);
   return parts[0] === "" ? "0 words" : `${parts.length} ${parts.length === 1 ? "word" : "words"}`;
+}
+
+function CopyIcon() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="5.5" y="5.5" width="7" height="8.2" rx="1.3" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M10.5 5.2V4.2A1.2 1.2 0 0 0 9.3 3H4.2A1.2 1.2 0 0 0 3 4.2v6.3A1.2 1.2 0 0 0 4.2 11.7H5.5" fill="none" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M3.6 8.4 6.6 11.3 12.4 4.6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
 }
 
 function PlusIcon() {

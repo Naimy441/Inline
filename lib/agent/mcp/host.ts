@@ -15,17 +15,34 @@ import {
 import {
   abortError,
   backoffFetch,
+  backoffWait,
   HttpError,
   isAbortError,
   isAuthError,
   isRateLimitError,
+  isRetryableError,
+  MAX_BACKOFF_ATTEMPTS,
   publicModelError,
+  retryAfterMsFromError,
+  retryDelayMs,
 } from "@/lib/agent/retry";
 import { readSseData } from "@/lib/agent/sse";
-import type { AgentToolCall, AgentToolName } from "@/lib/agent/tools";
+import { isToolName } from "@/lib/agent/toolCatalog";
+import type { AgentToolCall } from "@/lib/agent/tools";
+import {
+  documentFingerprint,
+  forgetThread,
+  initialAnthropicMessages,
+  initialOpenAIChatMessages,
+  initialOpenAIResponseId,
+  isStaleContinuation,
+  rememberThread,
+} from "@/lib/agent/continuation";
 import type {
   AgentCitation,
+  AgentContinuation,
   AgentEditDraft,
+  AgentProvider,
   AgentRequest,
   AgentResponse,
   AgentStreamEvent,
@@ -90,9 +107,17 @@ export async function* runAgentStream(request: AgentRequest, signal?: AbortSigna
   }
 }
 
+type DriverSnapshot = {
+  provider: AgentProvider;
+  openaiResponseId?: string;
+  anthropicMessages?: Array<{ role: "user" | "assistant"; content: unknown }>;
+  openaiChatMessages?: Array<Record<string, unknown>>;
+};
+
 type ProviderDriver = {
   round: (tools: Awaited<ReturnType<DocumentMcpRuntime["listTools"]>>) => AsyncGenerator<ProviderEvent>;
   continueWith: (results: Array<{ call: ProviderToolCall; text: string }>) => void;
+  snapshot: () => DriverSnapshot;
 };
 
 async function* runProviderLoop(
@@ -115,39 +140,67 @@ async function* runProviderLoop(
     if (signal?.aborted) throw abortError();
     const calls: ProviderToolCall[] = [];
     let retryStepId: string | undefined;
-    for await (const event of driver.round(tools)) {
-      if (event.type === "retry") {
-        retryStepId = `retry-${round}-${event.attempt}`;
-        yield {
-          type: "step",
-          step: {
-            id: retryStepId,
-            name: "retry",
-            title: event.message,
-            status: "active",
-            detail: `Waiting ${Math.max(1, Math.ceil(event.delayMs / 1000))}s`,
-          },
-        };
-        continue;
-      }
-      if (retryStepId && (event.type === "thinking" || event.type === "message" || event.type === "tool_call")) {
-        yield {
-          type: "step",
-          step: { id: retryStepId, name: "retry", title: "Resumed after retry", status: "complete" },
-        };
-        retryStepId = undefined;
-      }
-      if (event.type === "thinking" && event.delta) {
-        thinking += event.delta;
-        yield { type: "thinking", delta: event.delta };
-      } else if (event.type === "message" && event.delta) {
-        message += event.delta;
-        yield { type: "message", delta: event.delta };
-      } else if (event.type === "usage") {
-        usage = mergeUsage(usage, event.usage);
-        yield { type: "usage", usage };
-      } else if (event.type === "tool_call") {
-        calls.push(event.call);
+    attemptLoop: for (let attempt = 1; attempt <= MAX_BACKOFF_ATTEMPTS; attempt += 1) {
+      calls.length = 0;
+      try {
+        for await (const event of driver.round(tools)) {
+          if (event.type === "retry") {
+            retryStepId = `retry-${round}-${event.attempt}`;
+            yield {
+              type: "step",
+              step: {
+                id: retryStepId,
+                name: "retry",
+                title: event.message,
+                status: "active",
+                detail: `Waiting ${Math.max(1, Math.ceil(event.delayMs / 1000))}s`,
+              },
+            };
+            continue;
+          }
+          if (retryStepId && (event.type === "thinking" || event.type === "message" || event.type === "tool_call")) {
+            yield {
+              type: "step",
+              step: { id: retryStepId, name: "retry", title: "Resumed after retry", status: "complete" },
+            };
+            retryStepId = undefined;
+          }
+          if (event.type === "thinking" && event.delta) {
+            thinking += event.delta;
+            yield { type: "thinking", delta: event.delta };
+          } else if (event.type === "message" && event.delta) {
+            message += event.delta;
+            yield { type: "message", delta: event.delta };
+          } else if (event.type === "usage") {
+            usage = mergeUsage(usage, event.usage);
+            yield { type: "usage", usage };
+          } else if (event.type === "tool_call") {
+            calls.push(event.call);
+          }
+        }
+        break attemptLoop;
+      } catch (error) {
+        if (isAbortError(error) || signal?.aborted) throw error;
+        if (!isRetryableError(error) || attempt >= MAX_BACKOFF_ATTEMPTS) throw error;
+        const delayMs = retryDelayMs(
+          attempt,
+          retryAfterMsFromError(error),
+          isRateLimitError(error),
+        );
+        const raw = error instanceof Error ? error.message : "Model request failed.";
+        for await (const wait of backoffWait(delayMs, { attempt, maxAttempts: MAX_BACKOFF_ATTEMPTS, raw }, signal)) {
+          retryStepId = `retry-${round}-${wait.attempt}`;
+          yield {
+            type: "step",
+            step: {
+              id: retryStepId,
+              name: "retry",
+              title: wait.message,
+              status: "active",
+              detail: `Waiting ${Math.max(1, Math.ceil(wait.delayMs / 1000))}s`,
+            },
+          };
+        }
       }
     }
     if (retryStepId) {
@@ -162,13 +215,16 @@ async function* runProviderLoop(
     const outputs: Array<{ call: ProviderToolCall; text: string }> = [];
     for (const call of calls) {
       const stepId = call.id || `tool-${call.name}-${crypto.randomUUID()}`;
-      yield { type: "tool", name: call.name, hidden: true };
+      yield { type: "tool", name: call.name, hidden: true, args: call.args };
       yield {
         type: "step",
-        step: { id: stepId, name: call.name, title: stepTitle(call.name, call.args), status: "active" },
+        step: { id: stepId, name: call.name, title: stepTitle(call.name, call.args, request.title), status: "active" },
       };
       const result = await runtime.callTool(call.name, call.args);
-      yield* emitExecuted(runtime, { ...call, id: stepId }, result);
+      if (result.meta.clientTool) {
+        yield { type: "client_tool", call: result.meta.clientTool };
+      }
+      yield* emitExecuted(runtime, { ...call, id: stepId }, result, { documentTitle: request.title });
       if (result.meta.edit) {
         edits.push(result.meta.edit);
         yield { type: "phase", phase: "editing" };
@@ -183,12 +239,14 @@ async function* runProviderLoop(
         yield { type: "tasks", tasks };
       }
       if (result.meta.chatTitle) chatTitle = result.meta.chatTitle;
-      toolsUsed.push({
-        id: stepId,
-        name: call.name as AgentToolName,
-        args: call.args,
-        hidden: true,
-      });
+      if (isToolName(call.name)) {
+        toolsUsed.push({
+          id: stepId,
+          name: call.name,
+          args: call.args,
+          hidden: true,
+        });
+      }
       outputs.push({ call, text: result.text });
     }
     driver.continueWith(outputs);
@@ -203,6 +261,7 @@ async function* runProviderLoop(
     tasks,
     chatTitle,
     mock: false,
+    continuation: persistContinuation(request, runtime, driver),
   });
   if (result.tasks.length) yield { type: "tasks", tasks: result.tasks };
   if (result.citations?.length) yield { type: "citations", citations: result.citations };
@@ -216,11 +275,12 @@ async function* runMockLoop(
   runtime: DocumentMcpRuntime,
   signal?: AbortSignal,
 ): AsyncGenerator<AgentStreamEvent> {
+  forgetThread(request.chatId);
   const thinking = mockThinking(request);
   if (thinking && request.thinkingLevel !== "none") yield* typewrite("thinking", thinking, signal);
 
   const outline = await runtime.callTool("get_outline", {});
-  yield* emitExecuted(runtime, { name: "get_outline", args: {}, id: "outline" }, outline, { silent: true });
+  yield* emitExecuted(runtime, { name: "get_outline", args: {}, id: "outline" }, outline, { silent: true, documentTitle: request.title });
 
   const edits: AgentEditDraft[] = [];
   const toolsUsed: AgentToolCall[] = [
@@ -233,7 +293,7 @@ async function* runMockLoop(
   if (canEdit) {
     if (intent.includes("pdf") || intent.includes("export")) {
       const pdf = await runtime.callTool("export_pdf", {});
-      yield* emitExecuted(runtime, { name: "export_pdf", args: {}, id: "pdf" }, pdf);
+      yield* emitExecuted(runtime, { name: "export_pdf", args: {}, id: "pdf" }, pdf, { documentTitle: request.title });
       toolsUsed.push({ id: "pdf", name: "export_pdf", args: {}, hidden: true });
     }
 
@@ -242,7 +302,7 @@ async function* runMockLoop(
         text: mockEmptyInsert(request.prompt),
         reason: "Start the empty draft",
       });
-      yield* emitExecuted(runtime, { name: "insert_text", args: {}, id: "insert" }, inserted);
+      yield* emitExecuted(runtime, { name: "insert_text", args: {}, id: "insert" }, inserted, { documentTitle: request.title });
       toolsUsed.push({ id: "insert", name: "insert_text", args: {}, hidden: true });
       if (inserted.meta.edit) {
         edits.push(inserted.meta.edit);
@@ -257,7 +317,7 @@ async function* runMockLoop(
         replace,
         reason: selected ? "Uses the highlighted passage" : "Document edit",
       });
-      yield* emitExecuted(runtime, { name: "replace_text", args: { find: source }, id: "replace" }, replaced);
+      yield* emitExecuted(runtime, { name: "replace_text", args: { find: source }, id: "replace" }, replaced, { documentTitle: request.title });
       toolsUsed.push({ id: "replace", name: "replace_text", args: { find: source }, hidden: true });
       if (replaced.meta.edit) {
         edits.push(replaced.meta.edit);
@@ -297,7 +357,7 @@ async function* emitExecuted(
   _runtime: DocumentMcpRuntime,
   call: { name: string; args: Record<string, unknown>; id?: string },
   result: Awaited<ReturnType<DocumentMcpRuntime["callTool"]>>,
-  options?: { silent?: boolean },
+  options?: { silent?: boolean; documentTitle?: string },
 ): AsyncGenerator<AgentStreamEvent> {
   const stepId = call.id || `tool-${call.name}-${crypto.randomUUID()}`;
   if (options?.silent) {
@@ -308,7 +368,7 @@ async function* emitExecuted(
     step: {
       id: stepId,
       name: call.name,
-      title: stepTitle(call.name, call.args),
+      title: stepTitle(call.name, call.args, options?.documentTitle),
       status: "complete",
       hits: stepHits(call.name, result.raw),
     },
@@ -328,6 +388,7 @@ function finishResult(
     tasks: AgentTask[];
     chatTitle?: string;
     mock: boolean;
+    continuation?: AgentContinuation;
   },
 ): AgentResponse {
   return {
@@ -339,6 +400,7 @@ function finishResult(
     tools: parts.clientTools,
     citations: dedupeCitations(parts.citations),
     mock: parts.mock,
+    continuation: parts.continuation,
   };
 }
 
@@ -350,32 +412,66 @@ type ProviderEvent =
   | { type: "usage"; usage: AgentUsage }
   | { type: "retry"; attempt: number; delayMs: number; message: string };
 
+function persistContinuation(
+  request: AgentRequest,
+  runtime: DocumentMcpRuntime,
+  driver: ProviderDriver,
+): AgentContinuation | undefined {
+  if (!request.chatId) return undefined;
+  const snap = driver.snapshot();
+  rememberThread({
+    chatId: request.chatId,
+    provider: snap.provider,
+    model: request.model,
+    mode: request.mode,
+    openaiResponseId: snap.openaiResponseId,
+    anthropicMessages: snap.anthropicMessages,
+    openaiChatMessages: snap.openaiChatMessages,
+    updatedAt: Date.now(),
+  });
+  return {
+    provider: snap.provider,
+    model: request.model,
+    mode: request.mode,
+    openaiResponseId: snap.openaiResponseId,
+    documentFingerprint: documentFingerprint(runtime.session.text),
+  };
+}
+
 function createOpenAIDriver(
   apiKey: string,
   request: AgentRequest,
   runtime: DocumentMcpRuntime,
   signal?: AbortSignal,
 ): ProviderDriver {
-  let previousId: string | undefined;
+  let previousId = initialOpenAIResponseId(request);
   let pendingInput: unknown[] | undefined;
-  let chatFallback: ProviderDriver | null = null;
+  const seededChat = !previousId ? initialOpenAIChatMessages(request) : undefined;
+  let chatFallback: ProviderDriver | null = seededChat
+    ? createOpenAIChatDriver(apiKey, request, runtime, signal, seededChat)
+    : null;
 
-  return {
+  const freshInput = () => [
+    { role: "system", content: systemPrompt(request) },
+    ...request.history.map((item) => ({ role: item.role, content: item.content })),
+    { role: "user", content: userPrompt(request, runtime.session) },
+  ];
+
+  const driver: ProviderDriver = {
     async *round(tools) {
       if (chatFallback) {
         yield* chatFallback.round(tools);
         return;
       }
+      const continuing = Boolean(previousId) && !pendingInput;
       const body: Record<string, unknown> = {
         model: request.model,
         stream: true,
         store: true,
         tools: toOpenAITools(tools),
-        input: pendingInput ?? [
-          { role: "system", content: systemPrompt(request) },
-          ...request.history.map((item) => ({ role: item.role, content: item.content })),
-          { role: "user", content: userPrompt(request, runtime.session) },
-        ],
+        input: pendingInput ?? (continuing
+          ? [{ role: "user", content: userPrompt(request, runtime.session) }]
+          : freshInput()),
       };
       if (previousId) body.previous_response_id = previousId;
       if (request.thinkingLevel !== "none" && findAgentModel(request.model)?.thinking) {
@@ -393,8 +489,20 @@ function createOpenAIDriver(
           { signal },
         );
       } catch (error) {
+        if (previousId && isStaleContinuation(error) && !pendingInput) {
+          previousId = undefined;
+          forgetThread(request.chatId);
+          yield {
+            type: "retry",
+            attempt: 1,
+            delayMs: 0,
+            message: "Restarted conversation after a stale thread",
+          };
+          yield* driver.round(tools);
+          return;
+        }
         if (!previousId && shouldFallbackToChat(error)) {
-          chatFallback = createOpenAIChatDriver(apiKey, request, runtime, signal);
+          chatFallback = createOpenAIChatDriver(apiKey, request, runtime, signal, seededChat);
           yield* chatFallback.round(tools);
           return;
         }
@@ -418,7 +526,12 @@ function createOpenAIDriver(
         output: item.text,
       }));
     },
+    snapshot() {
+      if (chatFallback) return chatFallback.snapshot();
+      return { provider: "openai", openaiResponseId: previousId };
+    },
   };
+  return driver;
 }
 
 async function* readOpenAIResponse(res: Response): AsyncGenerator<ProviderEvent, {
@@ -438,8 +551,9 @@ async function* readOpenAIResponse(res: Response): AsyncGenerator<ProviderEvent,
         id?: string;
         usage?: OpenAIUsage;
         output?: Array<{ type?: string; call_id?: string; name?: string; arguments?: string }>;
+        error?: { message?: string; code?: string };
       };
-      error?: { message?: string };
+      error?: { message?: string; code?: string };
     };
     try {
       event = JSON.parse(raw) as typeof event;
@@ -447,7 +561,8 @@ async function* readOpenAIResponse(res: Response): AsyncGenerator<ProviderEvent,
       continue;
     }
     if (event.type === "error" || event.type === "response.failed") {
-      throw new Error(event.error?.message || "Streaming response failed.");
+      const failed = event.response?.error || event.error;
+      throw new Error(failed?.message || failed?.code || "Streaming response failed.");
     }
     const delta = typeof event.delta === "string" ? event.delta : "";
     if (event.type === "response.reasoning_summary_text.delta" || event.type === "response.reasoning_text.delta") {
@@ -495,12 +610,15 @@ function createOpenAIChatDriver(
   request: AgentRequest,
   runtime: DocumentMcpRuntime,
   signal?: AbortSignal,
+  seed?: Array<Record<string, unknown>>,
 ): ProviderDriver {
-  const messages: Array<Record<string, unknown>> = [
-    { role: "system", content: systemPrompt(request) },
-    ...request.history.map((item) => ({ role: item.role, content: item.content })),
-    { role: "user", content: userPrompt(request, runtime.session) },
-  ];
+  const messages: Array<Record<string, unknown>> = seed?.length
+    ? [...seed, { role: "user", content: userPrompt(request, runtime.session) }]
+    : [
+        { role: "system", content: systemPrompt(request) },
+        ...request.history.map((item) => ({ role: item.role, content: item.content })),
+        { role: "user", content: userPrompt(request, runtime.session) },
+      ];
   let lastCalls: ProviderToolCall[] = [];
   let lastContent = "";
 
@@ -584,6 +702,9 @@ function createOpenAIChatDriver(
       }
       lastCalls = [];
     },
+    snapshot() {
+      return { provider: "openai", openaiChatMessages: messages };
+    },
   };
 }
 
@@ -593,10 +714,13 @@ function createAnthropicDriver(
   runtime: DocumentMcpRuntime,
   signal?: AbortSignal,
 ): ProviderDriver {
-  const messages: Array<{ role: "user" | "assistant"; content: unknown }> = [
-    ...request.history.map((item) => ({ role: item.role, content: item.content })),
-    { role: "user", content: userPrompt(request, runtime.session) },
-  ];
+  const seeded = initialAnthropicMessages(request);
+  const messages: Array<{ role: "user" | "assistant"; content: unknown }> = seeded?.length
+    ? [...seeded, { role: "user", content: userPrompt(request, runtime.session) }]
+    : [
+        ...request.history.map((item) => ({ role: item.role, content: item.content })),
+        { role: "user", content: userPrompt(request, runtime.session) },
+      ];
   const budget = anthropicThinkingBudget(request.thinkingLevel);
   let lastBlocks: Array<Record<string, unknown>> = [];
 
@@ -635,11 +759,15 @@ function createAnthropicDriver(
           delta?: { type?: string; thinking?: string; text?: string; partial_json?: string };
           usage?: { input_tokens?: number; output_tokens?: number };
           message?: { usage?: { input_tokens?: number; output_tokens?: number } };
+          error?: { message?: string; type?: string };
         };
         try {
           event = JSON.parse(raw) as typeof event;
         } catch {
           continue;
+        }
+        if (event.type === "error") {
+          throw new Error(event.error?.message || event.error?.type || "Streaming response failed.");
         }
         if (event.type === "content_block_start" && event.content_block) {
           current = { ...event.content_block };
@@ -703,6 +831,9 @@ function createAnthropicDriver(
         })),
       });
       lastBlocks = [];
+    },
+    snapshot() {
+      return { provider: "anthropic", anthropicMessages: messages };
     },
   };
 }

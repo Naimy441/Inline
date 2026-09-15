@@ -1,30 +1,21 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { executeServerTool, runSandboxedJs, type AgentToolCall, type AgentToolName } from "@/lib/agent/tools";
+import { CLIENT_TOOLS } from "@/lib/agent/toolCatalog";
 import type { AgentCitation, AgentTask } from "@/lib/agent/types";
 import { DocumentSession } from "@/lib/agent/mcp/session";
 import { searchCitations, formatBibliography, formatInlineCite } from "@/lib/writing/citations";
+import { ResearchBudget, webEnabled, webFetch, webSearch } from "@/lib/agent/webResearch";
 
 export const WRITE_TOOLS = new Set(["replace_text", "insert_text", "delete_text"]);
-export const CLIENT_MCP_TOOLS = new Set([
-  "export_pdf",
-  "undo",
-  "redo",
-  "insert_link",
-  "insert_image",
-  "highlight_text",
-  "set_font_size",
-  "toggle_list",
-  "add_header",
-  "add_page_numbers",
-  "set_alignment",
-  "insert_horizontal_line",
-]);
+export const CLIENT_MCP_TOOLS = new Set<string>(CLIENT_TOOLS);
 
 export type DocumentMcpOptions = {
   allowWrites?: boolean;
   allowClient?: boolean;
   allowSeed?: boolean;
+  allowRunCode?: boolean;
+  allowWeb?: boolean;
 };
 
 export type ToolCallMeta = {
@@ -47,6 +38,9 @@ export function registerDocumentTools(server: McpServer, session: DocumentSessio
   const allowWrites = options.allowWrites !== false;
   const allowClient = Boolean(options.allowClient);
   const allowSeed = Boolean(options.allowSeed);
+  const allowRunCode = options.allowRunCode !== false;
+  const allowWeb = options.allowWeb !== false && webEnabled();
+  const researchBudget = new ResearchBudget();
 
   server.registerTool(
     "get_outline",
@@ -88,7 +82,7 @@ export function registerDocumentTools(server: McpServer, session: DocumentSessio
     {
       title: "Read document",
       description:
-        "Read the working draft on demand. Use page for a visual letter page, pages for several, paragraph ids for a range, or scope \"document\" for the whole draft (paged if longer than ~12k characters).",
+        "Read the working draft on demand. Use page for a visual letter page, pages for several, paragraph ids for a range, or scope \"document\" for the whole draft (paged if longer than ~12k characters). Page results include a paragraphs array with the same P1, P2 ids as search_document.",
       inputSchema: z.object({
         page: z.number().int().min(1).optional(),
         pages: z.array(z.number().int().min(1)).optional(),
@@ -124,7 +118,7 @@ export function registerDocumentTools(server: McpServer, session: DocumentSessio
       "insert_text",
       {
         title: "Insert text",
-        description: "Insert prose after a paragraph or after existing text. If the draft is empty, this appends.",
+        description: "Insert prose after a paragraph or after existing text. Prefer paragraphId from search_document or read_document. afterFind must be unique existing text. If the draft is empty, this appends.",
         inputSchema: z.object({
           text: z.string(),
           afterFind: z.string().optional(),
@@ -262,7 +256,7 @@ export function registerDocumentTools(server: McpServer, session: DocumentSessio
     "search_citations",
     {
       title: "Search citations",
-      description: "Look up catalog works for bibliographies. Do not invent sources.",
+      description: "Look up the local writing catalog only. For the open web use web_search. Do not invent sources.",
       inputSchema: z.object({ query: z.string() }),
     },
     async ({ query }) => {
@@ -271,33 +265,99 @@ export function registerDocumentTools(server: McpServer, session: DocumentSessio
         inline: formatInlineCite(work),
         bibliography: formatBibliography(work),
       }));
-      return jsonResult({ works });
+      return jsonResult({ works, source: "inline-catalog" });
     },
   );
 
-  server.registerTool(
-    "run_code",
-    {
-      title: "Run code",
-      description: "Small JavaScript for counts or transforms. No DOM, fetch, or Node APIs.",
-      inputSchema: z.object({ code: z.string() }),
-    },
-    async ({ code }) => jsonResult(runSandboxedJs(code)),
-  );
+  if (allowWeb) {
+    server.registerTool(
+      "web_search",
+      {
+        title: "Web search",
+        description:
+          "Search the live web. Use for current facts, news, and sources. Then web_fetch the best URLs before quoting. Optional recency: day, week, month, year. Optional site: example.org.",
+        inputSchema: z.object({
+          query: z.string().describe("Search query, under 400 characters"),
+          recency: z.enum(["any", "day", "week", "month", "year"]).optional(),
+          maxResults: z.number().int().min(1).max(8).optional(),
+          topic: z.enum(["general", "news"]).optional(),
+          site: z.string().optional(),
+        }),
+      },
+      async (args) => jsonResult(await webSearch(args, researchBudget)),
+    );
+    server.registerTool(
+      "web_fetch",
+      {
+        title: "Read web page",
+        description:
+          "Fetch a public http(s) page as clean text. Call after web_search. Do not invent the URL. Private, local, and credentialed URLs are blocked.",
+        inputSchema: z.object({
+          url: z.string().describe("Public http or https URL"),
+          maxChars: z.number().int().min(800).max(12_000).optional(),
+        }),
+      },
+      async (args) => jsonResult(await webFetch(args, researchBudget)),
+    );
+  }
+
+  if (allowRunCode) {
+    server.registerTool(
+      "run_code",
+      {
+        title: "Run code",
+        description: "Small JavaScript for counts or transforms. Isolated 80ms VM. No DOM, fetch, or Node APIs.",
+        inputSchema: z.object({ code: z.string() }),
+      },
+      async ({ code }) => jsonResult(runSandboxedJs(code)),
+    );
+  }
 
   if (allowClient) {
-    registerClientTool(server, "export_pdf", "Open the print / save as PDF dialog.", z.object({}));
-    registerClientTool(server, "undo", "Undo the last editor action.", z.object({}));
-    registerClientTool(server, "redo", "Redo the last undone editor action.", z.object({}));
-    registerClientTool(server, "insert_link", "Insert a link.", z.object({ url: z.string(), text: z.string().optional() }));
-    registerClientTool(server, "insert_image", "Insert an image from a URL.", z.object({ url: z.string() }));
-    registerClientTool(server, "highlight_text", "Highlight a passage.", z.object({ find: z.string(), color: z.string().optional() }));
-    registerClientTool(server, "set_font_size", "Set the selected text size.", z.object({ size: z.string() }));
-    registerClientTool(server, "toggle_list", "Toggle a list.", z.object({ type: z.enum(["ul", "ol"]) }));
-    registerClientTool(server, "add_header", "Set the document header.", z.object({ text: z.string() }));
-    registerClientTool(server, "add_page_numbers", "Show page numbers.", z.object({}));
-    registerClientTool(server, "set_alignment", "Set paragraph alignment.", z.object({ align: z.enum(["left", "center", "right", "justify"]) }));
-    registerClientTool(server, "insert_horizontal_line", "Insert a horizontal rule.", z.object({}));
+    registerClientTool(server, "export_pdf", "Open the print / save as PDF dialog in the editor immediately.", z.object({}));
+    registerClientTool(server, "undo", "Undo the last editor action immediately.", z.object({}));
+    registerClientTool(server, "redo", "Redo the last undone editor action immediately.", z.object({}));
+    registerClientTool(server, "insert_link", "Insert a link in the editor immediately.", z.object({ url: z.string(), text: z.string().optional(), find: z.string().optional() }));
+    registerClientTool(server, "insert_image", "Insert an image from a URL immediately.", z.object({ url: z.string() }));
+    registerClientTool(server, "highlight_text", "Highlight a passage immediately.", z.object({ find: z.string(), color: z.string().optional() }));
+    registerClientTool(server, "set_font_size", "Set text size immediately. Pass find to target a passage.", z.object({ size: z.string(), find: z.string().optional() }));
+    registerClientTool(server, "set_font_family", "Set the font family immediately.", z.object({ family: z.string(), find: z.string().optional() }));
+    registerClientTool(server, "set_text_color", "Set text color immediately.", z.object({ color: z.string(), find: z.string().optional() }));
+    registerClientTool(server, "toggle_list", "Turn the current blocks into a bulleted or numbered list.", z.object({ type: z.enum(["ul", "ol"]), variant: z.enum(["dash"]).optional(), find: z.string().optional() }));
+    registerClientTool(server, "toggle_bold", "Bold a passage immediately.", z.object({ find: z.string().optional() }));
+    registerClientTool(server, "toggle_italic", "Italicize a passage immediately.", z.object({ find: z.string().optional() }));
+    registerClientTool(server, "toggle_underline", "Underline a passage immediately.", z.object({ find: z.string().optional() }));
+    registerClientTool(server, "add_header", "Set the document header immediately.", z.object({ text: z.string() }));
+    registerClientTool(server, "add_footer", "Set the document footer immediately.", z.object({ text: z.string() }));
+    registerClientTool(server, "add_page_numbers", "Show page numbers immediately.", z.object({ location: z.enum(["header", "footer"]).optional() }));
+    registerClientTool(server, "set_alignment", "Set paragraph alignment immediately.", z.object({ align: z.enum(["left", "center", "right", "justify"]), find: z.string().optional() }));
+    registerClientTool(server, "set_line_spacing", "Set line spacing for the draft immediately.", z.object({ value: z.string() }));
+    registerClientTool(server, "set_block_style", "Apply a heading or title style immediately. Pass find to target a passage. For a school-paper title, keep Normal text and center it with set_alignment; do not use Heading 1.", z.object({ style: z.enum(["normal", "title", "subtitle", "h1", "h2", "h3"]), find: z.string().optional() }));
+    registerClientTool(server, "set_paragraph_indent", "Set first-line or hanging indent. Use first-line for essay body and hanging for bibliography. Call once with kind first-line and no find to indent every body paragraph. Call once with kind hanging and no find to hanging-indent the bibliography. Pass find plus following true to apply from that paragraph through the next heading. Never insert tab characters. indent_blocks is left margin only.", z.object({ kind: z.enum(["none", "first-line", "hanging"]), find: z.string().optional(), following: z.boolean().optional(), scope: z.enum(["body", "bibliography"]).optional() }));
+    registerClientTool(
+      server,
+      "apply_paper_style",
+      "Set document-level school-paper chrome: Times New Roman 12pt, double spacing, last-name header, page numbers in the header. Call this before writing an MLA or APA paper so new text inherits the style. Pass lastName if known.",
+      z.object({
+        preset: z.enum(["mla", "apa", "letter"]),
+        lastName: z.string().optional(),
+        header: z.string().optional(),
+      }),
+    );
+    registerClientTool(
+      server,
+      "insert_table",
+      "Insert a table immediately. Pass cells as a grid of strings so the table is filled in the same call. Empty cells cannot be filled later with replace_text. Insert the table before insert_page_break; never put a break inside the table.",
+      z.object({
+        rows: z.number().int().min(1).max(12).optional(),
+        cols: z.number().int().min(1).max(8).optional(),
+        find: z.string().optional(),
+        cells: z.array(z.array(z.string())).optional(),
+      }),
+    );
+    registerClientTool(server, "insert_page_break", "Insert a manual page break immediately. Call this after insert_table, not inside a table.", z.object({ find: z.string().optional() }));
+    registerClientTool(server, "indent_blocks", "Indent or outdent the current blocks immediately.", z.object({ direction: z.enum(["in", "out"]).optional(), find: z.string().optional() }));
+    registerClientTool(server, "insert_horizontal_line", "Insert a horizontal rule immediately.", z.object({}));
   }
 
   return server;
@@ -311,8 +371,12 @@ export function parseToolPayload(name: string, raw: unknown): ToolCallMeta {
   if (WRITE_TOOLS.has(name) && data && data.ok === true && isEdit(data.edit)) {
     meta.edit = data.edit;
   }
-  if (name === "search_citations" && data && Array.isArray(data.works)) {
-    meta.citations = data.works.filter(isCitation);
+  if (name === "search_citations") {
+    const works = Array.isArray(data?.works) ? data.works : Array.isArray(raw) ? raw : null;
+    if (works) meta.citations = works.filter(isCitation);
+  }
+  if (name === "web_fetch" && data?.citation && isCitation(data.citation)) {
+    meta.citations = [data.citation];
   }
   if (name === "propose_tasks" && data && Array.isArray(data.tasks)) {
     meta.tasks = data.tasks.filter(isTask);
@@ -321,7 +385,12 @@ export function parseToolPayload(name: string, raw: unknown): ToolCallMeta {
     meta.chatTitle = data.title;
   }
   if (CLIENT_MCP_TOOLS.has(name)) {
-    meta.clientTool = { id: crypto.randomUUID(), name: name as AgentToolName, args, hidden: true };
+    const rest = { ...args };
+    delete rest.ok;
+    delete rest.dispatched;
+    delete rest.name;
+    meta.args = rest;
+    meta.clientTool = { id: crypto.randomUUID(), name: name as AgentToolName, args: rest, hidden: true };
   }
   return meta;
 }
@@ -340,7 +409,7 @@ function registerClientTool(server: McpServer, name: string, description: string
   server.registerTool(
     name,
     { title: name.replace(/_/g, " "), description, inputSchema },
-    async (args) => jsonResult({ queued: true, name, args }),
+    async (args) => jsonResult({ ok: true, dispatched: true, name, ...(args as Record<string, unknown>) }),
   );
 }
 
