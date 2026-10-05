@@ -25,13 +25,14 @@ import type {
   ToolPart,
   UserMessage,
 } from "@/lib/agent/types";
-import { documentHub } from "@/lib/server/hub";
+import { DEFAULT_MAX_TURNS } from "@/lib/agent/types";
+import { documentHub, type LiveDocument } from "@/lib/server/hub";
+import { findText, textblockLines } from "@/lib/doc/editing";
+import { serializeDoc } from "@/lib/doc/markdown";
 import { deleteChatFile, findUpload, listChatIds, readChatFile, workspaceDir, writeChatFile } from "@/lib/server/store";
 import { isUserSuggestion } from "@/lib/doc/review";
-import { docxToDoc } from "@/lib/doc/docxImport";
-import { docToMarkdown } from "@/lib/doc/markdown";
-import { readZip } from "@/lib/server/unzip";
 import { log } from "@/lib/server/log";
+import { attachmentText } from "@/lib/agent/attachments";
 
 /**
  * The in-app agent: each chat is a Claude Code session (via the Claude Agent
@@ -99,21 +100,29 @@ class AsyncQueue<T> implements AsyncIterable<T> {
   }
 }
 
+/**
+ * " (lines 4-6)" for a selection, so Claude can target the right copy when the
+ * selected text appears more than once. Only when the text is still there.
+ */
+function selectionLines(doc: LiveDocument, selection: SelectionContext) {
+  try {
+    const size = doc.doc.content.size;
+    const from = Math.max(0, Math.min(size, selection.from));
+    const to = Math.max(from, Math.min(size, selection.to));
+    if (doc.doc.textBetween(from, to, "\n").trim() !== selection.text.trim()) return "";
+    const lines = textblockLines(serializeDoc(doc.doc)).filter((entry) => entry.pos + entry.node.nodeSize > from && entry.pos < to);
+    if (!lines.length) return "";
+    const first = lines[0]!.startLine;
+    const last = lines[lines.length - 1]!.endLine;
+    const repeats = findText(doc.doc, selection.text.split("\n")[0]!.trim(), { caseSensitive: true }).length > 1;
+    return ` (${first === last ? `line ${first}` : `lines ${first}-${last}`} of read_document${repeats ? "; this text appears more than once, so edit the copy on these lines" : ""})`;
+  } catch {
+    return "";
+  }
+}
+
 /** Image types Claude accepts as images; others (SVG) are sent as their source text. */
 const CLAUDE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
-
-/** The text Claude reads for a non-image, non-PDF attachment. Word files are converted to Inline's Markdown. */
-async function attachmentText(extension: string, data: Buffer) {
-  if (extension === "docx") {
-    try {
-      const parts = readZip(new Uint8Array(data));
-      return docToMarkdown(await docxToDoc(parts));
-    } catch (error) {
-      return `[This Word file couldn't be read: ${errorText(error)}]`;
-    }
-  }
-  return data.toString("utf8");
-}
 
 function clip(text: string, max: number) {
   const flat = text.replace(/\s+/g, " ").trim();
@@ -315,6 +324,8 @@ class ChatRuntime {
       const query = this.query;
       if (query && next.model !== this.state.settings.model) await query.setModel(next.model ?? undefined).catch(() => this.close());
       if (query && next.effort !== this.state.settings.effort) await query.applyFlagSettings({ effortLevel: next.effort }).catch(() => this.close());
+      // Limits are fixed when Claude Code starts; the session resumes with the new ones on the next message.
+      if (query && !this.state.running && (next.maxTurns !== this.state.settings.maxTurns || next.maxBudgetUsd !== this.state.settings.maxBudgetUsd)) this.close();
       this.state.settings = next;
     }
     this.state.updatedAt = Date.now();
@@ -403,7 +414,13 @@ class ChatRuntime {
       context.push("No document is open.");
     }
     if (input.selection?.text.trim()) {
-      context.push(`The user selected this text in the document:\n"""\n${input.selection.text.slice(0, 8000)}\n"""`);
+      const where = doc && input.selection.documentId === doc.id ? selectionLines(doc, input.selection) : "";
+      context.push(`The user selected this text in the document${where}:\n"""\n${input.selection.text.slice(0, 8000)}\n"""`);
+    }
+    if (input.attachments?.length) {
+      context.push(
+        `Attached to this message: ${input.attachments.map((item) => `"${item.name}" (${item.kind}, id ${item.id})`).join(", ")}. Images can be placed in the document with insert_image; text files can be read again later with read_attachment.`,
+      );
     }
     const blocks: Array<Record<string, unknown>> = [{ type: "text", text: `<inline-context>\n${context.join("\n")}\n</inline-context>` }];
     for (const attachment of input.attachments ?? []) {
@@ -429,6 +446,7 @@ class ChatRuntime {
     return {
       author: this.state.id,
       turn: this.current?.id,
+      attachments: () => this.state.messages.flatMap((message) => (message.role === "user" ? (message.attachments ?? []) : [])),
       documentId: this.state.documentId ?? undefined,
       readOnly: this.state.settings.mode === "ask",
       beforeWrite: async (doc) => {
@@ -482,6 +500,8 @@ class ChatRuntime {
         includePartialMessages: true,
         thinking: { type: "adaptive", display: "summarized" },
         effort: settings.effort,
+        maxTurns: settings.maxTurns ?? DEFAULT_MAX_TURNS,
+        ...(settings.maxBudgetUsd ? { maxBudgetUsd: settings.maxBudgetUsd } : {}),
         ...(settings.model ? { model: settings.model } : {}),
         ...(this.sessionStarted ? { resume: this.state.id } : { sessionId: this.state.id }),
         persistSession: true,
@@ -741,7 +761,9 @@ class ChatRuntime {
     } else if (result.subtype !== "success") {
       const reason =
         result.subtype === "error_max_turns"
-          ? "Stopped after reaching the turn limit."
+          ? `Stopped after ${result.num_turns} steps, the limit for one message. Send "continue" to keep going.`
+          : result.subtype === "error_max_budget_usd"
+            ? `Stopped at the spending limit for one message ($${this.state.settings.maxBudgetUsd ?? "?"}). Raise it in the effort menu, or send "continue".`
           : result.errors?.length
             ? describeFailure(result.errors.join("\n"))
             : "Claude stopped because of an error.";

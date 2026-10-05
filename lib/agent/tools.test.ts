@@ -80,6 +80,11 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   list_versions: {},
   restore_version: { version_id: "missing" },
   export_document: { format: "md" },
+  delete_comment: { comment_id: "missing" },
+  lock_text: { text: "quick brown fox" },
+  list_locked_text: {},
+  insert_image: { url: "https://example.com/a.png", position: "end" },
+  read_attachment: { attachment_id: "missing" },
 };
 
 describe("tool registry", () => {
@@ -1087,4 +1092,68 @@ describe("analysis tools never change the document", () => {
       assert.equal(doc.hunks.length, 0);
     });
   }
+});
+
+describe("comments, locks, images and attachments", () => {
+  test("delete_comment removes the comment and its highlight", async () => {
+    const { doc, ctx } = await setup();
+    const added = await runTool("add_comment", { text: "lazy dog", comment: "Too harsh?" }, ctx);
+    const id = /Added comment (\S+)/.exec(added.text)![1]!;
+    const result = await runTool("delete_comment", { comment_id: id }, ctx);
+    assert.ok(!result.isError, result.text);
+    assert.equal(doc.comments.length, 0);
+    let marked = false;
+    doc.doc.descendants((node) => {
+      if (node.marks.some((mark) => mark.type.name === "comment")) marked = true;
+    });
+    assert.equal(marked, false);
+    assert.equal((await runTool("delete_comment", { comment_id: id }, ctx)).isError, true);
+  });
+
+  test("lock_text protects a passage from Claude's edits until unlocked, and isn't a pending change", async () => {
+    const { doc, ctx } = await setup();
+    assert.ok(!(await runTool("lock_text", { text: "lazy dog" }, ctx)).isError);
+    assert.equal(doc.hunks.length, 0, "locking is not a content change");
+    assert.match((await runTool("list_locked_text", {}, ctx)).text, /line 3: "lazy dog"/);
+    const blocked = await runTool("edit_document", { old_string: "lazy dog", new_string: "sleepy dog" }, ctx);
+    assert.equal(blocked.isError, true);
+    assert.match(blocked.text, /locked/);
+    assert.ok(!(await runTool("lock_text", { text: "lazy dog", locked: false }, ctx)).isError);
+    assert.equal((await runTool("list_locked_text", {}, ctx)).text, "Nothing is locked.");
+    assert.ok(!(await runTool("edit_document", { old_string: "lazy dog", new_string: "sleepy dog" }, ctx)).isError);
+  });
+
+  test("lock_text asks which copy when the text repeats", async () => {
+    const { ctx } = await setup({}, "Same words.\n\nSame words.");
+    assert.match((await runTool("lock_text", { text: "Same words" }, ctx)).text, /appears 2 times/);
+    assert.match((await runTool("lock_text", { text: "Same words", all: true }, ctx)).text, /Locked 2 passages/);
+  });
+
+  test("insert_image places an attached image or a web image as a reviewable block", async () => {
+    const { saveUpload } = await import("@/lib/server/store");
+    await saveUpload("pic1", "png", new Uint8Array([1, 2, 3]));
+    await saveUpload("notes9", "txt", new TextEncoder().encode("hello"));
+    const { doc, ctx } = await setup();
+    const result = await runTool("insert_image", { attachment_id: "pic1", alt: "Chart", width: 320, position: "after_line", line: 1 }, ctx);
+    assert.ok(!result.isError, result.text);
+    assert.match(md(doc), /!\[Chart\]\(\/api\/uploads\/pic1\.png\)\{width=320/);
+    assert.equal(doc.hunks.length, 1);
+    assert.match((await runTool("insert_image", { attachment_id: "notes9", position: "end" }, ctx)).text, /isn't an image/);
+    assert.match((await runTool("insert_image", { url: "javascript:alert(1)", position: "end" }, ctx)).text, /must start with/);
+    assert.match((await runTool("insert_image", { position: "end" }, ctx)).text, /attachment_id or url/);
+  });
+
+  test("read_attachment reads text attachments of this chat only", async () => {
+    const { saveUpload } = await import("@/lib/server/store");
+    await saveUpload("brief7", "txt", new TextEncoder().encode("The brief."));
+    const { ctx } = await setup({
+      attachments: () => [
+        { id: "brief7", name: "brief.txt", kind: "text" },
+        { id: "img7", name: "photo.png", kind: "image" },
+      ],
+    });
+    assert.equal((await runTool("read_attachment", { attachment_id: "brief7" }, ctx)).text, '<attachment name="brief.txt">\nThe brief.\n</attachment>');
+    assert.match((await runTool("read_attachment", { attachment_id: "img7" }, ctx)).text, /an image/);
+    assert.match((await runTool("read_attachment", { attachment_id: "other" }, ctx)).text, /No attachment other in this chat. Attachments: brief7/);
+  });
 });

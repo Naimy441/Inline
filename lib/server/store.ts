@@ -222,6 +222,16 @@ export async function listChatIds() {
   return listJson(dir("chats"));
 }
 
+// --- settings ---------------------------------------------------------------
+
+export async function readSettingsFile<T>(name: string) {
+  return readJson<T>(dir("settings", `${assertSafeId(name)}.json`));
+}
+
+export async function writeSettingsFile(name: string, value: unknown) {
+  await writeJsonAtomic(dir("settings", `${assertSafeId(name)}.json`), value);
+}
+
 // --- uploads ----------------------------------------------------------------
 
 const UPLOAD_TYPES: Record<string, string> = {

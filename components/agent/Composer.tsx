@@ -2,9 +2,12 @@
 
 import { ArrowUp, Brain, ChevronDown, FileText, Image as ImageIcon, MessageCircleQuestion, Paperclip, PenLine, Square, TextQuote, X } from "lucide-react";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { BUDGET_OPTIONS } from "@/lib/agent/types";
 import type { AgentMode, Attachment, ChatSettings, ContextUsage, Effort, ModelOption, SelectionContext } from "@/lib/agent/types";
 import { uploadFile } from "@/lib/client/api";
 import { MenuButton } from "@/components/ui/Menu";
+import { CommandsDialog, useCommands } from "@/components/agent/CommandsDialog";
+import { expandSlashCommand, matchCommands, type SlashCommand } from "@/lib/agent/commands";
 import { toast } from "@/components/ui/Toast";
 
 export type ComposerHandle = { focus: () => void; setText: (text: string) => void };
@@ -32,6 +35,17 @@ export const Composer = forwardRef<
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(0);
+  const commands = useCommands();
+  const [commandIndex, setCommandIndex] = useState(0);
+  const [commandsHidden, setCommandsHidden] = useState(false);
+  const [managing, setManaging] = useState(false);
+  const slash = /^\/([a-z0-9-]*)$/i.exec(text);
+  const suggestions = slash && !commandsHidden ? matchCommands(slash[1]!, commands).slice(0, 8) : [];
+  const pickCommand = (command: SlashCommand) => {
+    setText(`/${command.name} `);
+    setCommandIndex(0);
+    requestAnimationFrame(() => textarea.current?.focus());
+  };
   const textarea = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -69,7 +83,7 @@ export const Composer = forwardRef<
   };
 
   const submit = async () => {
-    const value = text.trim();
+    const value = expandSlashCommand(text.trim(), commands);
     if ((!value && !attachments.length) || disabled || uploading) return;
     setText("");
     const sent = attachments;
@@ -121,6 +135,28 @@ export const Composer = forwardRef<
           {uploading > 0 && <span className="chip is-loading">Uploading…</span>}
         </div>
       )}
+      {suggestions.length > 0 && (
+        <div className="composer-commands" role="listbox" aria-label="Commands">
+          {suggestions.map((command, index) => (
+            <button
+              key={command.name}
+              type="button"
+              role="option"
+              aria-selected={index === commandIndex}
+              className={`composer-command${index === commandIndex ? " is-active" : ""}`}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => pickCommand(command)}
+            >
+              <span className="composer-command-name">/{command.name}</span>
+              <span className="composer-command-desc">{command.description}</span>
+            </button>
+          ))}
+          <button type="button" className="composer-command composer-command-manage" onMouseDown={(event) => event.preventDefault()} onClick={() => setManaging(true)}>
+            Manage commands…
+          </button>
+        </div>
+      )}
+      <CommandsDialog open={managing} onClose={() => setManaging(false)} />
       <textarea
         ref={textarea}
         className="composer-input"
@@ -136,7 +172,11 @@ export const Composer = forwardRef<
                 : "Ask Claude to write, edit or review…"
         }
         disabled={disabled}
-        onChange={(event) => setText(event.target.value)}
+        onChange={(event) => {
+          setText(event.target.value);
+          setCommandIndex(0);
+          setCommandsHidden(false);
+        }}
         onPaste={(event) => {
           const files = Array.from(event.clipboardData.files);
           if (files.length) {
@@ -145,6 +185,23 @@ export const Composer = forwardRef<
           }
         }}
         onKeyDown={(event) => {
+          if (suggestions.length) {
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault();
+              setCommandIndex((index) => (index + (event.key === "ArrowDown" ? 1 : suggestions.length - 1)) % suggestions.length);
+              return;
+            }
+            if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              pickCommand(suggestions[Math.min(commandIndex, suggestions.length - 1)]!);
+              return;
+            }
+            if (event.key === "Escape") {
+              event.preventDefault();
+              setCommandsHidden(true);
+              return;
+            }
+          }
           if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
             event.preventDefault();
             void submit();
@@ -201,6 +258,12 @@ export const Composer = forwardRef<
               items={[
                 { kind: "label", label: "Thinking effort" },
                 ...efforts.map((value) => ({ label: EFFORT_LABELS[value], checked: settings.effort === value, onSelect: () => onSettings({ effort: value }) })),
+                { kind: "label", label: "Spending limit per message" },
+                ...BUDGET_OPTIONS.map((value) => ({
+                  label: value === null ? "No limit" : `$${value.toFixed(2)}`,
+                  checked: (settings.maxBudgetUsd ?? null) === value,
+                  onSelect: () => onSettings({ maxBudgetUsd: value }),
+                })),
               ]}
             >
               <Brain size={13} />
