@@ -2,7 +2,7 @@ import { Mark, type Node as PMNode } from "prosemirror-model";
 import { Transform } from "prosemirror-transform";
 import { BLOCK_SEPARATOR, parseMarkdown, serializeBlock, serializeDoc, type BlockSpan, type SerializedDoc } from "@/lib/doc/markdown";
 import { LockedContentError, replaceTopLevelBlocks } from "@/lib/doc/merge";
-import { ALIGNMENTS, MAX_INDENT, cssSizeToPt, isTextblockType, schema, type Align } from "@/lib/doc/schema";
+import { ALIGNMENTS, MAX_INDENT, safeHref, cssSizeToPt, isTextblockType, schema, type Align } from "@/lib/doc/schema";
 
 /**
  * Document operations in the vocabulary the agent uses: Markdown text with
@@ -461,7 +461,11 @@ export function applyFormat(tr: Transform, from: number, to: number, spec: Forma
   }
   if (spec.link !== undefined) {
     tr.removeMark(from, to, schema.marks.link);
-    if (spec.link) tr.addMark(from, to, schema.mark("link", { href: spec.link }));
+    if (spec.link) {
+      const href = safeHref(spec.link);
+      if (!href) throw new EditError(`"${spec.link}" isn't a link Inline allows. Use an http, https, mailto or tel URL.`);
+      tr.addMark(from, to, schema.mark("link", { href }));
+    }
   }
 }
 

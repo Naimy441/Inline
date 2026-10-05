@@ -3,7 +3,7 @@ import type { Attrs, MarkType, Node as PMNode, NodeType } from "prosemirror-mode
 import { liftListItem, sinkListItem, wrapInList } from "prosemirror-schema-list";
 import { NodeSelection, TextSelection, type Command, type EditorState } from "prosemirror-state";
 import { isInTable } from "prosemirror-tables";
-import { MAX_INDENT, schema, type Align } from "@/lib/doc/schema";
+import { MAX_INDENT, safeHref, schema, type Align } from "@/lib/doc/schema";
 
 /** Editing commands shared by the toolbar, menus, keymap and command palette. */
 
@@ -333,8 +333,10 @@ export function linkAt(state: EditorState): { from: number; to: number; href: st
   return { from: start0 + Math.max(0, start), to: start0 + end, href: mark.attrs.href as string };
 }
 
-export function setLink(href: string | null, text?: string): Command {
+export function setLink(rawHref: string | null, text?: string): Command {
+  const href = rawHref === null ? null : safeHref(/^[\w.-]+\.[a-z]{2,}(\/|$)/i.test(rawHref.trim()) ? `https://${rawHref.trim()}` : rawHref);
   return (state, dispatch) => {
+    if (rawHref !== null && !href) return false;
     if (!dispatch) return true;
     const type = marks.link!;
     const existing = linkAt(state);

@@ -57,8 +57,11 @@ export async function connectInProcess(context: () => ToolContext): Promise<McpH
 /** A fetch that serves requests with the /api/mcp route handler, no network or Next server involved. */
 export async function routeFetch(): Promise<typeof fetch> {
   const route = await import("@/app/api/mcp/route");
+  const { mcpToken } = await import("@/lib/server/mcpToken");
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = input instanceof Request ? input : new Request(input, init);
+    const token = await mcpToken();
+    if (token && !request.headers.has("authorization")) request.headers.set("authorization", `Bearer ${token}`);
     const handler = route[request.method as "GET" | "POST" | "DELETE"];
     if (!handler) return new Response(null, { status: 405 });
     return handler(request);

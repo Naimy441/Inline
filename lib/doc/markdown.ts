@@ -2,7 +2,7 @@ import MarkdownIt from "markdown-it";
 type Token = ReturnType<InstanceType<typeof MarkdownIt>["parse"]>[number];
 import markPlugin from "markdown-it-mark";
 import { Fragment, type Mark, type Node as PMNode } from "prosemirror-model";
-import { ALIGNMENTS, MARKDOWN_MARKS, MAX_INDENT, schema, type Align } from "@/lib/doc/schema";
+import { ALIGNMENTS, MARKDOWN_MARKS, MAX_INDENT, safeHref, schema, type Align } from "@/lib/doc/schema";
 
 /**
  * Markdown is the agent's view of a document. Each top-level block becomes one
@@ -711,7 +711,10 @@ class BlockBuilder {
           remove("highlight");
           break;
         case "link_open":
-          add(schema.mark("link", { href: token.attrGet("href") ?? "", title: token.attrGet("title") || null }));
+          {
+            const href = safeHref(token.attrGet("href"));
+            if (href) add(schema.mark("link", { href, title: token.attrGet("title") || null }));
+          }
           break;
         case "link_close":
           remove("link");

@@ -306,3 +306,9 @@
     opacity: 1;
   }
 }
+
+.home-note {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--muted);
+}

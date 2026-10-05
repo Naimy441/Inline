@@ -4,7 +4,7 @@ import { ArrowLeft, Check, CloudOff, Download, History, Loader2, MessageSquare, 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { SelectionContext } from "@/lib/agent/types";
-import { patch, post, uploadFile } from "@/lib/client/api";
+import { api, patch, post, uploadFile } from "@/lib/client/api";
 import { DocumentSession, geometryFor, type ClientCommand, type EditorMode } from "@/lib/client/documentSession";
 import { useTheme } from "@/lib/client/theme";
 import { docPlainText, wordCount } from "@/lib/doc/editing";
@@ -290,6 +290,15 @@ export function Workspace({ documentId }: { documentId: string }) {
       }),
     toggleAgent: () => setPanel((current) => (current === "agent" ? null : "agent")),
     shortcuts: () => setShortcuts(true),
+    connectClaudeCode: async () => {
+      try {
+        const { command } = await api<{ command: string }>("/api/mcp/connect");
+        await navigator.clipboard.writeText(command);
+        toast("Copied. Paste the command in a terminal to let Claude Code work in your Inline documents.", { tone: "success", duration: 8000 });
+      } catch {
+        toast("Couldn't copy the command. Open /api/mcp/connect to see it.", { tone: "error" });
+      }
+    },
     wordCount: () => setCounting(true),
     specialCharacters: () => setCharmap(true),
     notice: (message) => toast(message),

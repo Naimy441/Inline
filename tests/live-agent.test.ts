@@ -139,7 +139,7 @@ describe("live Claude Code", { skip: LIVE ? false : "set INLINE_LIVE_AGENT=1 to 
       const doc = await hub.create({ title: "Shopping", markdown: "- Apples\n- Bread" });
       hub.activeDocumentId = doc.id;
       const config = path.join(dataDir, "mcp.json");
-      writeFileSync(config, JSON.stringify({ mcpServers: { inline: { type: "http", url } } }));
+      writeFileSync(config, JSON.stringify({ mcpServers: { inline: { type: "http", url, headers: { Authorization: `Bearer ${await (await import("@/lib/server/mcpToken")).mcpToken()}` } } } }));
       const { stdout } = await run(
         "claude",
         ["-p", "Add 'Milk' as a new item at the end of the list in my open Inline document. Use the Inline tools.", "--mcp-config", config, "--strict-mcp-config", "--allowedTools", "mcp__inline__*", "--model", MODEL, "--max-turns", "8"],

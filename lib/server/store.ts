@@ -116,26 +116,92 @@ export async function listDocumentIds() {
 }
 
 // --- versions ---------------------------------------------------------------
+// Each version is its own file; versions/<doc>/index.json lists their summaries
+// so listing history doesn't read every full snapshot. A missing or damaged
+// index is rebuilt from the files.
+
+const INDEX = "index";
+
+function summarize(version: StoredVersion): VersionSummary {
+  const { doc: _doc, hunks, ...summary } = version;
+  return hunks?.length ? { ...summary, pendingChanges: hunks.length } : summary;
+}
+
+async function rebuildIndex(documentId: string): Promise<VersionSummary[]> {
+  const ids = (await listJson(dir("versions", assertSafeId(documentId)))).filter((id) => id !== INDEX);
+  const versions = await Promise.all(ids.map((id) => readVersion(documentId, id).catch(() => null)));
+  const summaries = versions.filter((version): version is StoredVersion => Boolean(version)).map(summarize);
+  await writeJsonAtomic(dir("versions", documentId, `${INDEX}.json`), summaries);
+  return summaries;
+}
+
+const indexLocks = new Map<string, Promise<unknown>>();
+
+/** Read-modify-write the version index one change at a time per document. */
+async function updateIndex(documentId: string, change: (summaries: VersionSummary[]) => VersionSummary[]) {
+  const previous = indexLocks.get(documentId) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(async () => {
+    const current = (await readJson<VersionSummary[]>(dir("versions", documentId, `${INDEX}.json`)).catch(() => null)) ?? (await rebuildIndex(documentId));
+    await writeJsonAtomic(dir("versions", documentId, `${INDEX}.json`), change(Array.isArray(current) ? current : []));
+  });
+  indexLocks.set(documentId, next);
+  try {
+    await next;
+  } finally {
+    if (indexLocks.get(documentId) === next) indexLocks.delete(documentId);
+  }
+}
 
 export async function writeVersion(version: StoredVersion) {
-  await writeJsonAtomic(dir("versions", assertSafeId(version.documentId), `${assertSafeId(version.id)}.json`), version);
+  assertSafeId(version.documentId);
+  assertSafeId(version.id);
+  await writeJsonAtomic(dir("versions", version.documentId, `${version.id}.json`), version);
+  await updateIndex(version.documentId, (summaries) => [...summaries.filter((item) => item.id !== version.id), summarize(version)]);
 }
 
 export async function readVersion(documentId: string, id: string) {
+  if (id === INDEX) return null;
   return readJson<StoredVersion>(dir("versions", assertSafeId(documentId), `${assertSafeId(id)}.json`));
 }
 
 export async function listVersions(documentId: string): Promise<VersionSummary[]> {
-  const ids = await listJson(dir("versions", assertSafeId(documentId)));
-  const versions = await Promise.all(ids.map((id) => readVersion(documentId, id)));
-  return versions
-    .filter((version): version is StoredVersion => Boolean(version))
-    .map(({ doc: _doc, hunks, ...summary }) => (hunks?.length ? { ...summary, pendingChanges: hunks.length } : summary))
-    .sort((a, b) => b.createdAt - a.createdAt);
+  assertSafeId(documentId);
+  let summaries = await readJson<VersionSummary[]>(dir("versions", documentId, `${INDEX}.json`)).catch(() => null);
+  if (!Array.isArray(summaries)) summaries = (await listJson(dir("versions", documentId))).length ? await rebuildIndex(documentId) : [];
+  return [...summaries].sort((a, b) => b.createdAt - a.createdAt);
 }
 
 export async function deleteVersion(documentId: string, id: string) {
   await removeFile(dir("versions", assertSafeId(documentId), `${assertSafeId(id)}.json`));
+  await updateIndex(documentId, (summaries) => summaries.filter((item) => item.id !== id));
+}
+
+/**
+ * Which automatic versions to drop. Named versions (saved by the user or
+ * Claude) are always kept; automatic ones (autosaves, checkpoints before
+ * Claude's edits) are kept for the last day, then one per day for a month,
+ * then one per week.
+ */
+export function versionsToPrune(versions: readonly VersionSummary[], now = Date.now()): string[] {
+  const DAY = 24 * 60 * 60 * 1000;
+  const seen = new Set<string>();
+  const drop: string[] = [];
+  for (const version of [...versions].sort((a, b) => b.createdAt - a.createdAt)) {
+    if (version.author !== "auto") continue;
+    const age = now - version.createdAt;
+    if (age < DAY) continue;
+    const bucket = age < 30 * DAY ? `d${Math.floor(version.createdAt / DAY)}` : `w${Math.floor(version.createdAt / (7 * DAY))}`;
+    if (seen.has(bucket)) drop.push(version.id);
+    else seen.add(bucket);
+  }
+  return drop;
+}
+
+export async function pruneVersions(documentId: string, now = Date.now()) {
+  const drop = versionsToPrune(await listVersions(documentId), now);
+  for (const id of drop) await removeFile(dir("versions", assertSafeId(documentId), `${assertSafeId(id)}.json`));
+  if (drop.length) await updateIndex(documentId, (summaries) => summaries.filter((item) => !drop.includes(item.id)));
+  return drop.length;
 }
 
 // --- chats ------------------------------------------------------------------
