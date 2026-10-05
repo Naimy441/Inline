@@ -418,3 +418,34 @@ describe("reviewing one turn's changes", () => {
     assert.equal(doc.hunks.length, 2);
   });
 });
+
+describe("memory", () => {
+  test("idle chats are unloaded and come back from disk; listing chats doesn't load them", async () => {
+    const { chat } = await newChat();
+    claude.script((turn) => turn.say("Hello."));
+    await chat.send({ text: "hi" });
+    await idle(chat);
+    await chat.persistNow();
+    chat.close();
+    const id = chat.state.id;
+
+    assert.ok(runtime.unloadIdle(0) >= 1);
+    assert.equal((runtime as unknown as { chats: Map<string, ChatRuntime> }).chats.has(id), false);
+
+    const listed = await runtime.list();
+    assert.ok(listed.some((summary) => summary.id === id && summary.preview === "Hello."));
+    assert.equal((runtime as unknown as { chats: Map<string, ChatRuntime> }).chats.has(id), false, "listing didn't load it");
+
+    const back = (await runtime.get(id))!;
+    assert.notEqual(back, chat);
+    assert.equal(back.state.messages.length, 2);
+  });
+
+  test("a chat someone is watching, or that is running, stays loaded", async () => {
+    const { chat } = await newChat();
+    const stop = chat.subscribe(() => undefined);
+    runtime.unloadIdle(0);
+    assert.equal(await runtime.get(chat.state.id), chat);
+    stop();
+  });
+});

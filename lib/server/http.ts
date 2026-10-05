@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { EditError } from "@/lib/doc/editing";
 import { LockedContentError } from "@/lib/doc/merge";
+import { log, referenceId } from "@/lib/server/log";
 import { StaleEpochError, StepConflictError } from "@/lib/server/hub";
 
 /** Small helpers shared by the API route handlers. */
@@ -48,8 +49,9 @@ export function route<C>(handler: Handler<C>): Handler<C> {
       if (error instanceof StepConflictError) return json({ error: "Version conflict.", version: error.version }, { status: 409 });
       if (error instanceof EditError || error instanceof LockedContentError) return json({ error: error.message }, { status: 422 });
       if (error instanceof Error && error.message === "Invalid id.") return json({ error: "Invalid id." }, { status: 400 });
-      console.error("[inline] request failed", error);
-      return json({ error: "Something went wrong on the server." }, { status: 500 });
+      const reference = referenceId();
+      log("error", "request failed", { reference, method: request.method, path: new URL(request.url).pathname, error });
+      return json({ error: `Something went wrong on the server (reference ${reference}). Details are in the server log.`, reference }, { status: 500 });
     }
   };
 }

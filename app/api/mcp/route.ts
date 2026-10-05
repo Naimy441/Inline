@@ -1,12 +1,20 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { createInlineHttpServer } from "@/lib/agent/mcp";
+import { mcpAuthorized } from "@/lib/server/mcpToken";
 
 /**
- * Inline's MCP endpoint (Streamable HTTP, stateless). Connect Claude Code with:
- *   claude mcp add --transport http inline http://localhost:3000/api/mcp
+ * Inline's MCP endpoint (Streamable HTTP, stateless). Clients must send the
+ * MCP token as a Bearer token; Help > Connect Claude Code shows the command:
+ *   claude mcp add --transport http inline http://localhost:3000/api/mcp --header "Authorization: Bearer <token>"
  * Changes made through it show up live in the editor for the user to review.
  */
 async function handle(request: Request) {
+  if (!(await mcpAuthorized(request))) {
+    return Response.json(
+      { jsonrpc: "2.0", error: { code: -32001, message: "Missing or wrong Inline MCP token. In Inline, open Help > Connect Claude Code for the command to run." }, id: null },
+      { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="inline"' } },
+    );
+  }
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   const server = createInlineHttpServer({ author: "external" });
   await server.connect(transport);

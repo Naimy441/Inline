@@ -42,6 +42,7 @@ export type MenuActions = {
   toggleOutline: () => void;
   toggleAgent: () => void;
   shortcuts: () => void;
+  connectClaudeCode: () => void;
   wordCount: () => void;
   ask: (prompt: string) => void;
   specialCharacters: () => void;
@@ -244,7 +245,10 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
             { label: "Check for AI-sounding writing", onSelect: () => actions.ask("Run analyze_writing on the document and point out any passages that sound generic or AI-written. Suggest fixes but don't edit yet.") },
           ] as MenuItem[])),
     ],
-    Help: [{ label: "Keyboard shortcuts", shortcut: `${mod}/`, onSelect: actions.shortcuts }],
+    Help: [
+      { label: "Keyboard shortcuts", shortcut: `${mod}/`, onSelect: actions.shortcuts },
+      { label: "Connect Claude Code…", hint: "Copy the command to use Inline from your terminal", onSelect: actions.connectClaudeCode },
+    ],
   };
 
   return (

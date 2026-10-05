@@ -21,9 +21,13 @@ Open a document and press <kbd>Ctrl/⌘</kbd>+<kbd>J</kbd> to open the Claude pa
 
 The same document tools are served over MCP at `/api/mcp`. This means a Claude Code session in your terminal can work on your Inline documents while you watch the edits appear live in the browser:
 
+In Inline, choose **Help > Connect Claude Code** to copy the command. It looks like this:
+
 ```bash
-claude mcp add --transport http inline http://localhost:3000/api/mcp
+claude mcp add --transport http inline http://localhost:3000/api/mcp --header "Authorization: Bearer <token>"
 ```
+
+The token keeps other programs on your machine from editing your documents. Inline creates it on first run and keeps it in the data folder as `mcp-token`.
 
 The tools are `list_documents`, `open_document`, `create_document`, `read_document`, `get_outline`, `search_document`, `get_editor_context`, `edit_document`, `multi_edit_document`, `insert_content`, `write_document`, `format_text`, `set_paragraph_style`, `get_document_settings`, `update_document_settings`, `get_pending_changes`, `keep_changes`, `revert_changes`, `list_comments`, `add_comment`, `reply_to_comment`, `resolve_comment`, `list_versions`, `save_version`, `restore_version`, `analyze_writing` and `export_document`.
 
@@ -34,6 +38,8 @@ The tools are `list_documents`, `open_document`, `create_document`, `read_docume
 | `INLINE_DATA_DIR` | `.inline` in the project folder | Where documents, versions, chats and uploads are stored. |
 | `INLINE_ALLOWED_HOSTS` | local hostnames only | Comma-separated extra hostnames to accept, for serving Inline on a network. Requests for other hosts are refused, which blocks DNS-rebinding attacks. |
 | `INLINE_ACCESS_TOKEN` | unset | When set, every request must carry this secret, either as a `Bearer` token or as the `inline_token` cookie. Visit any page with `?token=<secret>` once to set the cookie. Set this whenever Inline is reachable by anyone but you, because the agent acts with your Claude account. |
+| `INLINE_MCP_TOKEN` | generated | The token MCP clients must send to `/api/mcp`. Set it to choose your own, or to `off` to accept any local client. |
+| `INLINE_LOG_LEVEL` | errors and warnings | Set to `info` to also print informational log lines. Logs are kept in `logs/inline.log` in the data folder. |
 | `INLINE_DEBUG_AGENT` | unset | Print Claude Code's stderr to the server log. |
 
 ### Development

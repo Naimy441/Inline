@@ -16,6 +16,8 @@ import {
   listDocumentIds,
   listVersions,
   mimeForExtension,
+  pruneVersions,
+  versionsToPrune,
   readChatFile,
   readDocumentFile,
   readVersion,
@@ -170,6 +172,72 @@ describe("versions", () => {
     assert.deepEqual(await listVersions("withversions"), []);
     assert.equal(await readVersion("withversions", "v1"), null);
     assert.equal((await listVersions("other")).length, 1);
+  });
+
+  it("lists from an index, and rebuilds it when it's missing or damaged", async () => {
+    const { rmSync, writeFileSync } = await import("node:fs");
+    await writeVersion(version("vidx", "a", 1));
+    await writeVersion(version("vidx", "b", 2));
+    const index = path.join(dataDir(), "versions", "vidx", "index.json");
+    assert.deepEqual((JSON.parse(readFileSync(index, "utf8")) as Array<{ id: string }>).map((v) => v.id).sort(), ["a", "b"]);
+    rmSync(index);
+    assert.deepEqual((await listVersions("vidx")).map((v) => v.id), ["b", "a"]);
+    writeFileSync(index, "{not json");
+    await writeVersion(version("vidx", "c", 3));
+    assert.deepEqual((await listVersions("vidx")).map((v) => v.id), ["c", "b", "a"]);
+    assert.equal(await readVersion("vidx", "index"), null, "the index is never read as a version");
+  });
+
+  it("concurrent saves all land in the index", async () => {
+    await Promise.all(Array.from({ length: 20 }, (_, i) => writeVersion(version("vrace", `v${i}`, i))));
+    assert.equal((await listVersions("vrace")).length, 20);
+  });
+
+  it("summaries count the pending changes a version holds", async () => {
+    await writeVersion({ ...version("vpend", "p", 1), hunks: [{ id: "h" } as never, { id: "i" } as never] });
+    assert.equal((await listVersions("vpend"))[0]!.pendingChanges, 2);
+  });
+});
+
+describe("version retention", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const now = 1000 * DAY;
+  const auto = (id: string, ageMs: number) => ({ id, documentId: "r", label: id, createdAt: now - ageMs, author: "auto" as const, title: "T", wordCount: 0 });
+
+  it("keeps everything from the last day and every named version", () => {
+    const versions = [auto("a", 1000), auto("b", 2000), auto("c", DAY - 1), { ...auto("named", 400 * DAY), author: "user" as const }, { ...auto("claude", 300 * DAY), author: "claude" as const }];
+    assert.deepEqual(versionsToPrune(versions, now), []);
+  });
+
+  it("keeps the newest automatic version per day for a month, then per week", () => {
+    // now is midnight, so 2.5 days ago and 2.5 days + 1s ago fall on the same day.
+    const versions = [
+      auto("day-newer", 2.5 * DAY),
+      auto("day-older", 2.5 * DAY + 1000),
+      auto("next-day", 3.5 * DAY),
+      auto("week-newest", 60 * DAY),
+      auto("week-older", 61 * DAY),
+      auto("week-oldest", 62 * DAY),
+    ];
+    assert.deepEqual(versionsToPrune(versions, now).sort(), ["day-older", "week-older", "week-oldest"]);
+  });
+
+  it("pruneVersions deletes the dropped files and their index entries", async () => {
+    const DAY_MS = DAY;
+    const t = Date.now();
+    await writeVersion({ ...version("vprune", "keep", t - 40 * DAY_MS), author: "auto" });
+    await writeVersion({ ...version("vprune", "drop", t - 40 * DAY_MS - 1000), author: "auto" });
+    await writeVersion({ ...version("vprune", "mine", t - 40 * DAY_MS - 2000), author: "user" });
+    // keep and drop share a week bucket unless they straddle a boundary; force the same bucket by checking first.
+    const expected = versionsToPrune(await listVersions("vprune"));
+    assert.equal(await pruneVersions("vprune"), expected.length);
+    const left = (await listVersions("vprune")).map((v) => v.id);
+    assert.ok(left.includes("mine"));
+    assert.ok(left.includes("keep"));
+    for (const id of expected) {
+      assert.ok(!left.includes(id));
+      assert.equal(await readVersion("vprune", id), null);
+    }
   });
 });
 

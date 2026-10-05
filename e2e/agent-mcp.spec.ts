@@ -19,7 +19,8 @@ type ToolCall = { text: string; isError: boolean };
 async function connect(baseURL: string) {
   const client = new Client({ name: "inline-e2e", version: "1.0.0" });
   // No Origin header is sent, as with Claude Code, so the proxy's CSRF check lets it through.
-  await client.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", baseURL)));
+  const { token } = (await (await fetch(new URL("/api/mcp/connect", baseURL))).json()) as { token: string };
+  await client.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", baseURL), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
   return client;
 }
 
@@ -200,6 +201,16 @@ test.describe("handshake", () => {
       data: { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
     });
     expect(response.status()).toBe(403);
+  });
+
+  test("the endpoint needs the MCP token, and Help shows the command that carries it", async ({ request }) => {
+    const call = (headers: Record<string, string> = {}) =>
+      request.post("/api/mcp", { headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", ...headers }, data: { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} } });
+    expect((await call()).status()).toBe(401);
+    expect((await call({ Authorization: "Bearer wrong" })).status()).toBe(401);
+    const { token, command } = (await (await request.get("/api/mcp/connect")).json()) as { token: string; command: string };
+    expect(command).toContain(`--header "Authorization: Bearer ${token}"`);
+    expect((await call({ Authorization: `Bearer ${token}` })).status()).toBe(200);
   });
 });
 

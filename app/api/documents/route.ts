@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { json, readJson, route } from "@/lib/server/http";
+import { HttpError, json, readJson, route } from "@/lib/server/http";
 import { documentHub } from "@/lib/server/hub";
 
 export const GET = route(async (request) => {
@@ -12,6 +12,13 @@ const CreateBody = z.object({
   markdown: z.string().max(5_000_000).optional(),
   doc: z.unknown().optional(),
   settings: z.unknown().optional(),
+});
+
+/** DELETE ?trashed=1 empties the trash: every trashed document is deleted forever. */
+export const DELETE = route(async (request) => {
+  if (new URL(request.url).searchParams.get("trashed") !== "1") throw new HttpError(400, "Only the trash can be emptied (?trashed=1).");
+  const deleted = await documentHub().emptyTrash();
+  return json({ deleted });
 });
 
 export const POST = route(async (request) => {
