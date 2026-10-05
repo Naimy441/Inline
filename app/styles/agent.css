@@ -831,3 +831,70 @@
 .agent-panel .panel-footer {
   padding-bottom: 22px;
 }
+
+/* Slash command suggestions above the composer. */
+.composer {
+  position: relative;
+}
+.composer-commands {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg, 0 8px 24px rgb(0 0 0 / 0.14));
+}
+.composer-command {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+.composer-command.is-active,
+.composer-command:hover {
+  background: var(--hover, rgb(127 127 127 / 0.12));
+}
+.composer-command-name {
+  font-weight: 600;
+}
+.composer-command-desc,
+.composer-command-manage {
+  color: var(--muted);
+}
+.commands-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.commands-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.commands-row-head {
+  display: grid;
+  grid-template-columns: 140px 1fr auto;
+  gap: 6px;
+  align-items: center;
+}
+.commands-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}

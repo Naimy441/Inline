@@ -356,6 +356,23 @@ export class LiveDocument {
     this.schedulePersist();
   }
 
+  /**
+   * Lock text from Claude's edits, or unlock it. Locking isn't a content
+   * change, so it never becomes a pending change for review.
+   */
+  setLocked(from: number, to: number, locked: boolean) {
+    const tr = new Transform(this.doc);
+    if (locked) tr.addMark(from, to, schema.mark("locked", { id: newId(10) }));
+    else tr.removeMark(from, to, schema.marks.locked);
+    if (!tr.docChanged) return false;
+    return this.applyTransform(tr, { kind: "system", label: "lock" }, { hunks: mapHunks(this.hunks, tr.mapping) });
+  }
+
+  /** Locked passages and where they are. */
+  lockedRanges() {
+    return [...rangeMarkTexts(this.doc, "locked").values()];
+  }
+
   /** Comments with the text they're currently anchored to. */
   commentsWithAnchors() {
     const anchors = rangeMarkTexts(this.doc, "comment");

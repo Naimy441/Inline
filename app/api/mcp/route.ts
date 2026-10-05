@@ -1,5 +1,6 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { createInlineHttpServer } from "@/lib/agent/mcp";
+import type { LiveDocument } from "@/lib/server/hub";
 import { mcpAuthorized } from "@/lib/server/mcpToken";
 
 /**
@@ -16,7 +17,7 @@ async function handle(request: Request) {
     );
   }
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
-  const server = createInlineHttpServer({ author: "external" });
+  const server = createInlineHttpServer({ author: "external", beforeWrite: checkpointExternal });
   await server.connect(transport);
   try {
     return await transport.handleRequest(request);
@@ -24,6 +25,21 @@ async function handle(request: Request) {
     // Stateless: every request gets its own server, so close it once the response is built.
     void server.close().catch(() => undefined);
   }
+}
+
+/**
+ * Save a version before an MCP client's first edit to a document, so the user
+ * can go back. Requests are stateless, so edits within a few minutes of the
+ * last checkpoint count as the same session.
+ */
+const EXTERNAL_SESSION_MS = 10 * 60 * 1000;
+const lastCheckpoint = new Map<string, number>();
+
+async function checkpointExternal(doc: LiveDocument) {
+  const last = lastCheckpoint.get(doc.id) ?? 0;
+  lastCheckpoint.set(doc.id, Date.now());
+  if (Date.now() - last < EXTERNAL_SESSION_MS) return;
+  await doc.checkpoint("Before edits from an MCP client");
 }
 
 /**

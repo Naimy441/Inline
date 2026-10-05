@@ -310,7 +310,7 @@ describe("queueing, interrupting and errors", () => {
       (_turn, claude) => claude.crash("Error: Not logged in. Please run /login"),
       (_turn, claude) => claude.exit(),
     ];
-    const expected = [/turn limit/, /sign/i, /exited unexpectedly/];
+    const expected = [/limit for one message/, /sign/i, /exited unexpectedly/];
     for (const [index, script] of scripts.entries()) {
       useModel(script);
       const { chat } = await newChat();

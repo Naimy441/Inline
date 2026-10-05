@@ -9,6 +9,8 @@ export const SettingsPatchSchema = z
     model: z.string().max(120).nullable().optional(),
     effort: EffortSchema.optional(),
     mode: z.enum(["agent", "ask"]).optional(),
+    maxTurns: z.number().int().min(1).max(1000).nullable().optional(),
+    maxBudgetUsd: z.number().min(0.01).max(1000).nullable().optional(),
   })
   .strict();
 
