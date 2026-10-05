@@ -128,6 +128,14 @@ test("the inline prompt sends an edit about the selection straight to Claude", a
   await expect(page.locator(".doc-content .review-insert")).toContainText("Thursday");
 });
 
+test("the spelling shortcut sends the paragraph at the cursor to Claude", async ({ page, request }) => {
+  await openWithClaude(page, request, "Ths sentence has a typo.");
+  await page.locator(".doc-content").click();
+  await page.keyboard.press("ControlOrMeta+Alt+x");
+  await expect(page.locator(".msg-user-text").last()).toContainText("Fix spelling, grammar and punctuation in the selected text only.");
+  await expect(page.locator(".chip-quote").last()).toContainText("Ths sentence has a typo.");
+});
+
 test("a failed edit is shown as a failed tool call", async ({ page, request }) => {
   await openWithClaude(page, request, "Nothing to see here.");
   await ask(page, 'replace "missing words" with "anything"');

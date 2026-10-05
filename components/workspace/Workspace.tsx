@@ -159,9 +159,10 @@ export function Workspace({ documentId }: { documentId: string }) {
 
   /** The inline ⌘K prompt: sends straight to Claude about the selection, or the cursor when nothing is selected. */
   const inlineAsk = useCallback(
-    (text: string) => {
+    (text: string, only?: SelectionContext) => {
       const view = session.view;
       const selection: SelectionContext | null =
+        only ??
         session.selection() ?? (view ? { documentId: session.id, text: "", from: view.state.selection.from, to: view.state.selection.from } : null);
       const deliver = (tries: number) => {
         if (agentRef.current) void agentRef.current.send(selection, text).catch(() => toast("Couldn't send that to Claude.", { tone: "error" }));
@@ -172,6 +173,25 @@ export function Workspace({ documentId }: { documentId: string }) {
     },
     [session, setPanel],
   );
+
+  /** Spelling and grammar for the selection, or the paragraph at the cursor (⌘⌥X). */
+  const checkSpelling = useCallback(() => {
+    const view = session.view;
+    if (!view) return;
+    let selection = session.selection();
+    if (!selection) {
+      const { $from } = view.state.selection;
+      const from = $from.start();
+      const to = $from.end();
+      const text = view.state.doc.textBetween(from, to, "\n");
+      if (!text.trim()) {
+        toast("Put the cursor in a paragraph or select some text to check.");
+        return;
+      }
+      selection = { documentId: session.id, text, from, to };
+    }
+    inlineAsk("Fix spelling, grammar and punctuation in the selected text only. Don't change the meaning, voice or wording beyond what's needed. If it's already correct, say so and don't edit.", selection);
+  }, [session, inlineAsk]);
 
   const startComment = useCallback(() => {
     if (!session.view || session.view.state.selection.empty) {
@@ -250,6 +270,11 @@ export function Workspace({ documentId }: { documentId: string }) {
         setPrompting(true);
         return;
       }
+      if (event.altKey && !event.shiftKey && event.code === "KeyX" && session.view?.hasFocus() && session.ui.get().mode !== "viewing") {
+        event.preventDefault();
+        checkSpelling();
+        return;
+      }
       if (key === "j" && !event.shiftKey && !event.altKey) {
         event.preventDefault();
         setPanel((current) => (current === "agent" ? null : "agent"));
@@ -269,7 +294,7 @@ export function Workspace({ documentId }: { documentId: string }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [askClaude, setPanel, session]);
+  }, [askClaude, checkSpelling, setPanel, session]);
 
   const insertImageFile = async (file: File) => {
     try {
@@ -360,6 +385,7 @@ export function Workspace({ documentId }: { documentId: string }) {
       setPreference("substitutions", !prefs.substitutions);
       toast(prefs.substitutions ? "Automatic substitutions off." : "Automatic substitutions on.");
     },
+    checkSpelling,
     ask: (prompt) => {
       setPanel("agent");
       requestAnimationFrame(() => agentRef.current?.ask(null, prompt));
