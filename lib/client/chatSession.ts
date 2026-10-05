@@ -11,6 +11,7 @@ import type {
   SelectionContext,
   SequencedChatEvent,
   ToolPart,
+  DocumentMention,
 } from "@/lib/agent/types";
 import { api, del, patch, post, Store } from "@/lib/client/api";
 
@@ -141,7 +142,7 @@ export class ChatSession {
     if (this.timer) clearTimeout(this.timer);
   }
 
-  async send(input: { text: string; documentId: string | null; selection?: SelectionContext; attachments?: Attachment[] }) {
+  async send(input: { text: string; documentId: string | null; selection?: SelectionContext; attachments?: Attachment[]; mentions?: DocumentMention[] }) {
     try {
       await post(`/api/agent/chats/${this.id}/messages`, input);
       this.ui.set((ui) => ({ ...ui, error: null }));

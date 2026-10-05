@@ -200,7 +200,9 @@ describe("tool use", () => {
     );
     assert.deepEqual(tools[1]!.input, { old_string: "Monday", new_string: "Saturday morning" });
     assert.match(tools[1]!.result!, /Edited in "Trip"/);
-    assert.deepEqual(assistant.changes, [{ documentId: doc.id, title: "Trip", tool: "edit_document", added: 2, removed: 1 }]);
+    const checkpoint = assistant.changes?.[0]?.checkpoint;
+    assert.ok(checkpoint, "the reply remembers the version saved before its edits");
+    assert.deepEqual(assistant.changes, [{ documentId: doc.id, title: "Trip", tool: "edit_document", added: 2, removed: 1, checkpoint }]);
 
     const change = events.find((event) => event.type === "change");
     assert.ok(change, "a change event reaches the panel");
@@ -229,6 +231,9 @@ describe("tool use", () => {
     const { docToMarkdown } = await import("@/lib/doc/markdown");
     const stored = await readVersion(doc.id, checkpoint!.id);
     assert.equal(docToMarkdown(loadDoc(stored!.doc)), NOTE);
+    assert.equal(lastAssistant(chat).changes?.[0]?.checkpoint, checkpoint!.id, "the reply links to it");
+    await doc.restoreVersion(checkpoint!.id);
+    assert.equal(markdownOf(doc), NOTE, "restoring it undoes the reply");
   });
 
   test("switching to Ask mode between turns applies to the live session", async () => {

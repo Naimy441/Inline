@@ -24,6 +24,7 @@ import type {
   Todo,
   ToolPart,
   UserMessage,
+  DocumentMention,
 } from "@/lib/agent/types";
 import { DEFAULT_MAX_TURNS } from "@/lib/agent/types";
 import { documentHub, type LiveDocument } from "@/lib/server/hub";
@@ -71,7 +72,7 @@ export function setQueryImplementation(next: typeof query | null) {
   startQuery = next ?? query;
 }
 
-export type SendInput = { text: string; documentId?: string | null; selection?: SelectionContext; attachments?: Attachment[] };
+export type SendInput = { text: string; documentId?: string | null; selection?: SelectionContext; attachments?: Attachment[]; mentions?: DocumentMention[] };
 
 class AsyncQueue<T> implements AsyncIterable<T> {
   private items: T[] = [];
@@ -170,7 +171,8 @@ class ChatRuntime {
   private current: AssistantMessage | null = null;
   private partsByBlock = new Map<string, string>();
   private blocksDelivered = new Map<string, number>();
-  private wroteThisTurn = new Set<string>();
+  /** Documents this turn has written to, with the version saved before the first write. */
+  private wroteThisTurn = new Map<string, string>();
   private interrupted = false;
   private discarded = false;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -343,12 +345,12 @@ class ChatRuntime {
       this.emitMeta();
     }
     if (this.state.running) {
-      const queued: QueuedMessage = { id: randomUUID(), text, createdAt: Date.now(), selection: input.selection, attachments: input.attachments };
+      const queued: QueuedMessage = { id: randomUUID(), text, createdAt: Date.now(), selection: input.selection, attachments: input.attachments, mentions: input.mentions };
       this.state.queue.push(queued);
       this.emit({ type: "queue", queue: this.state.queue });
       return { queued: true, id: queued.id };
     }
-    await this.startTurn({ text, selection: input.selection, attachments: input.attachments });
+    await this.startTurn({ text, selection: input.selection, attachments: input.attachments, mentions: input.mentions });
     return { queued: false, id: this.state.messages[this.state.messages.length - 2]!.id };
   }
 
@@ -358,11 +360,11 @@ class ChatRuntime {
     if (this.state.queue.length !== before) this.emit({ type: "queue", queue: this.state.queue });
   }
 
-  private async startTurn(input: { text: string; selection?: SelectionContext; attachments?: Attachment[] }) {
+  private async startTurn(input: { text: string; selection?: SelectionContext; attachments?: Attachment[]; mentions?: DocumentMention[] }) {
     this.lastUsed = Date.now();
     if (this.idleTimer) clearTimeout(this.idleTimer);
     const now = Date.now();
-    const user: UserMessage = { id: randomUUID(), role: "user", text: input.text, createdAt: now, selection: input.selection, attachments: input.attachments };
+    const user: UserMessage = { id: randomUUID(), role: "user", text: input.text, createdAt: now, selection: input.selection, attachments: input.attachments, mentions: input.mentions };
     const assistant: AssistantMessage = { id: randomUUID(), role: "assistant", createdAt: now, parts: [], status: "streaming", model: this.state.settings.model ?? undefined };
     if (!this.state.messages.length || this.state.title === "New chat") {
       this.state.title = clip(input.text || input.attachments?.[0]?.name || "New chat", 60);
@@ -395,7 +397,7 @@ class ChatRuntime {
     void this.persistNow();
   }
 
-  private async buildUserMessage(input: { text: string; selection?: SelectionContext; attachments?: Attachment[] }): Promise<SDKUserMessage> {
+  private async buildUserMessage(input: { text: string; selection?: SelectionContext; attachments?: Attachment[]; mentions?: DocumentMention[] }): Promise<SDKUserMessage> {
     const context: string[] = [];
     context.push(
       this.state.settings.mode === "ask"
@@ -416,6 +418,11 @@ class ChatRuntime {
     if (input.selection?.text.trim()) {
       const where = doc && input.selection.documentId === doc.id ? selectionLines(doc, input.selection) : "";
       context.push(`The user selected this text in the document${where}:\n"""\n${input.selection.text.slice(0, 8000)}\n"""`);
+    }
+    if (input.mentions?.length) {
+      context.push(
+        `The user mentioned ${input.mentions.length === 1 ? "this document" : "these documents"}: ${input.mentions.map((item) => `"${item.title}" (id ${item.id})`).join(", ")}. Read ${input.mentions.length === 1 ? "it" : "them"} with read_document and the document_id when relevant.`,
+      );
     }
     if (input.attachments?.length) {
       context.push(
@@ -451,8 +458,7 @@ class ChatRuntime {
       readOnly: this.state.settings.mode === "ask",
       beforeWrite: async (doc) => {
         if (this.wroteThisTurn.has(doc.id)) return;
-        this.wroteThisTurn.add(doc.id);
-        await doc.checkpoint("Before Claude's edits");
+        this.wroteThisTurn.set(doc.id, await doc.checkpoint("Before Claude's edits"));
       },
       onChange: (change) => this.recordChange(change),
     };
@@ -469,7 +475,8 @@ class ChatRuntime {
       existing.title = change.title;
       existing.tool = change.tool;
     } else {
-      message.changes.push({ ...change });
+      const checkpoint = this.wroteThisTurn.get(change.documentId);
+      message.changes.push(checkpoint ? { ...change, checkpoint } : { ...change });
     }
     this.emit({ type: "change", messageId: message.id, change });
   }
@@ -859,7 +866,7 @@ class ChatRuntime {
       this.state.messages.splice(this.state.messages.length - 2, 2);
       this.emit({ type: "snapshot", chat: this.state });
     }
-    await this.startTurn({ text: lastUser.text, selection: lastUser.selection, attachments: lastUser.attachments });
+    await this.startTurn({ text: lastUser.text, selection: lastUser.selection, attachments: lastUser.attachments, mentions: lastUser.mentions });
   }
 
   close() {

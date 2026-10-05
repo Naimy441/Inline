@@ -54,3 +54,19 @@ export function matchCommands(query: string, commands: readonly SlashCommand[]) 
   const rest = commands.filter((command) => !command.name.startsWith(q) && (command.name.includes(q) || command.description.toLowerCase().includes(q)));
   return [...prefix, ...rest];
 }
+
+/** Documents matching what's been typed after "@": title prefix first, then word starts, then anywhere. */
+export function matchDocuments<T extends { id: string; title: string }>(query: string, documents: readonly T[]): T[] {
+  const q = query.toLowerCase();
+  const rank = (title: string) => {
+    const t = title.toLowerCase();
+    if (t.startsWith(q)) return 0;
+    if (t.split(/\s+/).some((word) => word.startsWith(q))) return 1;
+    return t.includes(q) ? 2 : -1;
+  };
+  return documents
+    .map((doc) => ({ doc, rank: rank(doc.title) }))
+    .filter((item) => item.rank >= 0)
+    .sort((a, b) => a.rank - b.rank)
+    .map((item) => item.doc);
+}

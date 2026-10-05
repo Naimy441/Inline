@@ -687,13 +687,13 @@ describe("versions", () => {
   it("checkpoint saves only when there are changes since the last version", async () => {
     const live = await documentHub().create({ markdown: SAMPLE });
     const first = await live.checkpoint("Before Claude");
-    assert.ok(first);
-    assert.equal(first.label, "Before Claude");
-    assert.equal(await live.checkpoint("Before Claude"), null);
+    assert.equal((await live.versions()).find((version) => version.id === first)?.label, "Before Claude");
+    assert.equal(await live.checkpoint("Before Claude"), first, "no changes: the same version");
     live.receiveClientSteps(live.version, insertSteps(live.doc, 1, "x"), "a");
     const second = await live.checkpoint("Before Claude again");
-    assert.ok(second);
-    assert.equal(await live.checkpoint("again"), null);
+    assert.notEqual(second, first);
+    assert.equal(await live.checkpoint("again"), second);
+    assert.equal((await live.versions()).length, 2);
   });
 });
 

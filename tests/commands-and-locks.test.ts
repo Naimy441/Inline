@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { before, describe, test } from "node:test";
 
-import { BUILTIN_COMMANDS, expandSlashCommand, matchCommands, mergeCommands } from "@/lib/agent/commands";
+import { BUILTIN_COMMANDS, expandSlashCommand, matchCommands, matchDocuments, mergeCommands } from "@/lib/agent/commands";
 import { useTempDataDir } from "./support/mcp";
 
 /** Slash commands (pure helpers and the settings route) and locking text through the route. */
@@ -31,6 +31,22 @@ describe("slash command helpers", () => {
     assert.deepEqual(names.slice(0, 2).sort(), ["comments", "continue"]);
     assert.ok(matchCommands("repetition", commands).some((command) => command.name === "tighten"));
     assert.equal(matchCommands("", commands).length, commands.length);
+  });
+});
+
+describe("@-mention matching", () => {
+  const docs = [
+    { id: "1", title: "Q3 budget review" },
+    { id: "2", title: "Budget 2026" },
+    { id: "3", title: "Notes on rebudgeting" },
+    { id: "4", title: "Trip plan" },
+  ];
+
+  test("ranks title prefix, then word start, then anywhere", () => {
+    assert.deepEqual(matchDocuments("budget", docs).map((doc) => doc.id), ["2", "1", "3"]);
+    assert.deepEqual(matchDocuments("TRIP", docs).map((doc) => doc.id), ["4"]);
+    assert.equal(matchDocuments("", docs).length, 4);
+    assert.deepEqual(matchDocuments("zzz", docs), []);
   });
 });
 

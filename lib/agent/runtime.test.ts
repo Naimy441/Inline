@@ -136,6 +136,15 @@ describe("a turn", () => {
     assert.match(context, /editor is in suggesting mode/);
   });
 
+  it("lists @-mentioned documents and keeps them on the message", async () => {
+    const fake = useModel(() => undefined);
+    const { chat } = await newChat();
+    await turn(chat, "Compare with @Budget", { mentions: [{ id: "doc-123", title: "Budget" }] });
+    assert.match(fake.turns[0]!.context, /The user mentioned this document: "Budget" \(id doc-123\)/);
+    const user = chat.state.messages.find((message) => message.role === "user");
+    assert.deepEqual(user && "mentions" in user ? user.mentions : null, [{ id: "doc-123", title: "Budget" }]);
+  });
+
   it("says when no document is open", async () => {
     const fake = useModel(() => undefined);
     const chat = await agentRuntime().create();

@@ -79,6 +79,39 @@ test("each reply's Undo all touches only that reply's changes", async ({ page, r
   await expect(page.locator(".doc-content")).toHaveText("First beta gamma.");
 });
 
+test("a reply lists its changes, each kept or undone on its own, and can be restored", async ({ page, request }) => {
+  await openWithClaude(page, request, "Alpha beta gamma.");
+  await ask(page, 'replace "Alpha" with "First"');
+  await expect(lastReply(page)).toContainText("Replaced Alpha with First.");
+  const card = lastReply(page).locator(".change-card");
+  await card.getByRole("button", { name: /Show 1 change/ }).click();
+  const item = lastReply(page).locator(".turn-diff-item");
+  await expect(item).toHaveCount(1);
+  await expect(item.locator("del")).toHaveText("Alpha");
+  await expect(item.locator("ins")).toHaveText("First");
+  await item.getByRole("button", { name: "Keep this change" }).click();
+  await expect(page.locator(".review-bar")).toHaveCount(0);
+  await expect(page.locator(".doc-content")).toHaveText("First beta gamma.");
+
+  // Once reviewed, the reply offers to put the document back as it was before it.
+  page.once("dialog", (dialog) => void dialog.accept());
+  await card.getByRole("button", { name: "Restore to before" }).click();
+  await expect(page.locator(".doc-content")).toHaveText("Alpha beta gamma.");
+});
+
+test("typing @ suggests other documents and inserts the mention", async ({ page, request }) => {
+  const title = `Mention target ${Date.now()}`;
+  await request.post("/api/documents", { data: { title, markdown: "Other text." } });
+  await openWithClaude(page, request, "Main text.");
+  const composer = page.getByLabel("Message Claude");
+  await composer.pressSequentially("Compare with @Mention tar");
+  const option = page.getByRole("listbox", { name: "Documents" }).getByRole("option", { name: title });
+  await expect(option).toBeVisible();
+  await composer.press("Enter");
+  await expect(composer).toHaveValue(`Compare with @${title} `);
+  await expect(page.getByRole("listbox", { name: "Documents" })).toHaveCount(0);
+});
+
 test("a failed edit is shown as a failed tool call", async ({ page, request }) => {
   await openWithClaude(page, request, "Nothing to see here.");
   await ask(page, 'replace "missing words" with "anything"');

@@ -2,13 +2,15 @@
 
 import { Check, CircleDashed, History, Loader2, MessageSquarePlus, Plus, RefreshCw, Terminal, Trash2, X } from "lucide-react";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { Attachment, ChatSettings, ChatSummary, SelectionContext, Todo } from "@/lib/agent/types";
+import type { Attachment, DocumentMention, ChatSettings, ChatSummary, SelectionContext, Todo } from "@/lib/agent/types";
 import { refreshAgentStatus, useAgentStatus } from "@/lib/client/agentStatus";
 import { ChatSession, chatApi, type ChatUiState } from "@/lib/client/chatSession";
 import { Composer, type ComposerHandle } from "@/components/agent/Composer";
-import { MessageList } from "@/components/agent/MessageView";
+import { MessageList, type TurnHunk } from "@/components/agent/MessageView";
 import { Button, IconButton } from "@/components/ui/Button";
 import { Menu } from "@/components/ui/Menu";
+import { toast } from "@/components/ui/Toast";
+import { post } from "@/lib/client/api";
 
 export type AgentPanelHandle = { ask: (selection: SelectionContext | null, text?: string) => void };
 
@@ -49,7 +51,7 @@ export const AgentPanel = forwardRef<
   AgentPanelHandle,
   {
     documentId: string;
-    hunks: ReadonlyArray<{ id: string; turn?: string }>;
+    hunks: ReadonlyArray<TurnHunk>;
     onClose: () => void;
     onReview: (action: "next" | "accept" | "reject", ids: string[]) => void;
     initialPrompt?: string | null;
@@ -125,7 +127,7 @@ export const AgentPanel = forwardRef<
   });
 
   const send = useCallback(
-    async ({ text, attachments }: { text: string; attachments: Attachment[] }) => {
+    async ({ text, attachments, mentions }: { text: string; attachments: Attachment[]; mentions?: DocumentMention[] }) => {
       let target = session;
       if (!target) {
         const created = await chatApi.create({ documentId, settings });
@@ -133,7 +135,7 @@ export const AgentPanel = forwardRef<
         setChatId(created.id);
       }
       stick.current = true;
-      await target.send({ text, documentId, selection: selection ?? undefined, attachments });
+      await target.send({ text, documentId, selection: selection ?? undefined, attachments, mentions: mentions?.length ? mentions : undefined });
       setSelection(null);
     },
     [session, documentId, settings, selection],
@@ -148,6 +150,19 @@ export const AgentPanel = forwardRef<
     setHistoryOpen(true);
     setHistory(await chatApi.list(documentId).catch(() => []));
   };
+
+  const restoreTo = useCallback(
+    async (versionId: string) => {
+      if (!window.confirm("Put the document back as it was before this reply's edits? The current text is saved to history first.")) return;
+      try {
+        await post(`/api/documents/${documentId}/versions/${versionId}/restore`);
+        toast("Restored. The text before restoring is in version history.");
+      } catch (error) {
+        toast(error instanceof Error ? error.message : "Couldn't restore that version.");
+      }
+    },
+    [documentId],
+  );
 
   const todos = chat?.todos ?? [];
   const showTodos = todos.length > 0 && (chat?.running || todos.some((todo) => todo.status !== "completed"));
@@ -225,7 +240,7 @@ export const AgentPanel = forwardRef<
           <Onboarding state={status.state} message={"message" in status ? status.message : ""} />
         ) : chat?.messages.length ? (
           <div className="messages">
-            <MessageList messages={chat.messages} hunks={hunks} onRetry={() => session?.retry()} onReview={onReview} />
+            <MessageList messages={chat.messages} hunks={hunks} onRetry={() => session?.retry()} onReview={onReview} documentId={documentId} onRestore={restoreTo} />
             {chat.running && chat.status && <RunStatusLine status={chat.status} />}
           </div>
         ) : (
@@ -264,6 +279,7 @@ export const AgentPanel = forwardRef<
           models={models}
           context={chat?.context}
           selection={selection}
+          documentId={documentId}
           onClearSelection={() => setSelection(null)}
           onSend={send}
           onStop={() => void session?.interrupt()}
