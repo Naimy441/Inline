@@ -12,7 +12,11 @@ import { Menu } from "@/components/ui/Menu";
 import { toast } from "@/components/ui/Toast";
 import { post } from "@/lib/client/api";
 
-export type AgentPanelHandle = { ask: (selection: SelectionContext | null, text?: string) => void };
+export type AgentPanelHandle = {
+  ask: (selection: SelectionContext | null, text?: string) => void;
+  /** Send a message right away (the inline ⌘K prompt). */
+  send: (selection: SelectionContext | null, text: string) => Promise<void>;
+};
 
 const EMPTY_UI: ChatUiState = { chat: null, connected: false, error: null, rateLimit: null };
 const emptyStore = { subscribe: () => () => undefined, get: () => EMPTY_UI };
@@ -111,6 +115,7 @@ export const AgentPanel = forwardRef<
       if (text) composer.current?.setText(text);
       else composer.current?.focus();
     },
+    send: (selected, text) => send({ text, attachments: [], selected }),
   }));
 
   useEffect(() => {
@@ -127,7 +132,7 @@ export const AgentPanel = forwardRef<
   });
 
   const send = useCallback(
-    async ({ text, attachments, mentions }: { text: string; attachments: Attachment[]; mentions?: DocumentMention[] }) => {
+    async ({ text, attachments, mentions, selected }: { text: string; attachments: Attachment[]; mentions?: DocumentMention[]; selected?: SelectionContext | null }) => {
       let target = session;
       if (!target) {
         const created = await chatApi.create({ documentId, settings });
@@ -135,7 +140,7 @@ export const AgentPanel = forwardRef<
         setChatId(created.id);
       }
       stick.current = true;
-      await target.send({ text, documentId, selection: selection ?? undefined, attachments, mentions: mentions?.length ? mentions : undefined });
+      await target.send({ text, documentId, selection: (selected === undefined ? selection : selected) ?? undefined, attachments, mentions: mentions?.length ? mentions : undefined });
       setSelection(null);
     },
     [session, documentId, settings, selection],

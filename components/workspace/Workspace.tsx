@@ -73,6 +73,7 @@ export function Workspace({ documentId }: { documentId: string }) {
   const [outline, setOutline] = useState(false);
   const [find, setFind] = useState<{ replace: boolean } | null>(null);
   const [linkEditing, setLinkEditing] = useState(false);
+  const [prompting, setPrompting] = useState(false);
   const [draftComment, setDraftComment] = useState(false);
   const [setup, setSetup] = useState<{ tab: "page" | "text" | "header" } | null>(null);
   const [shortcuts, setShortcuts] = useState(false);
@@ -156,6 +157,22 @@ export function Workspace({ documentId }: { documentId: string }) {
     [session, setPanel],
   );
 
+  /** The inline ⌘K prompt: sends straight to Claude about the selection, or the cursor when nothing is selected. */
+  const inlineAsk = useCallback(
+    (text: string) => {
+      const view = session.view;
+      const selection: SelectionContext | null =
+        session.selection() ?? (view ? { documentId: session.id, text: "", from: view.state.selection.from, to: view.state.selection.from } : null);
+      const deliver = (tries: number) => {
+        if (agentRef.current) void agentRef.current.send(selection, text).catch(() => toast("Couldn't send that to Claude.", { tone: "error" }));
+        else if (tries > 0) requestAnimationFrame(() => deliver(tries - 1));
+      };
+      setPanel("agent");
+      deliver(60);
+    },
+    [session, setPanel],
+  );
+
   const startComment = useCallback(() => {
     if (!session.view || session.view.state.selection.empty) {
       toast("Select the text you want to comment on.");
@@ -221,6 +238,11 @@ export function Workspace({ documentId }: { documentId: string }) {
       if (event.shiftKey && !event.altKey && event.code === "KeyP") {
         event.preventDefault();
         session.setShowInvisibles(!preferences.get().showInvisibles);
+        return;
+      }
+      if (key === "k" && !event.shiftKey && !event.altKey && session.view?.hasFocus() && session.ui.get().mode !== "viewing") {
+        event.preventDefault();
+        setPrompting(true);
         return;
       }
       if (key === "j" && !event.shiftKey && !event.altKey) {
@@ -458,7 +480,7 @@ export function Workspace({ documentId }: { documentId: string }) {
           )}
           <PageCanvas session={session} meta={meta} pages={ui.pages} zoom={zoom} printing={ui.printing} />
           <ReviewBar session={session} hunks={ui.hunks} />
-          <SelectionBubble session={session} state={state} linkEditing={linkEditing} onLinkEditing={setLinkEditing} onAsk={() => askClaude()} onComment={startComment} />
+          <SelectionBubble session={session} state={state} linkEditing={linkEditing} onLinkEditing={setLinkEditing} onAsk={() => askClaude()} onComment={startComment} prompting={prompting} onPrompting={setPrompting} onInlineAsk={inlineAsk} />
         </main>
 
         {panel && (

@@ -1138,6 +1138,18 @@
   width: 180px;
 }
 
+.bubble-prompt {
+  align-items: center;
+  padding-left: 10px;
+}
+.bubble-prompt .input {
+  width: min(320px, calc(100vw - 140px));
+}
+.bubble-prompt-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
 @keyframes bubble-in {
   from {
     opacity: 0;

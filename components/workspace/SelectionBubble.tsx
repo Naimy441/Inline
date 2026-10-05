@@ -20,6 +20,9 @@ export function SelectionBubble({
   onLinkEditing,
   onAsk,
   onComment,
+  prompting = false,
+  onPrompting,
+  onInlineAsk,
 }: {
   session: DocumentSession;
   state: EditorState | null;
@@ -27,12 +30,19 @@ export function SelectionBubble({
   onLinkEditing: (open: boolean) => void;
   onAsk: () => void;
   onComment: () => void;
+  /** The inline ⌘K prompt is open. */
+  prompting?: boolean;
+  onPrompting?: (open: boolean) => void;
+  /** Send the inline prompt to Claude about the selection (or the cursor). */
+  onInlineAsk?: (text: string) => void;
 }) {
   const [dragging, setDragging] = useState(false);
   const [focused, setFocused] = useState(false);
   const [href, setHref] = useState("");
   const [text, setText] = useState("");
+  const [instruction, setInstruction] = useState("");
   const input = useRef<HTMLInputElement>(null);
+  const promptInput = useRef<HTMLInputElement>(null);
   const view = session.view;
 
   useEffect(() => {
@@ -69,12 +79,18 @@ export function SelectionBubble({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [linkEditing]);
 
+  useEffect(() => {
+    if (!prompting) return;
+    setInstruction("");
+    requestAnimationFrame(() => promptInput.current?.focus());
+  }, [prompting]);
+
   if (!state || !view) return null;
   const { from, to, empty } = state.selection;
   const isNode = state.selection instanceof NodeSelection;
   const showSelection = !empty && !isNode && focused && !dragging;
   const showLink = Boolean(link) && empty && focused && !dragging;
-  if (!linkEditing && !showSelection && !showLink) return null;
+  if (!prompting && !linkEditing && !showSelection && !showLink) return null;
 
   let coords: { left: number; top: number; bottom: number };
   try {
@@ -96,6 +112,48 @@ export function SelectionBubble({
     }
     onLinkEditing(false);
   };
+
+  if (prompting) {
+    const close = () => {
+      onPrompting?.(false);
+      view.focus();
+    };
+    const sendPrompt = () => {
+      const value = instruction.trim();
+      if (!value) return;
+      onInlineAsk?.(value);
+      onPrompting?.(false);
+      view.focus();
+    };
+    return (
+      <div className={`bubble bubble-link bubble-prompt${above ? " is-above" : ""}`} style={style} onMouseDown={(event) => event.stopPropagation()}>
+        <Sparkles size={14} className="bubble-prompt-icon" />
+        <input
+          ref={promptInput}
+          className="input input-sm"
+          aria-label="Ask Claude to edit"
+          placeholder={empty ? "Ask Claude to write here…" : "Ask Claude to change the selection…"}
+          value={instruction}
+          onChange={(event) => setInstruction(event.target.value)}
+          onBlur={(event) => {
+            if (!(event.relatedTarget as HTMLElement | null)?.closest?.(".bubble")) onPrompting?.(false);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              sendPrompt();
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              close();
+            }
+          }}
+        />
+        <button type="button" className="btn btn-primary btn-sm" disabled={!instruction.trim()} onClick={sendPrompt}>
+          <span className="btn-label">Send</span>
+        </button>
+      </div>
+    );
+  }
 
   if (linkEditing) {
     return (
@@ -159,6 +217,11 @@ export function SelectionBubble({
       <button type="button" className="bubble-btn bubble-ask" onClick={onAsk}>
         <Sparkles size={14} /> Ask Claude <kbd>{mod}L</kbd>
       </button>
+      {onPrompting && (
+        <button type="button" className="bubble-btn" aria-label="Edit with Claude" data-tip={`Edit with Claude  ${mod}K`} onClick={() => onPrompting(true)}>
+          <Pencil size={14} />
+        </button>
+      )}
       <span className="bubble-sep" />
       <button type="button" className="bubble-btn" aria-label="Comment" data-tip="Comment" onClick={onComment}>
         <MessageSquarePlus size={14} />

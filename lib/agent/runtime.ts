@@ -122,6 +122,20 @@ function selectionLines(doc: LiveDocument, selection: SelectionContext) {
   }
 }
 
+/** Where the user's cursor is (for the inline prompt with nothing selected): the line and its text. */
+function cursorContext(doc: LiveDocument, pos: number) {
+  try {
+    const at = Math.max(0, Math.min(doc.doc.content.size, pos));
+    const entry = textblockLines(serializeDoc(doc.doc)).find((line) => line.pos <= at && at <= line.pos + line.node.nodeSize);
+    if (!entry) return "";
+    const offset = Math.max(0, at - entry.pos - 1);
+    const text = entry.node.textContent;
+    return `The user's cursor is on line ${entry.startLine} of read_document, ${offset >= text.length ? "at the end of" : `after "${text.slice(Math.max(0, offset - 60), offset)}" in`} this paragraph:\n"""\n${text.slice(0, 4000)}\n"""`;
+  } catch {
+    return "";
+  }
+}
+
 /** Image types Claude accepts as images; others (SVG) are sent as their source text. */
 const CLAUDE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
@@ -414,6 +428,10 @@ class ChatRuntime {
       if (doc.editorMode !== "editing") context.push(`The user's editor is in ${doc.editorMode} mode.`);
     } else {
       context.push("No document is open.");
+    }
+    if (input.selection && !input.selection.text.trim() && doc && input.selection.documentId === doc.id) {
+      const where = cursorContext(doc, input.selection.from);
+      if (where) context.push(where);
     }
     if (input.selection?.text.trim()) {
       const where = doc && input.selection.documentId === doc.id ? selectionLines(doc, input.selection) : "";

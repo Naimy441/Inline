@@ -136,6 +136,18 @@ describe("a turn", () => {
     assert.match(context, /editor is in suggesting mode/);
   });
 
+  it("tells Claude where the cursor is when the inline prompt has no selection", async () => {
+    const fake = useModel(() => undefined);
+    const { doc, chat } = await newChat();
+    const { findText } = await import("@/lib/doc/editing");
+    const at = findText(doc.doc, "jumps", { caseSensitive: true })[0]!.from;
+    await turn(chat, "Add an adjective", { selection: { documentId: doc.id, text: "", from: at, to: at } });
+    const { context } = fake.turns[0]!;
+    assert.match(context, /The user's cursor is on line \d+ of read_document, after "The quick brown fox " in this paragraph:/);
+    assert.match(context, /"""\nThe quick brown fox jumps over the lazy dog\.\n"""/);
+    assert.doesNotMatch(context, /The user selected/);
+  });
+
   it("lists @-mentioned documents and keeps them on the message", async () => {
     const fake = useModel(() => undefined);
     const { chat } = await newChat();

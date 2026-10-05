@@ -112,6 +112,22 @@ test("typing @ suggests other documents and inserts the mention", async ({ page,
   await expect(page.getByRole("listbox", { name: "Documents" })).toHaveCount(0);
 });
 
+test("the inline prompt sends an edit about the selection straight to Claude", async ({ page, request }) => {
+  await openWithClaude(page, request, "The meeting is on Tuesday.");
+  await page.getByRole("button", { name: "Hide Claude" }).or(page.locator(".claude-toggle")).first().click();
+  await page.locator(".doc-content").click();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.press("ControlOrMeta+k");
+  const prompt = page.getByLabel("Ask Claude to edit");
+  await expect(prompt).toBeFocused();
+  await prompt.fill('replace "Tuesday" with "Thursday"');
+  await prompt.press("Enter");
+  await expect(prompt).toHaveCount(0);
+  // The panel opens with the message sent, and the edit lands for review.
+  await expect(page.locator(".msg-user-text").last()).toHaveText('replace "Tuesday" with "Thursday"');
+  await expect(page.locator(".doc-content .review-insert")).toContainText("Thursday");
+});
+
 test("a failed edit is shown as a failed tool call", async ({ page, request }) => {
   await openWithClaude(page, request, "Nothing to see here.");
   await ask(page, 'replace "missing words" with "anything"');
