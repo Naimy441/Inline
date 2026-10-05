@@ -825,7 +825,7 @@ export const TOOLS = [
   defineTool({
     name: "open_document",
     title: "Open document",
-    description: "Show a document in the user's editor.",
+    description: "Show a document in the user's editor, switching the editor to it. Use it after create_document, or when the user asks to see another document.",
     shape: { document_id: z.string() },
     write: false,
     async handler(args, ctx) {

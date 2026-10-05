@@ -18,6 +18,14 @@ async function handle(request: Request) {
   }
 }
 
+/** Stateless: no server-to-client event stream (GET) and no session to end (DELETE). Clients fall back to POST. */
+function methodNotAllowed() {
+  return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed." }, id: null }), {
+    status: 405,
+    headers: { Allow: "POST", "Content-Type": "application/json" },
+  });
+}
+
 export const POST = handle;
-export const GET = handle;
-export const DELETE = handle;
+export const GET = methodNotAllowed;
+export const DELETE = methodNotAllowed;

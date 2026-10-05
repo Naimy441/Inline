@@ -50,22 +50,25 @@ export function assertSafeId(id: string) {
 
 const queues = new Map<string, Promise<void>>();
 
-async function writeJsonAtomic(file: string, value: unknown) {
+/** Runs file operations one at a time per path, so a late write can't land after a newer one or a delete. */
+async function serialized(file: string, operation: () => Promise<void>) {
   const previous = queues.get(file) ?? Promise.resolve();
-  const next = previous
-    .catch(() => undefined)
-    .then(async () => {
-      await fs.mkdir(path.dirname(file), { recursive: true });
-      const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-      await fs.writeFile(tmp, JSON.stringify(value), "utf8");
-      await fs.rename(tmp, file);
-    });
+  const next = previous.catch(() => undefined).then(operation);
   queues.set(file, next);
   try {
     await next;
   } finally {
     if (queues.get(file) === next) queues.delete(file);
   }
+}
+
+async function writeJsonAtomic(file: string, value: unknown) {
+  await serialized(file, async () => {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+    await fs.writeFile(tmp, JSON.stringify(value), "utf8");
+    await fs.rename(tmp, file);
+  });
 }
 
 async function readJson<T>(file: string): Promise<T | null> {
@@ -78,7 +81,7 @@ async function readJson<T>(file: string): Promise<T | null> {
 }
 
 async function removeFile(file: string) {
-  await fs.rm(file, { force: true });
+  await serialized(file, () => fs.rm(file, { force: true }));
 }
 
 async function listJson(folder: string): Promise<string[]> {
