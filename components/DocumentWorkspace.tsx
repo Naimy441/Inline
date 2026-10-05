@@ -1797,14 +1797,17 @@ export function DocumentWorkspace({ documentId, onGoHome }: DocumentWorkspacePro
       case "download-markdown":
       case "download-html":
       case "download-docx":
+      case "download-pdf":
         if (el) {
           const format = action === "download-docx"
             ? "docx"
-            : action === "download-html"
-              ? "html"
-              : action === "download-markdown"
-                ? "md"
-                : "txt";
+            : action === "download-pdf"
+              ? "pdf"
+              : action === "download-html"
+                ? "html"
+                : action === "download-markdown"
+                  ? "md"
+                  : "txt";
           downloadDocument(el, title, format);
           speak(`Downloaded ${format === "docx" ? "Word" : format.toUpperCase()} document.`);
         }

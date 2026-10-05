@@ -1,8 +1,16 @@
 import { getPlainText } from "@/lib/pagination";
+import { buildPdf } from "@/lib/pdf/pdfWriter";
+import { snapshotPages } from "@/lib/pdf/pageSnapshot";
 
-export type DocumentExportFormat = "txt" | "md" | "html" | "docx";
+export type DocumentExportFormat = "txt" | "md" | "html" | "docx" | "pdf";
 
 export function downloadDocument(editor: HTMLElement, title: string, format: DocumentExportFormat) {
+  if (format === "pdf") {
+    // PDF is drawn from the live paginated layout (papers, header/footer chrome), not a clone.
+    const pages = editor.closest<HTMLElement>(".document") ?? editor;
+    downloadBlob(`${fileName(title)}.pdf`, buildPdf(snapshotPages(pages, title)), "application/pdf");
+    return;
+  }
   const clone = editor.cloneNode(true) as HTMLElement;
   cleanReviewMarkup(clone);
   const baseName = fileName(title);
