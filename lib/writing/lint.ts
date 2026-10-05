@@ -54,7 +54,7 @@ export function lintWriting(text: string, pageCount = 1): WritingLint {
       detail: "There is no text to diagnose yet.",
     });
   }
-  if (wordCount > 0 && wordCount < 40) {
+  if (words.length > 0 && words.length < 40) {
     issues.push({
       id: "short",
       code: "length",

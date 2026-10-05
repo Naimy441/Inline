@@ -43,6 +43,8 @@ export function detectAiTropes(text: string): TropeHit[] {
       replace: " - ",
     });
   }
+  // WATERMARK is global, so .test() would resume from the last match on the next call.
+  WATERMARK.lastIndex = 0;
   if (WATERMARK.test(text)) {
     hits.push({
       id: "watermark",

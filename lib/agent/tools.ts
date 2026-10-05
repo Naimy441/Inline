@@ -532,7 +532,13 @@ export const TOOLS = [
       if (ctx.readOnly) return fail("You are in Ask mode, so documents can't be changed.");
       const doc = await resolveDocument(ctx, args.document_id);
       const settings: Record<string, unknown> = {};
-      if (args.font_family) settings.fontFamily = FONT_FAMILIES.find((font) => font.label.toLowerCase() === args.font_family!.toLowerCase())?.value ?? args.font_family;
+      if (args.font_family) {
+        const known = FONT_FAMILIES.find((font) => font.label.toLowerCase() === args.font_family!.toLowerCase().replace(/["']/g, "").trim());
+        // Any other installed font works too; keep only a plain family name and add a fallback.
+        const name = args.font_family.replace(/[^\p{L}\p{N} -]/gu, "").trim();
+        if (!known && !name) return fail(`"${args.font_family}" isn't a font name.`);
+        settings.fontFamily = known?.value ?? `"${name}", sans-serif`;
+      }
       if (args.font_size !== undefined) settings.fontSize = args.font_size;
       if (args.line_spacing !== undefined) settings.lineSpacing = args.line_spacing;
       if (args.paragraph_spacing !== undefined) settings.paragraphSpacing = args.paragraph_spacing;
