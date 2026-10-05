@@ -185,8 +185,10 @@ export function reviewHunkAtCursor(view: EditorView, action: "accept" | "reject"
 }
 
 /** Move the selection to the next (or previous) hunk and return it. */
-export function gotoHunk(view: EditorView, direction: 1 | -1) {
-  const hunks = mappedHunks(view.state).sort((a, b) => a.mappedFrom - b.mappedFrom);
+export function gotoHunk(view: EditorView, direction: 1 | -1, only?: readonly string[]) {
+  const hunks = mappedHunks(view.state)
+    .filter((hunk) => !only || only.includes(hunk.id))
+    .sort((a, b) => a.mappedFrom - b.mappedFrom);
   if (!hunks.length) return null;
   const head = view.state.selection.head;
   const target =

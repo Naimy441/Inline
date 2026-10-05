@@ -13,7 +13,7 @@ import { markdownToDoc } from "@/lib/doc/markdown";
 import { hunkToJSON, type Hunk } from "@/lib/doc/review";
 import { schema } from "@/lib/doc/schema";
 import { DEFAULT_SETTINGS, type DocumentMeta } from "@/lib/doc/settings";
-import { LiveDocument, StepConflictError, documentHub, loadDoc, type HubEvent } from "@/lib/server/hub";
+import { LiveDocument, StaleEpochError, StepConflictError, documentHub, loadDoc, type HubEvent } from "@/lib/server/hub";
 import { dataDir, readDocumentFile, type StoredDocumentFile } from "@/lib/server/store";
 
 // The store resolves its directory on every call, so this applies before any write.
@@ -653,7 +653,7 @@ describe("versions", () => {
     assert.equal(listed.some((v) => "doc" in v), false);
   });
 
-  it("restoreVersion snapshots the current state first, restores the doc and clears hunks", async () => {
+  it("restoreVersion snapshots the current state (with its pending changes) first, then restores the version's own", async () => {
     const live = await documentHub().create({ title: "Restore", markdown: SAMPLE });
     const saved = await live.saveVersion("Clean", "user");
     const original = textOf(live.doc);
@@ -673,8 +673,14 @@ describe("versions", () => {
     assert.ok(backup);
     assert.equal(backup.author, "auto");
     // The backup holds the edited text, so the restore itself can be undone.
+    assert.equal(backup.pendingChanges, 1, "the pending change is kept in the backup");
     await live.restoreVersion(backup.id);
     assert.equal(textOf(live.doc), edited);
+    // ...and restoring it brings the pending change back, still reviewable.
+    assert.equal(live.hunks.length, 1);
+    assert.equal(live.hunksJSON()[0]!.insertedText, "sleepy cat");
+    live.review("reject", "all");
+    assert.match(textOf(live.doc), /lazy dog/);
     await assert.rejects(live.restoreVersion("nope"), /Version not found/);
   });
 
@@ -792,5 +798,29 @@ describe("persistence", () => {
     await live.flush();
     assert.equal(readFileSync(file, "utf8"), before);
     assert.equal(events.length, 1);
+  });
+});
+
+describe("document epochs", () => {
+  it("each load of a document gets its own epoch, carried by snapshots and resets", () => {
+    const a = makeLive();
+    const b = new LiveDocument(a.toFile());
+    assert.notEqual(a.epoch, b.epoch);
+    assert.equal(a.snapshot().epoch, a.epoch);
+    const reset = a.resetEvent();
+    assert.equal(reset.type === "reset" && reset.epoch, a.epoch);
+  });
+
+  it("refuses steps from an earlier load even when the version numbers happen to line up", () => {
+    const first = makeLive();
+    const restarted = new LiveDocument(first.toFile());
+    assert.equal(restarted.version, 0);
+    const before = restarted.doc;
+    assert.throws(
+      () => restarted.receiveClientSteps(0, insertSteps(before, 1, "X"), "a", { epoch: first.epoch }),
+      (error: unknown) => error instanceof StaleEpochError && error.epoch === restarted.epoch,
+    );
+    assert.equal(restarted.doc, before);
+    assert.equal(restarted.receiveClientSteps(0, insertSteps(before, 1, "X"), "a", { epoch: restarted.epoch }), 1);
   });
 });

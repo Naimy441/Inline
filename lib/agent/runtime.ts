@@ -28,6 +28,9 @@ import type {
 import { documentHub } from "@/lib/server/hub";
 import { deleteChatFile, findUpload, listChatIds, readChatFile, workspaceDir, writeChatFile } from "@/lib/server/store";
 import { isUserSuggestion } from "@/lib/doc/review";
+import { docxToDoc } from "@/lib/doc/docxImport";
+import { docToMarkdown } from "@/lib/doc/markdown";
+import { readZip } from "@/lib/server/unzip";
 
 /**
  * The in-app agent: each chat is a Claude Code session (via the Claude Agent
@@ -93,6 +96,22 @@ class AsyncQueue<T> implements AsyncIterable<T> {
       },
     };
   }
+}
+
+/** Image types Claude accepts as images; others (SVG) are sent as their source text. */
+const CLAUDE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+/** The text Claude reads for a non-image, non-PDF attachment. Word files are converted to Inline's Markdown. */
+async function attachmentText(extension: string, data: Buffer) {
+  if (extension === "docx") {
+    try {
+      const parts = readZip(new Uint8Array(data));
+      return docToMarkdown(await docxToDoc(parts));
+    } catch (error) {
+      return `[This Word file couldn't be read: ${errorText(error)}]`;
+    }
+  }
+  return data.toString("utf8");
 }
 
 function clip(text: string, max: number) {
@@ -384,12 +403,12 @@ class ChatRuntime {
         continue;
       }
       const data = await readFile(upload.file);
-      if (attachment.kind === "image") {
+      if (attachment.kind === "image" && CLAUDE_IMAGE_TYPES.has(attachment.mime)) {
         blocks.push({ type: "image", source: { type: "base64", media_type: attachment.mime, data: data.toString("base64") } });
       } else if (attachment.kind === "pdf") {
         blocks.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: data.toString("base64") }, title: attachment.name });
       } else {
-        blocks.push({ type: "text", text: `<attachment name="${attachment.name}">\n${data.toString("utf8").slice(0, 200_000)}\n</attachment>` });
+        blocks.push({ type: "text", text: `<attachment name="${attachment.name}">\n${(await attachmentText(upload.extension, data)).slice(0, 200_000)}\n</attachment>` });
       }
     }
     if (input.text) blocks.push({ type: "text", text: input.text });
@@ -399,6 +418,7 @@ class ChatRuntime {
   private toolContext(): ToolContext {
     return {
       author: this.state.id,
+      turn: this.current?.id,
       documentId: this.state.documentId ?? undefined,
       readOnly: this.state.settings.mode === "ask",
       beforeWrite: async (doc) => {

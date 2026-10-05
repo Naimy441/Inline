@@ -43,6 +43,8 @@ export type ToolContext = {
   author: string;
   /** The document a chat is attached to; tools default to it. */
   documentId?: string;
+  /** The chat message being written, so the changes it makes can be reviewed together. */
+  turn?: string;
   /** Ask mode: write tools are refused. */
   readOnly?: boolean;
   /** Called once before the first write of a turn (used to checkpoint a version). */
@@ -150,7 +152,7 @@ async function commitEdit(ctx: ToolContext, doc: LiveDocument, tool: string, bui
   const tr = build(before);
   if (!tr.docChanged) return fail("The edit produced no change to the document.");
   doc.setActivity({ chatId: ctx.author, status: "editing", label: describe, range: rangeOf(tr) });
-  doc.applyTransform(tr, { kind: "agent", author: ctx.author, tool });
+  doc.applyTransform(tr, { kind: "agent", author: ctx.author, tool, turn: ctx.turn });
   const { added, removed } = countWords(before, tr);
   ctx.onChange?.({ documentId: doc.id, title: doc.meta.title, tool, added, removed });
   const snippet = changedSnippet(before, tr);

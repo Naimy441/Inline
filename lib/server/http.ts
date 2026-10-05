@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { EditError } from "@/lib/doc/editing";
 import { LockedContentError } from "@/lib/doc/merge";
-import { StepConflictError } from "@/lib/server/hub";
+import { StaleEpochError, StepConflictError } from "@/lib/server/hub";
 
 /** Small helpers shared by the API route handlers. */
 
@@ -44,6 +44,7 @@ export function route<C>(handler: Handler<C>): Handler<C> {
       return await handler(request, context);
     } catch (error) {
       if (error instanceof HttpError) return json({ error: error.message, ...error.extra }, { status: error.status });
+      if (error instanceof StaleEpochError) return json({ error: error.message, stale: true, epoch: error.epoch }, { status: 409 });
       if (error instanceof StepConflictError) return json({ error: "Version conflict.", version: error.version }, { status: 409 });
       if (error instanceof EditError || error instanceof LockedContentError) return json({ error: error.message }, { status: 422 });
       if (error instanceof Error && error.message === "Invalid id.") return json({ error: "Invalid id." }, { status: 400 });

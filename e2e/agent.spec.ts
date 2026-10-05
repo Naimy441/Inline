@@ -58,6 +58,27 @@ test("undoing Claude's change from the reply restores the text", async ({ page, 
   await expect(page.locator(".review-bar")).toHaveCount(0);
 });
 
+test("each reply's Undo all touches only that reply's changes", async ({ page, request }) => {
+  await openWithClaude(page, request, "Alpha beta gamma.");
+  await ask(page, 'replace "Alpha" with "First"');
+  await expect(lastReply(page)).toContainText("Replaced Alpha with First.");
+  await ask(page, 'replace "gamma" with "third"');
+  await expect(lastReply(page)).toContainText("Replaced gamma with third.");
+  await expect(page.locator(".doc-content .review-insert")).toHaveText(["First", "third"]);
+
+  // Both replies still have their own pending change, so both cards offer review.
+  const cards = page.locator(".msg-assistant .change-card");
+  await expect(cards.nth(0).getByRole("button", { name: "Undo all" })).toBeVisible();
+  await cards.nth(1).getByRole("button", { name: "Undo all" }).click();
+  // The first reply's change is untouched and still pending.
+  await expect(page.locator(".doc-content .review-insert")).toHaveText(["First"]);
+  await expect(page.locator(".doc-content .review-delete")).toHaveText(["Alpha"]);
+  await expect(cards.nth(1).getByRole("button", { name: "Undo all" })).toHaveCount(0);
+  await cards.nth(0).getByRole("button", { name: "Keep all" }).click();
+  await expect(page.locator(".review-bar")).toHaveCount(0);
+  await expect(page.locator(".doc-content")).toHaveText("First beta gamma.");
+});
+
 test("a failed edit is shown as a failed tool call", async ({ page, request }) => {
   await openWithClaude(page, request, "Nothing to see here.");
   await ask(page, 'replace "missing words" with "anything"');
