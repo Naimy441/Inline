@@ -40,8 +40,8 @@ describe("live Claude Code", { skip: LIVE ? false : "set INLINE_LIVE_AGENT=1 to 
     for (const chat of chats) chat.close();
   });
 
-  async function turn(chat: ChatRuntime, text: string) {
-    await chat.send({ text });
+  async function turn(chat: ChatRuntime, text: string, extra: Partial<Parameters<ChatRuntime["send"]>[0]> = {}) {
+    await chat.send({ text, ...extra });
     const start = Date.now();
     while (chat.state.running || (chat.state.messages.at(-1) as AssistantMessage).status === "streaming") {
       if (Date.now() - start > 240_000) throw new Error("Claude did not finish in time");
@@ -81,6 +81,33 @@ describe("live Claude Code", { skip: LIVE ? false : "set INLINE_LIVE_AGENT=1 to 
     assert.equal(docToMarkdown(doc.doc), "The budget is 40000 dollars.");
     const text = message.parts.filter((part) => part.type === "text").map((part) => (part as { text: string }).text).join(" ");
     assert.match(text, /40,?000/);
+  });
+
+  test("a prompt in an empty document drafts it, and undo returns to empty", async () => {
+    const doc = await hub.create({ title: "Untitled document", markdown: "" });
+    const chat = await runtime.create({ documentId: doc.id, settings: { model: MODEL, effort: "low", mode: "agent" } });
+    chats.push(chat);
+    const message = await turn(chat, "Write a three-item bulleted packing list for a beach day, under a heading 'Beach day'. Nothing else.");
+    assert.equal(message.status, "done", message.error ?? "");
+    const text = docToMarkdown(doc.doc);
+    assert.match(text, /Beach day/i);
+    assert.equal((text.match(/^- /gm) ?? []).length, 3, text);
+    assert.doesNotMatch(text, /&nbsp;/);
+    doc.review("reject", "all");
+    assert.equal(docToMarkdown(doc.doc), "&nbsp;");
+  });
+
+  test("a prompt about the selection rewrites only that text", async () => {
+    const sentence = "In order to be able to make progress, it is really very important that we all agree on the scope first.";
+    const doc = await hub.create({ title: "Scope", markdown: `Keep this intro exactly.\n\n${sentence}\n\nKeep this outro exactly.` });
+    const chat = await runtime.create({ documentId: doc.id, settings: { model: MODEL, effort: "low", mode: "agent" } });
+    chats.push(chat);
+    const withSelection = await turn(chat, "Make the selected sentence much shorter.", { selection: { documentId: doc.id, text: sentence, from: 0, to: 0 } });
+    assert.equal(withSelection.status, "done", withSelection.error ?? "");
+    const text = docToMarkdown(doc.doc);
+    assert.match(text, /^Keep this intro exactly\.\n\n/);
+    assert.match(text, /\n\nKeep this outro exactly\.$/);
+    assert.doesNotMatch(text, /In order to be able to/);
   });
 
   describe("external Claude Code over HTTP", () => {

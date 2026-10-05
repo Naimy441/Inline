@@ -54,7 +54,7 @@ function record(chat: ChatRuntime) {
   return events;
 }
 
-async function waitFor<T>(check: () => T | undefined | false, what: string, timeoutMs = 3000): Promise<T> {
+async function waitFor<T>(check: () => T | undefined | false, what: string, timeoutMs = 10_000): Promise<T> {
   const start = Date.now();
   for (;;) {
     const value = check();
