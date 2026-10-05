@@ -496,6 +496,21 @@ export function Workspace({ documentId }: { documentId: string }) {
           onDragOver={(event) => {
             if (event.dataTransfer.types.includes("Files")) event.preventDefault();
           }}
+          onPasteCapture={(event) => {
+            if (!(event.target as HTMLElement).closest?.(".doc-content")) return;
+            const data = event.clipboardData;
+            const image = Array.from(data.files).find((item) => item.type.startsWith("image/"));
+            // A screenshot or copied image file: upload it. Pasted HTML is left to the editor.
+            if (image && !data.types.includes("text/html")) {
+              event.preventDefault();
+              event.stopPropagation();
+              void insertImageFile(image);
+              return;
+            }
+            if (data.types.includes("text/html") && data.getData("text/html").includes("data:image/")) {
+              setTimeout(() => void session.uploadInlineImages(), 0);
+            }
+          }}
           onDrop={(event) => {
             const file = Array.from(event.dataTransfer.files).find((item) => item.type.startsWith("image/"));
             if (!file) return;

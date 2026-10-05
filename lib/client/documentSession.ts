@@ -4,11 +4,12 @@ import { getVersion, receiveTransaction, sendableSteps } from "prosemirror-colla
 import { Node as PMNode } from "prosemirror-model";
 import { EditorState, TextSelection, type Command, type Transaction } from "prosemirror-state";
 import { Step } from "prosemirror-transform";
+import { dataUrlToBlob, ImageView } from "@/lib/editor/imageView";
 import { EditorView } from "prosemirror-view";
 import type { HunkJSON } from "@/lib/doc/review";
 import { schema } from "@/lib/doc/schema";
 import { pageSize, type DocComment, type DocumentMeta } from "@/lib/doc/settings";
-import { api, ApiError, post, Store } from "@/lib/client/api";
+import { api, ApiError, post, Store, uploadFile } from "@/lib/client/api";
 import { setCommentState } from "@/lib/editor/comments";
 import { syncDomSelection } from "@/lib/editor/domSync";
 import { pageCount, relayout, type PageGeometry } from "@/lib/editor/pagination";
@@ -249,6 +250,7 @@ export class DocumentSession {
         editable: () => this.ui.get().mode !== "viewing",
         state: this.createState(document),
         dispatchTransaction: (tr) => this.dispatch(tr),
+        nodeViews: { image: (node, view, getPos) => new ImageView(node, view, getPos) },
         attributes: { class: "doc-content", spellcheck: "true", "aria-label": "Document", role: "textbox", "aria-multiline": "true" },
         handleDOMEvents: {
           focus: () => {
@@ -729,6 +731,39 @@ export class DocumentSession {
     const { from, to } = view.state.selection;
     if (from === to) return null;
     return { documentId: this.id, text: view.state.doc.textBetween(from, to, "\n"), from, to };
+  }
+
+  /**
+   * Images pasted from other apps arrive as data: URLs inside the document.
+   * Upload each one and point the image at the stored file, so documents stay
+   * small and exports work. Returns how many were uploaded.
+   */
+  async uploadInlineImages() {
+    const view = this.view;
+    if (!view) return 0;
+    const sources = new Set<string>();
+    view.state.doc.descendants((node) => {
+      if (node.type.name === "image" && typeof node.attrs.src === "string" && node.attrs.src.startsWith("data:image/")) sources.add(node.attrs.src);
+    });
+    let uploaded = 0;
+    for (const src of sources) {
+      try {
+        const blob = dataUrlToBlob(src);
+        if (!blob) continue;
+        const extension = blob.type.split("/")[1]?.replace("+xml", "") || "png";
+        const file = await uploadFile(new File([blob], `pasted-image.${extension}`, { type: blob.type }));
+        if (!this.view) return uploaded;
+        const tr = this.view.state.tr;
+        this.view.state.doc.descendants((node, pos) => {
+          if (node.type.name === "image" && node.attrs.src === src) tr.setNodeMarkup(pos, undefined, { ...node.attrs, src: file.url });
+        });
+        if (tr.docChanged) this.view.dispatch(tr);
+        uploaded += 1;
+      } catch {
+        // Leave it inline; it still shows and saves.
+      }
+    }
+    return uploaded;
   }
 
   scrollTo(from: number, to: number) {
