@@ -2,10 +2,11 @@
 
 import { History, RotateCcw, Save, Sparkles, X } from "lucide-react";
 import { DOMSerializer, Node as PMNode } from "prosemirror-model";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, post } from "@/lib/client/api";
 import type { DocumentSession } from "@/lib/client/documentSession";
 import { schema } from "@/lib/doc/schema";
+import { diffParagraphs, diffStats } from "@/lib/doc/textDiff";
 import { Button, IconButton } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { toast } from "@/components/ui/Toast";
@@ -95,9 +96,23 @@ function VersionPreview({ session, version, onClose, onRestored }: { session: Do
   const container = useRef<HTMLDivElement>(null);
   const [loaded, setLoaded] = useState<{ doc: unknown } | null>(null);
   const [restoring, setRestoring] = useState(false);
+  const [comparing, setComparing] = useState(false);
+
+  const comparison = useMemo(() => {
+    if (!comparing || !loaded || !session.view) return null;
+    try {
+      const before = PMNode.fromJSON(schema, loaded.doc as Parameters<typeof PMNode.fromJSON>[1]);
+      const blocks = (doc: PMNode) => doc.textBetween(0, doc.content.size, "\n", "");
+      const paragraphs = diffParagraphs(blocks(before), blocks(session.view.state.doc));
+      return { paragraphs, ...diffStats(paragraphs) };
+    } catch {
+      return null;
+    }
+  }, [comparing, loaded, session.view]);
 
   useEffect(() => {
     setLoaded(null);
+    setComparing(false);
     if (!version) return;
     void api<{ version: { doc: unknown } }>(`/api/documents/${session.id}/versions/${version.id}`).then((result) => setLoaded(result.version));
   }, [session.id, version]);
@@ -154,7 +169,39 @@ function VersionPreview({ session, version, onClose, onRestored }: { session: Do
       }
     >
       {!loaded && <p className="muted">Loading…</p>}
-      <div className="version-preview doc-content" ref={container} />
+      {loaded && (
+        <div className="version-tabs" role="tablist">
+          <button type="button" role="tab" aria-selected={!comparing} className={`version-tab${comparing ? "" : " is-active"}`} onClick={() => setComparing(false)}>
+            This version
+          </button>
+          <button type="button" role="tab" aria-selected={comparing} className={`version-tab${comparing ? " is-active" : ""}`} onClick={() => setComparing(true)}>
+            Compare with now
+          </button>
+          {comparison && (
+            <span className="version-stats">
+              <span className="change-stat add">+{comparison.added}</span> <span className="change-stat del">−{comparison.removed}</span> words since this version
+            </span>
+          )}
+        </div>
+      )}
+      <div className="version-preview doc-content" ref={container} hidden={comparing} />
+      {comparing && comparison && (
+        <div className="version-preview version-diff" aria-label="Changes since this version">
+          {comparison.added + comparison.removed === 0 ? (
+            <p className="muted">No text changes since this version.</p>
+          ) : (
+            comparison.paragraphs.map((paragraph, index) =>
+              paragraph.kind === "same" && !paragraph.parts[0]!.text ? null : (
+                <p key={index} className={`diff-para is-${paragraph.kind}`}>
+                  {paragraph.parts.map((part, i) =>
+                    part.kind === "insert" ? <ins key={i}>{part.text}</ins> : part.kind === "delete" ? <del key={i}>{part.text}</del> : <span key={i}>{part.text}</span>,
+                  )}
+                </p>
+              ),
+            )
+          )}
+        </div>
+      )}
     </Dialog>
   );
 }

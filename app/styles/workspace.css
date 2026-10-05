@@ -902,6 +902,49 @@
   line-height: 1.15;
 }
 
+.version-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.version-tab {
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.version-tab.is-active {
+  border-color: var(--border);
+  color: inherit;
+  background: var(--surface-2);
+}
+.version-stats {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--muted);
+}
+.version-diff .diff-para {
+  margin: 0 0 10px;
+  white-space: pre-wrap;
+}
+.version-diff ins {
+  background: color-mix(in srgb, #1a7f37 18%, transparent);
+  text-decoration: none;
+}
+.version-diff del {
+  background: color-mix(in srgb, #cf222e 15%, transparent);
+  color: color-mix(in srgb, currentColor 70%, transparent);
+}
+.version-diff .is-same {
+  color: color-mix(in srgb, currentColor 65%, transparent);
+}
+
 .version-preview:empty {
   display: none;
 }
