@@ -264,6 +264,7 @@ export function Workspace({ documentId }: { documentId: string }) {
     image: () => imageInput.current?.click(),
     zoom: setZoom,
     toggleTheme,
+    dark,
     toggleOutline: () =>
       setOutline((value) => {
         store(OUTLINE_KEY, value ? "0" : "1");

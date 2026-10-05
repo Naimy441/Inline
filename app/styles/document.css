@@ -4,9 +4,8 @@
   position: relative;
   min-height: inherit;
   color: var(--paper-text);
-  font-family: Arial, sans-serif;
-  font-size: 11pt;
-  line-height: 1.15;
+  /* Font, size and spacing come from the document's settings on .page-content. */
+  font: inherit;
   word-wrap: break-word;
   overflow-wrap: break-word;
   white-space: pre-wrap;

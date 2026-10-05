@@ -35,7 +35,7 @@ export function PageCanvas({ session, meta, pages, zoom, printing }: { session: 
 
   return (
     <div className="page-stack-wrap" style={{ zoom: printing ? 1 : zoom }}>
-      <div className="page-stack" style={{ width: geometry.pageWidth, height: totalHeight }}>
+      <div className="page-stack" style={{ width: geometry.pageWidth, height: totalHeight, ["--doc-font" as string]: settings?.fontFamily }}>
         {Array.from({ length: pages }, (_, index) => (
           <Sheet key={index} index={index} pages={pages} meta={meta} top={index * pitch} geometry={geometry} />
         ))}

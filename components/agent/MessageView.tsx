@@ -127,7 +127,7 @@ export const AssistantView = memo(function AssistantView({
       )}
       {!streaming && message.usage && (
         <div className="msg-meta">
-          {formatDuration(message.usage.durationMs)} · {formatTokens(message.usage.outputTokens)} tokens{message.model ? ` · ${message.model}` : ""}
+          {formatDuration(message.usage.durationMs)} · {formatTokens(message.usage.outputTokens)} tokens{message.model ? ` · ${modelLabel(message.model)}` : ""}
         </div>
       )}
     </div>
@@ -163,4 +163,12 @@ export function MessageList({
       )}
     </>
   );
+}
+
+/** "claude-sonnet-5-5" → "Sonnet 5.5"; unknown ids are shown as they are. */
+function modelLabel(id: string) {
+  const match = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(?:\[.*\])?$/.exec(id);
+  if (!match) return id;
+  const [, family, major, minor] = match;
+  return `${family![0]!.toUpperCase()}${family!.slice(1)} ${major}${minor ? `.${minor}` : ""}`;
 }

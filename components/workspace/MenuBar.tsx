@@ -38,6 +38,7 @@ export type MenuActions = {
   image: () => void;
   zoom: (value: number) => void;
   toggleTheme: () => void;
+  dark: boolean;
   toggleOutline: () => void;
   toggleAgent: () => void;
   shortcuts: () => void;
@@ -127,7 +128,7 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
       ...(actions.focusMode ? [] : [{ label: "Claude panel", shortcut: `${mod}J`, onSelect: actions.toggleAgent }]),
       { label: "Focus mode", hint: "Hide Claude while you write", checked: actions.focusMode, onSelect: actions.toggleFocusMode },
       { label: "Show non-printing characters", shortcut: `${mod}⇧P`, checked: actions.showInvisibles, onSelect: actions.toggleInvisibles },
-      { label: "Dark theme", onSelect: actions.toggleTheme },
+      { label: "Dark theme", checked: actions.dark, onSelect: actions.toggleTheme },
       { label: "Full screen", onSelect: actions.fullScreen },
     ],
     Insert: [

@@ -486,6 +486,9 @@
 .page-content {
   position: absolute;
   z-index: 1;
+  font-family: var(--doc-font, Arial, sans-serif);
+  font-size: 11pt;
+  line-height: 1.15;
 }
 
 .editor-mount {

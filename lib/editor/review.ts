@@ -51,7 +51,8 @@ export function mappedHunks(state: EditorState): MappedHunk[] {
 }
 
 function clipDeleted(text: string) {
-  const flat = text.replace(/\n+/g, " ¶ ").trim();
+  // Keep surrounding spaces: they separate the struck-out words from the text around them.
+  const flat = text.replace(/\n+/g, " ¶ ").replace(/^ ¶ | ¶ $/g, " ");
   return flat.length > 400 ? `${flat.slice(0, 400)}…` : flat;
 }
 
