@@ -48,6 +48,10 @@ export type MenuActions = {
   paste: (plain: boolean) => void;
   clipboard: (action: "cut" | "copy") => void;
   fitWidth: () => void;
+  /** Zoom follows the window ("Fit"), shrinking pages that don't fit. */
+  zoomFit: boolean;
+  /** Phones: text reflows to the screen, so zoom and the outline don't apply. */
+  flow: boolean;
   fullScreen: () => void;
   focusMode: boolean;
   toggleFocusMode: () => void;
@@ -64,6 +68,31 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
   const [open, setOpen] = useState<string | null>(null);
   const anchors = useRef<Record<string, RefObject<HTMLButtonElement | null>>>({});
   const anchor = (name: string) => (anchors.current[name] ??= createRef<HTMLButtonElement>());
+  const menus = documentMenus(session, actions, zoom, hunks);
+
+  return (
+    <nav className="menubar" aria-label="Menu">
+      {Object.entries(menus).map(([name, items]) => (
+        <span key={name}>
+          <button
+            ref={anchor(name)}
+            type="button"
+            className={`menubar-item${open === name ? " is-open" : ""}`}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => setOpen((value) => (value === name ? null : name))}
+            onMouseEnter={() => open && open !== name && setOpen(name)}
+          >
+            {name}
+          </button>
+          <Menu open={open === name} onClose={() => setOpen((value) => (value === name ? null : value))} anchor={anchor(name)} items={items} />
+        </span>
+      ))}
+    </nav>
+  );
+}
+
+/** The menu bar's menus (File, Edit, View, …), shared with the phone's overflow menu. */
+export function documentMenus(session: DocumentSession, actions: MenuActions, zoom: number, hunks: number): Record<string, MenuItem[]> {
   const run = session.run.bind(session);
   const inTable = session.view ? isInTable(session.view.state) : false;
 
@@ -118,13 +147,18 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
     ],
     View: [
       { label: "Mode", submenu: modeMenuItems(actions.mode, actions.setMode) },
+      ...(actions.flow
+        ? []
+        : ([
+            { kind: "separator" },
+            { label: "Zoom in", onSelect: () => actions.zoom(Math.min(2, Math.round((zoom + 0.1) * 10) / 10)) },
+            { label: "Zoom out", onSelect: () => actions.zoom(Math.max(0.5, Math.round((zoom - 0.1) * 10) / 10)) },
+            { label: "Actual size", checked: !actions.zoomFit && zoom === 1, onSelect: () => actions.zoom(1) },
+            { label: "Fit to window", hint: "Shrink pages that don't fit", checked: actions.zoomFit, onSelect: actions.fitWidth },
+            { kind: "separator" },
+            { label: "Outline", onSelect: actions.toggleOutline },
+          ] as MenuItem[])),
       { kind: "separator" },
-      { label: "Zoom in", onSelect: () => actions.zoom(Math.min(2, Math.round((zoom + 0.1) * 10) / 10)) },
-      { label: "Zoom out", onSelect: () => actions.zoom(Math.max(0.5, Math.round((zoom - 0.1) * 10) / 10)) },
-      { label: "Actual size", checked: zoom === 1, onSelect: () => actions.zoom(1) },
-      { label: "Fit to width", onSelect: actions.fitWidth },
-      { kind: "separator" },
-      { label: "Outline", onSelect: actions.toggleOutline },
       ...(actions.focusMode ? [] : [{ label: "Claude panel", shortcut: `${mod}J`, onSelect: actions.toggleAgent }]),
       { label: "Focus mode", hint: "Hide Claude while you write", checked: actions.focusMode, onSelect: actions.toggleFocusMode },
       { label: "Show non-printing characters", shortcut: `${mod}⇧P`, checked: actions.showInvisibles, onSelect: actions.toggleInvisibles },
@@ -246,24 +280,5 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
     ],
     Help: [{ label: "Keyboard shortcuts", shortcut: `${mod}/`, onSelect: actions.shortcuts }],
   };
-
-  return (
-    <nav className="menubar" aria-label="Menu">
-      {Object.entries(menus).map(([name, items]) => (
-        <span key={name}>
-          <button
-            ref={anchor(name)}
-            type="button"
-            className={`menubar-item${open === name ? " is-open" : ""}`}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => setOpen((value) => (value === name ? null : name))}
-            onMouseEnter={() => open && open !== name && setOpen(name)}
-          >
-            {name}
-          </button>
-          <Menu open={open === name} onClose={() => setOpen((value) => (value === name ? null : value))} anchor={anchor(name)} items={items} />
-        </span>
-      ))}
-    </nav>
-  );
+  return menus;
 }

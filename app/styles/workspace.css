@@ -426,7 +426,7 @@
   display: flex;
   width: max-content;
   min-width: 100%;
-  padding: 28px 40px 120px;
+  padding: 28px var(--canvas-pad, 40px) 120px;
 }
 
 .page-stack {
@@ -1194,6 +1194,23 @@ button.status-item:hover {
   flex: 1;
 }
 
+/*
+ * Narrower windows: drop the toolbar's least-used controls (each is also in
+ * the menus or on a shortcut) before the row has to scroll.
+ */
+@media (max-width: 1320px) {
+  .tb-mode .tb-select-text {
+    display: none;
+  }
+}
+
+@media (max-width: 1220px) {
+  .tb-clear-group,
+  .tb-indent {
+    display: none;
+  }
+}
+
 /* Narrow screens: the panel overlays the canvas instead of squeezing it. */
 
 @media (max-width: 1100px) {
@@ -1203,12 +1220,29 @@ button.status-item:hover {
 }
 
 @media (max-width: 860px) {
-  .titlebar-status,
-  .titlebar-actions .btn-label {
+  .titlebar {
+    gap: 4px;
+  }
+  .titlebar-status {
+    flex: none;
+    margin-left: 0;
+  }
+  .presence-pill {
     display: none;
   }
   .menubar {
     display: none;
+  }
+  .title-stack {
+    flex: 1;
+  }
+  .title-input {
+    width: 100%;
+    height: 30px;
+    font-size: 16px;
+  }
+  .titlebar-actions {
+    margin-left: auto;
   }
   .panel-shell {
     position: absolute;
@@ -1270,4 +1304,277 @@ button.status-item:hover {
 .workspace.is-focus .bubble-ask + .bubble-sep,
 .workspace.is-focus .status-claude {
   display: none !important;
+}
+
+/* Claude is working: a small pulsing dot on the compact Claude button. */
+.claude-toggle.is-working::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--surface);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.icon-btn.claude-toggle {
+  border: 0;
+  background: transparent;
+}
+
+.icon-btn.claude-toggle.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.panel-backdrop {
+  display: none;
+}
+
+/*
+ * Phones: one column. Text reflows to the screen, the formatting toolbar sits
+ * at the bottom within thumb reach (and above the keyboard), and panels and
+ * menus rise as sheets. The workspace tracks the visual viewport so nothing
+ * pinned to the bottom hides behind the iOS keyboard.
+ */
+@media (max-width: 640px) {
+  .workspace {
+    position: fixed;
+    left: 0;
+    right: 0;
+    top: var(--app-top, 0px);
+    height: var(--app-height, 100dvh);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-areas: "title" "body" "tools";
+  }
+
+  .titlebar {
+    grid-area: title;
+    height: calc(52px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) 4px 0 2px;
+    gap: 0;
+  }
+
+  .titlebar > .icon-btn {
+    min-width: 40px;
+    height: 40px;
+  }
+
+  .titlebar > .logo {
+    display: none;
+  }
+
+  .title-input {
+    padding: 0 6px;
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .titlebar-status {
+    margin: 0 2px;
+  }
+
+  .titlebar-actions {
+    gap: 0;
+  }
+
+  .workspace-body {
+    grid-area: body;
+  }
+
+  .toolbar {
+    grid-area: tools;
+    height: calc(50px + env(safe-area-inset-bottom));
+    padding: 0 6px env(safe-area-inset-bottom);
+    gap: 0;
+    border-top: 1px solid var(--border);
+    border-bottom: 0;
+    scroll-snap-type: x proximity;
+  }
+
+  .toolbar .icon-btn-md {
+    min-width: 40px;
+    height: 40px;
+  }
+
+  .toolbar .tb-select {
+    height: 38px;
+    font-size: 14px;
+  }
+
+  .tb-group {
+    scroll-snap-align: start;
+  }
+
+  .tb-group + .tb-group {
+    margin-left: 2px;
+    padding-left: 3px;
+  }
+
+  .tb-zoom-group,
+  .tb-spacing,
+  .tb-spacer,
+  .tb-mode {
+    display: none;
+  }
+
+  .tb-zoom-group + .tb-group {
+    margin-left: 0;
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .tb-size {
+    width: 40px;
+    height: 32px;
+  }
+
+  .toolbar.is-viewing {
+    display: none;
+  }
+
+  .statusbar {
+    display: none;
+  }
+
+  .canvas {
+    background: var(--paper);
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .page-stack-wrap.is-flow {
+    display: block;
+    width: 100%;
+    padding: 20px 20px 112px;
+  }
+
+  .page-stack-wrap.is-flow .page-stack {
+    max-width: 680px;
+  }
+
+  .page-stack-wrap.is-flow .page-content {
+    position: relative;
+  }
+
+  /* Panels: a sheet over the document, leaving a sliver of it in view. */
+  .panel-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 44;
+    background: rgba(20, 19, 17, 0.32);
+    animation: fade-in 0.2s;
+  }
+
+  .panel-shell {
+    position: fixed;
+    left: 0;
+    right: 0;
+    top: calc(var(--app-top, 0px) + 36px + env(safe-area-inset-top));
+    bottom: auto;
+    z-index: 45;
+    width: auto;
+    height: calc(var(--app-height, 100dvh) - 36px - env(safe-area-inset-top));
+    border: 0;
+    border-radius: 16px 16px 0 0;
+    overflow: hidden;
+    box-shadow: var(--shadow-lg);
+    animation: sheet-up 0.28s var(--ease);
+  }
+
+  .panel-resizer {
+    display: none;
+  }
+
+  .panel-header {
+    height: 52px;
+    padding: 0 6px 0 18px;
+  }
+
+  .panel-header .icon-btn-sm {
+    min-width: 40px;
+    height: 40px;
+  }
+
+  .panel-title-text {
+    font-size: 15px;
+  }
+
+  .panel-footer {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+
+  .find-bar {
+    top: calc(var(--app-top, 0px) + 58px + env(safe-area-inset-top));
+    left: 8px;
+    right: 8px;
+    width: auto;
+    max-width: none;
+  }
+
+  .workspace.has-panel .find-bar {
+    right: 8px;
+  }
+
+  .find-field {
+    height: 40px;
+  }
+
+  .review-bar {
+    bottom: 12px;
+    width: calc(100% - 24px);
+    max-width: 440px;
+    margin: -64px auto 12px;
+    padding: 5px 5px 5px 12px;
+  }
+
+  .review-bar-count {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .review-bar-nav,
+  .review-bar-by {
+    display: none;
+  }
+
+  .review-bar-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .review-bar-dot {
+    flex: none;
+  }
+
+  .review-bar .btn-sm {
+    height: 34px;
+    padding: 0 12px;
+  }
+
+  .review-bar .icon-btn-sm {
+    min-width: 34px;
+    height: 34px;
+  }
+
+  .bubble-btn {
+    min-width: 40px;
+    height: 40px;
+  }
+
+  .bubble kbd {
+    display: none;
+  }
 }

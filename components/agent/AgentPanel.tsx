@@ -234,7 +234,7 @@ export const AgentPanel = forwardRef<
       </div>
 
       <div className="panel-footer">
-        {showTodos && <TodoList todos={todos} />}
+        {showTodos && <TodoList todos={todos} running={Boolean(chat?.running)} />}
         {chat && chat.queue.length > 0 && (
           <div className="queue">
             {chat.queue.map((item) => (
@@ -283,10 +283,11 @@ function RunStatusLine({ status }: { status: NonNullable<import("@/lib/agent/typ
   return <div className="run-status shimmer">{text}</div>;
 }
 
-function TodoList({ todos }: { todos: Todo[] }) {
+function TodoList({ todos, running }: { todos: Todo[]; running: boolean }) {
   const [open, setOpen] = useState(true);
   const done = todos.filter((todo) => todo.status === "completed").length;
-  const active = todos.find((todo) => todo.status === "in_progress");
+  // Once Claude stops, an unfinished step is no longer in progress: no spinner.
+  const active = running ? todos.find((todo) => todo.status === "in_progress") : undefined;
   return (
     <div className="todos">
       <button type="button" className="todos-head" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
@@ -298,8 +299,8 @@ function TodoList({ todos }: { todos: Todo[] }) {
       {open && (
         <ol className="todos-list">
           {todos.map((todo, index) => (
-            <li key={index} className={`todo is-${todo.status}`}>
-              <span className="todo-mark">{todo.status === "completed" ? <Check size={12} /> : todo.status === "in_progress" ? <Loader2 size={12} className="spin" /> : null}</span>
+            <li key={index} className={`todo is-${todo.status === "in_progress" && !running ? "pending" : todo.status}`}>
+              <span className="todo-mark">{todo.status === "completed" ? <Check size={12} /> : todo.status === "in_progress" && running ? <Loader2 size={12} className="spin" /> : null}</span>
               <span>{todo.content}</span>
             </li>
           ))}

@@ -52,7 +52,7 @@ export function HistoryPanel({ session, onClose }: { session: DocumentSession; o
       </header>
       <div className="history-save">
         <input className="input" placeholder="Name this version (optional)" value={label} onChange={(event) => setLabel(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void save()} />
-        <Button size="sm" icon={<Save size={14} />} onClick={() => void save()}>
+        <Button icon={<Save size={14} />} onClick={() => void save()}>
           Save
         </Button>
       </div>

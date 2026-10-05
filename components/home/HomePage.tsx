@@ -1,6 +1,6 @@
 "use client";
 
-import { Copy, FilePlus2, FileText, FileUp, MoreHorizontal, Moon, Pencil, RotateCcw, Search, Sun, Trash2 } from "lucide-react";
+import { Copy, FilePlus2, FileText, FileUp, MoreHorizontal, Moon, Pencil, Plus, RotateCcw, Search, Sun, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, del, patch, post } from "@/lib/client/api";
@@ -239,6 +239,12 @@ export function HomePage() {
           )}
         </section>
       </main>
+
+      {view === "recent" && (
+        <button type="button" className="home-fab" aria-label="New document" onClick={() => void create(templates[0]!)} disabled={creating !== null}>
+          <Plus size={24} />
+        </button>
+      )}
 
       <RenameDialog
         doc={renaming}

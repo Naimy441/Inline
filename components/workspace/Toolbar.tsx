@@ -88,6 +88,7 @@ export function Toolbar({
   state,
   meta,
   zoom,
+  zoomFit,
   onZoom,
   onLink,
   onComment,
@@ -98,7 +99,8 @@ export function Toolbar({
   state: EditorState | null;
   meta: DocumentMeta | null;
   zoom: number;
-  onZoom: (zoom: number) => void;
+  zoomFit: boolean;
+  onZoom: (zoom: number | "fit") => void;
   onLink: () => void;
   onComment: () => void;
   onImage: () => void;
@@ -134,11 +136,15 @@ export function Toolbar({
           <Redo2 size={16} />
         </IconButton>
       </Group>
-      <Group edit={false}>
+      <Group edit={false} className="tb-zoom-group">
         <MenuButton
           className="tb-select tb-zoom"
           label="Zoom"
-          items={ZOOMS.map((value) => ({ label: `${Math.round(value * 100)}%`, checked: value === zoom, onSelect: () => onZoom(value) }))}
+          items={[
+            { label: "Fit", hint: "Shrink pages that don't fit the window", checked: zoomFit, onSelect: () => onZoom("fit") },
+            { kind: "separator" },
+            ...ZOOMS.map<MenuItem>((value) => ({ label: `${Math.round(value * 100)}%`, checked: !zoomFit && value === zoom, onSelect: () => onZoom(value) })),
+          ]}
         >
           {Math.round(zoom * 100)}% <ChevronDown size={13} />
         </MenuButton>
@@ -216,7 +222,7 @@ export function Toolbar({
           <ImagePlus size={16} />
         </IconButton>
       </Group>
-      <Group>
+      <Group className="tb-align-group">
         <MenuButton
           className="icon-btn icon-btn-md tb-menu-icon"
           label="Align"
@@ -256,14 +262,14 @@ export function Toolbar({
         <IconButton label="Numbered list" shortcut={`${mod}⇧7`} active={list === "ordered"} disabled={disabled} onClick={() => run(toggleList("ordered"))}>
           <ListOrdered size={16} />
         </IconButton>
-        <IconButton label="Decrease indent" shortcut={`${mod}[`} disabled={disabled} onClick={() => run(outdent)}>
+        <IconButton label="Decrease indent" className="tb-indent" shortcut={`${mod}[`} disabled={disabled} onClick={() => run(outdent)}>
           <IndentDecrease size={16} />
         </IconButton>
-        <IconButton label="Increase indent" shortcut={`${mod}]`} disabled={disabled} onClick={() => run(indent)}>
+        <IconButton label="Increase indent" className="tb-indent" shortcut={`${mod}]`} disabled={disabled} onClick={() => run(indent)}>
           <IndentIncrease size={16} />
         </IconButton>
       </Group>
-      <Group>
+      <Group className="tb-clear-group">
         <IconButton label="Clear formatting" shortcut={`${mod}\\`} disabled={disabled} onClick={() => run(clearFormatting)}>
           <RemoveFormatting size={16} />
         </IconButton>
@@ -278,8 +284,8 @@ export function Toolbar({
 }
 
 /** A group of controls; editing groups are disabled in viewing mode. */
-function Group({ children, edit = true }: { children: ReactNode; edit?: boolean }) {
-  return <div className={`tb-group${edit ? " tb-edit" : ""}`}>{children}</div>;
+function Group({ children, edit = true, className }: { children: ReactNode; edit?: boolean; className?: string }) {
+  return <div className={`tb-group${edit ? " tb-edit" : ""}${className ? ` ${className}` : ""}`}>{children}</div>;
 }
 
 function FontSizeInput({ value, onCommit }: { value: number; onCommit: (value: number) => void }) {

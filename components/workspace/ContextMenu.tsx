@@ -9,6 +9,7 @@ import type { DocumentSession } from "@/lib/client/documentSession";
 import { clearFormatting } from "@/lib/editor/commands";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { toast } from "@/components/ui/Toast";
+import { isTouch } from "@/lib/client/viewport";
 
 const mod = typeof navigator !== "undefined" && /Mac|iP(hone|[oa]d)/.test(navigator.platform) ? "⌘" : "Ctrl+";
 
@@ -39,7 +40,8 @@ export function ContextMenu({
     const dom = view?.dom;
     if (!view || !dom) return;
     const onContextMenu = (event: MouseEvent) => {
-      if (event.shiftKey) return;
+      // Touch long-presses keep the system's own selection handles and menu.
+      if (event.shiftKey || (event as PointerEvent).pointerType === "touch" || isTouch()) return;
       event.preventDefault();
       // Right-clicking outside the selection moves the cursor there first.
       const hit = view.posAtCoords({ left: event.clientX, top: event.clientY });

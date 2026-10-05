@@ -33,7 +33,11 @@ export function Dialog({
     };
     document.addEventListener("keydown", onKey, true);
     requestAnimationFrame(() => {
-      const first = ref.current?.querySelector<HTMLElement>("[autofocus], input, textarea, select, button:not(.dialog-close)");
+      // Prefer a field over tabs or buttons, so opening a form doesn't land focus on its first tab.
+      const first =
+        ref.current?.querySelector<HTMLElement>("[autofocus]") ??
+        ref.current?.querySelector<HTMLElement>("input:not([type=hidden]), textarea, select") ??
+        ref.current?.querySelector<HTMLElement>("button:not(.dialog-close)");
       first?.focus();
     });
     return () => {

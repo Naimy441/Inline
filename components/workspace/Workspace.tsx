@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Check, CloudOff, Download, History, Loader2, MessageSquare, Moon, PanelRight, Sparkles, Sun } from "lucide-react";
+import { ArrowLeft, Check, CloudOff, Download, History, Loader2, MessageSquare, Moon, MoreHorizontal, PanelRight, Sparkles, Sun } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { SelectionContext } from "@/lib/agent/types";
@@ -13,18 +13,19 @@ import { insertImage, insertText } from "@/lib/editor/commands";
 import { AgentPanel, type AgentPanelHandle } from "@/components/agent/AgentPanel";
 import { IconButton } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
-import { MenuButton } from "@/components/ui/Menu";
+import { MenuButton, type MenuItem } from "@/components/ui/Menu";
 import { toast, Toaster } from "@/components/ui/Toast";
 import { InlineLogo } from "@/components/ui/Logo";
 import { CommentsPanel } from "@/components/workspace/CommentsPanel";
 import { FindBar } from "@/components/workspace/FindBar";
 import { HistoryPanel } from "@/components/workspace/HistoryPanel";
-import { MenuBar, type MenuActions } from "@/components/workspace/MenuBar";
+import { documentMenus, MenuBar, type MenuActions } from "@/components/workspace/MenuBar";
 import { OutlinePanel } from "@/components/workspace/OutlinePanel";
 import { PageCanvas } from "@/components/workspace/PageCanvas";
 import { PageSetupDialog } from "@/components/workspace/PageSetupDialog";
 import { ReviewBar } from "@/components/workspace/ReviewBar";
-import { EDITOR_MODES } from "@/components/workspace/modes";
+import { EDITOR_MODES, modeMenuItems } from "@/components/workspace/modes";
+import { COMPACT_QUERY, isCompact, useIsPhone, useMediaQuery, useVisualViewportVars } from "@/lib/client/viewport";
 import { DEFAULT_PREFERENCES, preferences, setPreference } from "@/lib/client/preferences";
 import { SelectionBubble } from "@/components/workspace/SelectionBubble";
 import { ShortcutsDialog } from "@/components/workspace/ShortcutsDialog";
@@ -33,6 +34,7 @@ import { SpecialCharactersDialog } from "@/components/workspace/SpecialCharacter
 import { Toolbar } from "@/components/workspace/Toolbar";
 
 type Panel = "agent" | "comments" | "history" | null;
+type Zoom = number | "fit";
 
 const PANEL_KEY = "inline-panel";
 const PANEL_WIDTH_KEY = "inline-panel-width";
@@ -69,7 +71,13 @@ export function Workspace({ documentId }: { documentId: string }) {
 
   const [panel, setPanelState] = useState<Panel>("agent");
   const [panelWidth, setPanelWidth] = useState(420);
-  const [zoom, setZoomState] = useState(1);
+  const [zoom, setZoomState] = useState<Zoom>("fit");
+  const [canvasWidth, setCanvasWidth] = useState(0);
+  const canvasRef = useRef<HTMLElement>(null);
+  const phone = useIsPhone();
+  // Below this width the menu bar and labelled buttons fold into a "More" menu.
+  const compact = useMediaQuery(COMPACT_QUERY);
+  useVisualViewportVars();
   const [outline, setOutline] = useState(false);
   const [find, setFind] = useState<{ replace: boolean } | null>(null);
   const [linkEditing, setLinkEditing] = useState(false);
@@ -81,9 +89,11 @@ export function Workspace({ documentId }: { documentId: string }) {
   const [focusMode, setFocusMode] = useState(false);
 
   useEffect(() => {
-    setPanelState(readStored<Panel>(PANEL_KEY, "agent", (raw) => (raw === "none" ? null : (["agent", "comments", "history"].includes(raw) ? (raw as Panel) : null))));
+    // On phones and tablets a panel covers the document, so it only opens when asked for.
+    if (isCompact()) setPanelState(initialAsk ? "agent" : null);
+    else setPanelState(readStored<Panel>(PANEL_KEY, "agent", (raw) => (raw === "none" ? null : (["agent", "comments", "history"].includes(raw) ? (raw as Panel) : null))));
     setPanelWidth(readStored(PANEL_WIDTH_KEY, 420, (raw) => (Number(raw) >= 320 ? Math.min(760, Number(raw)) : null)));
-    setZoomState(readStored(ZOOM_KEY, 1, (raw) => (Number(raw) >= 0.5 && Number(raw) <= 2 ? Number(raw) : null)));
+    setZoomState(readStored<Zoom>(ZOOM_KEY, "fit", (raw) => (raw === "fit" ? "fit" : Number(raw) >= 0.5 && Number(raw) <= 2 ? Number(raw) : null)));
     setOutline(readStored(OUTLINE_KEY, false, (raw) => raw === "1"));
     setFocusMode(readStored(FOCUS_KEY, false, (raw) => raw === "1"));
   }, []);
@@ -91,15 +101,26 @@ export function Workspace({ documentId }: { documentId: string }) {
   const setPanel = useCallback((next: Panel | ((current: Panel) => Panel)) => {
     setPanelState((current) => {
       const value = typeof next === "function" ? next(current) : next;
-      store(PANEL_KEY, value ?? "none");
+      // Small screens always start without a panel, so don't overwrite the desktop choice.
+      if (!isCompact()) store(PANEL_KEY, value ?? "none");
       return value;
     });
   }, []);
 
-  const setZoom = (value: number) => {
+  const setZoom = (value: Zoom) => {
     setZoomState(value);
     store(ZOOM_KEY, String(value));
   };
+
+  // "Fit" zoom shrinks pages that are wider than the canvas (narrow windows, tablets, an open panel).
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => setCanvasWidth(canvas.clientWidth));
+    observer.observe(canvas);
+    setCanvasWidth(canvas.clientWidth);
+    return () => observer.disconnect();
+  }, []);
 
   const commandHandler = useRef<(command: ClientCommand) => void>(() => undefined);
   const keyHandler = useRef<(name: "link" | "find" | "replace" | "comment" | "askClaude") => boolean>(() => false);
@@ -117,6 +138,13 @@ export function Workspace({ documentId }: { documentId: string }) {
   const prefs = useSyncExternalStore(preferences.subscribe, preferences.get, () => DEFAULT_PREFERENCES);
   const state = useSyncExternalStore(session.editor.subscribe, session.editor.get, session.editor.get);
   const meta = ui.meta;
+
+  useEffect(() => session.setFlow(phone), [session, phone]);
+  const flow = ui.flow && !ui.printing && !ui.exporting;
+  const canvasPad = canvasWidth && canvasWidth < 900 ? 16 : 40;
+  const pageWidth = geometryFor(meta).pageWidth;
+  const fitZoom = canvasWidth ? Math.max(0.5, Math.min(1, Math.floor(((canvasWidth - canvasPad * 2) / pageWidth) * 100) / 100)) : 1;
+  const effectiveZoom = flow ? 1 : zoom === "fit" ? fitZoom : zoom;
 
   useEffect(() => {
     if (meta) document.title = `${meta.title} · Inline`;
@@ -263,6 +291,8 @@ export function Workspace({ documentId }: { documentId: string }) {
     comment: startComment,
     image: () => imageInput.current?.click(),
     zoom: setZoom,
+    zoomFit: zoom === "fit",
+    flow,
     toggleTheme,
     dark,
     toggleOutline: () =>
@@ -279,12 +309,7 @@ export function Workspace({ documentId }: { documentId: string }) {
     clipboard: (action) => {
       if (!session.clipboard(action)) toast(`Select some text to ${action}.`);
     },
-    fitWidth: () => {
-      const canvas = document.querySelector<HTMLElement>(".canvas");
-      if (!canvas) return;
-      const width = geometryFor(meta).pageWidth + 80;
-      setZoom(Math.max(0.5, Math.min(2, Math.floor((canvas.clientWidth / width) * 20) / 20)));
-    },
+    fitWidth: () => setZoom("fit"),
     fullScreen: () => {
       if (document.fullscreenElement) void document.exitFullscreen();
       else void document.documentElement.requestFullscreen?.().catch(() => toast("Full screen isn't available here."));
@@ -327,6 +352,23 @@ export function Workspace({ documentId }: { documentId: string }) {
 
   const words = state ? wordCount(docPlainText(state.doc)) : (meta?.wordCount ?? 0);
   const openComments = ui.comments.filter((comment) => !comment.resolved).length;
+  const working = Boolean(ui.activity && ui.activity.status !== "idle");
+  const downloads: MenuItem[] = [
+    { label: "Word (.docx)", onSelect: () => void download("docx") },
+    { label: "PDF", onSelect: () => void download("pdf") },
+    { label: "Markdown (.md)", onSelect: () => void download("md") },
+    { label: "Web page (.html)", onSelect: () => void download("html") },
+    { label: "Plain text (.txt)", onSelect: () => void download("txt") },
+  ];
+  // Phones fold the title bar's buttons and the menu bar into one menu.
+  const moreItems = (): MenuItem[] => [
+    { label: "Mode", hint: EDITOR_MODES[ui.mode].label, icon: EDITOR_MODES[ui.mode].icon(16), submenu: modeMenuItems(ui.mode, (mode) => void session.setMode(mode)) },
+    { label: "Download", icon: <Download size={16} />, submenu: downloads },
+    { label: "Version history", icon: <History size={16} />, onSelect: () => setPanel("history") },
+    { label: "Dark theme", icon: <Moon size={16} />, checked: dark, onSelect: toggleTheme },
+    { kind: "separator" },
+    ...Object.entries(documentMenus(session, actions, effectiveZoom, ui.hunks.length)).map(([name, items]) => ({ label: name, submenu: items })),
+  ];
 
   return (
     <div className={`workspace${panel ? " has-panel" : ""}${focusMode ? " is-focus" : ""} is-${ui.mode}`} style={{ ["--panel-width" as string]: `${panelWidth}px` }}>
@@ -337,10 +379,10 @@ export function Workspace({ documentId }: { documentId: string }) {
         <InlineLogo />
         <div className="title-stack">
           <TitleInput meta={meta} onRename={(title) => void session.updateMeta({ title })} />
-          <MenuBar session={session} actions={actions} zoom={zoom} hunks={ui.hunks.length} />
+          <MenuBar session={session} actions={actions} zoom={effectiveZoom} hunks={ui.hunks.length} />
         </div>
         <div className="titlebar-status">
-          <SyncStatus sync={ui.sync} connection={ui.connection} />
+          <SyncStatus sync={ui.sync} connection={ui.connection} compact={compact} />
           {ui.activity && ui.activity.status !== "idle" && (
             <span className="presence-pill">
               <Sparkles size={12} />
@@ -348,49 +390,56 @@ export function Workspace({ documentId }: { documentId: string }) {
             </span>
           )}
         </div>
-        <div className="titlebar-actions">
-          <IconButton label={dark ? "Light theme" : "Dark theme"} onClick={toggleTheme}>
-            {dark ? <Sun size={16} /> : <Moon size={16} />}
-          </IconButton>
-          <IconButton label="Version history" active={panel === "history"} onClick={() => setPanel((current) => (current === "history" ? null : "history"))}>
-            <History size={16} />
-          </IconButton>
-          <IconButton label="Comments" active={panel === "comments"} onClick={() => setPanel((current) => (current === "comments" ? null : "comments"))}>
-            <MessageSquare size={16} />
-            {openComments > 0 && <span className="badge">{openComments}</span>}
-          </IconButton>
-          <MenuButton
-            className="btn btn-secondary btn-md"
-            label="Download"
-            placement="bottom-end"
-            items={[
-              { label: "Word (.docx)", onSelect: () => void download("docx") },
-              { label: "PDF", onSelect: () => void download("pdf") },
-              { label: "Markdown (.md)", onSelect: () => void download("md") },
-              { label: "Web page (.html)", onSelect: () => void download("html") },
-              { label: "Plain text (.txt)", onSelect: () => void download("txt") },
-            ]}
-          >
-            <Download size={15} />
-            <span className="btn-label">Export</span>
-          </MenuButton>
-          <button
-            type="button"
-            className={`btn btn-md claude-toggle${panel === "agent" ? " is-active" : ""}`}
-            onClick={() => setPanel((current) => (current === "agent" ? null : "agent"))}
-            data-tip="Claude  ⌘J"
-          >
-            <Sparkles size={15} />
-            <span className="btn-label">Claude</span>
-          </button>
-        </div>
+        {compact ? (
+          <div className="titlebar-actions">
+            <IconButton label="Comments" size="lg" active={panel === "comments"} onClick={() => setPanel((current) => (current === "comments" ? null : "comments"))}>
+              <MessageSquare size={19} />
+              {openComments > 0 && <span className="badge">{openComments}</span>}
+            </IconButton>
+            {!focusMode && (
+              <IconButton label="Claude" size="lg" className={`claude-toggle${panel === "agent" ? " is-active" : ""}${working ? " is-working" : ""}`} onClick={() => setPanel((current) => (current === "agent" ? null : "agent"))}>
+                <Sparkles size={19} />
+              </IconButton>
+            )}
+            <MenuButton className="icon-btn icon-btn-lg" label="More options" title={meta?.title ?? "Document"} placement="bottom-end" items={moreItems}>
+              <MoreHorizontal size={20} />
+            </MenuButton>
+          </div>
+        ) : (
+          <div className="titlebar-actions">
+            <IconButton label={dark ? "Light theme" : "Dark theme"} onClick={toggleTheme}>
+              {dark ? <Sun size={16} /> : <Moon size={16} />}
+            </IconButton>
+            <IconButton label="Version history" active={panel === "history"} onClick={() => setPanel((current) => (current === "history" ? null : "history"))}>
+              <History size={16} />
+            </IconButton>
+            <IconButton label="Comments" active={panel === "comments"} onClick={() => setPanel((current) => (current === "comments" ? null : "comments"))}>
+              <MessageSquare size={16} />
+              {openComments > 0 && <span className="badge">{openComments}</span>}
+            </IconButton>
+            <MenuButton className="btn btn-secondary btn-md export-btn" label="Download" placement="bottom-end" items={downloads}>
+              <Download size={15} />
+              <span className="btn-label">Export</span>
+            </MenuButton>
+            <button
+              type="button"
+              className={`btn btn-md claude-toggle${panel === "agent" ? " is-active" : ""}`}
+              onClick={() => setPanel((current) => (current === "agent" ? null : "agent"))}
+              data-tip="Claude  ⌘J"
+            >
+              <Sparkles size={15} />
+              <span className="btn-label">Claude</span>
+            </button>
+          </div>
+        )}
       </header>
 
       <Toolbar
         session={session}
         state={state}
         meta={meta}
-        zoom={zoom}
+        zoom={effectiveZoom}
+        zoomFit={zoom === "fit"}
         onZoom={setZoom}
         onLink={() => setLinkEditing(true)}
         onComment={startComment}
@@ -412,7 +461,9 @@ export function Workspace({ documentId }: { documentId: string }) {
       <div className="workspace-body">
         {outline && <OutlinePanel session={session} state={state} />}
         <main
+          ref={canvasRef}
           className="canvas"
+          style={{ ["--canvas-pad" as string]: `${canvasPad}px` }}
           onDragOver={(event) => {
             if (event.dataTransfer.types.includes("Files")) event.preventDefault();
           }}
@@ -429,11 +480,12 @@ export function Workspace({ documentId }: { documentId: string }) {
               <Loader2 size={18} className="spin" />
             </div>
           )}
-          <PageCanvas session={session} meta={meta} pages={ui.pages} zoom={zoom} printing={ui.printing} />
+          <PageCanvas session={session} meta={meta} pages={ui.pages} zoom={effectiveZoom} printing={ui.printing} flow={flow} />
           <ReviewBar session={session} hunks={ui.hunks} />
           <SelectionBubble session={session} state={state} linkEditing={linkEditing} onLinkEditing={setLinkEditing} onAsk={() => askClaude()} onComment={startComment} />
         </main>
 
+        {panel && phone && <div className="panel-backdrop" onClick={() => setPanel(null)} aria-hidden />}
         {panel && (
           <div className="panel-shell">
             <PanelResizer
@@ -494,7 +546,7 @@ export function Workspace({ documentId }: { documentId: string }) {
         <button type="button" className="status-item" onClick={() => setShortcuts(true)}>
           Shortcuts
         </button>
-        <span className="status-item">{Math.round(zoom * 100)}%</span>
+        <span className="status-item">{Math.round(effectiveZoom * 100)}%</span>
         <button type="button" className={`status-item status-claude${panel === "agent" ? " is-active" : ""}`} onClick={() => setPanel((current) => (current === "agent" ? null : "agent"))}>
           <PanelRight size={13} /> Claude
         </button>
@@ -545,24 +597,26 @@ function TitleInput({ meta, onRename }: { meta: DocumentMeta | null; onRename: (
   );
 }
 
-function SyncStatus({ sync, connection }: { sync: "saved" | "saving" | "error"; connection: "connecting" | "live" | "reconnecting" }) {
+function SyncStatus({ sync, connection, compact }: { sync: "saved" | "saving" | "error"; connection: "connecting" | "live" | "reconnecting"; compact?: boolean }) {
+  // Phones show only the icon; the label stays available to screen readers.
+  const label = (text: string) => <span className={compact ? "sr-only" : undefined}>{text}</span>;
   if (connection === "reconnecting" || sync === "error") {
     return (
       <span className="sync-status is-warning" title="Changes are kept locally and will sync when the connection is back.">
-        <CloudOff size={13} /> Offline
+        <CloudOff size={13} /> {label("Offline")}
       </span>
     );
   }
   if (sync === "saving") {
     return (
       <span className="sync-status">
-        <Loader2 size={13} className="spin" /> Saving…
+        <Loader2 size={13} className="spin" /> {label("Saving…")}
       </span>
     );
   }
   return (
     <span className="sync-status">
-      <Check size={13} /> Saved
+      <Check size={13} /> {label("Saved")}
     </span>
   );
 }

@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import type { DocumentSession } from "@/lib/client/documentSession";
 import { schema } from "@/lib/doc/schema";
 import { followLink, linkAt, markActive, setLink, toggle } from "@/lib/editor/commands";
+import { isTouch } from "@/lib/client/viewport";
 
 const mod = typeof navigator !== "undefined" && /Mac|iP(hone|[oa]d)/.test(navigator.platform) ? "⌘" : "Ctrl+";
 
@@ -85,8 +86,11 @@ export function SelectionBubble({
   } catch {
     return null;
   }
-  const above = coords.top > 120;
-  const style = { left: Math.max(12, Math.min(coords.left, window.innerWidth - 12)), top: above ? coords.top - 8 : coords.bottom + 8 };
+  // On touch screens the system's copy/paste callout sits above the selection, so go below it.
+  const above = coords.top > 120 && !isTouch();
+  // The bubble is centred on `left`; keep all of it on narrow screens.
+  const inset = window.innerWidth < 640 ? 156 : 12;
+  const style = { left: Math.max(inset, Math.min(coords.left, window.innerWidth - inset)), top: above ? coords.top - 8 : coords.bottom + 10 };
 
   const applyLink = () => {
     if (!href.trim()) {

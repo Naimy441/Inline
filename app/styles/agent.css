@@ -831,3 +831,65 @@
 .agent-panel .panel-footer {
   padding-bottom: 22px;
 }
+
+/* Phones: the panel is a sheet; larger text and touch targets, no keyboard hints. */
+@media (max-width: 640px) {
+  .composer-hint {
+    display: none;
+  }
+
+  .agent-panel .panel-footer {
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  }
+
+  .composer-input {
+    font-size: 16px;
+    max-height: 30dvh;
+  }
+
+  .composer .pill {
+    height: 32px;
+  }
+
+  .composer .icon-btn-sm {
+    min-width: 36px;
+    height: 36px;
+  }
+
+  .send-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+  }
+
+  .md,
+  .msg-user-text {
+    font-size: 15px;
+  }
+
+  .thinking-head,
+  .tool-head {
+    min-height: 34px;
+    font-size: 14px;
+  }
+
+  .suggestions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    max-width: none;
+    gap: 8px;
+  }
+
+  .suggestion {
+    padding: 12px;
+    font-size: 14px;
+  }
+
+  .panel-empty {
+    padding: 32px 20px 20px;
+  }
+
+  .change-card-actions .btn-sm {
+    height: 34px;
+  }
+}
