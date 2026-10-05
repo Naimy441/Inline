@@ -26,6 +26,9 @@ import { changedRanges, isUserSuggestion } from "@/lib/doc/review";
 import { FONT_FAMILIES, PAPER_SIZES, type DocumentSettings } from "@/lib/doc/settings";
 import { documentHub, type LiveDocument } from "@/lib/server/hub";
 import { lintWriting } from "@/lib/writing/lint";
+import { readFile } from "node:fs/promises";
+import { attachmentText } from "@/lib/agent/attachments";
+import { findUpload } from "@/lib/server/store";
 import { detectAiTropes } from "@/lib/writing/tropes";
 
 /**
@@ -49,6 +52,8 @@ export type ToolContext = {
   readOnly?: boolean;
   /** Called once before the first write of a turn (used to checkpoint a version). */
   beforeWrite?: (doc: LiveDocument) => Promise<void>;
+  /** Files attached to the chat's messages so far (in-app chats only). */
+  attachments?: () => Array<{ id: string; name: string; kind: "image" | "text" | "pdf" }>;
   /** Notified after a tool changes a document. */
   onChange?: (change: { documentId: string; title: string; tool: string; added: number; removed: number }) => void;
 };
@@ -749,6 +754,124 @@ export const TOOLS = [
       const doc = await resolveDocument(ctx, args.document_id);
       doc.setCommentResolved(args.comment_id, args.resolved ?? true);
       return ok(`${args.resolved === false ? "Reopened" : "Resolved"} ${args.comment_id}.`);
+    },
+  }),
+
+  defineTool({
+    name: "delete_comment",
+    title: "Delete comment",
+    description: "Delete a comment and its replies. Prefer resolve_comment when a comment has been addressed; delete only when the user asks or the comment is yours and no longer relevant.",
+    shape: { document_id: documentId, comment_id: z.string() },
+    write: true,
+    destructive: true,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      if (!doc.comments.some((comment) => comment.id === args.comment_id)) return fail(`No comment with id ${args.comment_id}. Use list_comments to see the ids.`);
+      doc.deleteComment(args.comment_id);
+      return ok(`Deleted comment ${args.comment_id}.`);
+    },
+  }),
+
+  defineTool({
+    name: "lock_text",
+    title: "Lock or unlock text",
+    description:
+      "Lock text so it can't be changed by AI edits (yours included), or unlock it. Use only when the user asks to protect or release a passage. Target exact text as a reader sees it; pass occurrence when it appears more than once, or all: true.",
+    shape: {
+      document_id: documentId,
+      text: z.string().min(1).describe("Exact text to lock or unlock."),
+      occurrence: z.number().int().min(1).optional(),
+      all: z.boolean().optional(),
+      locked: z.boolean().optional().describe("false to unlock (default true)."),
+    },
+    write: true,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      const found = findText(doc.doc, args.text, { caseSensitive: true });
+      const hits = found.length ? found : findText(doc.doc, args.text);
+      if (!hits.length) return fail(`Text not found: "${args.text}".`);
+      if (hits.length > 1 && !args.occurrence && !args.all) return fail(`"${args.text}" appears ${hits.length} times. Pass occurrence (1-based), all: true, or quote more text.`);
+      const targets = args.all ? hits : [hits[(args.occurrence ?? 1) - 1]];
+      if (!targets[0]) return fail(`Only ${hits.length} matches.`);
+      const locked = args.locked !== false;
+      // Apply from the end so earlier positions stay valid.
+      for (const target of [...targets].sort((a, b) => b!.from - a!.from)) doc.setLocked(target!.from, target!.to, locked);
+      return ok(`${locked ? "Locked" : "Unlocked"} ${targets.length === 1 ? `"${clip(args.text, 80)}"` : `${targets.length} passages`}.`);
+    },
+  }),
+
+  defineTool({
+    name: "list_locked_text",
+    title: "List locked text",
+    description: "List the passages the user has locked from AI edits. Edits that touch them fail, so plan around them.",
+    shape: { document_id: documentId },
+    write: false,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      const ranges = doc.lockedRanges();
+      if (!ranges.length) return ok("Nothing is locked.");
+      const lines = textblockLines(serializeDoc(doc.doc));
+      return ok(
+        ranges
+          .map((range) => {
+            const line = lines.find((entry) => entry.pos + entry.node.nodeSize > range.from)?.startLine;
+            return `- line ${line ?? "?"}: "${clip(range.text, 200)}"`;
+          })
+          .join("\n"),
+      );
+    },
+  }),
+
+  defineTool({
+    name: "insert_image",
+    title: "Insert image",
+    description:
+      "Insert an image as its own block: an image the user attached in this chat (attachment_id), an Inline upload URL (/api/uploads/...), or a web image URL (https://...). Place it at the start, end, or before/after a line.",
+    shape: {
+      document_id: documentId,
+      attachment_id: z.string().optional().describe("Id of an image the user attached to a chat message."),
+      url: z.string().optional().describe("Image URL, when not using attachment_id."),
+      alt: z.string().optional().describe("Alternative text describing the image."),
+      width: z.number().int().min(16).max(2000).optional().describe("Width in pixels."),
+      align: z.enum(["left", "center", "right"]).optional(),
+      position: z.enum(["start", "end", "after_line", "before_line"]),
+      line: z.number().int().min(1).optional(),
+    },
+    write: true,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      let src = args.url?.trim() ?? "";
+      if (args.attachment_id) {
+        const upload = await findUpload(args.attachment_id).catch(() => null);
+        if (!upload) return fail(`No attachment with id ${args.attachment_id}.`);
+        if (!/^(png|jpg|gif|webp|svg)$/.test(upload.extension)) return fail("That attachment isn't an image.");
+        src = `/api/uploads/${args.attachment_id}.${upload.extension}`;
+      }
+      if (!src) return fail("Pass attachment_id or url.");
+      if (!/^(https?:\/\/|\/api\/uploads\/)/i.test(src)) return fail("The image URL must start with https:// or /api/uploads/.");
+      if ((args.position === "after_line" || args.position === "before_line") && !args.line) return fail("line is required when position is after_line or before_line.");
+      const attrs = [args.width ? `width=${args.width}` : "", `align=${args.align ?? "center"}`].filter(Boolean).join(" ");
+      const markdown = `![${(args.alt ?? "").replace(/[\[\]]/g, "")}](${src.replace(/[()\s]/g, encodeURIComponent)}){${attrs}}`;
+      const position =
+        args.position === "start" || args.position === "end" ? { at: args.position } : args.position === "after_line" ? { afterLine: args.line! } : { beforeLine: args.line! };
+      return commitEdit(ctx, doc, "insert_image", (current) => insertMarkdown(current, markdown, position), "Inserted an image");
+    },
+  }),
+
+  defineTool({
+    name: "read_attachment",
+    title: "Read attachment",
+    description: "Read the text of a file the user attached earlier in this chat (text, Markdown, CSV, JSON or Word), for example after older messages were summarized. Pass the attachment id from list in the chat context.",
+    shape: { attachment_id: z.string() },
+    write: false,
+    async handler(args, ctx) {
+      const known = ctx.attachments?.().find((item) => item.id === args.attachment_id);
+      if (!known) return fail(`No attachment ${args.attachment_id} in this chat.${ctx.attachments?.().length ? ` Attachments: ${ctx.attachments().map((item) => `${item.id} (${item.name})`).join(", ")}.` : ""}`);
+      if (known.kind !== "text") return fail(`"${known.name}" is ${known.kind === "image" ? "an image" : "a PDF"}; ask the user to attach it again so you can see it.`);
+      const upload = await findUpload(known.id).catch(() => null);
+      if (!upload) return fail(`"${known.name}" is no longer available.`);
+      const text = await attachmentText(upload.extension, await readFile(upload.file));
+      return ok(`<attachment name="${known.name}">\n${text.slice(0, 200_000)}\n</attachment>`);
     },
   }),
 

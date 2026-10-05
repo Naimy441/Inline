@@ -91,12 +91,13 @@
 .home-section-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 4px;
   margin-bottom: 14px;
 }
 
 .home-section-head h2 {
+  flex: 1;
+  min-width: 0;
   margin: 0;
   font-size: 13px;
   font-weight: 600;
@@ -424,4 +425,10 @@
     transform: scale(0.95);
     background: var(--accent-hover);
   }
+}
+
+.home-note {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--muted);
 }

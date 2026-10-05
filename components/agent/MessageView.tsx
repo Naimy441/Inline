@@ -128,7 +128,7 @@ export const AssistantView = memo(function AssistantView({
       )}
       {!streaming && message.usage && (
         <div className="msg-meta">
-          {formatDuration(message.usage.durationMs)} · {formatTokens(message.usage.outputTokens)} tokens{message.model ? ` · ${modelLabel(message.model)}` : ""}
+          {formatDuration(message.usage.durationMs)} · {formatTokens(message.usage.outputTokens)} tokens{message.usage.costUsd > 0 ? ` · $${message.usage.costUsd < 0.01 ? "<0.01" : message.usage.costUsd.toFixed(2)}` : ""}{message.model ? ` · ${modelLabel(message.model)}` : ""}
         </div>
       )}
     </div>

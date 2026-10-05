@@ -1,14 +1,23 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { createInlineHttpServer } from "@/lib/agent/mcp";
+import type { LiveDocument } from "@/lib/server/hub";
+import { mcpAuthorized } from "@/lib/server/mcpToken";
 
 /**
- * Inline's MCP endpoint (Streamable HTTP, stateless). Connect Claude Code with:
- *   claude mcp add --transport http inline http://localhost:3000/api/mcp
+ * Inline's MCP endpoint (Streamable HTTP, stateless). Clients must send the
+ * MCP token as a Bearer token; Help > Connect Claude Code shows the command:
+ *   claude mcp add --transport http inline http://localhost:3000/api/mcp --header "Authorization: Bearer <token>"
  * Changes made through it show up live in the editor for the user to review.
  */
 async function handle(request: Request) {
+  if (!(await mcpAuthorized(request))) {
+    return Response.json(
+      { jsonrpc: "2.0", error: { code: -32001, message: "Missing or wrong Inline MCP token. In Inline, open Help > Connect Claude Code for the command to run." }, id: null },
+      { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="inline"' } },
+    );
+  }
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
-  const server = createInlineHttpServer({ author: "external" });
+  const server = createInlineHttpServer({ author: "external", beforeWrite: checkpointExternal });
   await server.connect(transport);
   try {
     return await transport.handleRequest(request);
@@ -16,6 +25,21 @@ async function handle(request: Request) {
     // Stateless: every request gets its own server, so close it once the response is built.
     void server.close().catch(() => undefined);
   }
+}
+
+/**
+ * Save a version before an MCP client's first edit to a document, so the user
+ * can go back. Requests are stateless, so edits within a few minutes of the
+ * last checkpoint count as the same session.
+ */
+const EXTERNAL_SESSION_MS = 10 * 60 * 1000;
+const lastCheckpoint = new Map<string, number>();
+
+async function checkpointExternal(doc: LiveDocument) {
+  const last = lastCheckpoint.get(doc.id) ?? 0;
+  lastCheckpoint.set(doc.id, Date.now());
+  if (Date.now() - last < EXTERNAL_SESSION_MS) return;
+  await doc.checkpoint("Before edits from an MCP client");
 }
 
 /**

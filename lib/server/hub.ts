@@ -16,10 +16,12 @@ import {
   type DocumentMeta,
   type DocumentSettings,
 } from "@/lib/doc/settings";
+import { log } from "@/lib/server/log";
 import {
   deleteDocumentFile,
   listDocumentIds,
   listVersions,
+  pruneVersions,
   readDocumentFile,
   readVersion,
   writeDocumentFile,
@@ -83,6 +85,9 @@ export type ClientSelection = { from: number; to: number; version: number; at: n
 const STEP_LOG_LIMIT = 2000;
 const PERSIST_DELAY_MS = 400;
 const AUTO_VERSION_INTERVAL_MS = 10 * 60 * 1000;
+const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+const UNLOAD_AFTER_MS = 15 * 60 * 1000;
+export const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 export class StepConflictError extends Error {
   constructor(readonly version: number) {
@@ -152,7 +157,19 @@ export class LiveDocument {
 
   subscribe(listener: (event: HubEvent) => void) {
     this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    this.lastUsed = Date.now();
+    return () => {
+      this.listeners.delete(listener);
+      this.lastUsed = Date.now();
+    };
+  }
+
+  /** When this document was last opened, watched or changed; idle documents are unloaded from memory. */
+  lastUsed = Date.now();
+
+  /** Nothing is watching it and nothing is waiting to be saved. */
+  get idle() {
+    return this.listeners.size === 0 && !this.persistTimer;
   }
 
   get subscriberCount() {
@@ -236,6 +253,7 @@ export class LiveDocument {
     });
     this.meta = { ...this.meta, updatedAt: Date.now() };
     this.dirtySinceVersion = true;
+    this.lastUsed = Date.now();
     this.schedulePersist();
   }
 
@@ -338,6 +356,23 @@ export class LiveDocument {
     this.schedulePersist();
   }
 
+  /**
+   * Lock text from Claude's edits, or unlock it. Locking isn't a content
+   * change, so it never becomes a pending change for review.
+   */
+  setLocked(from: number, to: number, locked: boolean) {
+    const tr = new Transform(this.doc);
+    if (locked) tr.addMark(from, to, schema.mark("locked", { id: newId(10) }));
+    else tr.removeMark(from, to, schema.marks.locked);
+    if (!tr.docChanged) return false;
+    return this.applyTransform(tr, { kind: "system", label: "lock" }, { hunks: mapHunks(this.hunks, tr.mapping) });
+  }
+
+  /** Locked passages and where they are. */
+  lockedRanges() {
+    return [...rangeMarkTexts(this.doc, "locked").values()];
+  }
+
   /** Comments with the text they're currently anchored to. */
   commentsWithAnchors() {
     const anchors = rangeMarkTexts(this.doc, "comment");
@@ -379,6 +414,7 @@ export class LiveDocument {
       ...(this.hunks.length ? { hunks: this.hunksJSON() } : {}),
     };
     await writeVersion(version);
+    if (author === "auto") void pruneVersions(this.id).catch((error) => log("error", "pruning versions failed", { documentId: this.id, error }));
     this.dirtySinceVersion = false;
     this.lastAutoVersion = Date.now();
     const { doc: _doc, hunks, ...summary } = version;
@@ -507,8 +543,12 @@ class DocumentHub {
   activeDocumentId: string | null = null;
 
   async get(id: string): Promise<LiveDocument | null> {
+    this.scheduleSweep();
     const existing = this.open.get(id);
-    if (existing) return existing;
+    if (existing) {
+      existing.lastUsed = Date.now();
+      return existing;
+    }
     const pending = this.loading.get(id);
     if (pending) return pending;
     const load = (async () => {
@@ -557,7 +597,22 @@ class DocumentHub {
     return live;
   }
 
-  async list(options: { trashed?: boolean } = {}): Promise<DocumentMeta[]> {
+  /** Delete every document in the trash, or only those trashed before `olderThan` (ms since epoch). */
+  async emptyTrash(olderThan?: number) {
+    const trashed = await this.list({ trashed: true, purge: false });
+    const targets = trashed.filter((meta) => olderThan === undefined || (meta.trashedAt ?? 0) < olderThan);
+    for (const meta of targets) await this.remove(meta.id);
+    return targets.length;
+  }
+
+  private lastPurge = 0;
+
+  async list(options: { trashed?: boolean; purge?: boolean } = {}): Promise<DocumentMeta[]> {
+    // Trashed documents are deleted forever after TRASH_RETENTION_MS; checked at most hourly, when documents are listed.
+    if (options.purge !== false && Date.now() - this.lastPurge > 60 * 60 * 1000) {
+      this.lastPurge = Date.now();
+      await this.emptyTrash(Date.now() - TRASH_RETENTION_MS).catch((error) => log("error", "purging the trash failed", { error }));
+    }
     const ids = await listDocumentIds();
     const metas: DocumentMeta[] = [];
     for (const id of ids) {
@@ -566,7 +621,10 @@ class DocumentHub {
         metas.push(live.meta);
         continue;
       }
-      const file = await readDocumentFile(id).catch(() => null);
+      const file = await readDocumentFile(id).catch((error) => {
+        log("error", "a document file couldn't be read; it is left out of the list", { documentId: id, error });
+        return null;
+      });
       if (file) metas.push(normalizeFile(file).meta);
     }
     return metas
@@ -598,6 +656,37 @@ class DocumentHub {
     }
     const [latest] = await this.list();
     return latest ? this.get(latest.id) : null;
+  }
+
+  private sweepTimer: ReturnType<typeof setInterval> | null = null;
+
+  private scheduleSweep() {
+    if (this.sweepTimer) return;
+    this.sweepTimer = setInterval(() => void this.unloadIdle(), SWEEP_INTERVAL_MS);
+    // Housekeeping only: it must not keep the process alive.
+    this.sweepTimer.unref?.();
+  }
+
+  /**
+   * Unload documents nobody has watched or changed for a while; they're read
+   * back from disk on next use. Open tabs reconnect to a new epoch, which
+   * they handle like a server restart.
+   */
+  async unloadIdle(maxIdleMs = UNLOAD_AFTER_MS, now = Date.now()) {
+    let unloaded = 0;
+    for (const [id, doc] of this.open) {
+      if (!doc.idle || now - doc.lastUsed < maxIdleMs || doc.activity) continue;
+      await doc.flush().catch(() => undefined);
+      // Check again: it may have been used while saving.
+      if (!doc.idle || now - doc.lastUsed < maxIdleMs) continue;
+      this.open.delete(id);
+      unloaded += 1;
+    }
+    return unloaded;
+  }
+
+  get loadedCount() {
+    return this.open.size;
   }
 
   async flushAll() {

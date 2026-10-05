@@ -1,6 +1,6 @@
 "use client";
 
-import { ClipboardPaste, Copy, Link2, MessageSquarePlus, RemoveFormatting, Scissors, Sparkles, Trash2 } from "lucide-react";
+import { ClipboardPaste, Copy, Link2, Lock, LockOpen, MessageSquarePlus, RemoveFormatting, Scissors, Sparkles, Trash2 } from "lucide-react";
 import { deleteSelection } from "prosemirror-commands";
 import { TextSelection } from "prosemirror-state";
 import { addColumnAfter, addColumnBefore, addRowAfter, addRowBefore, deleteColumn, deleteRow, deleteTable, isInTable } from "prosemirror-tables";
@@ -61,6 +61,12 @@ export function ContextMenu({
   const hasSelection = Boolean(state && !state.selection.empty);
   const inTable = state ? isInTable(state) : false;
   const run = session.run.bind(session);
+  const locked = hasSelection && session.selectionLocked();
+  const lockSelection = (lock: boolean) =>
+    void session
+      .setSelectionLocked(lock)
+      .then(() => toast(lock ? "Locked. Claude can't change this text." : "Unlocked. Claude can edit this text again."))
+      .catch((error: Error) => toast(error.message, { tone: "error" }));
   const paste = (plain: boolean) => void session.paste(plain).catch((error: Error) => toast(error.message, { tone: "error" }));
 
   const items: MenuItem[] = [
@@ -73,6 +79,13 @@ export function ContextMenu({
     ...(hideClaude ? [] : [{ label: hasSelection ? "Ask Claude about this" : "Ask Claude", icon: <Sparkles size={14} />, shortcut: `${mod}L`, onSelect: onAsk }]),
     { label: "Comment", icon: <MessageSquarePlus size={14} />, shortcut: `${mod}⌥M`, disabled: !hasSelection, onSelect: onComment },
     { label: "Link", icon: <Link2 size={14} />, shortcut: `${mod}K`, disabled: readOnly, onSelect: onLink },
+    ...(hideClaude
+      ? []
+      : [
+          locked
+            ? { label: "Unlock for Claude", icon: <LockOpen size={14} />, disabled: readOnly, onSelect: () => lockSelection(false) }
+            : { label: "Lock from Claude's edits", icon: <Lock size={14} />, disabled: !hasSelection || readOnly, onSelect: () => lockSelection(true) },
+        ]),
     ...(inTable && !readOnly
       ? ([
           { kind: "separator" },

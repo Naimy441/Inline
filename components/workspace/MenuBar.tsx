@@ -42,6 +42,7 @@ export type MenuActions = {
   toggleOutline: () => void;
   toggleAgent: () => void;
   shortcuts: () => void;
+  connectClaudeCode: () => void;
   wordCount: () => void;
   ask: (prompt: string) => void;
   specialCharacters: () => void;
@@ -275,10 +276,20 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
             { kind: "separator" },
             { label: "Ask Claude to proofread", onSelect: () => actions.ask("Proofread the document and fix spelling, grammar and punctuation. Don't change the meaning or voice.") },
             { label: "Ask Claude for feedback", onSelect: () => actions.ask("Read the document and give me your three most important suggestions to improve it. Don't edit yet.") },
+            {
+              label: "Ask Claude to address all comments",
+              onSelect: () =>
+                actions.ask(
+                  "Work through every open comment in the document (list_comments). For each one: make the change it asks for if it's clear, reply briefly with what you changed and resolve it; if it's a question or you're unsure, reply with your answer or question and leave it open. Finish with a short summary.",
+                ),
+            },
             { label: "Check for AI-sounding writing", onSelect: () => actions.ask("Run analyze_writing on the document and point out any passages that sound generic or AI-written. Suggest fixes but don't edit yet.") },
           ] as MenuItem[])),
     ],
-    Help: [{ label: "Keyboard shortcuts", shortcut: `${mod}/`, onSelect: actions.shortcuts }],
+    Help: [
+      { label: "Keyboard shortcuts", shortcut: `${mod}/`, onSelect: actions.shortcuts },
+      { label: "Connect Claude Code…", hint: "Copy the command to use Inline from your terminal", onSelect: actions.connectClaudeCode },
+    ],
   };
   return menus;
 }

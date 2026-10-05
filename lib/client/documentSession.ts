@@ -734,6 +734,24 @@ export class DocumentSession {
     this.ui.set((ui) => ({ ...ui, unmerged: null }));
   }
 
+  /** Whether the selection includes text locked from AI edits. */
+  selectionLocked() {
+    const view = this.view;
+    if (!view) return false;
+    const { from, to } = view.state.selection;
+    return from < to && view.state.doc.rangeHasMark(from, to, schema.marks.locked!);
+  }
+
+  /** Lock the selection from Claude's edits, or unlock it. */
+  async setSelectionLocked(locked: boolean) {
+    const view = this.view;
+    if (!view) return;
+    await this.whenSaved();
+    const { from, to } = view.state.selection;
+    if (from === to) throw new Error(`Select the text to ${locked ? "lock" : "unlock"}.`);
+    await post(`/api/documents/${this.id}/lock`, { from, to, version: getVersion(view.state), locked });
+  }
+
   async updateMeta(patch: { title?: string; settings?: Record<string, unknown> }) {
     const result = await api<{ meta: DocumentMeta }>(`/api/documents/${this.id}`, { method: "PATCH", json: patch });
     this.ui.set((ui) => ({ ...ui, meta: result.meta }));

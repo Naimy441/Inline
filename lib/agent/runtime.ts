@@ -25,12 +25,14 @@ import type {
   ToolPart,
   UserMessage,
 } from "@/lib/agent/types";
-import { documentHub } from "@/lib/server/hub";
+import { DEFAULT_MAX_TURNS } from "@/lib/agent/types";
+import { documentHub, type LiveDocument } from "@/lib/server/hub";
+import { findText, textblockLines } from "@/lib/doc/editing";
+import { serializeDoc } from "@/lib/doc/markdown";
 import { deleteChatFile, findUpload, listChatIds, readChatFile, workspaceDir, writeChatFile } from "@/lib/server/store";
 import { isUserSuggestion } from "@/lib/doc/review";
-import { docxToDoc } from "@/lib/doc/docxImport";
-import { docToMarkdown } from "@/lib/doc/markdown";
-import { readZip } from "@/lib/server/unzip";
+import { log } from "@/lib/server/log";
+import { attachmentText } from "@/lib/agent/attachments";
 
 /**
  * The in-app agent: each chat is a Claude Code session (via the Claude Agent
@@ -98,21 +100,29 @@ class AsyncQueue<T> implements AsyncIterable<T> {
   }
 }
 
+/**
+ * " (lines 4-6)" for a selection, so Claude can target the right copy when the
+ * selected text appears more than once. Only when the text is still there.
+ */
+function selectionLines(doc: LiveDocument, selection: SelectionContext) {
+  try {
+    const size = doc.doc.content.size;
+    const from = Math.max(0, Math.min(size, selection.from));
+    const to = Math.max(from, Math.min(size, selection.to));
+    if (doc.doc.textBetween(from, to, "\n").trim() !== selection.text.trim()) return "";
+    const lines = textblockLines(serializeDoc(doc.doc)).filter((entry) => entry.pos + entry.node.nodeSize > from && entry.pos < to);
+    if (!lines.length) return "";
+    const first = lines[0]!.startLine;
+    const last = lines[lines.length - 1]!.endLine;
+    const repeats = findText(doc.doc, selection.text.split("\n")[0]!.trim(), { caseSensitive: true }).length > 1;
+    return ` (${first === last ? `line ${first}` : `lines ${first}-${last}`} of read_document${repeats ? "; this text appears more than once, so edit the copy on these lines" : ""})`;
+  } catch {
+    return "";
+  }
+}
+
 /** Image types Claude accepts as images; others (SVG) are sent as their source text. */
 const CLAUDE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
-
-/** The text Claude reads for a non-image, non-PDF attachment. Word files are converted to Inline's Markdown. */
-async function attachmentText(extension: string, data: Buffer) {
-  if (extension === "docx") {
-    try {
-      const parts = readZip(new Uint8Array(data));
-      return docToMarkdown(await docxToDoc(parts));
-    } catch (error) {
-      return `[This Word file couldn't be read: ${errorText(error)}]`;
-    }
-  }
-  return data.toString("utf8");
-}
 
 function clip(text: string, max: number) {
   const flat = text.replace(/\s+/g, " ").trim();
@@ -197,6 +207,11 @@ class ChatRuntime {
     return this.query !== null;
   }
 
+  /** Not running, not streaming to anyone and not holding a Claude Code session; safe to drop from memory. */
+  get unloadable() {
+    return !this.live && !this.state.running && this.listeners.size === 0 && !this.persistTimer;
+  }
+
   summary(): ChatSummary {
     const lastAssistant = [...this.state.messages].reverse().find((message) => message.role === "assistant") as AssistantMessage | undefined;
     const lastText = lastAssistant?.parts.filter((part) => part.type === "text").map((part) => (part as { text: string }).text).join(" ");
@@ -223,7 +238,11 @@ class ChatRuntime {
       listener({ type: "snapshot", chat: this.state, seq: this.seq });
     }
     this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    this.lastUsed = Date.now();
+    return () => {
+      this.listeners.delete(listener);
+      this.lastUsed = Date.now();
+    };
   }
 
   private emit(event: ChatEvent) {
@@ -305,6 +324,8 @@ class ChatRuntime {
       const query = this.query;
       if (query && next.model !== this.state.settings.model) await query.setModel(next.model ?? undefined).catch(() => this.close());
       if (query && next.effort !== this.state.settings.effort) await query.applyFlagSettings({ effortLevel: next.effort }).catch(() => this.close());
+      // Limits are fixed when Claude Code starts; the session resumes with the new ones on the next message.
+      if (query && !this.state.running && (next.maxTurns !== this.state.settings.maxTurns || next.maxBudgetUsd !== this.state.settings.maxBudgetUsd)) this.close();
       this.state.settings = next;
     }
     this.state.updatedAt = Date.now();
@@ -393,7 +414,13 @@ class ChatRuntime {
       context.push("No document is open.");
     }
     if (input.selection?.text.trim()) {
-      context.push(`The user selected this text in the document:\n"""\n${input.selection.text.slice(0, 8000)}\n"""`);
+      const where = doc && input.selection.documentId === doc.id ? selectionLines(doc, input.selection) : "";
+      context.push(`The user selected this text in the document${where}:\n"""\n${input.selection.text.slice(0, 8000)}\n"""`);
+    }
+    if (input.attachments?.length) {
+      context.push(
+        `Attached to this message: ${input.attachments.map((item) => `"${item.name}" (${item.kind}, id ${item.id})`).join(", ")}. Images can be placed in the document with insert_image; text files can be read again later with read_attachment.`,
+      );
     }
     const blocks: Array<Record<string, unknown>> = [{ type: "text", text: `<inline-context>\n${context.join("\n")}\n</inline-context>` }];
     for (const attachment of input.attachments ?? []) {
@@ -419,6 +446,7 @@ class ChatRuntime {
     return {
       author: this.state.id,
       turn: this.current?.id,
+      attachments: () => this.state.messages.flatMap((message) => (message.role === "user" ? (message.attachments ?? []) : [])),
       documentId: this.state.documentId ?? undefined,
       readOnly: this.state.settings.mode === "ask",
       beforeWrite: async (doc) => {
@@ -472,6 +500,8 @@ class ChatRuntime {
         includePartialMessages: true,
         thinking: { type: "adaptive", display: "summarized" },
         effort: settings.effort,
+        maxTurns: settings.maxTurns ?? DEFAULT_MAX_TURNS,
+        ...(settings.maxBudgetUsd ? { maxBudgetUsd: settings.maxBudgetUsd } : {}),
         ...(settings.model ? { model: settings.model } : {}),
         ...(this.sessionStarted ? { resume: this.state.id } : { sessionId: this.state.id }),
         persistSession: true,
@@ -731,7 +761,9 @@ class ChatRuntime {
     } else if (result.subtype !== "success") {
       const reason =
         result.subtype === "error_max_turns"
-          ? "Stopped after reaching the turn limit."
+          ? `Stopped after ${result.num_turns} steps, the limit for one message. Send "continue" to keep going.`
+          : result.subtype === "error_max_budget_usd"
+            ? `Stopped at the spending limit for one message ($${this.state.settings.maxBudgetUsd ?? "?"}). Raise it in the effort menu, or send "continue".`
           : result.errors?.length
             ? describeFailure(result.errors.join("\n"))
             : "Claude stopped because of an error.";
@@ -747,6 +779,7 @@ class ChatRuntime {
   private finishTurn(status: AssistantMessage["status"], error?: string) {
     const message = this.current;
     if (!message) return;
+    if (status === "error") log("warn", "a Claude turn ended with an error", { chatId: this.state.id, error: error ?? message.error });
     this.current = null;
     message.status = status;
     if (error) message.error = error;
@@ -888,6 +921,7 @@ class AgentRuntime {
 
   async get(id: string) {
     await this.init();
+    this.scheduleSweep();
     const existing = this.chats.get(id);
     if (existing) return existing;
     let pending = this.loading.get(id);
@@ -933,8 +967,17 @@ class AgentRuntime {
 
   async list(options: { documentId?: string } = {}): Promise<ChatSummary[]> {
     await this.init();
+    this.scheduleSweep();
     const ids = await listChatIds();
-    const chats = await Promise.all(ids.map((id) => this.get(id).catch(() => null)));
+    // Chats not already in memory are summarized from their files without being kept loaded.
+    const chats = await Promise.all(
+      ids.map(async (id) => {
+        const loaded = this.chats.get(id);
+        if (loaded) return loaded;
+        const file = await readChatFile<PersistedChat>(id).catch(() => null);
+        return file ? new ChatRuntime(file) : null;
+      }),
+    );
     return chats
       .filter((chat): chat is ChatRuntime => Boolean(chat))
       .map((chat) => chat.summary())
@@ -963,6 +1006,30 @@ class AgentRuntime {
     if (total <= MAX_LIVE_SESSIONS) return;
     live.sort((a, b) => a.lastUsed - b.lastUsed);
     for (const item of live.slice(0, total - MAX_LIVE_SESSIONS)) item.close();
+  }
+
+  private sweepTimer: ReturnType<typeof setInterval> | null = null;
+
+  private scheduleSweep() {
+    if (this.sweepTimer) return;
+    this.sweepTimer = setInterval(() => this.unloadIdle(), 5 * 60 * 1000);
+    this.sweepTimer.unref?.();
+  }
+
+  /** Drop chats from memory that are idle; they're read back from disk when opened again. */
+  unloadIdle(maxIdleMs = 30 * 60 * 1000, now = Date.now()) {
+    let unloaded = 0;
+    for (const [id, chat] of this.chats) {
+      if (chat.unloadable && now - chat.lastUsed >= maxIdleMs) {
+        this.chats.delete(id);
+        unloaded += 1;
+      }
+    }
+    return unloaded;
+  }
+
+  get loadedCount() {
+    return this.chats.size;
   }
 
   setDefaults(patch: Partial<ChatSettings>) {

@@ -13,7 +13,7 @@ import { markdownToDoc } from "@/lib/doc/markdown";
 import { hunkToJSON, type Hunk } from "@/lib/doc/review";
 import { schema } from "@/lib/doc/schema";
 import { DEFAULT_SETTINGS, type DocumentMeta } from "@/lib/doc/settings";
-import { LiveDocument, StaleEpochError, StepConflictError, documentHub, loadDoc, type HubEvent } from "@/lib/server/hub";
+import { LiveDocument, StaleEpochError, StepConflictError, TRASH_RETENTION_MS, documentHub, loadDoc, type HubEvent } from "@/lib/server/hub";
 import { dataDir, readDocumentFile, type StoredDocumentFile } from "@/lib/server/store";
 
 // The store resolves its directory on every call, so this applies before any write.
@@ -822,5 +822,59 @@ describe("document epochs", () => {
     );
     assert.equal(restarted.doc, before);
     assert.equal(restarted.receiveClientSteps(0, insertSteps(before, 1, "X"), "a", { epoch: restarted.epoch }), 1);
+  });
+});
+
+describe("trash", () => {
+  it("emptyTrash deletes trashed documents only, and list() purges ones trashed over 30 days ago", async () => {
+    const hub = freshHub();
+    const keep = await hub.create({ title: "Keep", markdown: "a" });
+    const recent = await hub.create({ title: "Recent", markdown: "b" });
+    const old = await hub.create({ title: "Old", markdown: "c" });
+    recent.setTrashed(true);
+    old.setTrashed(true);
+    old.meta = { ...old.meta, trashedAt: Date.now() - TRASH_RETENTION_MS - 1000 };
+    await old.flush();
+    await recent.flush();
+
+    const listed = await hub.list({ trashed: true });
+    const ids = listed.map((meta) => meta.id);
+    assert.ok(ids.includes(recent.id));
+    assert.ok(!ids.includes(old.id), "the old one is purged on listing");
+    assert.equal(await hub.get(old.id), null);
+
+    assert.ok((await hub.emptyTrash()) >= 1);
+    assert.equal(await hub.get(recent.id), null);
+    assert.equal((await hub.list({ trashed: true })).length, 0);
+    assert.ok(await hub.get(keep.id));
+  });
+});
+
+describe("unloading idle documents", () => {
+  it("unloads saved, unwatched documents and reloads them from disk with a new epoch", async () => {
+    const hub = freshHub();
+    const doc = await hub.create({ markdown: SAMPLE });
+    doc.receiveClientSteps(0, insertSteps(doc.doc, 1, "Saved "), "a");
+    const watched = await hub.create({ markdown: "watched" });
+    const stop = watched.subscribe(() => undefined);
+
+    // Pending saves keep it loaded until they're written.
+    assert.equal(await hub.unloadIdle(0), 0);
+    await doc.flush();
+    await hub.unloadIdle(0);
+    const reloaded = (await hub.get(doc.id))!;
+    assert.notEqual(reloaded, doc);
+    assert.notEqual(reloaded.epoch, doc.epoch);
+    assert.match(textOf(reloaded.doc), /^Saved The quick/);
+    assert.equal(await hub.get(watched.id), watched, "a watched document stays loaded");
+    stop();
+  });
+
+  it("keeps recently used documents", async () => {
+    const hub = freshHub();
+    const doc = await hub.create({ markdown: SAMPLE });
+    await doc.flush();
+    assert.equal(await hub.unloadIdle(60_000), 0);
+    assert.equal(await hub.get(doc.id), doc);
   });
 });

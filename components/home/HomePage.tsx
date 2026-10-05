@@ -1,6 +1,6 @@
 "use client";
 
-import { Copy, FilePlus2, FileText, FileUp, MoreHorizontal, Moon, Pencil, Plus, RotateCcw, Search, Sun, Trash2 } from "lucide-react";
+import { Copy, Download, FilePlus2, FileText, FileUp, MoreHorizontal, Moon, Pencil, Plus, RotateCcw, Search, Sun, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, del, patch, post } from "@/lib/client/api";
@@ -81,6 +81,13 @@ export function HomePage() {
 
   const importFile = async (file: File) => {
     try {
+      if (/\.docx$/i.test(file.name)) {
+        const form = new FormData();
+        form.append("file", file);
+        const { document } = await api<{ document: Snapshot }>("/api/documents/import", { method: "POST", body: form });
+        open(document.meta.id);
+        return;
+      }
       const text = await file.text();
       const title = file.name.replace(/\.[^.]+$/, "") || "Imported document";
       const body = /\.html?$/i.test(file.name) ? { title, doc: htmlToDocJSON(text) } : { title, markdown: text };
@@ -155,10 +162,13 @@ export function HomePage() {
             <Button size="sm" variant="ghost" icon={<FileUp size={15} />} onClick={() => fileInput.current?.click()}>
               Import file
             </Button>
+            <Button size="sm" variant="ghost" icon={<Download size={15} />} onClick={() => window.location.assign("/api/documents/backup")}>
+              Download all
+            </Button>
             <input
               ref={fileInput}
               type="file"
-              accept=".md,.markdown,.txt,.html,.htm"
+              accept=".docx,.md,.markdown,.txt,.html,.htm"
               hidden
               onChange={(event) => {
                 const file = event.target.files?.[0];
@@ -188,7 +198,27 @@ export function HomePage() {
                 Trash{trashed.length ? ` (${trashed.length})` : ""}
               </button>
             </div>
+            {view === "trash" && trashed.length > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={<Trash2 size={15} />}
+                onClick={async () => {
+                  if (!window.confirm(`Delete ${trashed.length} document${trashed.length === 1 ? "" : "s"} in the trash forever? This can't be undone.`)) return;
+                  try {
+                    const { deleted } = await del<{ deleted: number }>("/api/documents?trashed=1");
+                    toast(`Deleted ${deleted} document${deleted === 1 ? "" : "s"} permanently.`);
+                  } catch (error) {
+                    toast(error instanceof Error ? error.message : "Couldn't empty the trash.", { tone: "error" });
+                  }
+                  void load();
+                }}
+              >
+                Empty trash
+              </Button>
+            )}
           </div>
+          {view === "trash" && <p className="home-note">Documents in the trash are deleted forever after 30 days.</p>}
 
           {documents === null ? (
             <div className="doc-list">

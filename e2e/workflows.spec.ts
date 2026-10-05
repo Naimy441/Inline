@@ -56,6 +56,40 @@ test.describe("home page", () => {
     expect(list.documents.some((doc) => doc.title === title)).toBe(false);
   });
 
+  test("Empty trash deletes everything in the trash after confirming", async ({ page, request }) => {
+    const title = `Scrap ${Date.now()}`;
+    const id = await createDocument(request, title, "Throwaway.");
+    await request.patch(`/api/documents/${id}`, { data: { trashed: true } });
+    await page.goto("/");
+    await page.getByRole("tab", { name: /Trash/ }).click();
+    await expect(page.locator(".doc-row", { hasText: title })).toHaveCount(1);
+    await expect(page.getByText("deleted forever after 30 days")).toBeVisible();
+    page.once("dialog", (dialog) => void dialog.accept());
+    await page.getByRole("button", { name: "Empty trash" }).click();
+    await expect(page.getByText("Trash is empty.")).toBeVisible();
+    const list = (await (await request.get("/api/documents?trashed=1")).json()) as { documents: unknown[] };
+    expect(list.documents).toHaveLength(0);
+  });
+
+  test("a Word file imports as a new document", async ({ page, request }) => {
+    // Make a .docx with Inline's own exporter, then import it through the home page.
+    const id = await createDocument(request, "Source", "# Imported plan\n\n- first point\n- second point\n\nClosing **bold** line.");
+    const docx = await (await request.get(`/api/documents/${id}/export?format=docx`)).body();
+    await page.goto("/");
+    await page.locator('input[type="file"][accept*=".docx"]').setInputFiles({ name: "Plan from Word.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", buffer: docx });
+    await expect(page).toHaveURL(/\/d\//);
+    await expect(page.locator(".doc-content h1")).toHaveText("Imported plan");
+    await expect(page.locator(".doc-content li")).toHaveText(["first point", "second point"]);
+    await expect(page.locator(".doc-content strong")).toHaveText("bold");
+  });
+
+  test("Download all saves a backup ZIP", async ({ page, request }) => {
+    await createDocument(request, "In the backup", "Hello.");
+    await page.goto("/");
+    const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Download all" }).click()]);
+    expect(download.suggestedFilename()).toMatch(/^inline-backup-.*\.zip$/);
+  });
+
   test("dark theme persists across reloads", async ({ page }) => {
     await page.goto("/");
     const html = page.locator("html");
@@ -221,6 +255,13 @@ test.describe("collaboration and Claude", () => {
     await second.keyboard.type(" and two");
     await expect(first.locator(".doc-content")).toContainText("Shared start from tab one and two");
     await context.close();
+  });
+
+  test("pages can't be framed by other sites and send security headers", async ({ request }) => {
+    const response = await request.get("/");
+    expect(response.headers()["x-frame-options"]).toBe("DENY");
+    expect(response.headers()["content-security-policy"]).toContain("frame-ancestors 'none'");
+    expect(response.headers()["x-content-type-options"]).toBe("nosniff");
   });
 
   test("the API refuses cross-site writes", async ({ request }) => {

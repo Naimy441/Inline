@@ -66,7 +66,18 @@ export type AssistantMessage = {
 
 export type ChatMessage = UserMessage | AssistantMessage;
 
-export type ChatSettings = { model: string | null; effort: Effort; mode: AgentMode };
+export type ChatSettings = {
+  model: string | null;
+  effort: Effort;
+  mode: AgentMode;
+  /** Most tool-use rounds Claude may take for one message (default DEFAULT_MAX_TURNS). */
+  maxTurns?: number | null;
+  /** Most a single message may spend, in US dollars; null for no limit. */
+  maxBudgetUsd?: number | null;
+};
+
+export const DEFAULT_MAX_TURNS = 100;
+export const BUDGET_OPTIONS = [null, 0.5, 2, 10] as const;
 
 export type ChatSummary = {
   id: string;

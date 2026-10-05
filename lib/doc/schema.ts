@@ -13,6 +13,21 @@ import { tableNodes } from "prosemirror-tables";
 
 export type Align = "left" | "center" | "right" | "justify";
 
+/**
+ * Link targets Inline allows: web, mail and phone links, in-document anchors
+ * and relative paths. Script and data URLs are refused wherever a link enters
+ * a document (paste, import, Markdown, Claude's tools) and never rendered.
+ */
+export function safeHref(href: unknown): string | null {
+  if (typeof href !== "string") return null;
+  const trimmed = href.trim();
+  if (!trimmed) return null;
+  // Browsers ignore control characters and whitespace inside a scheme ("java\tscript:").
+  const scheme = /^([^:/?#]+):/.exec(trimmed.replace(/[\u0000-\u0020\u007f]+/g, ""))?.[1]?.toLowerCase();
+  if (scheme && !["http", "https", "mailto", "tel"].includes(scheme)) return null;
+  return trimmed;
+}
+
 export const ALIGNMENTS: Align[] = ["left", "center", "right", "justify"];
 export const MAX_INDENT = 8;
 
@@ -283,15 +298,15 @@ const marks: Record<string, MarkSpec> = {
     parseDOM: [
       {
         tag: "a[href]",
-        getAttrs: (dom) => ({
-          href: (dom as HTMLElement).getAttribute("href"),
-          title: (dom as HTMLElement).getAttribute("title"),
-        }),
+        getAttrs: (dom) => {
+          const href = safeHref((dom as HTMLElement).getAttribute("href"));
+          return href ? { href, title: (dom as HTMLElement).getAttribute("title") } : false;
+        },
       },
     ],
     toDOM: (mark): DOMOutputSpec => [
       "a",
-      { href: mark.attrs.href, ...(mark.attrs.title ? { title: mark.attrs.title } : {}), rel: "noopener noreferrer" },
+      { href: safeHref(mark.attrs.href) ?? "#", ...(mark.attrs.title ? { title: mark.attrs.title } : {}), rel: "noopener noreferrer" },
       0,
     ],
   },
