@@ -1580,3 +1580,78 @@ button.status-item:hover {
     display: none;
   }
 }
+
+/* Connection lost: a notice pinned to the top of the canvas that doesn't push the page down. */
+.canvas-notice {
+  position: sticky;
+  top: 12px;
+  z-index: 16;
+  display: flex;
+  justify-content: center;
+  height: 0;
+  padding: 0 12px;
+}
+
+.offline-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  max-width: 520px;
+  height: max-content;
+  padding: 9px 14px;
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, var(--border));
+  border-radius: var(--radius-lg);
+  background: var(--warning-soft);
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.45;
+  box-shadow: var(--shadow-md);
+  animation: rise 0.22s var(--ease);
+}
+
+.offline-notice > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--warning);
+}
+
+.offline-notice strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Claude working off screen: a chip at the canvas edge that scrolls to it. */
+.agent-locator {
+  position: fixed;
+  z-index: 17;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(360px, calc(100vw - 32px));
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--accent-text);
+  font-size: 12.5px;
+  font-weight: 500;
+  box-shadow: var(--shadow-md);
+  transform: translateX(-50%);
+  animation: bubble-in 0.15s var(--ease);
+}
+
+.agent-locator:hover {
+  background: var(--accent-soft);
+}
+
+.agent-locator svg {
+  flex: none;
+  color: var(--accent);
+}
+
+.agent-locator-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

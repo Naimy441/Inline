@@ -30,6 +30,7 @@ import { DEFAULT_PREFERENCES, preferences, setPreference } from "@/lib/client/pr
 import { SelectionBubble } from "@/components/workspace/SelectionBubble";
 import { ShortcutsDialog } from "@/components/workspace/ShortcutsDialog";
 import { ContextMenu } from "@/components/workspace/ContextMenu";
+import { AgentLocator, OfflineNotice } from "@/components/workspace/CanvasNotices";
 import { SpecialCharactersDialog } from "@/components/workspace/SpecialCharactersDialog";
 import { Toolbar } from "@/components/workspace/Toolbar";
 
@@ -493,6 +494,8 @@ export function Workspace({ documentId }: { documentId: string }) {
           }}
         >
           {find && <FindBar session={session} state={state} replace={find.replace} onClose={() => setFind(null)} />}
+          <OfflineNotice offline={ui.status === "ready" && (ui.connection === "reconnecting" || ui.sync === "error")} />
+          <AgentLocator canvas={canvasRef} state={state} active={working && !focusMode} label={ui.activity?.label ?? ""} />
           {ui.status === "loading" && (
             <div className="canvas-loading">
               <Loader2 size={18} className="spin" />

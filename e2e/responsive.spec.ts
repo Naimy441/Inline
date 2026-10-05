@@ -222,3 +222,87 @@ test.describe("narrow desktop window", () => {
     await expect(page.locator(".tb-zoom")).not.toContainText("100%");
   });
 });
+
+test.describe("connection and Claude's whereabouts", () => {
+  test("losing the connection shows an offline notice that clears when it's back", async ({ page, request }) => {
+    const id = await createDocument(request, "Offline memo", MEMO);
+    // The live update stream can't connect: the page loads, but stays offline.
+    await page.route("**/events**", (route) => route.abort());
+    await openDocument(page, id);
+    await expect(page.locator(".offline-notice")).toContainText("You're offline.", { timeout: 15_000 });
+    // Typing still works while offline.
+    await page.locator(".doc-content p").first().click();
+    await page.keyboard.press("End");
+    await page.keyboard.type(" Typed offline.");
+    await page.unroute("**/events**");
+    await expect(page.locator(".offline-notice")).toHaveCount(0, { timeout: 20_000 });
+    await expect(page.locator(".sync-status")).toContainText("Saved", { timeout: 15_000 });
+  });
+
+  test("Claude's working range is marked, and a chip points to it when it's off screen", async ({ page, request }) => {
+    const filler = Array.from({ length: 60 }, (_, index) => `Paragraph ${index + 1} of filler text.`).join("\n\n");
+    await openDocument(page, await createDocument(request, "Long memo", `${filler}\n\nThe deadline is Friday.`));
+    const toggle = page.locator(".claude-toggle");
+    if (!((await toggle.getAttribute("class")) ?? "").includes("is-active")) await toggle.click();
+    const composer = page.getByLabel("Message Claude");
+    await composer.fill('slowly replace "Friday" with "Monday"');
+    await composer.press("Enter");
+
+    await expect(page.locator(".doc-content .agent-range.agent-editing").first()).toBeVisible();
+    await page.locator(".canvas").evaluate((element) => element.scrollTo(0, 0));
+    const chip = page.locator(".agent-locator");
+    await expect(chip).toBeVisible();
+    await chip.click();
+    await expect(page.locator(".doc-content .agent-caret")).toBeInViewport();
+    await expect(chip).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Stop" }).click();
+  });
+});
+
+test.describe("chat history", () => {
+  async function chat(page: Page, text: string) {
+    const toggle = page.locator(".claude-toggle");
+    if (!((await toggle.getAttribute("class")) ?? "").includes("is-active")) await toggle.click();
+    const composer = page.getByLabel("Message Claude");
+    await composer.fill(text);
+    await composer.press("Enter");
+    await expect(page.locator(".msg-assistant").last()).toContainText(`You said: ${text}`);
+  }
+
+  test("is searchable and shows which document each chat belongs to", async ({ page, request }) => {
+    // "All" lists every document's chats, so tag this run's chats to tell them apart.
+    const tag = `t${Date.now().toString(36)}`;
+    const first = await createDocument(request, `Budget plan ${tag}`, "Numbers.");
+    const second = await createDocument(request, `Trip notes ${tag}`, "Places.");
+    await openDocument(page, first);
+    await chat(page, `draft a budget summary ${tag}`);
+    await openDocument(page, second);
+    await chat(page, `list museums to visit ${tag}`);
+    await page.getByRole("button", { name: "New chat" }).click();
+    await chat(page, `pack a light bag ${tag}`);
+
+    await page.getByLabel("Chat history").click();
+    const history = page.locator(".chat-history");
+    const search = history.getByLabel("Search chats");
+    await expect(history.locator(".chat-row")).toHaveCount(2);
+    await search.fill("museum");
+    await expect(history.locator(".chat-row")).toHaveCount(1);
+    await expect(history.locator(".chat-row")).toContainText("museums");
+
+    await history.getByRole("tab", { name: "All" }).click();
+    await search.fill(tag);
+    await expect(history.locator(".chat-row")).toHaveCount(3);
+    const budget = history.locator(".chat-row", { hasText: "budget" });
+    await expect(budget.locator(".chat-row-doc")).toHaveText(`Budget plan ${tag}`);
+    await expect(history.locator(".chat-row", { hasText: "museums" }).locator(".chat-row-doc")).toHaveText("This document");
+    // Searching also matches the document's title.
+    await search.fill(`budget plan ${tag}`);
+    await expect(history.locator(".chat-row")).toHaveCount(1);
+
+    // A chat from another document opens that document with the chat showing.
+    await budget.locator(".chat-row-main").click();
+    await expect(page).toHaveURL(new RegExp(`/d/${first}`));
+    await expect(page.locator(".msg-user-text").first()).toHaveText(`draft a budget summary ${tag}`);
+  });
+});

@@ -151,8 +151,10 @@ async function commitEdit(ctx: ToolContext, doc: LiveDocument, tool: string, bui
   const before = doc.doc;
   const tr = build(before);
   if (!tr.docChanged) return fail("The edit produced no change to the document.");
-  doc.setActivity({ chatId: ctx.author, status: "editing", label: describe, range: rangeOf(tr) });
   doc.applyTransform(tr, { kind: "agent", author: ctx.author, tool, turn: ctx.turn });
+  // After the transform: the range is in the new document, so it must carry the new version
+  // (the editor only draws a range recorded at the version it's showing).
+  doc.setActivity({ chatId: ctx.author, status: "editing", label: describe, range: rangeOf(tr) });
   const { added, removed } = countWords(before, tr);
   ctx.onChange?.({ documentId: doc.id, title: doc.meta.title, tool, added, removed });
   const snippet = changedSnippet(before, tr);
