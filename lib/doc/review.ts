@@ -29,10 +29,17 @@ export type Hunk = {
   to: number;
   /** The content this hunk replaced (restored on undo). */
   deleted: Slice;
-  /** Who made the change: a chat id, or "external" for MCP clients. */
+  /** Who made the change: a chat id, "external" for MCP clients, or USER_AUTHOR for suggesting mode. */
   author: string;
   createdAt: number;
 };
+
+/** Author of the changes a person makes in suggesting mode; every other author is Claude. */
+export const USER_AUTHOR = "user";
+
+export function isUserSuggestion(hunk: { author: string }) {
+  return hunk.author === USER_AUTHOR;
+}
 
 export type HunkJSON = Omit<Hunk, "deleted"> & { deleted: ReturnType<Slice["toJSON"]>; deletedText: string; insertedText?: string };
 

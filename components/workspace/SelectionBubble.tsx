@@ -163,13 +163,13 @@ export function SelectionBubble({
       <button type="button" className="bubble-btn" aria-label="Comment" data-tip="Comment" onClick={onComment}>
         <MessageSquarePlus size={14} />
       </button>
-      <button type="button" className={`bubble-btn${markActive(state, schema.marks.bold!) ? " is-active" : ""}`} aria-label="Bold" onClick={() => session.run(toggle("bold"))}>
+      <button type="button" className={`bubble-btn bubble-edit${markActive(state, schema.marks.bold!) ? " is-active" : ""}`} aria-label="Bold" onClick={() => session.run(toggle("bold"))}>
         <Bold size={14} />
       </button>
-      <button type="button" className={`bubble-btn${markActive(state, schema.marks.italic!) ? " is-active" : ""}`} aria-label="Italic" onClick={() => session.run(toggle("italic"))}>
+      <button type="button" className={`bubble-btn bubble-edit${markActive(state, schema.marks.italic!) ? " is-active" : ""}`} aria-label="Italic" onClick={() => session.run(toggle("italic"))}>
         <Italic size={14} />
       </button>
-      <button type="button" className="bubble-btn" aria-label="Link" onClick={() => onLinkEditing(true)}>
+      <button type="button" className="bubble-btn bubble-edit" aria-label="Link" onClick={() => onLinkEditing(true)}>
         <Link2 size={14} />
       </button>
     </div>

@@ -8,7 +8,7 @@ import { keymap } from "prosemirror-keymap";
 import { Fragment, Slice, type MarkType } from "prosemirror-model";
 import { findWrapping } from "prosemirror-transform";
 import { splitListItem } from "prosemirror-schema-list";
-import { Plugin, TextSelection, type Command } from "prosemirror-state";
+import { Plugin, TextSelection, type Command, type EditorState, type Transaction } from "prosemirror-state";
 import { columnResizing, goToNextCell, tableEditing } from "prosemirror-tables";
 import { blockIdFixes } from "@/lib/doc/ids";
 import { parseMarkdown } from "@/lib/doc/markdown";
@@ -28,6 +28,7 @@ import {
 } from "@/lib/editor/commands";
 import { commentsPlugin } from "@/lib/editor/comments";
 import { findPlugin } from "@/lib/editor/find";
+import { invisiblesPlugin } from "@/lib/editor/invisibles";
 import { paginationPlugin, type PageGeometry } from "@/lib/editor/pagination";
 import { placeholderPlugin } from "@/lib/editor/placeholder";
 import { presencePlugin } from "@/lib/editor/presence";
@@ -61,12 +62,39 @@ function markInputRule(pattern: RegExp, type: MarkType) {
   });
 }
 
-function buildInputRules() {
+/**
+ * Tools > Automatic substitutions: typographic quotes, dashes, symbols and
+ * fractions as you type. Each rule checks the preference when it fires, so
+ * turning it off takes effect immediately.
+ */
+const SUBSTITUTIONS: InputRule[] = [
+  ...smartQuotes,
+  ellipsis,
+  emDash,
+  new InputRule(/\((?:c|C)\)$/, "©"),
+  new InputRule(/\((?:r|R)\)$/, "®"),
+  new InputRule(/\((?:tm|TM)\)$/, "™"),
+  new InputRule(/->$/, "→"),
+  new InputRule(/<-$/, "←"),
+  new InputRule(/=>$/, "⇒"),
+  new InputRule(/!=$/, "≠"),
+  new InputRule(/>=$/, "≥"),
+  new InputRule(/<=$/, "≤"),
+  new InputRule(/\+\/-$/, "±"),
+  new InputRule(/(?:^|[\s(])(1\/2)\s$/, "½"),
+  new InputRule(/(?:^|[\s(])(1\/4)\s$/, "¼"),
+  new InputRule(/(?:^|[\s(])(3\/4)\s$/, "¾"),
+];
+
+function whenEnabled(rule: InputRule, enabled: () => boolean) {
+  const handler = (rule as unknown as { handler: (state: EditorState, match: RegExpMatchArray, start: number, end: number) => Transaction | null }).handler;
+  return new InputRule((rule as unknown as { match: RegExp }).match, (state, match, start, end) => (enabled() ? handler(state, match, start, end) : null));
+}
+
+function buildInputRules(substitutions: () => boolean) {
   return inputRules({
     rules: [
-      ...smartQuotes,
-      ellipsis,
-      emDash,
+      ...SUBSTITUTIONS.map((rule) => whenEnabled(rule, substitutions)),
       textblockTypeInputRule(/^(#{1,6})\s$/, nodes.heading!, (match) => ({ level: match[1]!.length })),
       textblockTypeInputRule(/^```$/, nodes.code_block!),
       wrappingInputRule(/^\s*>\s$/, nodes.blockquote!),
@@ -211,11 +239,22 @@ export type EditorPluginOptions = {
   onPages?: (pages: number) => void;
   keys?: Record<string, Command>;
   placeholder?: string;
+  /** Viewing mode: local edits are refused (changes from the server still apply). */
+  readOnly?: () => boolean;
+  substitutions?: () => boolean;
+  showInvisibles?: boolean;
 };
+
+function readOnlyPlugin(readOnly: () => boolean) {
+  return new Plugin({
+    filterTransaction: (tr) => !tr.docChanged || tr.getMeta("rebased") !== undefined || !readOnly(),
+  });
+}
 
 export function editorPlugins(options: EditorPluginOptions) {
   return [
-    buildInputRules(),
+    readOnlyPlugin(options.readOnly ?? (() => false)),
+    buildInputRules(options.substitutions ?? (() => true)),
     buildKeymap(options.keys ?? {}),
     keymap(baseKeymap),
     history(),
@@ -230,6 +269,7 @@ export function editorPlugins(options: EditorPluginOptions) {
     presencePlugin(),
     commentsPlugin(options.onActivateComment),
     findPlugin(),
+    invisiblesPlugin(options.showInvisibles ?? false),
     placeholderPlugin(options.placeholder ?? "Start writing, or ask Claude to draft something…"),
     paginationPlugin(options.geometry, options.onPages),
   ];

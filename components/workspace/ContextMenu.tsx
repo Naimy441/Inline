@@ -1,6 +1,7 @@
 "use client";
 
-import { ClipboardPaste, Copy, Link2, MessageSquarePlus, RemoveFormatting, Scissors, Sparkles } from "lucide-react";
+import { ClipboardPaste, Copy, Link2, MessageSquarePlus, RemoveFormatting, Scissors, Sparkles, Trash2 } from "lucide-react";
+import { deleteSelection } from "prosemirror-commands";
 import { TextSelection } from "prosemirror-state";
 import { addColumnAfter, addColumnBefore, addRowAfter, addRowBefore, deleteColumn, deleteRow, deleteTable, isInTable } from "prosemirror-tables";
 import { useEffect, useState } from "react";
@@ -21,9 +22,12 @@ export function ContextMenu({
   onComment,
   onLink,
   hideClaude = false,
+  readOnly = false,
 }: {
   session: DocumentSession;
   hideClaude?: boolean;
+  /** Viewing mode: only copying, commenting and asking are offered. */
+  readOnly?: boolean;
   onAsk: () => void;
   onComment: () => void;
   onLink: () => void;
@@ -58,15 +62,16 @@ export function ContextMenu({
   const paste = (plain: boolean) => void session.paste(plain).catch((error: Error) => toast(error.message, { tone: "error" }));
 
   const items: MenuItem[] = [
-    { label: "Cut", icon: <Scissors size={14} />, shortcut: `${mod}X`, disabled: !hasSelection, onSelect: () => session.clipboard("cut") },
+    { label: "Cut", icon: <Scissors size={14} />, shortcut: `${mod}X`, disabled: !hasSelection || readOnly, onSelect: () => session.clipboard("cut") },
     { label: "Copy", icon: <Copy size={14} />, shortcut: `${mod}C`, disabled: !hasSelection, onSelect: () => session.clipboard("copy") },
-    { label: "Paste", icon: <ClipboardPaste size={14} />, shortcut: `${mod}V`, onSelect: () => paste(false) },
-    { label: "Paste without formatting", shortcut: `${mod}⇧V`, onSelect: () => paste(true) },
+    { label: "Paste", icon: <ClipboardPaste size={14} />, shortcut: `${mod}V`, disabled: readOnly, onSelect: () => paste(false) },
+    { label: "Paste without formatting", shortcut: `${mod}⇧V`, disabled: readOnly, onSelect: () => paste(true) },
+    { label: "Delete", icon: <Trash2 size={14} />, disabled: !hasSelection || readOnly, onSelect: () => run(deleteSelection) },
     { kind: "separator" },
     ...(hideClaude ? [] : [{ label: hasSelection ? "Ask Claude about this" : "Ask Claude", icon: <Sparkles size={14} />, shortcut: `${mod}L`, onSelect: onAsk }]),
     { label: "Comment", icon: <MessageSquarePlus size={14} />, shortcut: `${mod}⌥M`, disabled: !hasSelection, onSelect: onComment },
-    { label: "Link", icon: <Link2 size={14} />, shortcut: `${mod}K`, onSelect: onLink },
-    ...(inTable
+    { label: "Link", icon: <Link2 size={14} />, shortcut: `${mod}K`, disabled: readOnly, onSelect: onLink },
+    ...(inTable && !readOnly
       ? ([
           { kind: "separator" },
           {
@@ -85,7 +90,7 @@ export function ContextMenu({
         ] as MenuItem[])
       : []),
     { kind: "separator" },
-    { label: "Clear formatting", icon: <RemoveFormatting size={14} />, shortcut: `${mod}\\`, disabled: !hasSelection, onSelect: () => run(clearFormatting) },
+    { label: "Clear formatting", icon: <RemoveFormatting size={14} />, shortcut: `${mod}\\`, disabled: !hasSelection || readOnly, onSelect: () => run(clearFormatting) },
     { kind: "label", label: "Shift+right-click for spelling suggestions" },
   ];
 

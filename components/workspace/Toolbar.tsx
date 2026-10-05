@@ -29,7 +29,8 @@ import {
 import { redo, redoDepth, undo, undoDepth } from "prosemirror-history";
 import type { EditorState } from "prosemirror-state";
 import { useRef, useState, type ReactNode } from "react";
-import type { DocumentSession } from "@/lib/client/documentSession";
+import type { DocumentSession, EditorMode } from "@/lib/client/documentSession";
+import { EDITOR_MODES, modeMenuItems } from "@/components/workspace/modes";
 import { FONT_FAMILIES, type DocumentMeta } from "@/lib/doc/settings";
 import { schema, type Align } from "@/lib/doc/schema";
 import {
@@ -91,6 +92,7 @@ export function Toolbar({
   onLink,
   onComment,
   onImage,
+  mode,
 }: {
   session: DocumentSession;
   state: EditorState | null;
@@ -100,9 +102,11 @@ export function Toolbar({
   onLink: () => void;
   onComment: () => void;
   onImage: () => void;
+  mode: EditorMode;
 }) {
   const run = session.run.bind(session);
-  const disabled = !state;
+  const viewing = mode === "viewing";
+  const disabled = !state || viewing;
   const kind = state ? blockKind(state) : null;
   const align = state ? currentAlign(state) : "left";
   const list = state ? listKind(state) : null;
@@ -121,16 +125,16 @@ export function Toolbar({
   const alignIcon = { left: <AlignLeft size={16} />, center: <AlignCenter size={16} />, right: <AlignRight size={16} />, justify: <AlignJustify size={16} /> }[align];
 
   return (
-    <div className="toolbar" role="toolbar" aria-label="Formatting">
+    <div className={`toolbar${viewing ? " is-viewing" : ""}`} role="toolbar" aria-label="Formatting">
       <Group>
-        <IconButton label="Undo" shortcut={`${mod}Z`} disabled={!state || !undoDepth(state)} onClick={() => run(undo)}>
+        <IconButton label="Undo" shortcut={`${mod}Z`} disabled={disabled || !undoDepth(state)} onClick={() => run(undo)}>
           <Undo2 size={16} />
         </IconButton>
-        <IconButton label="Redo" shortcut={`${mod}⇧Z`} disabled={!state || !redoDepth(state)} onClick={() => run(redo)}>
+        <IconButton label="Redo" shortcut={`${mod}⇧Z`} disabled={disabled || !redoDepth(state)} onClick={() => run(redo)}>
           <Redo2 size={16} />
         </IconButton>
       </Group>
-      <Group>
+      <Group edit={false}>
         <MenuButton
           className="tb-select tb-zoom"
           label="Zoom"
@@ -205,7 +209,7 @@ export function Toolbar({
         <IconButton label="Insert link" shortcut={`${mod}K`} disabled={disabled} active={active("link")} onClick={onLink}>
           <Link2 size={16} />
         </IconButton>
-        <IconButton label="Add comment" shortcut={`${mod}⌥M`} disabled={disabled || state?.selection.empty} onClick={onComment}>
+        <IconButton label="Add comment" shortcut={`${mod}⌥M`} disabled={!state || state.selection.empty} onClick={onComment}>
           <MessageSquarePlus size={16} />
         </IconButton>
         <IconButton label="Insert image" disabled={disabled} onClick={onImage}>
@@ -264,12 +268,18 @@ export function Toolbar({
           <RemoveFormatting size={16} />
         </IconButton>
       </Group>
+      <div className="tb-spacer" />
+      <MenuButton className={`tb-select tb-mode is-${mode}`} label="Mode" placement="bottom-end" items={() => modeMenuItems(mode, (next) => void session.setMode(next))}>
+        {EDITOR_MODES[mode].icon(15)}
+        <span className="tb-select-text">{EDITOR_MODES[mode].label}</span> <ChevronDown size={13} />
+      </MenuButton>
     </div>
   );
 }
 
-function Group({ children }: { children: ReactNode }) {
-  return <div className="tb-group">{children}</div>;
+/** A group of controls; editing groups are disabled in viewing mode. */
+function Group({ children, edit = true }: { children: ReactNode; edit?: boolean }) {
+  return <div className={`tb-group${edit ? " tb-edit" : ""}`}>{children}</div>;
 }
 
 function FontSizeInput({ value, onCommit }: { value: number; onCommit: (value: number) => void }) {

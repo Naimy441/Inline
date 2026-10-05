@@ -3,7 +3,8 @@
 import { redo, undo } from "prosemirror-history";
 import { AllSelection } from "prosemirror-state";
 import { createRef, useRef, useState, type RefObject } from "react";
-import type { DocumentSession } from "@/lib/client/documentSession";
+import type { DocumentSession, EditorMode } from "@/lib/client/documentSession";
+import { modeMenuItems } from "@/components/workspace/modes";
 import {
   changeCase,
   clearFormatting,
@@ -50,6 +51,12 @@ export type MenuActions = {
   focusMode: boolean;
   toggleFocusMode: () => void;
   notice: (message: string) => void;
+  mode: EditorMode;
+  setMode: (mode: EditorMode) => void;
+  showInvisibles: boolean;
+  toggleInvisibles: () => void;
+  substitutions: boolean;
+  toggleSubstitutions: () => void;
 };
 
 export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSession; actions: MenuActions; zoom: number; hunks: number }) {
@@ -104,11 +111,13 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
       { label: "Find", shortcut: `${mod}F`, onSelect: () => actions.find(false) },
       { label: "Find and replace", shortcut: `${mod}H`, onSelect: () => actions.find(true) },
       { kind: "separator" },
-      { label: "Keep all of Claude's changes", disabled: !hunks, onSelect: () => void session.review("accept", "all") },
-      { label: "Undo all of Claude's changes", disabled: !hunks, onSelect: () => void session.review("reject", "all") },
+      { label: "Keep all pending changes", hint: "Claude's edits and suggestions", disabled: !hunks, onSelect: () => void session.review("accept", "all") },
+      { label: "Undo all pending changes", disabled: !hunks, onSelect: () => void session.review("reject", "all") },
       { label: "Next change", shortcut: "⌥]", disabled: !hunks, onSelect: () => session.gotoChange(1) },
     ],
     View: [
+      { label: "Mode", submenu: modeMenuItems(actions.mode, actions.setMode) },
+      { kind: "separator" },
       { label: "Zoom in", onSelect: () => actions.zoom(Math.min(2, Math.round((zoom + 0.1) * 10) / 10)) },
       { label: "Zoom out", onSelect: () => actions.zoom(Math.max(0.5, Math.round((zoom - 0.1) * 10) / 10)) },
       { label: "Actual size", checked: zoom === 1, onSelect: () => actions.zoom(1) },
@@ -117,6 +126,7 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
       { label: "Outline", onSelect: actions.toggleOutline },
       ...(actions.focusMode ? [] : [{ label: "Claude panel", shortcut: `${mod}J`, onSelect: actions.toggleAgent }]),
       { label: "Focus mode", hint: "Hide Claude while you write", checked: actions.focusMode, onSelect: actions.toggleFocusMode },
+      { label: "Show non-printing characters", shortcut: `${mod}⇧P`, checked: actions.showInvisibles, onSelect: actions.toggleInvisibles },
       { label: "Dark theme", onSelect: actions.toggleTheme },
       { label: "Full screen", onSelect: actions.fullScreen },
     ],
@@ -223,6 +233,7 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
     ],
     Tools: [
       { label: "Word count", onSelect: actions.wordCount },
+      { label: "Automatic substitutions", hint: "Smart quotes, dashes, ©, →, ½", checked: actions.substitutions, onSelect: actions.toggleSubstitutions },
       ...(actions.focusMode
         ? []
         : ([

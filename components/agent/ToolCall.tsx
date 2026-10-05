@@ -92,6 +92,8 @@ export function describeTool(part: ToolPart): Described {
       return { icon: <TextCursorInput size={14} />, verb: "Looked at", target: "your selection", live: "Looking at" };
     case "get_pending_changes":
       return { icon: <FileSearch size={14} />, verb: "Reviewed", target: "pending changes", live: "Reviewing" };
+    case "keep_changes":
+      return { icon: <Check size={14} />, verb: "Kept", target: "changes", live: "Keeping" };
     case "revert_changes":
       return { icon: <Undo2 size={14} />, verb: "Reverted", target: "changes", live: "Reverting" };
     case "list_comments":

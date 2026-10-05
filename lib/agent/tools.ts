@@ -21,7 +21,7 @@ import {
   type FormatSpec,
 } from "@/lib/doc/editing";
 import { serializeDoc } from "@/lib/doc/markdown";
-import { changedRanges } from "@/lib/doc/review";
+import { changedRanges, isUserSuggestion } from "@/lib/doc/review";
 import { FONT_FAMILIES, PAPER_SIZES, type DocumentSettings } from "@/lib/doc/settings";
 import { documentHub, type LiveDocument } from "@/lib/server/hub";
 import { lintWriting } from "@/lib/writing/lint";
@@ -592,7 +592,14 @@ export const TOOLS = [
       }
       const open = doc.commentsWithAnchors().filter((comment) => !comment.resolved);
       parts.push(open.length ? `${open.length} open comment${open.length === 1 ? "" : "s"} (use list_comments).` : "No open comments.");
-      parts.push(doc.hunks.length ? `${doc.hunks.length} suggested change${doc.hunks.length === 1 ? "" : "s"} awaiting review (use get_pending_changes).` : "No pending suggestions.");
+      const userSuggestions = doc.hunks.filter(isUserSuggestion).length;
+      const claudeChanges = doc.hunks.length - userSuggestions;
+      const pending = [
+        claudeChanges ? `${claudeChanges} change${claudeChanges === 1 ? "" : "s"} by Claude` : "",
+        userSuggestions ? `${userSuggestions} suggestion${userSuggestions === 1 ? "" : "s"} by the user` : "",
+      ].filter(Boolean);
+      parts.push(pending.length ? `${pending.join(" and ")} awaiting review (use get_pending_changes).` : "No pending changes.");
+      if (doc.editorMode !== "editing") parts.push(`The user's editor is in ${doc.editorMode} mode.`);
       return ok(parts.join("\n"));
     },
   }),
@@ -600,7 +607,8 @@ export const TOOLS = [
   defineTool({
     name: "get_pending_changes",
     title: "Get pending changes",
-    description: "List the suggested changes in a document that the user has not yet kept or undone, with their ids, location and before/after text.",
+    description:
+      "List the pending changes in a document that have not yet been kept or undone, with their ids, author, location and before/after text. Changes come from Claude's edits and from the user's own edits in suggesting mode.",
     shape: { document_id: documentId },
     write: false,
     async handler(args, ctx) {
@@ -610,7 +618,8 @@ export const TOOLS = [
       const entries = blockLines(serialized);
       const rows = doc.hunksJSON().map((hunk) => {
         const entry = entries.find((item) => item.block.pos + item.block.node.nodeSize > hunk.from);
-        return `- ${hunk.id} (line ${entry?.startLine ?? "?"}): "${clip(hunk.deletedText)}" → "${clip(hunk.insertedText ?? "")}"`;
+        const author = isUserSuggestion(hunk) ? "suggested by the user" : "by Claude";
+        return `- ${hunk.id} (line ${entry?.startLine ?? "?"}, ${author}): "${clip(hunk.deletedText)}" → "${clip(hunk.insertedText ?? "")}"`;
       });
       return ok(`${doc.hunks.length} pending change${doc.hunks.length === 1 ? "" : "s"} in "${doc.meta.title}":\n${rows.join("\n")}`);
     },
@@ -634,6 +643,28 @@ export const TOOLS = [
       if (!count) return fail("No matching pending changes.");
       doc.review("reject", args.all ? "all" : args.change_ids!);
       return ok(`Reverted ${count} change${count === 1 ? "" : "s"} in "${doc.meta.title}".`);
+    },
+  }),
+
+  defineTool({
+    name: "keep_changes",
+    title: "Keep changes",
+    description:
+      "Keep (accept) pending changes so they become part of the document, for example when the user asks you to accept their suggestions or the edits you made. Never keep the user's suggestions unless they asked. Pass change ids from get_pending_changes, or all: true.",
+    shape: {
+      document_id: documentId,
+      change_ids: z.array(z.string()).optional(),
+      all: z.boolean().optional(),
+    },
+    write: true,
+    async handler(args, ctx) {
+      if (ctx.readOnly) return fail("You are in Ask mode, so documents can't be changed.");
+      const doc = await resolveDocument(ctx, args.document_id);
+      if (!args.all && !args.change_ids?.length) return fail("Pass change_ids or all: true.");
+      const count = args.all ? doc.hunks.length : doc.hunks.filter((hunk) => args.change_ids!.includes(hunk.id)).length;
+      if (!count) return fail("No matching pending changes.");
+      doc.review("accept", args.all ? "all" : args.change_ids!);
+      return ok(`Kept ${count} change${count === 1 ? "" : "s"} in "${doc.meta.title}".`);
     },
   }),
 

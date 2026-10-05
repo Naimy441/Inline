@@ -15,6 +15,8 @@ import { pageCount, relayout, type PageGeometry } from "@/lib/editor/pagination"
 import { setPresence } from "@/lib/editor/presence";
 import { gotoHunk, reviewHunkAtCursor, setHunks } from "@/lib/editor/review";
 import { editorPlugins } from "@/lib/editor/setup";
+import { setInvisibles } from "@/lib/editor/invisibles";
+import { loadPreferences, preferences, setPreference } from "@/lib/client/preferences";
 
 /**
  * The browser side of a live document. The server is the authority
@@ -64,7 +66,13 @@ export type DocumentUiState = {
   activeComment: string | null;
   /** Set while the browser print dialog is open: pages are laid out with no gap between them. */
   printing: boolean;
+  /** Editing changes the document directly; suggesting records edits for review; viewing is read-only. */
+  mode: EditorMode;
 };
+
+export type EditorMode = "editing" | "suggesting" | "viewing";
+
+const MODES: readonly EditorMode[] = ["editing", "suggesting", "viewing"];
 
 const PX_PER_IN = 96;
 
@@ -124,6 +132,7 @@ export class DocumentSession {
     pages: 1,
     activeComment: null,
     printing: false,
+    mode: "editing",
   });
   /** Bumped on every editor transaction so toolbars can re-read the state. */
   readonly editor = new Store<EditorState | null>(null);
@@ -137,6 +146,8 @@ export class DocumentSession {
   private destroyed = false;
   private generation = 0;
   private confirmWaiters: Array<() => void> = [];
+  /** Whether the steps now being typed are suggestions. Lags `ui.mode` until earlier edits are confirmed. */
+  private suggesting = false;
 
   constructor(
     readonly id: string,
@@ -185,7 +196,11 @@ export class DocumentSession {
     try {
       const { document } = await api<{ document: Snapshot }>(`/api/documents/${this.id}`);
       if (this.destroyed || generation !== this.generation) return;
+      const mode = this.storedMode();
+      this.suggesting = mode === "suggesting";
+      this.ui.set((ui) => ({ ...ui, mode }));
       this.view = new EditorView(mount, {
+        editable: () => this.ui.get().mode !== "viewing",
         state: this.createState(document),
         dispatchTransaction: (tr) => this.dispatch(tr),
         attributes: { class: "doc-content", spellcheck: "true", "aria-label": "Document", role: "textbox", "aria-multiline": "true" },
@@ -233,6 +248,9 @@ export class DocumentSession {
         geometry: () => this.geometry(),
         onPages: (pages) => this.ui.set((ui) => (ui.pages === pages ? ui : { ...ui, pages })),
         keys: this.keyBindings(),
+        readOnly: () => this.ui.get().mode === "viewing",
+        substitutions: () => preferences.get().substitutions,
+        showInvisibles: loadPreferences().showInvisibles,
       }),
     });
     return state.apply(setHunks(state.tr, snapshot.hunks, snapshot.version));
@@ -302,7 +320,12 @@ export class DocumentSession {
     const sendable = sendableSteps(view.state);
     if (!sendable) return;
     this.inflight = true;
-    const body = { version: sendable.version, steps: sendable.steps.map((step) => step.toJSON()), clientID: String(sendable.clientID) };
+    const body = {
+      version: sendable.version,
+      steps: sendable.steps.map((step) => step.toJSON()),
+      clientID: String(sendable.clientID),
+      ...(this.suggesting ? { suggest: true } : {}),
+    };
     post<{ version: number }>(`/api/documents/${this.id}/steps`, body)
       .then(() => {
         this.inflight = false;
@@ -487,7 +510,41 @@ export class DocumentSession {
       return;
     }
     const { from, to } = view.state.selection;
-    void post(`/api/documents/${this.id}/selection`, { from, to, version: getVersion(view.state) }).catch(() => undefined);
+    void post(`/api/documents/${this.id}/selection`, { from, to, version: getVersion(view.state), mode: this.ui.get().mode }).catch(() => undefined);
+  }
+
+  // --- modes and preferences ----------------------------------------------------------------
+
+  private storedMode(): EditorMode {
+    try {
+      const raw = window.localStorage.getItem(`inline-mode:${this.id}`);
+      return MODES.includes(raw as EditorMode) ? (raw as EditorMode) : "editing";
+    } catch {
+      return "editing";
+    }
+  }
+
+  /** Switch between editing, suggesting and viewing (remembered per document in this browser). */
+  async setMode(mode: EditorMode) {
+    if (this.ui.get().mode === mode) return;
+    this.ui.set((ui) => ({ ...ui, mode }));
+    try {
+      window.localStorage.setItem(`inline-mode:${this.id}`, mode);
+    } catch {
+      // Private browsing: the mode lasts for this tab.
+    }
+    const view = this.view;
+    if (view) view.setProps({});
+    // Edits typed before the switch keep the mode they were typed in.
+    await this.whenSaved();
+    if (this.ui.get().mode === mode) this.suggesting = mode === "suggesting";
+    this.reportSelection();
+  }
+
+  setShowInvisibles(on: boolean) {
+    setPreference("showInvisibles", on);
+    const view = this.view;
+    if (view) view.dispatch(setInvisibles(view.state.tr, on));
   }
 
   // --- actions ------------------------------------------------------------------------------

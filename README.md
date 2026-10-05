@@ -25,7 +25,7 @@ The same document tools are served over MCP at `/api/mcp`. This means a Claude C
 claude mcp add --transport http inline http://localhost:3000/api/mcp
 ```
 
-The tools are `list_documents`, `open_document`, `create_document`, `read_document`, `get_outline`, `search_document`, `get_editor_context`, `edit_document`, `multi_edit_document`, `insert_content`, `write_document`, `format_text`, `set_paragraph_style`, `get_document_settings`, `update_document_settings`, `get_pending_changes`, `revert_changes`, `list_comments`, `add_comment`, `reply_to_comment`, `resolve_comment`, `list_versions`, `save_version`, `restore_version`, `analyze_writing` and `export_document`.
+The tools are `list_documents`, `open_document`, `create_document`, `read_document`, `get_outline`, `search_document`, `get_editor_context`, `edit_document`, `multi_edit_document`, `insert_content`, `write_document`, `format_text`, `set_paragraph_style`, `get_document_settings`, `update_document_settings`, `get_pending_changes`, `keep_changes`, `revert_changes`, `list_comments`, `add_comment`, `reply_to_comment`, `resolve_comment`, `list_versions`, `save_version`, `restore_version`, `analyze_writing` and `export_document`.
 
 ### Configuration
 

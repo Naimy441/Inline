@@ -35,6 +35,9 @@
 
   --insert-bg: rgba(46, 160, 67, 0.16);
   --insert-line: #2ea043;
+  --suggest-bg: rgba(38, 103, 214, 0.12);
+  --suggest-line: #2667d6;
+  --nonprinting: #7aa2e3;
   --delete-bg: rgba(218, 54, 51, 0.1);
   --delete-text: #b4332f;
   --format-bg: rgba(130, 80, 223, 0.12);
@@ -92,6 +95,9 @@
 
   --insert-bg: rgba(63, 185, 80, 0.2);
   --insert-line: #3fb950;
+  --suggest-bg: rgba(88, 150, 255, 0.18);
+  --suggest-line: #6aa3ff;
+  --nonprinting: #5d82bd;
   --delete-bg: rgba(248, 81, 73, 0.14);
   --delete-text: #ff8b84;
   --format-bg: rgba(163, 113, 247, 0.2);

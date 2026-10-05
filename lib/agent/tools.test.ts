@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
+import { Fragment, Slice, type Node as PMNode } from "prosemirror-model";
+import { ReplaceStep } from "prosemirror-transform";
+
 import { runTool } from "@/lib/agent/tools";
+import { schema } from "@/lib/doc/schema";
 import { docToMarkdown } from "@/lib/doc/markdown";
 import { documentHub } from "@/lib/server/hub";
 
@@ -126,3 +130,34 @@ test("analyze_writing and settings", async () => {
   const settings = await runTool("get_document_settings", {}, ctx);
   assert.match(settings.text, /Georgia/);
 });
+
+test("edits made in suggesting mode become the user's pending suggestions", async () => {
+  const { doc, ctx } = await setup();
+  const pos = findText(doc.doc, "lazy dog");
+  assert.ok(pos > 0);
+  const step = new ReplaceStep(pos, pos + 4, new Slice(Fragment.from(schema.text("sleepy")), 0, 0));
+  doc.receiveClientSteps(doc.version, [step.toJSON()], "client-1", { suggest: true });
+  assert.equal(doc.hunks.length, 1);
+  assert.equal(doc.hunks[0]!.author, "user");
+
+  const pending = await runTool("get_pending_changes", {}, ctx);
+  assert.match(pending.text, /suggested by the user/);
+  const kept = await runTool("keep_changes", { all: true }, ctx);
+  assert.equal(kept.isError, undefined, kept.text);
+  assert.equal(doc.hunks.length, 0);
+  assert.match(docToMarkdown(doc.doc), /sleepy dog/);
+
+  // Plain edits are not tracked.
+  doc.receiveClientSteps(doc.version, [new ReplaceStep(pos, pos + 6, new Slice(Fragment.from(schema.text("lazy")), 0, 0)).toJSON()], "client-1");
+  assert.equal(doc.hunks.length, 0);
+});
+
+function findText(node: PMNode, text: string) {
+  let found = -1;
+  node.descendants((child, pos) => {
+    if (found >= 0) return false;
+    if (child.isText && child.text!.includes(text)) found = pos + child.text!.indexOf(text);
+    return true;
+  });
+  return found;
+}

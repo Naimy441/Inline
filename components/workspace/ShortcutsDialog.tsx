@@ -48,6 +48,8 @@ const GROUPS: Array<[string, Array<[string, string]>]> = [
       ["Find / replace", `${mod} F / ${mod} H`],
       ["Comment", `${mod} ${alt} M`],
       ["Undo / redo", `${mod} Z / ${mod} ⇧ Z`],
+      ["Editing / suggesting / viewing", `${mod} ${alt} ⇧ Z / X / C`],
+      ["Show non-printing characters", `${mod} ⇧ P`],
       ["Print", `${mod} P`],
       ["Shortcuts", `${mod} /`],
     ],

@@ -508,6 +508,58 @@ img.ProseMirror-separator {
   background: color-mix(in srgb, var(--delete-text) 18%, transparent);
 }
 
+/* The user's own suggestions (suggesting mode) are blue, Claude's edits green. */
+
+.doc-content .review-insert.is-suggestion {
+  background: var(--suggest-bg);
+  box-shadow: inset 0 -1.5px 0 color-mix(in srgb, var(--suggest-line) 55%, transparent);
+}
+
+.doc-content .review-insert.is-suggestion.is-focused {
+  background: color-mix(in srgb, var(--suggest-line) 24%, transparent);
+}
+
+.doc-content .review-block.is-suggestion::after {
+  background: var(--suggest-line);
+}
+
+.doc-content .review-delete.is-suggestion {
+  background: none;
+  color: var(--suggest-line);
+  text-decoration-color: var(--suggest-line);
+}
+
+.doc-content .review-delete.is-suggestion.is-focused {
+  background: var(--suggest-bg);
+}
+
+/* View > Show non-printing characters */
+
+.doc-content .np-mark {
+  color: var(--nonprinting);
+  font-family: Arial, sans-serif;
+  font-weight: 400;
+  font-style: normal;
+  text-decoration: none;
+  pointer-events: none;
+  user-select: none;
+}
+
+.doc-content .np-para::after {
+  content: "¶";
+}
+
+.doc-content .np-break::after {
+  content: "↵";
+}
+
+.doc-content .np-space {
+  background-image: radial-gradient(circle, var(--nonprinting) 0.09em, transparent 0.11em);
+  background-position: center 58%;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+}
+
 .doc-content .review-controls {
   position: relative;
   display: inline-flex;

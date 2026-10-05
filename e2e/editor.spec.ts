@@ -103,3 +103,38 @@ test("focus mode hides Claude", async ({ page }) => {
   await expect(page.locator(".claude-toggle")).toBeHidden();
   await expect(page.locator(".agent-panel")).toHaveCount(0);
 });
+
+test("suggesting mode records edits for review and viewing mode is read-only", async ({ page }) => {
+  await newBlankDocument(page);
+  const doc = page.locator(".doc-content");
+  await doc.click();
+  await page.keyboard.type("Plain words (c) -> here.");
+  await expect(doc).toContainText("Plain words © → here.");
+
+  await page.locator(".tb-mode").click();
+  await page.locator(".menu-item", { hasText: "Suggesting" }).click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" Suggested.");
+  await expect(page.locator(".review-bar-count")).toHaveText("1 suggestion");
+  await expect(page.locator(".review-insert.is-suggestion")).toContainText("Suggested.");
+
+  await page.keyboard.press("Control+Alt+Shift+c");
+  await expect(page.locator(".tb-mode")).toContainText("Viewing");
+  await expect(doc).toHaveAttribute("contenteditable", "false");
+
+  await page.keyboard.press("Control+Alt+Shift+z");
+  await page.locator(".review-bar .btn-primary").click();
+  await expect(page.locator(".review-bar")).toHaveCount(0);
+  await expect(doc).toContainText("here. Suggested.");
+});
+
+test("non-printing characters can be shown", async ({ page }) => {
+  await newBlankDocument(page);
+  await page.locator(".doc-content").click();
+  await page.keyboard.type("Two words");
+  await page.keyboard.press("Control+Shift+P");
+  await expect(page.locator(".doc-content .np-para")).toHaveCount(1);
+  await expect(page.locator(".doc-content .np-space")).toHaveCount(1);
+  await page.keyboard.press("Control+Shift+P");
+  await expect(page.locator(".doc-content .np-para")).toHaveCount(0);
+});

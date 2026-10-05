@@ -65,6 +65,7 @@
   }
 
   /* Print the document as it reads, without review or collaboration marks. */
+  .doc-content .np-mark,
   .doc-content .review-delete,
   .doc-content .review-controls,
   .doc-content .agent-caret,
@@ -77,7 +78,8 @@
   .doc-content .review-format,
   .doc-content .agent-range,
   .doc-content .comment-hl,
-  .doc-content .find-match {
+  .doc-content .find-match,
+  .doc-content .np-space {
     background: none !important;
     box-shadow: none !important;
     border: 0 !important;

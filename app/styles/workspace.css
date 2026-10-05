@@ -228,6 +228,48 @@
   color: var(--muted);
 }
 
+.tb-spacer {
+  flex: 1 0 8px;
+}
+
+/* Viewing mode: the editing controls stay visible but inert. */
+.workspace.is-viewing .bubble-edit {
+  display: none;
+}
+
+.toolbar.is-viewing .tb-edit {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.tb-mode {
+  flex: none;
+  gap: 6px;
+  font-weight: 500;
+}
+
+.tb-mode.is-suggesting,
+.tb-mode.is-suggesting svg {
+  color: var(--suggest-line);
+}
+
+.tb-mode.is-suggesting {
+  background: var(--suggest-bg);
+}
+
+.tb-mode.is-viewing {
+  background: var(--surface-active);
+}
+
+.status-mode.is-suggesting {
+  color: var(--suggest-line);
+}
+
+.review-bar.is-suggestions .review-bar-dot {
+  background: var(--suggest-line);
+  box-shadow: 0 0 0 3px var(--suggest-bg);
+}
+
 .tb-select-text {
   overflow: hidden;
   text-overflow: ellipsis;

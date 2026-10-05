@@ -27,6 +27,7 @@ import type {
 } from "@/lib/agent/types";
 import { documentHub } from "@/lib/server/hub";
 import { deleteChatFile, findUpload, listChatIds, readChatFile, workspaceDir, writeChatFile } from "@/lib/server/store";
+import { isUserSuggestion } from "@/lib/doc/review";
 
 /**
  * The in-app agent: each chat is a Claude Code session (via the Claude Agent
@@ -344,8 +345,11 @@ class ChatRuntime {
     const doc = this.state.documentId ? await documentHub().get(this.state.documentId) : null;
     if (doc && !doc.meta.trashedAt) {
       context.push(`Open document: "${doc.meta.title}" (id ${doc.id}).`);
-      const pending = doc.hunks.length;
-      if (pending) context.push(`${pending} earlier suggested change${pending === 1 ? " is" : "s are"} still awaiting the user's review.`);
+      const suggestions = doc.hunks.filter(isUserSuggestion).length;
+      const pending = doc.hunks.length - suggestions;
+      if (pending) context.push(`${pending} earlier change${pending === 1 ? " is" : "s are"} by Claude still awaiting the user's review.`);
+      if (suggestions) context.push(`The user has ${suggestions} pending suggestion${suggestions === 1 ? "" : "s"} of their own (suggesting mode).`);
+      if (doc.editorMode !== "editing") context.push(`The user's editor is in ${doc.editorMode} mode.`);
     } else {
       context.push("No document is open.");
     }

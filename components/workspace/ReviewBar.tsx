@@ -2,17 +2,28 @@
 
 import { Check, ChevronDown, ChevronUp, Undo2 } from "lucide-react";
 import type { DocumentSession } from "@/lib/client/documentSession";
+import { isUserSuggestion, type HunkJSON } from "@/lib/doc/review";
 
 const mod = typeof navigator !== "undefined" && /Mac|iP(hone|[oa]d)/.test(navigator.platform) ? "⌘" : "Ctrl+";
 
-/** Floating summary of Claude's pending changes, like Cursor's review bar. */
-export function ReviewBar({ session, count }: { session: DocumentSession; count: number }) {
-  if (!count) return null;
+function summary(hunks: HunkJSON[]) {
+  const suggestions = hunks.filter(isUserSuggestion).length;
+  const claude = hunks.length - suggestions;
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  if (!suggestions) return plural(claude, "change") + " by Claude";
+  if (!claude) return plural(suggestions, "suggestion");
+  return `${plural(claude, "change")} by Claude, ${plural(suggestions, "suggestion")}`;
+}
+
+/** Floating summary of pending changes (Claude's edits and suggestions), like Cursor's review bar. */
+export function ReviewBar({ session, hunks }: { session: DocumentSession; hunks: HunkJSON[] }) {
+  if (!hunks.length) return null;
+  const onlySuggestions = hunks.every(isUserSuggestion);
   return (
-    <div className="review-bar" role="region" aria-label="Review Claude's changes">
+    <div className={`review-bar${onlySuggestions ? " is-suggestions" : ""}`} role="region" aria-label="Review pending changes">
       <span className="review-bar-count">
         <span className="review-bar-dot" />
-        {count} change{count === 1 ? "" : "s"} by Claude
+        {summary(hunks)}
       </span>
       <div className="review-bar-nav">
         <button type="button" className="icon-btn icon-btn-sm" aria-label="Previous change" data-tip="Previous change  ⌥[" onClick={() => session.gotoChange(-1)}>

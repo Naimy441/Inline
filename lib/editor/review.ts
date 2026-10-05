@@ -2,7 +2,7 @@ import { sendableSteps, getVersion } from "prosemirror-collab";
 import { Plugin, PluginKey, type EditorState, type Transaction } from "prosemirror-state";
 import { Mapping } from "prosemirror-transform";
 import { Decoration, DecorationSet, type EditorView } from "prosemirror-view";
-import type { HunkJSON } from "@/lib/doc/review";
+import { isUserSuggestion, type HunkJSON } from "@/lib/doc/review";
 
 /**
  * Cursor-style review of Claude's edits. Hunks arrive from the server in
@@ -92,18 +92,19 @@ function buildDecorations(state: EditorState, handlers: ReviewHandlers) {
   const decorations: Decoration[] = [];
   for (const hunk of hunks) {
     const focused = review.focused === hunk.id;
+    const by = isUserSuggestion(hunk) ? " is-suggestion" : "";
     const formatOnly = hunk.deletedText === hunk.insertedText && hunk.mappedTo > hunk.mappedFrom;
     if (hunk.mappedTo > hunk.mappedFrom) {
       decorations.push(
         Decoration.inline(hunk.mappedFrom, hunk.mappedTo, {
-          class: `${formatOnly ? "review-format" : "review-insert"}${focused ? " is-focused" : ""}`,
+          class: `${formatOnly ? "review-format" : "review-insert"}${by}${focused ? " is-focused" : ""}`,
           "data-hunk": hunk.id,
         }),
       );
       // Whole blocks that were inserted get a gutter bar.
       state.doc.nodesBetween(hunk.mappedFrom, hunk.mappedTo, (node, pos) => {
         if (node.isTextblock && pos >= hunk.mappedFrom - 1 && pos + node.nodeSize <= hunk.mappedTo + 1) {
-          decorations.push(Decoration.node(pos, pos + node.nodeSize, { class: "review-block" }));
+          decorations.push(Decoration.node(pos, pos + node.nodeSize, { class: `review-block${by}` }));
         }
         return !node.isTextblock;
       });
@@ -114,7 +115,7 @@ function buildDecorations(state: EditorState, handlers: ReviewHandlers) {
           hunk.mappedFrom,
           () => {
             const span = document.createElement("span");
-            span.className = `review-delete${focused ? " is-focused" : ""}`;
+            span.className = `review-delete${by}${focused ? " is-focused" : ""}`;
             span.setAttribute("data-hunk", hunk.id);
             span.textContent = clipDeleted(hunk.deletedText);
             return span;
@@ -146,7 +147,11 @@ export function reviewPlugin(handlers: ReviewHandlers) {
         if (next.hunks.length && (tr.selectionSet || tr.docChanged) && meta?.focused === undefined) {
           const head = newState.selection.head;
           const hit = hunkAt(newState, head);
-          if (hit) next = { ...next, focused: hit.id };
+          // While someone types a suggestion, its Keep/Undo controls would chase the
+          // cursor; they appear once the cursor moves (or on hover) instead.
+          const typing = hit && tr.docChanged && isUserSuggestion(hit);
+          if (hit && !typing) next = { ...next, focused: hit.id };
+          else if (typing && next.focused === hit.id) next = { ...next, focused: null };
           else if (next.focused && !next.hunks.some((hunk) => hunk.id === next.focused)) next = { ...next, focused: null };
         }
         return next;

@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { SelectionContext } from "@/lib/agent/types";
 import { patch, post, uploadFile } from "@/lib/client/api";
-import { DocumentSession, geometryFor, type ClientCommand } from "@/lib/client/documentSession";
+import { DocumentSession, geometryFor, type ClientCommand, type EditorMode } from "@/lib/client/documentSession";
 import { useTheme } from "@/lib/client/theme";
 import { docPlainText, wordCount } from "@/lib/doc/editing";
 import type { DocumentMeta } from "@/lib/doc/settings";
@@ -24,6 +24,8 @@ import { OutlinePanel } from "@/components/workspace/OutlinePanel";
 import { PageCanvas } from "@/components/workspace/PageCanvas";
 import { PageSetupDialog } from "@/components/workspace/PageSetupDialog";
 import { ReviewBar } from "@/components/workspace/ReviewBar";
+import { EDITOR_MODES } from "@/components/workspace/modes";
+import { DEFAULT_PREFERENCES, preferences, setPreference } from "@/lib/client/preferences";
 import { SelectionBubble } from "@/components/workspace/SelectionBubble";
 import { ShortcutsDialog } from "@/components/workspace/ShortcutsDialog";
 import { ContextMenu } from "@/components/workspace/ContextMenu";
@@ -112,6 +114,7 @@ export function Workspace({ documentId }: { documentId: string }) {
   );
 
   const ui = useSyncExternalStore(session.ui.subscribe, session.ui.get, session.ui.get);
+  const prefs = useSyncExternalStore(preferences.subscribe, preferences.get, () => DEFAULT_PREFERENCES);
   const state = useSyncExternalStore(session.editor.subscribe, session.editor.get, session.editor.get);
   const meta = ui.meta;
 
@@ -190,6 +193,18 @@ export function Workspace({ documentId }: { documentId: string }) {
       const modKey = event.metaKey || event.ctrlKey;
       if (!modKey) return;
       const key = event.key.toLowerCase();
+      // Mode shortcuts match Google Docs; event.code because Alt changes event.key on macOS.
+      const modeByCode: Record<string, EditorMode> = { KeyZ: "editing", KeyX: "suggesting", KeyC: "viewing" };
+      if (event.altKey && event.shiftKey && modeByCode[event.code]) {
+        event.preventDefault();
+        void session.setMode(modeByCode[event.code]!);
+        return;
+      }
+      if (event.shiftKey && !event.altKey && event.code === "KeyP") {
+        event.preventDefault();
+        session.setShowInvisibles(!preferences.get().showInvisibles);
+        return;
+      }
       if (key === "j" && !event.shiftKey && !event.altKey) {
         event.preventDefault();
         setPanel((current) => (current === "agent" ? null : "agent"));
@@ -209,7 +224,7 @@ export function Workspace({ documentId }: { documentId: string }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [askClaude, setPanel]);
+  }, [askClaude, setPanel, session]);
 
   const insertImageFile = async (file: File) => {
     try {
@@ -281,6 +296,15 @@ export function Workspace({ documentId }: { documentId: string }) {
       if (next) setPanel((current) => (current === "agent" ? null : current));
       toast(next ? "Focus mode on: Claude is hidden until you turn it off in View." : "Focus mode off.");
     },
+    mode: ui.mode,
+    setMode: (mode) => void session.setMode(mode),
+    showInvisibles: prefs.showInvisibles,
+    toggleInvisibles: () => session.setShowInvisibles(!prefs.showInvisibles),
+    substitutions: prefs.substitutions,
+    toggleSubstitutions: () => {
+      setPreference("substitutions", !prefs.substitutions);
+      toast(prefs.substitutions ? "Automatic substitutions off." : "Automatic substitutions on.");
+    },
     ask: (prompt) => {
       setPanel("agent");
       requestAnimationFrame(() => agentRef.current?.ask(null, prompt));
@@ -304,7 +328,7 @@ export function Workspace({ documentId }: { documentId: string }) {
   const openComments = ui.comments.filter((comment) => !comment.resolved).length;
 
   return (
-    <div className={`workspace${panel ? " has-panel" : ""}${focusMode ? " is-focus" : ""}`} style={{ ["--panel-width" as string]: `${panelWidth}px` }}>
+    <div className={`workspace${panel ? " has-panel" : ""}${focusMode ? " is-focus" : ""} is-${ui.mode}`} style={{ ["--panel-width" as string]: `${panelWidth}px` }}>
       <header className="titlebar">
         <button type="button" className="icon-btn icon-btn-md" aria-label="All documents" data-tip="All documents" onClick={() => router.push("/")}>
           <ArrowLeft size={17} />
@@ -370,6 +394,7 @@ export function Workspace({ documentId }: { documentId: string }) {
         onLink={() => setLinkEditing(true)}
         onComment={startComment}
         onImage={() => imageInput.current?.click()}
+        mode={ui.mode}
       />
       <input
         ref={imageInput}
@@ -404,7 +429,7 @@ export function Workspace({ documentId }: { documentId: string }) {
             </div>
           )}
           <PageCanvas session={session} meta={meta} pages={ui.pages} zoom={zoom} printing={ui.printing} />
-          <ReviewBar session={session} count={ui.hunks.length} />
+          <ReviewBar session={session} hunks={ui.hunks} />
           <SelectionBubble session={session} state={state} linkEditing={linkEditing} onLinkEditing={setLinkEditing} onAsk={() => askClaude()} onComment={startComment} />
         </main>
 
@@ -459,6 +484,11 @@ export function Workspace({ documentId }: { documentId: string }) {
           {ui.pages} page{ui.pages === 1 ? "" : "s"}
         </span>
         {ui.hunks.length > 0 && <span className="status-item is-accent">{ui.hunks.length} pending</span>}
+        {ui.mode !== "editing" && (
+          <button type="button" className={`status-item status-mode is-${ui.mode}`} onClick={() => void session.setMode("editing")} data-tip="Back to editing">
+            {EDITOR_MODES[ui.mode].icon(13)} {EDITOR_MODES[ui.mode].label}
+          </button>
+        )}
         <span className="status-spacer" />
         <button type="button" className="status-item" onClick={() => setShortcuts(true)}>
           Shortcuts
@@ -478,7 +508,7 @@ export function Workspace({ documentId }: { documentId: string }) {
           session.run(insertText(char));
         }}
       />
-      <ContextMenu session={session} hideClaude={focusMode} onAsk={() => askClaude()} onComment={startComment} onLink={() => setLinkEditing(true)} />
+      <ContextMenu session={session} hideClaude={focusMode} readOnly={ui.mode === "viewing"} onAsk={() => askClaude()} onComment={startComment} onLink={() => setLinkEditing(true)} />
       <WordCountDialog open={counting} onClose={() => setCounting(false)} session={session} />
       <Toaster />
     </div>

@@ -3,7 +3,7 @@ import { Step, Transform } from "prosemirror-transform";
 import { docPlainText, rangeMarkTexts, wordCount } from "@/lib/doc/editing";
 import { blockIdFixes, ensureBlockIds, newId } from "@/lib/doc/ids";
 import { markdownToDoc } from "@/lib/doc/markdown";
-import { acceptHunks, hunkFromJSON, hunkToJSON, mapHunks, recordAgentChange, rejectHunks, type Hunk, type HunkJSON } from "@/lib/doc/review";
+import { acceptHunks, hunkFromJSON, hunkToJSON, mapHunks, recordAgentChange, rejectHunks, USER_AUTHOR, type Hunk, type HunkJSON } from "@/lib/doc/review";
 import { emptyDoc, schema } from "@/lib/doc/schema";
 import {
   DEFAULT_SETTINGS,
@@ -95,6 +95,8 @@ export class LiveDocument {
   meta: DocumentMeta;
   activity: AgentActivity | null = null;
   selection: ClientSelection | null = null;
+  /** The mode the user's editor is in, so Claude knows whether they're suggesting or only viewing. */
+  editorMode: "editing" | "suggesting" | "viewing" = "editing";
   private log: Array<{ step: Step; clientID: string }> = [];
   private listeners = new Set<(event: HubEvent) => void>();
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -162,8 +164,12 @@ export class LiveDocument {
     return { steps: slice.map((entry) => entry.step.toJSON()), clientIDs: slice.map((entry) => entry.clientID) };
   }
 
-  /** Apply steps from a browser editor (prosemirror-collab protocol). */
-  receiveClientSteps(version: number, stepsJSON: unknown[], clientID: string) {
+  /**
+   * Apply steps from a browser editor (prosemirror-collab protocol). In
+   * suggesting mode the edit is recorded as a pending change for review, the
+   * same way Claude's edits are.
+   */
+  receiveClientSteps(version: number, stepsJSON: unknown[], clientID: string, options: { suggest?: boolean } = {}) {
     if (this.deleted) throw new Error("Document was deleted.");
     if (version !== this.version) throw new StepConflictError(this.version);
     const tr = new Transform(this.doc);
@@ -172,7 +178,8 @@ export class LiveDocument {
       const result = tr.maybeStep(step);
       if (result.failed) throw new Error(`Step rejected: ${result.failed}`);
     }
-    this.commit(tr, { kind: "client", clientID }, mapHunks(this.hunks, tr.mapping));
+    const hunks = options.suggest ? recordAgentChange(this.doc, tr, this.hunks, USER_AUTHOR) : mapHunks(this.hunks, tr.mapping);
+    this.commit(tr, { kind: "client", clientID }, hunks);
     return this.version;
   }
 
