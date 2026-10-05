@@ -1,69 +1,121 @@
 import assert from "node:assert/strict";
-import { afterEach, describe, it } from "node:test";
+import { afterEach, describe, test } from "node:test";
+
 import { NextRequest } from "next/server";
-import { proxy } from "../../proxy";
+
+import { proxy } from "@/proxy";
+
+/**
+ * The request guard in front of /api/mcp and the rest of the API. Inline
+ * drives Claude Code with the user's own login, so the MCP endpoint must not
+ * be reachable from other websites (CSRF, DNS rebinding) or, when a token is
+ * configured, without it.
+ */
 
 function request(url: string, init: { method?: string; headers?: Record<string, string> } = {}) {
   const host = new URL(url).host;
   return new NextRequest(url, { method: init.method ?? "GET", headers: { host, ...init.headers } });
 }
 
-const passes = (response: Response) => response.headers.get("x-middleware-next") === "1";
+function mcpPost(url = "http://localhost:3000/api/mcp", headers: Record<string, string> = {}) {
+  return request(url, { method: "POST", headers: { "content-type": "application/json", ...headers } });
+}
+
+async function status(response: Response) {
+  return response.headers.get("x-middleware-next") === "1" ? "next" : response.status;
+}
 
 afterEach(() => {
-  delete process.env.INLINE_ALLOWED_HOSTS;
   delete process.env.INLINE_ACCESS_TOKEN;
+  delete process.env.INLINE_ALLOWED_HOSTS;
 });
 
-describe("host allow-list", () => {
-  it("answers local hosts", () => {
-    for (const url of ["http://localhost:3000/", "http://127.0.0.1:3000/api/documents", "http://[::1]:3000/", "http://app.localhost/"]) {
-      assert.ok(passes(proxy(request(url))), url);
-    }
-  });
+describe("host allow-list (DNS rebinding)", () => {
+  for (const host of ["localhost:3000", "127.0.0.1:3000", "[::1]:3000", "inline.localhost:3000"]) {
+    test(`allows ${host}`, async () => {
+      assert.equal(await status(proxy(mcpPost(`http://${host}/api/mcp`))), "next");
+    });
+  }
 
-  it("refuses other hosts unless they are listed", async () => {
-    const response = proxy(request("http://evil.example/api/documents"));
+  test("refuses other hosts", async () => {
+    const response = proxy(mcpPost("http://evil.example.com/api/mcp"));
     assert.equal(response.status, 403);
-    assert.match((await response.json()).error, /INLINE_ALLOWED_HOSTS/);
-    process.env.INLINE_ALLOWED_HOSTS = "docs.internal, other.host";
-    assert.ok(passes(proxy(request("http://docs.internal:8080/"))));
-    assert.equal(proxy(request("http://evil.example/")).status, 403);
+    assert.match(((await response.json()) as { error: string }).error, /INLINE_ALLOWED_HOSTS/);
+  });
+
+  test("INLINE_ALLOWED_HOSTS adds hosts", async () => {
+    process.env.INLINE_ALLOWED_HOSTS = "inline.example.com, other.test";
+    assert.equal(await status(proxy(mcpPost("http://inline.example.com/api/mcp"))), "next");
+    assert.equal(proxy(mcpPost("http://third.test/api/mcp")).status, 403);
   });
 });
 
-describe("cross-site writes", () => {
-  it("allows same-origin writes and writes without an Origin (MCP clients)", () => {
-    assert.ok(passes(proxy(request("http://localhost:3000/api/documents", { method: "POST", headers: { origin: "http://localhost:3000" } }))));
-    assert.ok(passes(proxy(request("http://localhost:3000/api/mcp", { method: "POST" }))));
+describe("cross-site requests (CSRF)", () => {
+  test("MCP clients send no Origin and are allowed", async () => {
+    assert.equal(await status(proxy(mcpPost())), "next");
   });
 
-  it("blocks writes from another origin", () => {
-    assert.equal(proxy(request("http://localhost:3000/api/documents", { method: "POST", headers: { origin: "http://evil.example" } })).status, 403);
-    assert.equal(proxy(request("http://localhost:3000/api/documents", { method: "DELETE", headers: { origin: "null" } })).status, 403);
-    assert.equal(proxy(request("http://localhost:3000/api/documents", { method: "POST", headers: { "sec-fetch-site": "cross-site" } })).status, 403);
+  test("same-origin browser requests are allowed", async () => {
+    assert.equal(await status(proxy(mcpPost(undefined, { origin: "http://localhost:3000", "sec-fetch-site": "same-origin" }))), "next");
   });
 
-  it("lets reads through from anywhere on an allowed host", () => {
-    assert.ok(passes(proxy(request("http://localhost:3000/api/documents", { headers: { origin: "http://evil.example" } }))));
+  test("a page on another site can't call tools", async () => {
+    const response = proxy(mcpPost(undefined, { origin: "https://evil.example.com" }));
+    assert.equal(response.status, 403);
+  });
+
+  test("a cross-site fetch without Origin is caught by Sec-Fetch-Site", async () => {
+    assert.equal(proxy(mcpPost(undefined, { "sec-fetch-site": "cross-site" })).status, 403);
+  });
+
+  test("a malformed Origin is refused", async () => {
+    assert.equal(proxy(mcpPost(undefined, { origin: "null" })).status, 403);
+  });
+
+  test("reads are not origin-checked", async () => {
+    assert.equal(await status(proxy(request("http://localhost:3000/api/documents", { headers: { origin: "https://evil.example.com" } }))), "next");
   });
 });
 
 describe("access token", () => {
-  it("requires the token on the API as a bearer or cookie", () => {
+  test("without the token, the API answers 401", async () => {
     process.env.INLINE_ACCESS_TOKEN = "s3cret";
-    assert.equal(proxy(request("http://localhost:3000/api/documents")).status, 401);
-    assert.ok(passes(proxy(request("http://localhost:3000/api/documents", { headers: { authorization: "Bearer s3cret" } }))));
-    assert.ok(passes(proxy(request("http://localhost:3000/api/documents", { headers: { cookie: "inline_token=s3cret" } }))));
-    assert.equal(proxy(request("http://localhost:3000/api/documents", { headers: { authorization: "Bearer wrong" } })).status, 401);
+    const response = proxy(mcpPost());
+    assert.equal(response.status, 401);
+    assert.match(((await response.json()) as { error: string }).error, /access token/);
   });
 
-  it("stores the cookie when a page is opened with ?token and drops it from the URL", () => {
+  test("a Bearer token (how MCP clients authenticate) is accepted", async () => {
+    process.env.INLINE_ACCESS_TOKEN = "s3cret";
+    assert.equal(await status(proxy(mcpPost(undefined, { authorization: "Bearer s3cret" }))), "next");
+    assert.equal(proxy(mcpPost(undefined, { authorization: "Bearer wrong" })).status, 401);
+  });
+
+  test("the cookie is accepted", async () => {
+    process.env.INLINE_ACCESS_TOKEN = "s3cret";
+    assert.equal(await status(proxy(mcpPost(undefined, { cookie: "inline_token=s3cret" }))), "next");
+  });
+
+  test("visiting a page with ?token= stores the cookie and strips the token from the URL", async () => {
     process.env.INLINE_ACCESS_TOKEN = "s3cret";
     const response = proxy(request("http://localhost:3000/d/abc?token=s3cret"));
     assert.equal(response.status, 307);
     assert.equal(response.headers.get("location"), "http://localhost:3000/d/abc");
-    assert.match(response.headers.get("set-cookie") ?? "", /inline_token=s3cret.*HttpOnly/i);
-    assert.equal(proxy(request("http://localhost:3000/d/abc")).status, 401);
+    const cookie = response.headers.get("set-cookie") ?? "";
+    assert.match(cookie, /inline_token=s3cret/);
+    assert.match(cookie, /HttpOnly/i);
+    assert.match(cookie, /SameSite=strict/i);
+  });
+
+  test("?token= is not accepted on the API itself", async () => {
+    process.env.INLINE_ACCESS_TOKEN = "s3cret";
+    assert.equal(proxy(mcpPost("http://localhost:3000/api/mcp?token=s3cret")).status, 401);
+  });
+
+  test("pages without the token explain how to open Inline", async () => {
+    process.env.INLINE_ACCESS_TOKEN = "s3cret";
+    const response = proxy(request("http://localhost:3000/"));
+    assert.equal(response.status, 401);
+    assert.match(await response.text(), /\?token=/);
   });
 });

@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
-/** End-to-end flows across the home page, the editor, exports, collaboration and the MCP endpoint. */
+/** End-to-end flows across the home page, the editor, exports and collaboration. (MCP flows live in agent-mcp.spec.ts.) */
 
 async function createDocument(request: APIRequestContext, title: string, markdown: string) {
   const response = await request.post("/api/documents", { data: { title, markdown } });
@@ -18,15 +18,6 @@ async function openDocument(page: Page, id: string) {
 async function menu(page: Page, ...path: string[]) {
   await page.locator(".menubar-item", { hasText: path[0] }).click();
   for (const label of path.slice(1)) await page.locator(".menu-item", { hasText: label }).first().click();
-}
-
-async function callMcp(request: APIRequestContext, method: string, params: Record<string, unknown> = {}) {
-  const response = await request.post("/api/mcp", {
-    headers: { accept: "application/json, text/event-stream", "content-type": "application/json" },
-    data: { jsonrpc: "2.0", id: 1, method, params },
-  });
-  expect(response.ok()).toBeTruthy();
-  return (await response.json()) as { result?: Record<string, unknown>; error?: { message: string } };
 }
 
 test.describe("home page", () => {
@@ -127,6 +118,8 @@ test.describe("editing", () => {
     await page.keyboard.press("Control+Alt+m");
     await page.keyboard.type("Which source?");
     await page.keyboard.press("Control+Enter");
+    // The draft card stays until the server has saved the comment; wait for it to close.
+    await expect(page.locator(".comment-card.is-draft")).toHaveCount(0);
     const card = page.locator(".comment-card", { hasText: "Which source?" });
     await card.click();
     await card.getByPlaceholder("Reply…").fill("The 2024 survey.");
@@ -228,27 +221,6 @@ test.describe("collaboration and Claude", () => {
     await second.keyboard.type(" and two");
     await expect(first.locator(".doc-content")).toContainText("Shared start from tab one and two");
     await context.close();
-  });
-
-  test("an MCP client's edit shows up live for review", async ({ page, request }) => {
-    const id = await createDocument(request, "MCP target", "The quick brown fox.");
-    await openDocument(page, id);
-
-    const tools = await callMcp(request, "tools/list");
-    const names = ((tools.result?.tools ?? []) as Array<{ name: string }>).map((tool) => tool.name);
-    expect(names).toEqual(expect.arrayContaining(["read_document", "edit_document", "list_documents", "add_comment"]));
-
-    const read = await callMcp(request, "tools/call", { name: "read_document", arguments: { document_id: id } });
-    expect(JSON.stringify(read.result)).toContain("The quick brown fox.");
-
-    const edit = await callMcp(request, "tools/call", { name: "edit_document", arguments: { document_id: id, old_string: "brown", new_string: "red" } });
-    expect(edit.result?.isError).toBeFalsy();
-
-    await expect(page.locator(".doc-content .review-insert")).toContainText("red");
-    await expect(page.locator(".review-bar")).toBeVisible();
-    await page.locator(".review-bar").getByRole("button", { name: "Keep all" }).click();
-    await expect(page.locator(".review-bar")).toHaveCount(0);
-    await expect(page.locator(".doc-content")).toHaveText("The quick red fox.");
   });
 
   test("the API refuses cross-site writes", async ({ request }) => {

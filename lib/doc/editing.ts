@@ -1,6 +1,6 @@
 import { Mark, type Node as PMNode } from "prosemirror-model";
 import { Transform } from "prosemirror-transform";
-import { BLOCK_SEPARATOR, parseMarkdown, serializeDoc, type BlockSpan, type SerializedDoc } from "@/lib/doc/markdown";
+import { BLOCK_SEPARATOR, parseMarkdown, serializeBlock, serializeDoc, type BlockSpan, type SerializedDoc } from "@/lib/doc/markdown";
 import { LockedContentError, replaceTopLevelBlocks } from "@/lib/doc/merge";
 import { ALIGNMENTS, MAX_INDENT, cssSizeToPt, isTextblockType, schema, type Align } from "@/lib/doc/schema";
 
@@ -62,6 +62,50 @@ export function blockLines(serialized: SerializedDoc): BlockLines[] {
     const count = block.markdown.split("\n").length;
     out.push({ block, startLine: line, endLine: line + count - 1 });
     line += count + 1; // blank separator line
+  }
+  return out;
+}
+
+export type TextblockLines = { node: PMNode; pos: number; startLine: number; endLine: number };
+
+/**
+ * Every textblock with the Markdown lines it occupies. List items, quoted
+ * paragraphs and table rows get their own lines rather than the whole
+ * block's, so "line 8" means the item a reader sees on line 8.
+ */
+export function textblockLines(serialized: SerializedDoc): TextblockLines[] {
+  const out: TextblockLines[] = [];
+  for (const entry of blockLines(serialized)) {
+    const block = entry.block;
+    if (block.node.isTextblock) {
+      out.push({ node: block.node, pos: block.pos, startLine: entry.startLine, endLine: entry.endLine });
+      continue;
+    }
+    if (block.node.type.name === "table") {
+      // Rows are one line each, after the header row and the divider line.
+      block.node.forEach((row, rowOffset, rowIndex) => {
+        const line = entry.startLine + (rowIndex === 0 ? 0 : rowIndex + 1);
+        row.descendants((node, pos) => {
+          if (!node.isTextblock) return true;
+          out.push({ node, pos: block.pos + 1 + rowOffset + 1 + pos, startLine: line, endLine: line });
+          return false;
+        });
+      });
+      continue;
+    }
+    // Lists and quotes: find each textblock's own Markdown, in order, among the block's lines.
+    const lines = block.markdown.split("\n");
+    let cursor = 0;
+    block.node.descendants((node, pos) => {
+      if (!node.isTextblock) return true;
+      const own = serializeBlock(node).split("\n");
+      const found = lines.findIndex((line, index) => index >= cursor && line.includes(own[0]!));
+      const at = found >= 0 ? found : Math.min(cursor, lines.length - 1);
+      const span = Math.max(1, Math.min(own.length, lines.length - at));
+      out.push({ node, pos: block.pos + 1 + pos, startLine: entry.startLine + at, endLine: entry.startLine + at + span - 1 });
+      cursor = at + span;
+      return false;
+    });
   }
   return out;
 }
@@ -257,10 +301,17 @@ export function insertMarkdown(doc: PMNode, markdown: string, position: InsertPo
   const tr = new Transform(doc);
   const serialized = serializeDoc(doc);
   let index: number;
+  const entries = blockLines(serialized);
+  // Inserting at the start or end next to a list is inserting before its first or after its last line.
+  if ("at" in position && entries.length) {
+    const edge = position.at === "start" ? entries[0]! : entries[entries.length - 1]!;
+    if (blocks.length === 1 && blocks[0]!.type === edge.block.node.type && /_list$/.test(blocks[0]!.type.name)) {
+      position = position.at === "start" ? { beforeLine: edge.startLine } : { afterLine: edge.endLine };
+    }
+  }
   if ("at" in position) {
     index = position.at === "start" ? 0 : doc.childCount;
   } else {
-    const entries = blockLines(serialized);
     const line = "afterLine" in position ? position.afterLine : position.beforeLine;
     const containing = entries.find((item) => item.endLine >= line && item.startLine <= line);
     // New items for a list go into that list rather than starting a second one beside it.
@@ -294,49 +345,24 @@ type TextIndex = { text: string; positions: number[]; line: number };
 
 /** Plain text of each textblock with the document position of every character. */
 function textIndex(doc: PMNode, lineFilter?: { from: number; to: number }): TextIndex[] {
-  const serialized = serializeDoc(doc);
-  const entries = blockLines(serialized);
   const out: TextIndex[] = [];
-  for (const entry of entries) {
+  for (const entry of textblockLines(serializeDoc(doc))) {
     if (lineFilter && (entry.endLine < lineFilter.from || entry.startLine > lineFilter.to)) continue;
-    entry.block.node.descendants((node, pos) => {
-      if (!node.isTextblock) return true;
-      const base = entry.block.pos + 1 + pos + 1;
-      let text = "";
-      const positions: number[] = [];
-      node.forEach((child, offset) => {
-        if (child.isText) {
-          for (let i = 0; i < (child.text ?? "").length; i += 1) {
-            text += child.text![i];
-            positions.push(base + offset + i);
-          }
-        } else {
-          text += "\n";
-          positions.push(base + offset);
+    const base = entry.pos + 1;
+    let text = "";
+    const positions: number[] = [];
+    entry.node.forEach((child, offset) => {
+      if (child.isText) {
+        for (let i = 0; i < (child.text ?? "").length; i += 1) {
+          text += child.text![i];
+          positions.push(base + offset + i);
         }
-      });
-      out.push({ text, positions, line: entry.startLine });
-      return false;
+      } else {
+        text += "\n";
+        positions.push(base + offset);
+      }
     });
-    if (entry.block.node.isTextblock) {
-      // descendants() skips the node itself; handle top-level textblocks directly.
-      const node = entry.block.node;
-      const base = entry.block.pos + 1;
-      let text = "";
-      const positions: number[] = [];
-      node.forEach((child, offset) => {
-        if (child.isText) {
-          for (let i = 0; i < (child.text ?? "").length; i += 1) {
-            text += child.text![i];
-            positions.push(base + offset + i);
-          }
-        } else {
-          text += "\n";
-          positions.push(base + offset);
-        }
-      });
-      out.push({ text, positions, line: entry.startLine });
-    }
+    out.push({ text, positions, line: entry.startLine });
   }
   return out;
 }
@@ -451,22 +477,9 @@ export function lockedBetween(doc: PMNode, from: number, to: number): boolean {
 
 /** Content range of every textblock within the given lines. */
 export function textblockRanges(doc: PMNode, lines: { from: number; to: number }): Array<{ from: number; to: number; pos: number; node: PMNode }> {
-  const serialized = serializeDoc(doc);
-  const ranges: Array<{ from: number; to: number; pos: number; node: PMNode }> = [];
-  for (const entry of blocksInLines(serialized, lines.from, lines.to)) {
-    const block = entry.block;
-    if (block.node.isTextblock) {
-      ranges.push({ from: block.pos + 1, to: block.pos + block.node.nodeSize - 1, pos: block.pos, node: block.node });
-      continue;
-    }
-    block.node.descendants((node, pos) => {
-      if (!node.isTextblock) return true;
-      const abs = block.pos + 1 + pos;
-      ranges.push({ from: abs + 1, to: abs + node.nodeSize - 1, pos: abs, node });
-      return false;
-    });
-  }
-  return ranges;
+  return textblockLines(serializeDoc(doc))
+    .filter((entry) => entry.endLine >= lines.from && entry.startLine <= lines.to)
+    .map((entry) => ({ from: entry.pos + 1, to: entry.pos + entry.node.nodeSize - 1, pos: entry.pos, node: entry.node }));
 }
 
 // ---------------------------------------------------------------------------

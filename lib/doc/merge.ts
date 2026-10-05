@@ -66,6 +66,8 @@ function applyBlockChanges(tr: Transform, regionStart: number, oldBlocks: PMNode
   }
 
   let changed = false;
+  const firstStep = tr.steps.length;
+  const deletions: Array<{ from: number; to: number }> = [];
   for (let i = ops.length - 1; i >= 0; i -= 1) {
     const { pair, pos } = ops[i]!;
     if (pair.old && pair.next) {
@@ -76,12 +78,21 @@ function applyBlockChanges(tr: Transform, regionStart: number, oldBlocks: PMNode
       }
     } else if (pair.old) {
       assertUnlocked(pair.old);
-      tr.delete(pos, pos + pair.old.nodeSize);
-      changed = true;
+      deletions.push({ from: pos, to: pos + pair.old.nodeSize });
     } else if (pair.next) {
       tr.insert(pos, stripIds(pair.next));
       changed = true;
     }
+  }
+  // Delete after inserting: removing every old block first would leave the
+  // document momentarily empty, and ProseMirror fills it with an empty
+  // paragraph that then stays behind the new content.
+  for (const deletion of deletions) {
+    const mapping = tr.mapping.slice(firstStep);
+    const from = mapping.map(deletion.from, 1);
+    const to = Math.max(from, mapping.map(deletion.to, -1));
+    tr.delete(from, to);
+    changed = true;
   }
   return changed;
 }

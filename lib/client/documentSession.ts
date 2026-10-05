@@ -411,7 +411,11 @@ export class DocumentSession {
       .catch((error: unknown) => {
         this.inflight = false;
         if (error instanceof ApiError && error.status === 409) {
-          // Someone else got there first; their steps are on the way and we'll resend after rebasing.
+          // Someone else got there first. Their steps usually arrive through the event
+          // stream before this response, while the flush they trigger is skipped for the
+          // request in flight; if we've already caught up, resend now or nothing will.
+          const current = this.view;
+          if (current && getVersion(current.state) > body.version) this.flushSteps();
           return;
         }
         if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
