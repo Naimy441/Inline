@@ -1451,9 +1451,11 @@ button.status-item:hover {
     -webkit-overflow-scrolling: touch;
   }
 
+  /* Fill the screen so the review bar rests at the bottom even under a short document. */
   .page-stack-wrap.is-flow {
     display: block;
     width: 100%;
+    min-height: 100%;
     padding: 20px 20px 112px;
   }
 
