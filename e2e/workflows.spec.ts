@@ -127,6 +127,8 @@ test.describe("editing", () => {
     await page.keyboard.press("Control+Alt+m");
     await page.keyboard.type("Which source?");
     await page.keyboard.press("Control+Enter");
+    // The draft card stays until the server has saved the comment; wait for it to close.
+    await expect(page.locator(".comment-card.is-draft")).toHaveCount(0);
     const card = page.locator(".comment-card", { hasText: "Which source?" });
     await card.click();
     await card.getByPlaceholder("Reply…").fill("The 2024 survey.");
