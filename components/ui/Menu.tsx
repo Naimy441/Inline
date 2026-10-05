@@ -109,7 +109,14 @@ export function Menu({
   const subItem = sub ? (items[sub.index] as { submenu?: MenuItem[] }) : null;
   return createPortal(
     <>
-      <div ref={ref} role="menu" className={`menu${className ? ` ${className}` : ""}`} style={{ position: "fixed", ...style }}>
+      <div
+        ref={ref}
+        role="menu"
+        className={`menu${className ? ` ${className}` : ""}`}
+        style={{ position: "fixed", ...style }}
+        // React bubbles portal events through the component tree, so a pick would also click whatever opened the menu (a document row opens it).
+        onClick={(event) => event.stopPropagation()}
+      >
         {items.map((item, index) => {
           if (item.kind === "separator") return <div key={index} className="menu-sep" role="separator" />;
           if (item.kind === "label") return <div key={index} className="menu-label">{item.label}</div>;

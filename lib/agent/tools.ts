@@ -534,7 +534,13 @@ export const TOOLS = [
       if (ctx.readOnly) return fail("You are in Ask mode, so documents can't be changed.");
       const doc = await resolveDocument(ctx, args.document_id);
       const settings: Record<string, unknown> = {};
-      if (args.font_family) settings.fontFamily = FONT_FAMILIES.find((font) => font.label.toLowerCase() === args.font_family!.toLowerCase())?.value ?? args.font_family;
+      if (args.font_family) {
+        const known = FONT_FAMILIES.find((font) => font.label.toLowerCase() === args.font_family!.toLowerCase().replace(/["']/g, "").trim());
+        // Any other installed font works too; keep only a plain family name and add a fallback.
+        const name = args.font_family.replace(/[^\p{L}\p{N} -]/gu, "").trim();
+        if (!known && !name) return fail(`"${args.font_family}" isn't a font name.`);
+        settings.fontFamily = known?.value ?? `"${name}", sans-serif`;
+      }
       if (args.font_size !== undefined) settings.fontSize = args.font_size;
       if (args.line_spacing !== undefined) settings.lineSpacing = args.line_spacing;
       if (args.paragraph_spacing !== undefined) settings.paragraphSpacing = args.paragraph_spacing;
@@ -877,15 +883,15 @@ export const TOOLS = [
     name: "export_document",
     title: "Export document",
     description:
-      "Export a document as Word (.docx), PDF, Markdown, HTML or plain text. For docx/md/html/txt the file is downloaded in the user's browser (and a URL is returned); PDF opens the browser's print dialog with the document's page setup.",
+      "Export a document as Word (.docx), PDF, Markdown, HTML or plain text. The file is downloaded in the user's browser. docx/md/html/txt are also available at a returned URL; PDF is drawn from the editor's page layout, so the document must be open in Inline.",
     shape: { document_id: documentId, format: z.enum(["docx", "pdf", "md", "html", "txt"]) },
     write: false,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
       if (args.format === "pdf") {
-        const viewers = doc.sendCommand({ kind: "print" });
+        const viewers = doc.sendCommand({ kind: "export_pdf" });
         return viewers
-          ? ok("Opened the print dialog in the user's editor; they can choose \"Save as PDF\".")
+          ? ok(`Started the download of "${doc.meta.title}.pdf" in the user's editor.`)
           : fail("PDF export needs the document open in the Inline editor. Ask the user to open it, or export docx/html instead.");
       }
       const url = `/api/documents/${doc.id}/export?format=${args.format}`;

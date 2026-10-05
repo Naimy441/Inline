@@ -1066,10 +1066,12 @@ describe("export_document", () => {
     const offline = await runTool("export_document", { format: "pdf" }, ctx);
     assert.equal(offline.isError, true);
     assert.match(offline.text, /needs the document open/);
-    doc.subscribe(() => undefined);
+    const commands: unknown[] = [];
+    doc.subscribe((event) => event.type === "command" && commands.push(event.command));
     const online = await runTool("export_document", { format: "pdf" }, ctx);
     assert.equal(online.isError, undefined);
-    assert.match(online.text, /print dialog/);
+    assert.match(online.text, /Started the download of "Field notes\.pdf"/);
+    assert.deepEqual(commands, [{ kind: "export_pdf" }], "the editor draws the PDF from its own page layout");
   });
 });
 

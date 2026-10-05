@@ -253,7 +253,7 @@ export const toggleBlockquote: Command = (state, dispatch) => {
   return wrapIn(nodes.blockquote!)(state, dispatch);
 };
 
-function insertBlock(node: PMNode): Command {
+function insertBlock(node: PMNode, enter = false): Command {
   return (state, dispatch) => {
     if (!dispatch) return true;
     const { $from } = state.selection;
@@ -266,7 +266,7 @@ function insertBlock(node: PMNode): Command {
     if (cursor >= tr.doc.content.size || !tr.doc.resolve(cursor).nodeAfter?.isTextblock) {
       tr.insert(cursor, nodes.paragraph!.create());
     }
-    cursor = Math.min(cursor + 1, tr.doc.content.size);
+    cursor = enter ? after + 1 : Math.min(cursor + 1, tr.doc.content.size);
     tr.setSelection(TextSelection.near(tr.doc.resolve(cursor)));
     dispatch(tr.scrollIntoView());
     return true;
@@ -288,7 +288,8 @@ export function insertTable(rows: number, cols: number): Command {
   );
   return (state, dispatch) => {
     if (isInTable(state)) return false;
-    return insertBlock(table)(state, dispatch);
+    // Start typing in the first cell, like Docs and Word.
+    return insertBlock(table, true)(state, dispatch);
   };
 }
 

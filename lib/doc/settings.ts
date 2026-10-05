@@ -10,7 +10,7 @@ export type HorizontalAlign = "left" | "center" | "right";
 /** Paper sizes in inches. */
 export const PAPER_SIZES: Record<PaperSize, { label: string; width: number; height: number }> = {
   letter: { label: "Letter (8.5\" × 11\")", width: 8.5, height: 11 },
-  a4: { label: "A4 (8.27\" × 11.69\")", width: 8.27, height: 11.69 },
+  a4: { label: "A4 (8.27\" × 11.69\")", width: 210 / 25.4, height: 297 / 25.4 },
   legal: { label: "Legal (8.5\" × 14\")", width: 8.5, height: 14 },
 };
 
@@ -143,7 +143,8 @@ export function normalizeSettings(input: unknown, base: DocumentSettings = DEFAU
         left: num(margins.left, base.pageSetup.margins.left, 0, 3),
       },
     },
-    fontFamily: str(raw.fontFamily, base.fontFamily, 200) || base.fontFamily,
+    // A CSS font-family list; it is written into style sheets on export, so nothing that could end the declaration.
+    fontFamily: str(raw.fontFamily, base.fontFamily, 200).replace(/[;{}<>\\]/g, "").trim() || base.fontFamily,
     fontSize: num(raw.fontSize, base.fontSize, 6, 96),
     lineSpacing: num(raw.lineSpacing, base.lineSpacing, 0.8, 4),
     paragraphSpacing: num(raw.paragraphSpacing, base.paragraphSpacing, 0, 72),

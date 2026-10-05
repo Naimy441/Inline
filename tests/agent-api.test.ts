@@ -190,7 +190,8 @@ describe("chat lifecycle over HTTP", () => {
     const interrupted = await routes.interrupt.POST(post(`/api/agent/chats/${chat.id}/interrupt`), params({ id: chat.id }));
     assert.equal(interrupted.status, 200);
     const finished = await waitIdle(chat.id);
-    assert.equal(finished.messages.at(-1)!.role === "assistant" && finished.messages.at(-1)!.status, "stopped");
+    const last = finished.messages.at(-1)!;
+    assert.equal(last.role === "assistant" && last.status, "stopped");
   });
 
   test("retry after an error", async () => {
