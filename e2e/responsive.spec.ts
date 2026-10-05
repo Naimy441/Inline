@@ -74,18 +74,19 @@ test.describe("phone", () => {
     await expect(page.locator(".agent-panel")).toHaveCount(0);
 
     // Touch-sized controls.
-    const bold = await page.getByRole("button", { name: "Bold", exact: true }).boundingBox();
+    const bold = await page.getByRole("toolbar", { name: "Formatting" }).getByRole("button", { name: "Bold", exact: true }).boundingBox();
     expect(bold!.height).toBeGreaterThanOrEqual(40);
   });
 
   test("typing and formatting work in the reflowed layout", async ({ page, request }) => {
     await openDocument(page, await createDocument(request, "Phone typing", "Hello"));
     await page.locator(".doc-content p").first().click();
+    await expect(page.locator(".doc-content")).toBeFocused();
     await page.keyboard.press("End");
     await page.keyboard.type(" world");
     await expect(page.locator(".doc-content")).toHaveText("Hello world");
     await page.keyboard.press("Shift+Home");
-    await page.getByRole("button", { name: "Bold", exact: true }).click();
+    await page.getByRole("toolbar", { name: "Formatting" }).getByRole("button", { name: "Bold", exact: true }).click();
     await expect(page.locator(".doc-content strong")).toHaveText("Hello world");
   });
 
