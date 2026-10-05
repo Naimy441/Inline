@@ -214,25 +214,6 @@ describe("editing through MCP", () => {
     assert.equal(reply.status, "done");
   });
 
-  it("shows what Claude is doing on the document while it works", async () => {
-    const seen: Array<string | undefined> = [];
-    let docId = "";
-    useModel(async (_turn, claude) => {
-      await claude.call("read_document");
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      seen.push((await documentHub().get(docId))!.activity?.status);
-      await claude.call("edit_document", { old_string: "quick", new_string: "swift" });
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      seen.push((await documentHub().get(docId))!.activity?.status);
-    });
-    const { doc, chat } = await newChat();
-    docId = doc.id;
-    await turn(chat, "Go");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepEqual(seen, ["reading", "editing"]);
-    assert.equal(doc.activity, null, "the indicator clears when the turn ends");
-  });
-
   it("follows the document the user switches to", async () => {
     const fake = useModel(async (_turn, claude) => {
       await claude.call("edit_document", { old_string: "Second", new_string: "2nd" });

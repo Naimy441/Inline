@@ -261,14 +261,19 @@ class ChatRuntime {
       this.persistTimer = null;
     }
     if (this.discarded) return;
-    await writeChatFile(this.state.id, this.toFile());
+    const write = writeChatFile(this.state.id, this.toFile());
+    this.writing = write.catch(() => undefined);
+    await write;
   }
 
-  /** The chat is being deleted: stop writing it, or a pending save would bring the file back. */
-  discard() {
+  private writing: Promise<void> = Promise.resolve();
+
+  /** Stop persisting this chat (it is being deleted) and wait for any write in flight. */
+  async discard() {
     this.discarded = true;
     if (this.persistTimer) clearTimeout(this.persistTimer);
     this.persistTimer = null;
+    await this.writing;
   }
 
   // --- settings ----------------------------------------------------------------
@@ -920,9 +925,11 @@ class AgentRuntime {
   async remove(id: string) {
     const chat = await this.get(id);
     if (chat) {
-      chat.discard();
+      // Stop saving first, or a pending save would write the chat back after it is deleted.
+      const discarded = chat.discard();
       await chat.interrupt();
       chat.close();
+      await discarded;
     }
     this.chats.delete(id);
     await deleteChatFile(id);

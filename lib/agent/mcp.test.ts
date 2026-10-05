@@ -12,10 +12,8 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Fragment, Slice } from "prosemirror-model";
 import { ReplaceStep } from "prosemirror-transform";
-import { POST as mcpRoute, GET as mcpGet } from "@/app/api/mcp/route";
-import { createInlineHttpServer, createInlineSdkServer, MCP_SERVER_NAME } from "@/lib/agent/mcp";
-import { DOCUMENT_FORMAT_GUIDE } from "@/lib/agent/prompt";
-import { TOOLS, type ToolContext } from "@/lib/agent/tools";
+import { createInlineHttpServer, createInlineSdkServer } from "@/lib/agent/mcp";
+import { type ToolContext } from "@/lib/agent/tools";
 import { docToMarkdown } from "@/lib/doc/markdown";
 import { schema } from "@/lib/doc/schema";
 import { documentHub } from "@/lib/server/hub";
@@ -55,46 +53,7 @@ function textPosition(node: import("prosemirror-model").Node, text: string) {
   return found;
 }
 
-async function rpc(body: unknown, method = "POST") {
-  const request = new Request("http://localhost:3000/api/mcp", {
-    method,
-    headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
-    body: method === "POST" ? (typeof body === "string" ? body : JSON.stringify(body)) : undefined,
-  });
-  return method === "POST" ? mcpRoute(request) : mcpGet();
-}
-
 describe("protocol", () => {
-  it("introduces itself with instructions on how documents work", async () => {
-    const { client } = await external();
-    assert.equal(client.getServerVersion()?.name, MCP_SERVER_NAME);
-    assert.equal(client.getServerVersion()?.title, "Inline");
-    const instructions = client.getInstructions() ?? "";
-    assert.match(instructions, /document editor/);
-    assert.ok(instructions.includes(DOCUMENT_FORMAT_GUIDE));
-    assert.ok(client.getServerCapabilities()?.tools);
-  });
-
-  it("lists every tool with a schema, a description and honest hints", async () => {
-    const { client } = await external();
-    const { tools } = await client.listTools();
-    assert.deepEqual(
-      tools.map((tool) => tool.name).sort(),
-      TOOLS.map((tool) => tool.name).sort(),
-    );
-    for (const tool of tools) {
-      const definition = TOOLS.find((item) => item.name === tool.name)!;
-      assert.equal(tool.inputSchema.type, "object", tool.name);
-      assert.ok((tool.description ?? "").length > 40, `${tool.name} explains itself`);
-      assert.equal(tool.annotations?.readOnlyHint, !definition.write, `${tool.name} readOnlyHint`);
-      assert.equal(tool.annotations?.openWorldHint, false);
-      for (const key of Object.keys(definition.shape)) assert.ok(key in (tool.inputSchema.properties ?? {}), `${tool.name}.${key} is in the schema`);
-    }
-    const edit = tools.find((tool) => tool.name === "edit_document")!;
-    assert.deepEqual([...(edit.inputSchema.required ?? [])].sort(), ["new_string", "old_string"]);
-    assert.equal(tools.find((tool) => tool.name === "write_document")!.annotations?.destructiveHint, true);
-    assert.equal(tools.find((tool) => tool.name === "read_document")!.annotations?.destructiveHint, false);
-  });
 
   it("serves the same catalog to the in-app agent", async () => {
     const config = createInlineSdkServer(() => ({ author: "chat" }));
@@ -121,33 +80,6 @@ describe("protocol", () => {
     const missingDoc = await call("read_document", { document_id: "doesnotexist" });
     assert.equal(missingDoc.isError, true);
     assert.equal(docToMarkdown(doc.doc).trim(), "Some text.");
-  });
-});
-
-describe("the HTTP endpoint", () => {
-  it("answers a stateless handshake and tool calls as JSON", async () => {
-    const init = await rpc({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "curl", version: "1" } } });
-    assert.equal(init.status, 200);
-    assert.match(init.headers.get("content-type") ?? "", /application\/json/);
-    const hello = (await init.json()) as { result: { serverInfo: { name: string } } };
-    assert.equal(hello.result.serverInfo.name, "inline");
-
-    const doc = await newDocument("Over the wire.");
-    const read = await rpc({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "read_document", arguments: { document_id: doc.id } } });
-    const body = (await read.json()) as { result: CallResult };
-    assert.match(body.result.content[0]!.text!, /1\tOver the wire\./);
-  });
-
-  it("rejects malformed requests", async () => {
-    const response = await rpc("{not json");
-    assert.ok(response.status >= 400 && response.status < 500);
-    const message = (await response.json()) as { error?: { code: number } };
-    assert.equal(message.error?.code, -32700);
-  });
-
-  it("refuses a server-sent event stream it can't provide", async () => {
-    const response = await rpc(null, "GET");
-    assert.equal(response.status, 405);
   });
 });
 

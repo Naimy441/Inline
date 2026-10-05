@@ -78,6 +78,8 @@ export function changedRanges(before: PMNode, tr: Transform): Range[] {
   tr.steps.forEach((step, index) => {
     let range: { from: number; to: number } | null = null;
     if (step instanceof AddMarkStep || step instanceof RemoveMarkStep) range = { from: step.from, to: step.to };
+    // Block ids are bookkeeping (the hub assigns them after every change), not content.
+    else if (step instanceof AttrStep && step.attr === "id") return;
     else if (step instanceof AttrStep || step instanceof AddNodeMarkStep || step instanceof RemoveNodeMarkStep) {
       const node = tr.docs[index]!.nodeAt(step.pos);
       range = { from: step.pos, to: step.pos + (node?.nodeSize ?? 1) };
@@ -129,6 +131,33 @@ export function mapHunks(hunks: readonly Hunk[], mapping: Mappable): Hunk[] {
 }
 
 /**
+ * Maps positions from the document before a transaction to the one after it
+ * using the transaction's changed ranges rather than its steps. Steps can be
+ * coarse (one replace covering a whole sentence for a two-word edit), and
+ * mapping through them would stretch every word-level change, and every
+ * pending hunk inside that sentence, to the whole step.
+ */
+class ChangeMapping implements Mappable {
+  constructor(private readonly ranges: readonly Range[]) {}
+
+  map(pos: number, assoc = 1): number {
+    let delta = 0;
+    for (const range of this.ranges) {
+      if (pos < range.fromA || (pos === range.fromA && (assoc < 0 || range.toA > range.fromA))) break;
+      if (pos < range.toA || (pos === range.toA && range.fromA === range.toA && assoc < 0)) return assoc < 0 ? range.fromB : range.toB;
+      if (pos === range.toA && assoc < 0 && range.toA > range.fromA) return range.toB;
+      delta = range.toB - range.toA;
+    }
+    return pos + delta;
+  }
+
+  mapResult(pos: number, assoc = 1) {
+    const mapped = this.map(pos, assoc);
+    return { pos: mapped, deleted: false, deletedBefore: false, deletedAfter: false, deletedAcross: false } as ReturnType<Mappable["mapResult"]>;
+  }
+}
+
+/**
  * Record the changes made by an agent transaction as hunks, merging them with
  * existing hunks they overlap so a single undo always restores the text the
  * user last accepted.
@@ -136,54 +165,66 @@ export function mapHunks(hunks: readonly Hunk[], mapping: Mappable): Hunk[] {
 export function recordAgentChange(before: PMNode, tr: Transform, existing: readonly Hunk[], author: string, now = Date.now()): Hunk[] {
   const ranges = changedRanges(before, tr);
   if (!ranges.length) return mapHunks(existing, tr.mapping);
+  const mapping = new ChangeMapping([...ranges].sort((a, b) => a.fromA - b.fromA || a.fromB - b.fromB));
 
   // Existing hunks are in `before` coordinates.
   const pending = [...existing].sort((a, b) => a.from - b.from);
   const absorbed = new Set<string>();
-  const created: Hunk[] = [];
 
-  for (const range of ranges) {
-    let fromA = range.fromA;
-    let toA = range.toA;
+  // Group changed ranges with the pending hunks they touch, and with each other
+  // when a hunk bridges them, so every region becomes exactly one hunk.
+  type Group = { fromA: number; toA: number; fromB: number; toB: number; hunks: Hunk[] };
+  const groups: Group[] = [];
+  for (const range of [...ranges].sort((a, b) => a.fromA - b.fromA)) {
+    let group: Group = { fromA: range.fromA, toA: range.toA, fromB: range.fromB, toB: range.toB, hunks: [] };
+    const last = groups[groups.length - 1];
+    if (last && range.fromA <= last.toA) {
+      groups.pop();
+      group = { fromA: Math.min(last.fromA, range.fromA), toA: Math.max(last.toA, range.toA), fromB: Math.min(last.fromB, range.fromB), toB: Math.max(last.toB, range.toB), hunks: last.hunks };
+    }
     // Grow the region until it no longer touches any other pending hunk.
     let grew = true;
-    const group: Hunk[] = [];
     while (grew) {
       grew = false;
       for (const hunk of pending) {
-        if (absorbed.has(hunk.id) || group.includes(hunk)) continue;
-        if (hunk.from <= toA && fromA <= hunk.to) {
-          group.push(hunk);
-          fromA = Math.min(fromA, hunk.from);
-          toA = Math.max(toA, hunk.to);
+        if (absorbed.has(hunk.id)) continue;
+        if (hunk.from <= group.toA && group.fromA <= hunk.to) {
+          absorbed.add(hunk.id);
+          group.hunks.push(hunk);
+          group.fromA = Math.min(group.fromA, hunk.from);
+          group.toA = Math.max(group.toA, hunk.to);
           grew = true;
         }
       }
     }
-    for (const hunk of group) absorbed.add(hunk.id);
+    groups.push(group);
+  }
 
+  const created: Hunk[] = [];
+  for (const group of groups) {
     // Reconstruct what the region looked like before any of the grouped hunks.
     const original = new Transform(before);
-    for (const hunk of [...group].sort((a, b) => b.from - a.from)) original.replace(hunk.from, hunk.to, hunk.deleted);
-    const origFrom = original.mapping.map(fromA, -1);
-    const origTo = original.mapping.map(toA, 1);
+    for (const hunk of [...group.hunks].sort((a, b) => b.from - a.from)) original.replace(hunk.from, hunk.to, hunk.deleted);
+    const origFrom = original.mapping.map(group.fromA, -1);
+    const origTo = original.mapping.map(group.toA, 1);
     const deleted = original.doc.slice(origFrom, Math.max(origFrom, origTo));
 
-    const fromB = tr.mapping.map(fromA, -1);
-    const toB = Math.max(fromB, tr.mapping.map(toA, 1));
+    const fromB = Math.min(mapping.map(group.fromA, -1), group.fromB);
+    const toB = Math.max(fromB, mapping.map(group.toA, 1), group.toB);
+    const first = [...group.hunks].sort((a, b) => a.createdAt - b.createdAt)[0];
     created.push({
-      id: group[0]?.id ?? newId(10),
-      from: Math.min(fromB, range.fromB),
-      to: Math.max(toB, range.toB),
+      id: first?.id ?? newId(10),
+      from: fromB,
+      to: toB,
       deleted,
       author,
-      createdAt: group[0]?.createdAt ?? now,
+      createdAt: first?.createdAt ?? now,
     });
   }
 
   const untouched = mapHunks(
     pending.filter((hunk) => !absorbed.has(hunk.id)),
-    tr.mapping,
+    mapping,
   );
   // A merged hunk whose content ended up identical to the original is no change at all.
   const live = created.filter((hunk) => !sliceEqualsRange(hunk.deleted, tr.doc, hunk.from, hunk.to));
