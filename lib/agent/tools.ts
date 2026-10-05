@@ -159,7 +159,7 @@ async function commitEdit(ctx: ToolContext, doc: LiveDocument, tool: string, bui
   doc.applyTransform(tr, { kind: "agent", author: ctx.author, tool, turn: ctx.turn });
   // After the transform: the range is in the new document, so it must carry the new version
   // (the editor only draws a range recorded at the version it's showing).
-  doc.setActivity({ chatId: ctx.author, status: "editing", label: describe, range: rangeOf(tr) });
+  showActivity(ctx, doc, { chatId: ctx.author, status: "editing", label: describe, range: rangeOf(tr) });
   const { added, removed } = countWords(before, tr);
   ctx.onChange?.({ documentId: doc.id, title: doc.meta.title, tool, added, removed });
   const snippet = changedSnippet(before, tr);
@@ -168,19 +168,50 @@ async function commitEdit(ctx: ToolContext, doc: LiveDocument, tool: string, bui
   );
 }
 
+const fading = new WeakMap<LiveDocument, ReturnType<typeof setTimeout>>();
+
+/**
+ * Show what the agent is doing in the editor. In-app turns clear it when the run
+ * ends; external MCP clients have no turn, so their activity fades on its own.
+ */
+function showActivity(ctx: ToolContext, doc: LiveDocument, activity: Parameters<LiveDocument["setActivity"]>[0]) {
+  doc.setActivity(activity);
+  if (ctx.author !== "external") return;
+  clearTimeout(fading.get(doc));
+  const timer = setTimeout(() => {
+    if (doc.activity?.chatId === "external") doc.setActivity(null);
+  }, EXTERNAL_ACTIVITY_MS);
+  timer.unref?.();
+  fading.set(doc, timer);
+}
+
+const EXTERNAL_ACTIVITY_MS = 4000;
+
 function rangeOf(tr: Transform) {
   let from = Infinity;
   let to = -Infinity;
-  for (const map of tr.mapping.maps) {
+  // Each step's map is in that step's own coordinates; carry it through the later steps.
+  tr.mapping.maps.forEach((map, index) => {
+    const later = tr.mapping.slice(index + 1);
     map.forEach((_oldStart, _oldEnd, newStart, newEnd) => {
-      from = Math.min(from, newStart);
-      to = Math.max(to, newEnd);
+      from = Math.min(from, later.map(newStart, -1));
+      to = Math.max(to, later.map(newEnd, 1));
     });
-  }
+  });
   if (!Number.isFinite(from)) return undefined;
   const size = tr.doc.content.size;
-  return { from: Math.max(0, Math.min(from, size)), to: Math.max(0, Math.min(to, size)) };
+  from = Math.max(0, Math.min(from, size));
+  to = Math.max(from, Math.min(to, size));
+  // Whole words, like the review highlight: "Tuesday" → "Thursday" keeps its "T", but the change is the word.
+  const $from = tr.doc.resolve(from);
+  if ($from.parent.isTextblock) from -= WORD_END.exec($from.parent.textBetween(0, $from.parentOffset, undefined, "\ufffc"))?.[0].length ?? 0;
+  const $to = tr.doc.resolve(to);
+  if ($to.parent.isTextblock) to += WORD_START.exec($to.parent.textBetween($to.parentOffset, $to.parent.content.size, undefined, "\ufffc"))?.[0].length ?? 0;
+  return { from, to };
 }
+
+const WORD_END = /[\p{L}\p{N}_'’]+$/u;
+const WORD_START = /^[\p{L}\p{N}_'’]+/u;
 
 function wrapErrors(handler: (...args: never[]) => Promise<ToolResult>) {
   return async (...args: never[]): Promise<ToolResult> => {
@@ -255,7 +286,7 @@ export const TOOLS = [
       const lines = markdownLines(serializeDoc(doc.doc));
       const offset = args.offset ?? 1;
       const limit = args.limit ?? 2000;
-      doc.setActivity({ chatId: ctx.author, status: "reading", label: "Reading" });
+      showActivity(ctx, doc, { chatId: ctx.author, status: "reading", label: "Reading" });
       const body = numberLines(lines, offset, limit);
       const end = Math.min(lines.length, offset + limit - 1);
       const more = end < lines.length ? `\n(Showing lines ${offset}-${end} of ${lines.length}. Pass offset to read further.)` : "";

@@ -665,6 +665,11 @@ img.ProseMirror-separator {
   white-space: nowrap;
 }
 
+/* The label is CSS content so it never becomes part of the document's text. */
+.doc-content .agent-caret-flag::before {
+  content: "Claude";
+}
+
 .doc-content .agent-caret.agent-reading .agent-caret-flag::after {
   content: " is reading";
   font-weight: 500;

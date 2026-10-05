@@ -361,6 +361,30 @@ describe("edit_document", () => {
     assert.equal(doc.activity?.status, "editing");
   });
 
+  test("the editing range covers the changed words, at the version after the edit", async () => {
+    const { doc, ctx } = await setup();
+    await runTool("edit_document", { old_string: "lazy dog", new_string: "very sleepy dog" }, ctx);
+    const activity = doc.activity!;
+    assert.equal(activity.version, doc.version);
+    assert.ok(activity.range);
+    // Whole words, though the edit only inserted "very sleep" before the kept "y dog".
+    assert.equal(doc.doc.textBetween(activity.range.from, activity.range.to), "very sleepy");
+  });
+
+  test("an MCP client's activity fades on its own; an in-app chat's stays until its run ends", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const external = await setup({ author: "external" });
+    await runTool("edit_document", { old_string: "lazy dog", new_string: "sleepy dog" }, external.ctx);
+    assert.equal(external.doc.activity?.status, "editing");
+    t.mock.timers.tick(5000);
+    assert.equal(external.doc.activity, null);
+
+    const chat = await setup();
+    await runTool("edit_document", { old_string: "lazy dog", new_string: "sleepy dog" }, chat.ctx);
+    t.mock.timers.tick(5000);
+    assert.equal(chat.doc.activity?.status, "editing");
+  });
+
   test("a failed edit neither checkpoints nor notifies", async () => {
     let notified = false;
     const { ctx } = await setup({ onChange: () => (notified = true) });

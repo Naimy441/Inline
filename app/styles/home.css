@@ -348,6 +348,25 @@
     font-size: 15px;
     color: var(--text);
   }
+  /* Import and Download are icons here, so the heading keeps one line. */
+  .home-section-head .btn {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    justify-content: center;
+  }
+  /* Optically align the last icon with the content edge. */
+  .home-section-head .btn:last-of-type {
+    margin-right: -10px;
+  }
+  .home-section-head .btn-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
   /* Templates scroll edge to edge. */
   .template-row {
     grid-auto-columns: 112px;

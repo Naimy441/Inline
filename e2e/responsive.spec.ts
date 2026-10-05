@@ -183,6 +183,10 @@ test.describe("phone", () => {
     // Templates scroll sideways inside their own row.
     const row = page.locator(".template-row");
     expect(await row.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+    // Import and Download are icon buttons that keep their names, so the heading stays on one line.
+    await expect(page.getByRole("button", { name: "Import file" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Download all" })).toBeVisible();
+    expect((await page.locator(".home-section-head h2").first().boundingBox())!.height).toBeLessThan(30);
     await page.getByRole("button", { name: "New document" }).click();
     await expect(page).toHaveURL(/\/d\//);
     await expect(page.locator(".doc-content")).toBeVisible();
