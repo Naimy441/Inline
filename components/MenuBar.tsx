@@ -79,10 +79,10 @@ export function MenuBar(props: Props) {
         { label: "Download as Markdown", action: "download-markdown" },
         { label: "Download as HTML", action: "download-html" },
         { label: "Download as Word", action: "download-docx" },
-        { label: "Save as PDF", action: "print", shortcut: "⌘P" },
+        { label: "Download as PDF", action: "download-pdf" },
         { label: "Move to trash", action: "trash", writes: true },
         "sep",
-        { label: "Print", action: "print" },
+        { label: "Print", action: "print", shortcut: "⌘P" },
       ])}
       {menu("edit", "Edit", [
         { label: "Undo", action: "undo", shortcut: "⌘Z", writes: true },

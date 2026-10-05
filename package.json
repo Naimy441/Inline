@@ -7,7 +7,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "tsx --test lib/agent/*.test.ts lib/agent/mcp/*.test.ts lib/agent/eval/*.test.ts lib/writing/*.test.ts lib/debug/*.test.ts lib/editorUndo.test.ts lib/editorSpell.test.ts",
+    "test": "tsx --test lib/agent/*.test.ts lib/agent/mcp/*.test.ts lib/agent/eval/*.test.ts lib/writing/*.test.ts lib/debug/*.test.ts lib/editorUndo.test.ts lib/editorSpell.test.ts lib/pdf/*.test.ts",
     "test:eval": "INLINE_LIVE_EVAL=1 tsx --test lib/agent/eval/live.test.ts"
   },
   "dependencies": {
