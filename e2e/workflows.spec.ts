@@ -237,6 +237,25 @@ test.describe("downloads", () => {
     expect(pdf.bytes.subarray(0, 5).toString()).toBe("%PDF-");
     expect(pdf.bytes.toString("latin1")).toContain("Heading");
   });
+
+  test("asks whether to include pending changes", async ({ page, request }) => {
+    await openDocument(page, await createDocument(request, "Pending export", "Original text."));
+    await page.locator(".doc-content").click();
+    await page.keyboard.press("ControlOrMeta+Alt+Shift+X");
+    await page.keyboard.press("End");
+    await page.keyboard.type(" Added.");
+    await expect(page.locator(".doc-content .review-insert")).toContainText("Added.");
+
+    const download = async (choice: string) => {
+      const pending = page.waitForEvent("download");
+      await menu(page, "File", "Download", "Markdown (.md)");
+      await page.getByRole("dialog").getByRole("button", { name: choice }).click();
+      const file = await pending;
+      return (await readFile((await file.path())!)).toString();
+    };
+    expect(await download("Without them")).toBe("Original text.");
+    expect(await download("Include them")).toBe("Original text. Added.");
+  });
 });
 
 test.describe("collaboration and Claude", () => {

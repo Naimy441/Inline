@@ -11,7 +11,7 @@ import { docPlainText, wordCount } from "@/lib/doc/editing";
 import type { DocumentMeta } from "@/lib/doc/settings";
 import { insertImage, insertText } from "@/lib/editor/commands";
 import { AgentPanel, type AgentPanelHandle } from "@/components/agent/AgentPanel";
-import { IconButton } from "@/components/ui/Button";
+import { Button, IconButton } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { MenuButton } from "@/components/ui/Menu";
 import { toast, Toaster } from "@/components/ui/Toast";
@@ -190,15 +190,20 @@ export function Workspace({ documentId }: { documentId: string }) {
     return true;
   };
 
+  const [exporting, setExporting] = useState<"docx" | "md" | "html" | "txt" | null>(null);
   const download = useCallback(
-    async (format: "docx" | "pdf" | "md" | "html" | "txt") => {
+    async (format: "docx" | "pdf" | "md" | "html" | "txt", changes?: "with" | "without") => {
+      if (format !== "pdf" && !changes && session.ui.get().hunks.length) {
+        setExporting(format);
+        return;
+      }
       if (format === "pdf") {
         await session.exportPdf().catch((error: Error) => toast(`Couldn't export the PDF: ${error.message}`, { tone: "error" }));
         return;
       }
       await session.whenSaved();
       const link = document.createElement("a");
-      link.href = `/api/documents/${documentId}/export?format=${format}`;
+      link.href = `/api/documents/${documentId}/export?format=${format}${changes === "without" ? "&changes=without" : ""}`;
       link.download = "";
       document.body.append(link);
       link.click();
@@ -551,6 +556,41 @@ export function Workspace({ documentId }: { documentId: string }) {
 
       <PageSetupDialog open={Boolean(setup)} initialTab={setup?.tab} session={session} settings={meta?.settings} onClose={() => setSetup(null)} />
       <ShortcutsDialog open={shortcuts} onClose={() => setShortcuts(false)} />
+      <Dialog
+        open={exporting !== null}
+        onClose={() => setExporting(null)}
+        title="Download with pending changes?"
+        description={`${ui.hunks.length} change${ui.hunks.length === 1 ? " is" : "s are"} still waiting for review.`}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setExporting(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                const format = exporting!;
+                setExporting(null);
+                void download(format, "without");
+              }}
+            >
+              Without them
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                const format = exporting!;
+                setExporting(null);
+                void download(format, "with");
+              }}
+            >
+              Include them
+            </Button>
+          </>
+        }
+      >
+        <p>Include the pending changes as they appear now, or download the text as it was before them. Nothing in the document changes either way.</p>
+      </Dialog>
       <SpecialCharactersDialog
         open={charmap}
         onClose={() => setCharmap(false)}
