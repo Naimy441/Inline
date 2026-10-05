@@ -52,6 +52,7 @@ export type AgentActivity = {
 
 export type ClientCommand =
   | { kind: "print" }
+  | { kind: "export_pdf" }
   | { kind: "open_document"; documentId: string }
   | { kind: "scroll_to"; from: number; to: number; version: number }
   | { kind: "download"; url: string; filename: string };

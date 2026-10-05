@@ -8,7 +8,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test lib/doc/*.test.ts lib/editor/*.test.ts lib/agent/*.test.ts",
+    "test": "tsx --test lib/doc/*.test.ts lib/editor/*.test.ts lib/agent/*.test.ts lib/pdf/*.test.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {

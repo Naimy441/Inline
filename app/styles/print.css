@@ -90,3 +90,25 @@
     display: none;
   }
 }
+
+/* The same clean view while a PDF is drawn from the pages (DocumentSession.exportPdf). */
+.page-stack.is-clean .doc-content .np-mark,
+.page-stack.is-clean .doc-content .review-delete,
+.page-stack.is-clean .doc-content .review-controls,
+.page-stack.is-clean .doc-content .agent-caret,
+.page-stack.is-clean .doc-content .review-block::after,
+.page-stack.is-clean .doc-content .is-empty::before {
+  display: none !important;
+}
+
+.page-stack.is-clean .doc-content .review-insert,
+.page-stack.is-clean .doc-content .review-format,
+.page-stack.is-clean .doc-content .agent-range,
+.page-stack.is-clean .doc-content .comment-hl,
+.page-stack.is-clean .doc-content .find-match,
+.page-stack.is-clean .doc-content .np-space {
+  background: none !important;
+  box-shadow: none !important;
+  border: 0 !important;
+  color: inherit !important;
+}

@@ -158,8 +158,7 @@ export function Workspace({ documentId }: { documentId: string }) {
   const download = useCallback(
     async (format: "docx" | "pdf" | "md" | "html" | "txt") => {
       if (format === "pdf") {
-        toast("Choose “Save as PDF” in the print dialog.");
-        setTimeout(() => void session.print(), 300);
+        await session.exportPdf().catch((error: Error) => toast(`Couldn't export the PDF: ${error.message}`, { tone: "error" }));
         return;
       }
       await session.whenSaved();
@@ -175,6 +174,7 @@ export function Workspace({ documentId }: { documentId: string }) {
 
   commandHandler.current = (command) => {
     if (command.kind === "print") void session.print();
+    else if (command.kind === "export_pdf") void session.exportPdf().catch((error: Error) => toast(`Couldn't export the PDF: ${error.message}`, { tone: "error" }));
     else if (command.kind === "download") {
       const link = document.createElement("a");
       link.href = command.url;

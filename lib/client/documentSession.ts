@@ -15,6 +15,8 @@ import { pageCount, relayout, type PageGeometry } from "@/lib/editor/pagination"
 import { setPresence } from "@/lib/editor/presence";
 import { gotoHunk, reviewHunkAtCursor, setHunks } from "@/lib/editor/review";
 import { editorPlugins } from "@/lib/editor/setup";
+import { snapshotPages } from "@/lib/pdf/pageSnapshot";
+import { buildPdf } from "@/lib/pdf/pdfWriter";
 import { setInvisibles } from "@/lib/editor/invisibles";
 import { loadPreferences, preferences, setPreference } from "@/lib/client/preferences";
 
@@ -36,6 +38,7 @@ export type AgentActivity = {
 
 export type ClientCommand =
   | { kind: "print" }
+  | { kind: "export_pdf" }
   | { kind: "open_document"; documentId: string }
   | { kind: "scroll_to"; from: number; to: number; version: number }
   | { kind: "download"; url: string; filename: string };
@@ -186,6 +189,39 @@ export class DocumentSession {
       this.ui.set((ui) => ({ ...ui, printing: false }));
       if (this.view) relayout(this.view);
     }
+  }
+
+  /**
+   * Download a PDF drawn from the laid-out pages (lib/pdf), so breaks, margins,
+   * headers and wrapping match the screen. Review marks and other editor UI are
+   * left out.
+   */
+  async exportPdf() {
+    const view = this.view;
+    if (!view) throw new Error("The document isn't open yet.");
+    await this.whenSaved();
+    const root = view.dom.closest<HTMLElement>(".page-stack");
+    if (!root) throw new Error("The page layout isn't ready yet.");
+    const title = this.meta?.title ?? "Untitled document";
+    // Lay the pages out without review marks (as printing does) while they're read.
+    root.classList.add("is-clean");
+    let bytes: Uint8Array<ArrayBuffer>;
+    try {
+      relayout(view);
+      await settleLayout(() => pageCount(view.state));
+      bytes = buildPdf(snapshotPages(root, title));
+    } finally {
+      root.classList.remove("is-clean");
+      relayout(view);
+    }
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${title.replace(/[\\/:*?"<>|]+/g, "-").trim() || "Untitled document"}.pdf`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }
 
   async start(mount: HTMLElement) {
