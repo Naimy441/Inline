@@ -1,0 +1,634 @@
+/* The document itself: page typography plus editor decorations. */
+
+.doc-content {
+  position: relative;
+  min-height: inherit;
+  color: var(--paper-text);
+  font-family: Arial, sans-serif;
+  font-size: 11pt;
+  line-height: 1.15;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+  white-space: break-spaces;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0;
+  caret-color: var(--paper-text);
+  outline: none;
+  --para-space: 8pt;
+}
+
+.doc-content[contenteditable="false"] {
+  caret-color: transparent;
+}
+
+.doc-content pre {
+  white-space: pre-wrap;
+}
+
+.doc-content li {
+  position: relative;
+}
+
+.doc-content ::selection {
+  background: var(--selection);
+}
+
+.ProseMirror-hideselection *::selection {
+  background: transparent;
+}
+
+.ProseMirror-hideselection {
+  caret-color: transparent;
+}
+
+.ProseMirror [draggable][contenteditable="false"] {
+  user-select: text;
+}
+
+.ProseMirror-selectednode {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+li.ProseMirror-selectednode {
+  outline: none;
+}
+
+li.ProseMirror-selectednode::after {
+  content: "";
+  position: absolute;
+  inset: -2px -2px -2px -32px;
+  border: 2px solid var(--focus);
+  pointer-events: none;
+}
+
+img.ProseMirror-separator {
+  display: inline !important;
+  border: none !important;
+  margin: 0 !important;
+}
+
+.ProseMirror-gapcursor {
+  display: none;
+  pointer-events: none;
+  position: absolute;
+}
+
+.ProseMirror-gapcursor::after {
+  content: "";
+  display: block;
+  position: absolute;
+  top: -2px;
+  width: 20px;
+  border-top: 1px solid var(--paper-text);
+  animation: gapcursor-blink 1.1s steps(2, start) infinite;
+}
+
+.ProseMirror-focused .ProseMirror-gapcursor {
+  display: block;
+}
+
+@keyframes gapcursor-blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+/* Blocks */
+
+.doc-content > *:first-child {
+  margin-top: 0;
+}
+
+.doc-content p {
+  margin: 0 0 var(--para-space);
+}
+
+.doc-content .doc-title {
+  margin: 0 0 3pt;
+  font-size: 26pt;
+  line-height: 1.15;
+  font-weight: 400;
+}
+
+.doc-content .doc-subtitle {
+  margin: 0 0 16pt;
+  font-size: 15pt;
+  color: #666;
+}
+
+.doc-content h1,
+.doc-content h2,
+.doc-content h3,
+.doc-content h4,
+.doc-content h5,
+.doc-content h6 {
+  font-weight: 400;
+  line-height: 1.2;
+}
+
+.doc-content h1 {
+  margin: 20pt 0 6pt;
+  font-size: 20pt;
+}
+
+.doc-content h2 {
+  margin: 18pt 0 6pt;
+  font-size: 16pt;
+}
+
+.doc-content h3 {
+  margin: 16pt 0 4pt;
+  font-size: 14pt;
+  color: #434343;
+}
+
+.doc-content h4 {
+  margin: 14pt 0 4pt;
+  font-size: 12pt;
+  color: #666;
+}
+
+.doc-content h5,
+.doc-content h6 {
+  margin: 12pt 0 4pt;
+  font-size: 11pt;
+  color: #666;
+}
+
+.doc-content h6 {
+  font-style: italic;
+}
+
+:root[data-theme="dark"] .doc-content .doc-subtitle,
+:root[data-theme="dark"] .doc-content h3,
+:root[data-theme="dark"] .doc-content h4,
+:root[data-theme="dark"] .doc-content h5,
+:root[data-theme="dark"] .doc-content h6 {
+  color: var(--muted);
+}
+
+.doc-content blockquote {
+  margin: 0 0 var(--para-space);
+  padding: 2pt 0 2pt 14pt;
+  border-left: 3px solid #dadce0;
+  color: #555;
+}
+
+:root[data-theme="dark"] .doc-content blockquote {
+  border-color: var(--border-strong);
+  color: var(--text-2);
+}
+
+.doc-content blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.doc-content pre {
+  margin: 0 0 var(--para-space);
+  padding: 10px 12px;
+  border-radius: 4px;
+  background: #f6f8fa;
+  font-family: "Roboto Mono", var(--font-mono);
+  font-size: 0.85em;
+  line-height: 1.5;
+  tab-size: 4;
+}
+
+:root[data-theme="dark"] .doc-content pre {
+  background: var(--bg-sunken);
+}
+
+.doc-content code {
+  font-family: "Roboto Mono", var(--font-mono);
+  font-size: 0.9em;
+}
+
+.doc-content :not(pre) > code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.05);
+}
+
+:root[data-theme="dark"] .doc-content :not(pre) > code {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.doc-content hr {
+  margin: 12pt 0;
+  border: 0;
+  border-top: 1px solid #c4c7c5;
+}
+
+.doc-content hr.ProseMirror-selectednode {
+  outline-offset: 4px;
+}
+
+.doc-content a {
+  color: #1155cc;
+  text-decoration: underline;
+}
+
+:root[data-theme="dark"] .doc-content a {
+  color: var(--link);
+}
+
+.doc-content mark {
+  color: inherit;
+  border-radius: 1px;
+}
+
+/* Lists */
+
+.doc-content ul,
+.doc-content ol {
+  margin: 0 0 var(--para-space);
+  padding-left: 0.375in;
+}
+
+.doc-content li > p {
+  margin-bottom: 2pt;
+}
+
+.doc-content li > ul,
+.doc-content li > ol {
+  margin-bottom: 2pt;
+}
+
+.doc-content ul {
+  list-style: disc;
+}
+
+.doc-content ul ul {
+  list-style: circle;
+}
+
+.doc-content ul ul ul {
+  list-style: square;
+}
+
+.doc-content ol {
+  list-style: decimal;
+}
+
+.doc-content ol ol {
+  list-style: lower-alpha;
+}
+
+.doc-content ol ol ol {
+  list-style: lower-roman;
+}
+
+.doc-content li.task-item {
+  list-style: none;
+}
+
+.doc-content li.task-item::before {
+  content: "";
+  position: absolute;
+  left: -22px;
+  top: 0.2em;
+  width: 13px;
+  height: 13px;
+  border: 1.5px solid #80868b;
+  border-radius: 3px;
+  background: var(--paper) no-repeat center / 10px 10px;
+  cursor: pointer;
+  transition: background-color 0.12s, border-color 0.12s;
+}
+
+.doc-content li.task-item[data-checked="true"]::before {
+  border-color: #1a73e8;
+  background-color: #1a73e8;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.2 5 8.6l4.6-5' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+.doc-content li.task-item[data-checked="true"] > p {
+  color: #80868b;
+  text-decoration: line-through;
+}
+
+/* Tables */
+
+.doc-content table {
+  width: 100%;
+  margin: 0 0 var(--para-space);
+  border-collapse: collapse;
+  table-layout: fixed;
+  overflow: hidden;
+}
+
+.doc-content td,
+.doc-content th {
+  position: relative;
+  min-width: 1em;
+  padding: 5px 7px;
+  border: 1px solid #c4c7c5;
+  vertical-align: top;
+  box-sizing: border-box;
+  text-align: left;
+}
+
+:root[data-theme="dark"] .doc-content td,
+:root[data-theme="dark"] .doc-content th {
+  border-color: var(--border-strong);
+}
+
+.doc-content th {
+  font-weight: 700;
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.doc-content td > p,
+.doc-content th > p {
+  margin: 0;
+}
+
+.doc-content .selectedCell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: var(--selection);
+  pointer-events: none;
+}
+
+.doc-content .column-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: -2px;
+  right: -2px;
+  z-index: 20;
+  width: 4px;
+  background: var(--focus);
+  pointer-events: none;
+}
+
+.doc-content.resize-cursor {
+  cursor: col-resize;
+}
+
+.doc-content .tableWrapper {
+  overflow-x: auto;
+}
+
+/* Images */
+
+.doc-content .doc-image {
+  margin: 0 0 var(--para-space);
+  line-height: 0;
+}
+
+.doc-content .doc-image img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 2px;
+}
+
+.doc-content .doc-image.align-center {
+  text-align: center;
+}
+
+.doc-content .doc-image.align-right {
+  text-align: right;
+}
+
+.doc-content .doc-image.ProseMirror-selectednode {
+  outline: none;
+}
+
+.doc-content .doc-image.ProseMirror-selectednode img {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Page breaks and pagination spacers */
+
+.doc-content .page-break {
+  position: relative;
+  height: 14px;
+  margin: 0;
+  cursor: default;
+}
+
+.doc-content .page-break::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 7px;
+  border-top: 1px dashed var(--border-strong);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.doc-content .page-break:hover::before,
+.doc-content .page-break.ProseMirror-selectednode::before {
+  opacity: 1;
+}
+
+.doc-content .page-break.ProseMirror-selectednode {
+  outline: none;
+}
+
+.doc-content .page-gap {
+  display: block;
+  width: 100%;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Placeholder */
+
+.doc-content .is-empty::before {
+  content: attr(data-placeholder);
+  position: absolute;
+  color: #9aa0a6;
+  pointer-events: none;
+  font-style: normal;
+}
+
+/* Locked text */
+
+.doc-content .locked-text {
+  background-image: linear-gradient(to right, rgba(128, 128, 128, 0.35) 50%, transparent 50%);
+  background-size: 6px 1px;
+  background-repeat: repeat-x;
+  background-position: 0 100%;
+}
+
+/* Claude's tracked changes */
+
+.doc-content .review-insert {
+  background: var(--insert-bg);
+  box-shadow: inset 0 -1.5px 0 color-mix(in srgb, var(--insert-line) 55%, transparent);
+  border-radius: 2px;
+  transition: background-color 0.15s;
+}
+
+.doc-content .review-insert.is-focused {
+  background: color-mix(in srgb, var(--insert-line) 26%, transparent);
+}
+
+.doc-content .review-format {
+  background: var(--format-bg);
+  border-radius: 2px;
+}
+
+.doc-content .review-format.is-focused {
+  background: color-mix(in srgb, #8250df 24%, transparent);
+}
+
+.doc-content .review-block {
+  position: relative;
+}
+
+.doc-content .review-block::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -14px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--insert-line);
+}
+
+.doc-content .review-delete {
+  background: var(--delete-bg);
+  color: var(--delete-text);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--delete-text) 60%, transparent);
+  border-radius: 2px;
+  user-select: none;
+}
+
+.doc-content .review-delete.is-focused {
+  background: color-mix(in srgb, var(--delete-text) 18%, transparent);
+}
+
+.doc-content .review-controls {
+  position: relative;
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 4px;
+  padding: 2px;
+  vertical-align: 1px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  font-weight: 500;
+  font-style: normal;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  animation: bubble-in 0.12s var(--ease);
+}
+
+.doc-content .review-btn {
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+}
+
+.doc-content .review-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.doc-content .review-keep {
+  color: var(--success);
+}
+
+.doc-content .review-keep:hover {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+/* Claude's cursor while it works */
+
+.doc-content .agent-range {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-radius: 2px;
+}
+
+.doc-content .agent-caret {
+  position: relative;
+  display: inline-block;
+  width: 0;
+  height: 1.1em;
+  margin: 0 -1px;
+  vertical-align: text-bottom;
+  border-left: 2px solid var(--accent);
+  user-select: none;
+  pointer-events: none;
+}
+
+.doc-content .agent-caret-flag {
+  position: absolute;
+  left: -2px;
+  bottom: 100%;
+  padding: 1px 5px 2px;
+  border-radius: 3px 3px 3px 0;
+  background: var(--accent);
+  color: #fff;
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.3;
+  font-style: normal;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.doc-content .agent-caret.agent-reading .agent-caret-flag::after {
+  content: " is reading";
+  font-weight: 500;
+}
+
+.doc-content .agent-caret.agent-editing .agent-caret-flag::after {
+  content: " is editing";
+  font-weight: 500;
+}
+
+.doc-content .agent-caret.agent-editing {
+  animation: caret-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes caret-pulse {
+  50% {
+    border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+}
+
+/* Comments */
+
+.doc-content .comment-hl {
+  background: rgba(251, 188, 4, 0.22);
+  border-bottom: 2px solid rgba(251, 188, 4, 0.75);
+  cursor: pointer;
+}
+
+.doc-content .comment-hl.is-active {
+  background: rgba(251, 188, 4, 0.45);
+}
+
+/* Find */
+
+.doc-content .find-match {
+  background: rgba(255, 213, 0, 0.35);
+  border-radius: 2px;
+}
+
+.doc-content .find-match.is-current {
+  background: #ff9632;
+  color: #000;
+}

@@ -1,27 +1,30 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
-import { chatLayoutBootScript } from "@/lib/agent/chats";
-import { docMarkBootScript } from "@/lib/docMark";
-import { documentTitleBootScript } from "@/lib/documentStore";
+import { themeBootScript } from "@/lib/client/theme";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  description: "A Google Docs-style paginated document editor.",
+  title: "Inline",
+  description: "A document editor with Claude built in.",
+};
+
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f6f5f2" },
+    { media: "(prefers-color-scheme: dark)", color: "#1b1b1a" },
+  ],
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <script
-          dangerouslySetInnerHTML={{
-            __html:
-              `try{var t=localStorage.getItem('inline-theme');if(t==='dark'||(t!=='light'&&matchMedia('(prefers-color-scheme: dark)').matches))document.documentElement.dataset.theme='dark'}catch(e){}` +
-              `try{var w=Number(localStorage.getItem('inline-chat-width'));if(isFinite(w)&&w>=320)document.documentElement.style.setProperty('--chat-width',Math.round(w)+'px')}catch(e){}` +
-              docMarkBootScript +
-              documentTitleBootScript +
-              chatLayoutBootScript,
-          }}
+        <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
+        <link
+          rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=EB+Garamond:ital,wght@0,400;0,600;1,400&family=Merriweather:ital,wght@0,400;0,700;1,400&family=Roboto+Mono:wght@400;500&display=swap"
         />
       </head>
       <body>{children}</body>

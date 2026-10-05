@@ -77,25 +77,6 @@ export function cleanAiArtifacts(text: string) {
   return next.replace(/[ \t]{2,}/g, " ");
 }
 
-export function cleanAiArtifactsInEditor(editor: HTMLElement): number {
-  const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
-  let fixes = 0;
-  const nodes: Text[] = [];
-  while (walker.nextNode()) {
-    const node = walker.currentNode as Text;
-    if (node.parentElement?.closest("[data-page-break],[data-page-push],[data-manual-break]")) continue;
-    nodes.push(node);
-  }
-  for (const node of nodes) {
-    const next = cleanAiArtifacts(node.data);
-    if (next !== node.data) {
-      node.data = next;
-      fixes += 1;
-    }
-  }
-  return fixes;
-}
-
 export function summarizeTropes(hits: TropeHit[]) {
   if (!hits.length) return "No common AI tropes or hidden tokens found.";
   return hits.map((hit) => hit.title).join("; ");

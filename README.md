@@ -2,6 +2,48 @@
 
 TLDR: Inline is an open-source project that bridges AI coding-agent tools (like Cursor) with Google Docs-style rich-text editing. Today, AI agents work well in code/markdown environments but not inside a WYSIWYG document editor, while tools like Google Docs lack deep agentic capabilities. Inline aims to combine both, letting an AI agent work directly inside a collaborative rich-text document.
 
+## Running Inline
+
+Inline's agent is Claude Code. It runs on your own Claude account through the Claude Agent SDK, so there are no API keys to paste into the app.
+
+**Requirements:** Node.js 20 or newer, and Claude Code signed in on the machine that runs Inline (run `claude`, then `/login`).
+
+```bash
+npm install
+npm run dev        # http://localhost:3000
+```
+
+For a production build, run `npm run build && npm start`.
+
+Open a document and press <kbd>Ctrl/⌘</kbd>+<kbd>J</kbd> to open the Claude panel. Claude reads and edits the document through Inline's MCP tools. Each edit shows up as a tracked change that you can keep or undo, one at a time or all at once. Select text and press <kbd>Ctrl/⌘</kbd>+<kbd>L</kbd> to ask about just that passage.
+
+### Use Inline from Claude Code (or any MCP client)
+
+The same document tools are served over MCP at `/api/mcp`. This means a Claude Code session in your terminal can work on your Inline documents while you watch the edits appear live in the browser:
+
+```bash
+claude mcp add --transport http inline http://localhost:3000/api/mcp
+```
+
+The tools are `list_documents`, `open_document`, `create_document`, `read_document`, `get_outline`, `search_document`, `get_editor_context`, `edit_document`, `multi_edit_document`, `insert_content`, `write_document`, `format_text`, `set_paragraph_style`, `get_document_settings`, `update_document_settings`, `get_pending_changes`, `revert_changes`, `list_comments`, `add_comment`, `reply_to_comment`, `resolve_comment`, `list_versions`, `save_version`, `restore_version`, `analyze_writing` and `export_document`.
+
+### Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `INLINE_DATA_DIR` | `.inline` in the project folder | Where documents, versions, chats and uploads are stored. |
+| `INLINE_ALLOWED_HOSTS` | local hostnames only | Comma-separated extra hostnames to accept, for serving Inline on a network. Requests for other hosts are refused, which blocks DNS-rebinding attacks. |
+| `INLINE_ACCESS_TOKEN` | unset | When set, every request must carry this secret, either as a `Bearer` token or as the `inline_token` cookie. Visit any page with `?token=<secret>` once to set the cookie. Set this whenever Inline is reachable by anyone but you, because the agent acts with your Claude account. |
+| `INLINE_DEBUG_AGENT` | unset | Print Claude Code's stderr to the server log. |
+
+### Development
+
+```bash
+npm run typecheck
+npm test           # document model, editing engine, review and MCP tool tests
+npm run test:e2e   # browser tests (Playwright; set CHROMIUM_PATH to use a system Chromium)
+```
+
 ---
 
 This is a project that aims to bring capabilities restricted primarily to software developers to a broader audience, including corporate workers, writers, professionals, and students, for the specific purpose of writing or drafting documents.

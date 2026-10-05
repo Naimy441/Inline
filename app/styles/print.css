@@ -1,0 +1,90 @@
+/*
+ * Printing and "Save as PDF". DocumentSession.print() lays the sheets out edge
+ * to edge and sizes @page to the document's paper, so each sheet on screen is
+ * exactly one printed page, headers, footers and page numbers included.
+ */
+
+@media print {
+  :root,
+  :root[data-theme="dark"] {
+    color-scheme: light;
+    --paper: #ffffff;
+    --paper-text: #202124;
+    --muted: #5f6368;
+    --link: #1155cc;
+    --bg-sunken: #f6f8fa;
+    --border-strong: #c4c7c5;
+    --text-2: #444746;
+  }
+
+  html,
+  body {
+    height: auto;
+    background: #fff !important;
+  }
+
+  body {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .titlebar,
+  .toolbar,
+  .statusbar,
+  .outline,
+  .panel-shell,
+  .find-bar,
+  .review-bar,
+  .bubble,
+  .toaster,
+  .canvas-loading,
+  .dialog-backdrop,
+  .popover,
+  .menu {
+    display: none !important;
+  }
+
+  .workspace,
+  .workspace-body,
+  .canvas {
+    display: block;
+    height: auto;
+    overflow: visible;
+    background: none;
+  }
+
+  .page-stack-wrap {
+    display: block;
+    padding: 0;
+    min-width: 0;
+  }
+
+  .sheet {
+    box-shadow: none;
+    border-radius: 0;
+  }
+
+  /* Print the document as it reads, without review or collaboration marks. */
+  .doc-content .review-delete,
+  .doc-content .review-controls,
+  .doc-content .agent-caret,
+  .doc-content .review-block::after,
+  .doc-content .is-empty::before {
+    display: none !important;
+  }
+
+  .doc-content .review-insert,
+  .doc-content .review-format,
+  .doc-content .agent-range,
+  .doc-content .comment-hl,
+  .doc-content .find-match {
+    background: none !important;
+    box-shadow: none !important;
+    border: 0 !important;
+    color: inherit !important;
+  }
+
+  .doc-content .page-break::before {
+    display: none;
+  }
+}
