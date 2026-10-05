@@ -118,6 +118,7 @@ export class LiveDocument {
   private listeners = new Set<(event: HubEvent) => void>();
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private lastAutoVersion = 0;
+  private lastVersionId: string | null = null;
   private dirtySinceVersion = false;
   private deleted = false;
 
@@ -417,6 +418,7 @@ export class LiveDocument {
     if (author === "auto") void pruneVersions(this.id).catch((error) => log("error", "pruning versions failed", { documentId: this.id, error }));
     this.dirtySinceVersion = false;
     this.lastAutoVersion = Date.now();
+    this.lastVersionId = version.id;
     const { doc: _doc, hunks, ...summary } = version;
     return hunks?.length ? { ...summary, pendingChanges: hunks.length } : summary;
   }
@@ -450,9 +452,10 @@ export class LiveDocument {
   }
 
   /** Called before an agent turn edits the document, so the user can always go back. */
-  async checkpoint(label: string) {
-    if (!this.dirtySinceVersion && this.lastAutoVersion) return null;
-    return this.saveVersion(label, "auto");
+  /** Returns the id of a version holding the current content (a new one only when something changed since the last). */
+  async checkpoint(label: string): Promise<string> {
+    if (!this.dirtySinceVersion && this.lastVersionId) return this.lastVersionId;
+    return (await this.saveVersion(label, "auto")).id;
   }
 
   // --- persistence ------------------------------------------------------------

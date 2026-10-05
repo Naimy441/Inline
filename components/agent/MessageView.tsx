@@ -70,11 +70,17 @@ export const AssistantView = memo(function AssistantView({
   pending,
   onRetry,
   onReview,
+  documentId,
+  onRestore,
 }: {
   message: AssistantMessage;
   isLast: boolean;
-  /** Ids of this turn's changes still awaiting review. */
-  pending: string[];
+  /** The open document, which "Restore to before" applies to. */
+  documentId?: string;
+  /** Put the open document back to the version saved before this reply's edits. */
+  onRestore?: (versionId: string) => void;
+  /** This turn's changes still awaiting review. */
+  pending: TurnHunk[];
   onRetry: () => void;
   onReview: (action: "next" | "accept" | "reject", ids: string[]) => void;
 }) {
@@ -82,6 +88,9 @@ export const AssistantView = memo(function AssistantView({
   const changes = message.changes ?? [];
   const added = changes.reduce((sum, change) => sum + change.added, 0);
   const removed = changes.reduce((sum, change) => sum + change.removed, 0);
+  const [showDiff, setShowDiff] = useState(false);
+  const pendingIds = pending.map((hunk) => hunk.id);
+  const restorable = changes.find((change) => change.documentId === documentId)?.checkpoint;
   return (
     <div className="msg msg-assistant">
       {message.parts.map((part) => (
@@ -111,20 +120,48 @@ export const AssistantView = memo(function AssistantView({
             <span className="change-stat del">−{removed}</span>
             <span className="change-unit">words</span>
           </span>
+          {pending.length === 0 && restorable && onRestore && (
+            <span className="change-card-actions">
+              <button type="button" className="link-btn" title="Put the document back as it was before this reply's edits" onClick={() => onRestore(restorable)}>
+                Restore to before
+              </button>
+            </span>
+          )}
           {pending.length > 0 && (
             <span className="change-card-actions">
-              <button type="button" className="link-btn" onClick={() => onReview("next", pending)}>
-                Review
+              <button type="button" className="link-btn" aria-expanded={showDiff} onClick={() => setShowDiff((value) => !value)}>
+                {showDiff ? "Hide" : "Show"} {pending.length} change{pending.length === 1 ? "" : "s"}
               </button>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => onReview("reject", pending)}>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => onReview("reject", pendingIds)}>
                 Undo all
               </button>
-              <button type="button" className="btn btn-secondary btn-sm" onClick={() => onReview("accept", pending)}>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => onReview("accept", pendingIds)}>
                 Keep all
               </button>
             </span>
           )}
         </div>
+      )}
+      {!streaming && showDiff && pending.length > 0 && (
+        <ul className="turn-diff" aria-label="Changes in this reply">
+          {pending.map((hunk) => (
+            <li key={hunk.id} className="turn-diff-item">
+              <button type="button" className="turn-diff-text" title="Show in the document" onClick={() => onReview("next", [hunk.id])}>
+                {hunk.deletedText ? <del className="change-stat del">{clip(hunk.deletedText)}</del> : null}
+                {hunk.insertedText ? <ins className="change-stat add">{clip(hunk.insertedText)}</ins> : null}
+                {!hunk.deletedText && !hunk.insertedText ? <span className="change-unit">Formatting change</span> : null}
+              </button>
+              <span className="turn-diff-actions">
+                <button type="button" className="btn btn-ghost btn-sm" aria-label="Undo this change" onClick={() => onReview("reject", [hunk.id])}>
+                  Undo
+                </button>
+                <button type="button" className="btn btn-secondary btn-sm" aria-label="Keep this change" onClick={() => onReview("accept", [hunk.id])}>
+                  Keep
+                </button>
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
       {!streaming && message.usage && (
         <div className="msg-meta">
@@ -135,26 +172,38 @@ export const AssistantView = memo(function AssistantView({
   );
 });
 
-const NO_IDS: string[] = [];
+/** A pending change as the chat shows it. */
+export type TurnHunk = { id: string; turn?: string; deletedText?: string; insertedText?: string };
+
+const NO_HUNKS: TurnHunk[] = [];
+
+function clip(text: string, max = 160) {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
 
 export function MessageList({
   messages,
   hunks,
   onRetry,
   onReview,
+  documentId,
+  onRestore,
 }: {
   messages: ChatMessage[];
   /** Pending changes in the open document; each card acts only on its own turn's. */
-  hunks: ReadonlyArray<{ id: string; turn?: string }>;
+  hunks: ReadonlyArray<TurnHunk>;
   onRetry: () => void;
   onReview: (action: "next" | "accept" | "reject", ids: string[]) => void;
+  documentId?: string;
+  onRestore?: (versionId: string) => void;
 }) {
-  const byTurn = new Map<string, string[]>();
+  const byTurn = new Map<string, TurnHunk[]>();
   for (const hunk of hunks) {
     if (!hunk.turn) continue;
-    const ids = byTurn.get(hunk.turn) ?? [];
-    ids.push(hunk.id);
-    byTurn.set(hunk.turn, ids);
+    const list = byTurn.get(hunk.turn) ?? [];
+    list.push(hunk);
+    byTurn.set(hunk.turn, list);
   }
   return (
     <>
@@ -166,9 +215,11 @@ export function MessageList({
             key={message.id}
             message={message}
             isLast={index === messages.length - 1}
-            pending={byTurn.get(message.id) ?? NO_IDS}
+            pending={byTurn.get(message.id) ?? NO_HUNKS}
             onRetry={onRetry}
             onReview={onReview}
+            documentId={documentId}
+            onRestore={onRestore}
           />
         ),
       )}

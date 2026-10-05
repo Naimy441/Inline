@@ -3,12 +3,27 @@
 import { ArrowUp, Brain, ChevronDown, FileText, Image as ImageIcon, MessageCircleQuestion, Paperclip, PenLine, Square, TextQuote, X } from "lucide-react";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { BUDGET_OPTIONS } from "@/lib/agent/types";
-import type { AgentMode, Attachment, ChatSettings, ContextUsage, Effort, ModelOption, SelectionContext } from "@/lib/agent/types";
-import { uploadFile } from "@/lib/client/api";
+import type { AgentMode, Attachment, ChatSettings, ContextUsage, DocumentMention, Effort, ModelOption, SelectionContext } from "@/lib/agent/types";
+import { api, uploadFile } from "@/lib/client/api";
 import { MenuButton } from "@/components/ui/Menu";
 import { CommandsDialog, useCommands } from "@/components/agent/CommandsDialog";
-import { expandSlashCommand, matchCommands, type SlashCommand } from "@/lib/agent/commands";
+import { expandSlashCommand, matchCommands, matchDocuments, type SlashCommand } from "@/lib/agent/commands";
 import { toast } from "@/components/ui/Toast";
+
+/** Titles of the user's other documents, for @-mentions (loaded once per panel). */
+function useDocumentTitles(exclude: string | null) {
+  const [documents, setDocuments] = useState<DocumentMention[]>([]);
+  useEffect(() => {
+    let live = true;
+    api<{ documents: Array<{ id: string; title: string }> }>("/api/documents")
+      .then(({ documents }) => live && setDocuments(documents.map(({ id, title }) => ({ id, title: title || "Untitled" }))))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
+  return exclude ? documents.filter((doc) => doc.id !== exclude) : documents;
+}
 
 export type ComposerHandle = { focus: () => void; setText: (text: string) => void };
 
@@ -27,11 +42,13 @@ export const Composer = forwardRef<
     context?: ContextUsage;
     selection: SelectionContext | null;
     onClearSelection: () => void;
-    onSend: (input: { text: string; attachments: Attachment[] }) => Promise<void> | void;
+    /** The open document, left out of @-mention suggestions. */
+    documentId?: string | null;
+    onSend: (input: { text: string; attachments: Attachment[]; mentions: DocumentMention[] }) => Promise<void> | void;
     onStop: () => void;
     onSettings: (patch: Partial<ChatSettings>) => void;
   }
->(function Composer({ running, disabled, disabledReason, settings, models, context, selection, onClearSelection, onSend, onStop, onSettings }, ref) {
+>(function Composer({ running, disabled, disabledReason, settings, models, context, selection, documentId, onClearSelection, onSend, onStop, onSettings }, ref) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(0);
@@ -39,8 +56,28 @@ export const Composer = forwardRef<
   const [commandIndex, setCommandIndex] = useState(0);
   const [commandsHidden, setCommandsHidden] = useState(false);
   const [managing, setManaging] = useState(false);
+  const [mentions, setMentions] = useState<DocumentMention[]>([]);
+  const [caret, setCaret] = useState(0);
+  const documents = useDocumentTitles(documentId ?? null);
   const slash = /^\/([a-z0-9-]*)$/i.exec(text);
+  // Titles have spaces, so the query runs to the caret; the list hides once nothing matches.
+  const at = /(?:^|\s)@([^@\n]{0,40})$/.exec(text.slice(0, caret));
   const suggestions = slash && !commandsHidden ? matchCommands(slash[1]!, commands).slice(0, 8) : [];
+  const docSuggestions = !slash && at && !commandsHidden ? matchDocuments(at[1]!, documents).slice(0, 8) : [];
+  const optionCount = suggestions.length || docSuggestions.length;
+  const pickDocument = (doc: DocumentMention) => {
+    const start = caret - at![1]!.length - 1;
+    const label = `@${doc.title.replace(/\s+/g, " ")} `;
+    const next = text.slice(0, start) + label + text.slice(caret);
+    setText(next);
+    setMentions((list) => (list.some((item) => item.id === doc.id) ? list : [...list, doc]));
+    setCommandIndex(0);
+    requestAnimationFrame(() => {
+      textarea.current?.focus();
+      textarea.current?.setSelectionRange(start + label.length, start + label.length);
+      setCaret(start + label.length);
+    });
+  };
   const pickCommand = (command: SlashCommand) => {
     setText(`/${command.name} `);
     setCommandIndex(0);
@@ -87,12 +124,16 @@ export const Composer = forwardRef<
     if ((!value && !attachments.length) || disabled || uploading) return;
     setText("");
     const sent = attachments;
+    // Only documents whose @-mention is still in the text.
+    const mentioned = mentions.filter((doc) => value.includes(`@${doc.title.replace(/\s+/g, " ")}`));
     setAttachments([]);
+    setMentions([]);
     try {
-      await onSend({ text: value, attachments: sent });
+      await onSend({ text: value, attachments: sent, mentions: mentioned });
     } catch {
       setText(value);
       setAttachments(sent);
+      setMentions(mentioned);
     }
   };
 
@@ -156,6 +197,24 @@ export const Composer = forwardRef<
           </button>
         </div>
       )}
+      {docSuggestions.length > 0 && (
+        <div className="composer-commands" role="listbox" aria-label="Documents">
+          {docSuggestions.map((doc, index) => (
+            <button
+              key={doc.id}
+              type="button"
+              role="option"
+              aria-selected={index === commandIndex}
+              className={`composer-command${index === commandIndex ? " is-active" : ""}`}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => pickDocument(doc)}
+            >
+              <FileText size={13} />
+              <span className="composer-command-name">{doc.title}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <CommandsDialog open={managing} onClose={() => setManaging(false)} />
       <textarea
         ref={textarea}
@@ -174,6 +233,7 @@ export const Composer = forwardRef<
         disabled={disabled}
         onChange={(event) => {
           setText(event.target.value);
+          setCaret(event.target.selectionStart ?? event.target.value.length);
           setCommandIndex(0);
           setCommandsHidden(false);
         }}
@@ -184,16 +244,19 @@ export const Composer = forwardRef<
             void attach(files);
           }
         }}
+        onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
         onKeyDown={(event) => {
-          if (suggestions.length) {
+          if (optionCount) {
             if (event.key === "ArrowDown" || event.key === "ArrowUp") {
               event.preventDefault();
-              setCommandIndex((index) => (index + (event.key === "ArrowDown" ? 1 : suggestions.length - 1)) % suggestions.length);
+              setCommandIndex((index) => (index + (event.key === "ArrowDown" ? 1 : optionCount - 1)) % optionCount);
               return;
             }
             if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
-              pickCommand(suggestions[Math.min(commandIndex, suggestions.length - 1)]!);
+              const index = Math.min(commandIndex, optionCount - 1);
+              if (suggestions.length) pickCommand(suggestions[index]!);
+              else pickDocument(docSuggestions[index]!);
               return;
             }
             if (event.key === "Escape") {

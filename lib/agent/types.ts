@@ -31,6 +31,9 @@ export type Attachment = {
   kind: "image" | "text" | "pdf";
 };
 
+/** A document the user @-mentioned in a message. */
+export type DocumentMention = { id: string; title: string };
+
 export type UserMessage = {
   id: string;
   role: "user";
@@ -38,9 +41,18 @@ export type UserMessage = {
   createdAt: number;
   selection?: SelectionContext;
   attachments?: Attachment[];
+  mentions?: DocumentMention[];
 };
 
-export type DocumentChange = { documentId: string; title: string; tool: string; added: number; removed: number };
+export type DocumentChange = {
+  documentId: string;
+  title: string;
+  tool: string;
+  added: number;
+  removed: number;
+  /** Version saved just before this turn's first edit, for "Restore to before this". */
+  checkpoint?: string;
+};
 
 export type TurnUsage = {
   inputTokens: number;
@@ -93,7 +105,7 @@ export type ContextUsage = { tokens: number; maxTokens: number; percentage: numb
 
 export type RateLimit = { status: "allowed" | "allowed_warning" | "rejected"; resetsAt?: number; type?: string; utilization?: number };
 
-export type QueuedMessage = { id: string; text: string; createdAt: number; selection?: SelectionContext; attachments?: Attachment[] };
+export type QueuedMessage = { id: string; text: string; createdAt: number; selection?: SelectionContext; attachments?: Attachment[]; mentions?: DocumentMention[] };
 
 export type ChatState = {
   id: string;

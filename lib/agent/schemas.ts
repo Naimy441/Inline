@@ -34,4 +34,5 @@ export const SendSchema = z.object({
   documentId: z.string().max(80).nullable().optional(),
   selection: SelectionSchema.optional(),
   attachments: z.array(AttachmentSchema).max(10).optional(),
+  mentions: z.array(z.object({ id: z.string().max(80), title: z.string().max(300) })).max(20).optional(),
 });

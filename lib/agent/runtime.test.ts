@@ -136,6 +136,27 @@ describe("a turn", () => {
     assert.match(context, /editor is in suggesting mode/);
   });
 
+  it("tells Claude where the cursor is when the inline prompt has no selection", async () => {
+    const fake = useModel(() => undefined);
+    const { doc, chat } = await newChat();
+    const { findText } = await import("@/lib/doc/editing");
+    const at = findText(doc.doc, "jumps", { caseSensitive: true })[0]!.from;
+    await turn(chat, "Add an adjective", { selection: { documentId: doc.id, text: "", from: at, to: at } });
+    const { context } = fake.turns[0]!;
+    assert.match(context, /The user's cursor is on line \d+ of read_document, after "The quick brown fox " in this paragraph:/);
+    assert.match(context, /"""\nThe quick brown fox jumps over the lazy dog\.\n"""/);
+    assert.doesNotMatch(context, /The user selected/);
+  });
+
+  it("lists @-mentioned documents and keeps them on the message", async () => {
+    const fake = useModel(() => undefined);
+    const { chat } = await newChat();
+    await turn(chat, "Compare with @Budget", { mentions: [{ id: "doc-123", title: "Budget" }] });
+    assert.match(fake.turns[0]!.context, /The user mentioned this document: "Budget" \(id doc-123\)/);
+    const user = chat.state.messages.find((message) => message.role === "user");
+    assert.deepEqual(user && "mentions" in user ? user.mentions : null, [{ id: "doc-123", title: "Budget" }]);
+  });
+
   it("says when no document is open", async () => {
     const fake = useModel(() => undefined);
     const chat = await agentRuntime().create();
