@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { after, before, describe, mock, test } from "node:test";
+import { after, before, describe, test } from "node:test";
 
 import type { ChatRuntime } from "@/lib/agent/runtime";
 import type { AssistantMessage, ToolPart } from "@/lib/agent/types";
@@ -31,8 +31,7 @@ let reviewRoute: typeof import("@/app/api/documents/[id]/review/route");
 let toMarkdown: (doc: LiveDocument) => string;
 
 before(async () => {
-  const real = await import("@anthropic-ai/claude-agent-sdk");
-  mock.module("@anthropic-ai/claude-agent-sdk", { namedExports: { ...real, query: claude.query } });
+  (await import("@/lib/agent/runtime")).setQueryImplementation(claude.query as never);
   hub = (await import("@/lib/server/hub")).documentHub();
   runtime = (await import("@/lib/agent/runtime")).agentRuntime();
   messagesRoute = await import("@/app/api/agent/chats/[id]/messages/route");

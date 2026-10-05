@@ -21,6 +21,6 @@ export default defineConfig({
     url: `http://localhost:${port}`,
     reuseExistingServer: false,
     timeout: 120_000,
-    env: { INLINE_DATA_DIR: path.join(os.tmpdir(), `inline-e2e-${Date.now()}`) },
+    env: { INLINE_FAKE_CLAUDE: "1", INLINE_DATA_DIR: path.join(os.tmpdir(), `inline-e2e-${Date.now()}`) },
   },
 });

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
 
 import { MCP_SERVER_NAME, mcpToolName } from "@/lib/agent/mcp";
+import { DOCUMENT_FORMAT_GUIDE } from "@/lib/agent/prompt";
 import { TOOLS, type ToolContext } from "@/lib/agent/tools";
 import { docToMarkdown } from "@/lib/doc/markdown";
 import { documentHub } from "@/lib/server/hub";
@@ -37,6 +38,7 @@ describe("in-process server (in-app agent)", () => {
     for (const definition of TOOLS) {
       const listed = tools.find((tool) => tool.name === definition.name)!;
       assert.equal(listed.description, definition.description);
+      assert.ok(definition.description.length > 40, `${definition.name} explains itself`);
       assert.equal(listed.inputSchema.type, "object");
       assert.equal(listed.annotations?.readOnlyHint, !definition.write, definition.name);
       assert.equal(listed.annotations?.destructiveHint, Boolean(definition.destructive), definition.name);
@@ -112,6 +114,7 @@ describe("HTTP server at /api/mcp (external clients)", () => {
     const instructions = mcp.client.getInstructions() ?? "";
     assert.match(instructions, /Inline is a document editor/);
     assert.match(instructions, /keep or undo each one/);
+    assert.ok(instructions.includes(DOCUMENT_FORMAT_GUIDE), "the instructions teach the document format");
     assert.ok(mcp.client.getServerCapabilities()?.tools);
   });
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { after, before, describe, mock, test } from "node:test";
+import { after, before, describe, test } from "node:test";
 
 import type { ChatRuntime } from "@/lib/agent/runtime";
 import type { ChatState, SequencedChatEvent } from "@/lib/agent/types";
@@ -30,8 +30,7 @@ let hub: ReturnType<typeof import("@/lib/server/hub").documentHub>;
 let runtime: ReturnType<typeof import("@/lib/agent/runtime").agentRuntime>;
 
 before(async () => {
-  const real = await import("@anthropic-ai/claude-agent-sdk");
-  mock.module("@anthropic-ai/claude-agent-sdk", { namedExports: { ...real, query: claude.query } });
+  (await import("@/lib/agent/runtime")).setQueryImplementation(claude.query as never);
   routes = {
     chats: await import("@/app/api/agent/chats/route"),
     chat: await import("@/app/api/agent/chats/[id]/route"),

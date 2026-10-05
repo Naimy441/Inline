@@ -8,7 +8,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test --experimental-test-module-mocks \"lib/**/*.test.ts\" \"tests/**/*.test.ts\"",
+    "test": "tsx --test \"lib/**/*.test.ts\" \"tests/**/*.test.ts\"",
     "test:e2e": "playwright test"
   },
   "dependencies": {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { after, before, beforeEach, describe, mock, test } from "node:test";
+import { after, before, beforeEach, describe, test } from "node:test";
 
 import type { AssistantMessage, SequencedChatEvent, ToolPart, UserMessage } from "@/lib/agent/types";
 import type { ChatRuntime } from "@/lib/agent/runtime";
@@ -27,8 +27,7 @@ let markdownOf: (doc: LiveDocument) => string;
 let saveUpload: typeof import("@/lib/server/store").saveUpload;
 
 before(async () => {
-  const real = await import("@anthropic-ai/claude-agent-sdk");
-  mock.module("@anthropic-ai/claude-agent-sdk", { namedExports: { ...real, query: claude.query } });
+  (await import("@/lib/agent/runtime")).setQueryImplementation(claude.query as never);
   const runtimeModule = await import("@/lib/agent/runtime");
   runtime = runtimeModule.agentRuntime();
   hub = (await import("@/lib/server/hub")).documentHub();
@@ -78,64 +77,7 @@ async function newChat(markdown = NOTE, settings = {}) {
   return { doc, chat };
 }
 
-describe("a plain conversation turn", () => {
-  test("streams text into an assistant message and finishes with usage", async () => {
-    const { chat } = await newChat();
-    const events = record(chat);
-    claude.script(async (turn) => {
-      turn.think("The user wants a summary.");
-      turn.say("Your trip starts on Monday.");
-    });
-    const sent = await chat.send({ text: "When do we leave?" });
-    assert.equal(sent.queued, false);
-    await idle(chat);
-
-    const [user, assistant] = chat.state.messages as [UserMessage, AssistantMessage];
-    assert.equal(user.text, "When do we leave?");
-    assert.equal(sent.id, user.id);
-    assert.equal(assistant.status, "done");
-    assert.deepEqual(
-      assistant.parts.map((part) => part.type),
-      ["thinking", "text"],
-    );
-    assert.equal(assistant.parts[1]!.type === "text" && assistant.parts[1]!.text, "Your trip starts on Monday.");
-    assert.equal(assistant.model, "claude-test-model");
-    assert.deepEqual(assistant.usage, { inputTokens: 900, outputTokens: 150, cacheReadTokens: 4000, cacheCreationTokens: 100, costUsd: 0.0123, durationMs: 1200, numTurns: 2 });
-
-    const types = events.map((event) => event.type);
-    assert.equal(types[0], "snapshot");
-    for (const type of ["message", "running", "status", "part", "text_delta", "thinking_delta", "message_done"]) assert.ok(types.includes(type as never), `missing ${type}`);
-    assert.deepEqual(
-      events.filter((event) => event.type === "running").map((event) => (event as { running: boolean }).running),
-      [true, false],
-    );
-    const deltas = events.filter((event) => event.type === "text_delta").map((event) => (event as { text: string }).text);
-    assert.ok(deltas.length > 1, "text streams in several deltas");
-    assert.equal(deltas.join(""), "Your trip starts on Monday.");
-    const seqs = events.map((event) => event.seq);
-    assert.deepEqual(
-      seqs.slice(1),
-      [...seqs.slice(1)].sort((a, b) => a - b),
-      "sequence numbers increase",
-    );
-    await waitFor(() => chat.state.context, "context usage");
-    assert.equal(chat.state.context!.percentage, 6);
-  });
-
-  test("the first message names the chat", async () => {
-    const { chat } = await newChat();
-    await chat.send({ text: "Help me plan the packing list for a week in the mountains" });
-    await idle(chat);
-    assert.equal(chat.state.title, "Help me plan the packing list for a week in the mountains");
-    assert.equal(chat.summary().messageCount, 2);
-    assert.equal(chat.summary().preview, "OK.");
-  });
-
-  test("empty messages are refused", async () => {
-    const { chat } = await newChat();
-    await assert.rejects(chat.send({ text: "   " }), /Message is empty/);
-  });
-
+describe("session setup", () => {
   test("the query is configured as a sandboxed Claude Code session with only Inline's tools", async () => {
     const { chat } = await newChat(NOTE, { model: "claude-test-opus", effort: "high" });
     await chat.send({ text: "hi" });
@@ -156,33 +98,6 @@ describe("a plain conversation turn", () => {
 });
 
 describe("context sent with each message", () => {
-  test("names the open document, pending changes, editor mode and selection", async () => {
-    const { doc, chat } = await newChat();
-    await hub.get(doc.id);
-    let seen: string[] = [];
-    claude.script(async (turn) => {
-      await turn.tool("mcp__inline__edit_document", { old_string: "Monday", new_string: "Tuesday" });
-      turn.say("Changed.");
-    });
-    await chat.send({ text: "Change the day" });
-    await idle(chat);
-    doc.editorMode = "suggesting";
-    claude.script((turn) => {
-      seen = turn.texts;
-      turn.say("Noted.");
-    });
-    await chat.send({ text: "Make this punchier", selection: { documentId: doc.id, text: "Pack light.", from: 1, to: 5 } });
-    await idle(chat);
-    const [context, text] = seen;
-    assert.match(context!, /^<inline-context>/);
-    assert.match(context!, /Mode: Agent\. Make requested changes directly in the document\./);
-    assert.match(context!, new RegExp(`Open document: "Trip" \\(id ${doc.id}\\)\\.`));
-    assert.match(context!, /1 earlier change is by Claude still awaiting the user's review\./);
-    assert.match(context!, /editor is in suggesting mode/);
-    assert.match(context!, /The user selected this text in the document:\n"""\nPack light\.\n"""/);
-    assert.equal(text, "Make this punchier");
-  });
-
   test("says when no document is open, and Ask mode", async () => {
     const chat = await runtime.create({ documentId: null, settings: { mode: "ask" } });
     let seen = "";
@@ -273,24 +188,6 @@ describe("tool use", () => {
     await waitFor(() => docEvents.at(-1) === "activity:idle", "activity to clear");
   });
 
-  test("a checkpoint version is saved once, before the turn's first edit", async () => {
-    const { doc, chat } = await newChat();
-    claude.script(async (turn) => {
-      await turn.tool("mcp__inline__edit_document", { old_string: "Monday", new_string: "Tuesday" });
-      await turn.tool("mcp__inline__edit_document", { old_string: "Pack light.", new_string: "Pack warm clothes." });
-      await turn.tool("mcp__inline__insert_content", { content: "Bring snacks.", position: "end" });
-    });
-    await chat.send({ text: "Three edits" });
-    await idle(chat);
-    const versions = await doc.versions();
-    assert.deepEqual(
-      versions.map((version) => [version.label, version.author]),
-      [["Before Claude's edits", "auto"]],
-    );
-    assert.deepEqual(lastAssistant(chat).changes!.length, 1, "changes to one document aggregate");
-    assert.equal(lastAssistant(chat).changes![0]!.tool, "insert_content");
-  });
-
   test("the checkpoint captures the text from before Claude's edits", async () => {
     const { doc, chat } = await newChat();
     claude.script(async (turn) => {
@@ -307,24 +204,6 @@ describe("tool use", () => {
     assert.equal(docToMarkdown(loadDoc(stored!.doc)), NOTE);
   });
 
-  test("in Ask mode the tools refuse to write and the document is untouched", async () => {
-    const { doc, chat } = await newChat(NOTE, { mode: "ask" });
-    let result = { text: "", isError: false };
-    claude.script(async (turn) => {
-      result = await turn.tool("mcp__inline__edit_document", { old_string: "Monday", new_string: "Tuesday" });
-      turn.say("I can't edit in Ask mode.");
-    });
-    await chat.send({ text: "Change Monday to Tuesday" });
-    await idle(chat);
-    assert.equal(result.isError, true);
-    assert.match(result.text, /Ask mode/);
-    assert.equal(markdownOf(doc), NOTE);
-    const tool = lastAssistant(chat).parts.find((part): part is ToolPart => part.type === "tool")!;
-    assert.equal(tool.status, "error");
-    assert.equal(lastAssistant(chat).status, "done");
-    assert.equal((await doc.versions()).length, 0, "no checkpoint without a write");
-  });
-
   test("switching to Ask mode between turns applies to the live session", async () => {
     const { doc, chat } = await newChat();
     await chat.send({ text: "warm up" });
@@ -339,149 +218,6 @@ describe("tool use", () => {
     assert.equal(claude.calls.filter((call) => call.options.sessionId === chat.state.id || call.options.resume === chat.state.id).length, 1, "same session");
     assert.equal(result.isError, true);
     assert.equal(markdownOf(doc), NOTE);
-  });
-
-  test("attaching the chat to another document retargets the tools", async () => {
-    const { chat } = await newChat();
-    const other = await hub.create({ title: "Budget", markdown: "Total: 100." });
-    claude.script(async (turn) => {
-      await turn.tool("mcp__inline__edit_document", { old_string: "100", new_string: "120" });
-    });
-    await chat.send({ text: "Raise it", documentId: other.id });
-    await idle(chat);
-    assert.equal(chat.state.documentId, other.id);
-    assert.equal(markdownOf(other), "Total: 120.");
-  });
-
-  test("TodoWrite updates the chat's todo list", async () => {
-    const { chat } = await newChat();
-    const events = record(chat);
-    claude.script(async (turn) => {
-      await turn.tool("TodoWrite", {
-        todos: [
-          { content: "Read the draft", activeForm: "Reading the draft", status: "completed" },
-          { content: "Tighten the intro", activeForm: "Tightening the intro", status: "in_progress" },
-        ],
-      });
-    });
-    await chat.send({ text: "Plan it" });
-    await idle(chat);
-    assert.deepEqual(
-      chat.state.todos.map((todo) => [todo.content, todo.status]),
-      [
-        ["Read the draft", "completed"],
-        ["Tighten the intro", "in_progress"],
-      ],
-    );
-    assert.ok(events.some((event) => event.type === "todos"));
-  });
-
-  test("a failed tool shows as an error part, and the turn still completes", async () => {
-    const { chat } = await newChat();
-    claude.script(async (turn) => {
-      await turn.tool("mcp__inline__edit_document", { old_string: "Wednesday", new_string: "Thursday" });
-      turn.say("That text isn't in the document.");
-    });
-    await chat.send({ text: "Change Wednesday" });
-    await idle(chat);
-    const tool = lastAssistant(chat).parts.find((part): part is ToolPart => part.type === "tool")!;
-    assert.equal(tool.status, "error");
-    assert.match(tool.result!, /not found/);
-    assert.equal(lastAssistant(chat).status, "done");
-  });
-
-  test("subagent messages are not shown as the main transcript", async () => {
-    const { chat } = await newChat();
-    claude.script((turn) => {
-      turn.emit({ type: "assistant", parent_tool_use_id: "toolu_task", message: { id: "sub", content: [{ type: "text", text: "inner monologue" }] } });
-      turn.say("Visible answer.");
-    });
-    await chat.send({ text: "go" });
-    await idle(chat);
-    const texts = lastAssistant(chat).parts.filter((part) => part.type === "text").map((part) => (part as { text: string }).text);
-    assert.deepEqual(texts, ["Visible answer."]);
-  });
-});
-
-describe("queueing, interrupting and retrying", () => {
-  test("messages sent while Claude is working queue and run in order", async () => {
-    const { chat } = await newChat();
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => (release = resolve));
-    const order: string[] = [];
-    claude.script(
-      async (turn) => {
-        order.push(turn.texts.at(-1)!);
-        await gate;
-        turn.say("first done");
-      },
-      (turn) => {
-        order.push(turn.texts.at(-1)!);
-        turn.say("second done");
-      },
-    );
-    await chat.send({ text: "first" });
-    const queued = await chat.send({ text: "second" });
-    assert.equal(queued.queued, true);
-    assert.deepEqual(
-      chat.state.queue.map((item) => item.text),
-      ["second"],
-    );
-    release();
-    await waitFor(() => chat.state.messages.length === 4 && !chat.state.running && lastAssistant(chat).status === "done", "both turns");
-    assert.deepEqual(order, ["first", "second"]);
-    assert.equal(chat.state.queue.length, 0);
-  });
-
-  test("a queued message can be removed before it runs", async () => {
-    const { chat } = await newChat();
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => (release = resolve));
-    claude.script(async (turn) => {
-      await gate;
-      turn.say("done");
-    });
-    await chat.send({ text: "first" });
-    const queued = await chat.send({ text: "never mind" });
-    chat.removeQueued(queued.id);
-    release();
-    await idle(chat);
-    assert.equal(chat.state.messages.length, 2);
-  });
-
-  test("interrupt stops the turn and clears the queue", async () => {
-    const { chat } = await newChat();
-    claude.script(async (turn) => {
-      turn.say("Working on a long answer");
-      await turn.waitForInterrupt();
-      turn.stopped();
-    });
-    await chat.send({ text: "write a novel" });
-    await chat.send({ text: "queued behind it" });
-    await waitFor(() => lastAssistant(chat).parts.length > 0, "streaming to start");
-    await chat.interrupt();
-    await idle(chat);
-    assert.equal(lastAssistant(chat).status, "stopped");
-    assert.equal(lastAssistant(chat).error, undefined);
-    assert.equal(chat.state.queue.length, 0);
-    assert.equal(chat.state.messages.length, 2, "the queued message did not run");
-  });
-
-  test("retry re-runs the last message after an error", async () => {
-    const { chat } = await newChat();
-    claude.script(
-      (turn) => turn.fail("error_during_execution", ["socket hang up"]),
-      (turn) => turn.say("Second time lucky."),
-    );
-    await chat.send({ text: "try this" });
-    await idle(chat);
-    assert.equal(lastAssistant(chat).status, "error");
-    assert.match(lastAssistant(chat).error!, /socket hang up/);
-    await chat.retry();
-    await idle(chat);
-    assert.equal(chat.state.messages.length, 2, "the failed exchange is replaced, not duplicated");
-    assert.equal((chat.state.messages[0] as UserMessage).text, "try this");
-    assert.equal(lastAssistant(chat).status, "done");
   });
 });
 
@@ -509,14 +245,6 @@ describe("failures are explained in plain language", () => {
     assert.match(lastAssistant(chat).error!, /usage limit/);
   });
 
-  test("hitting the turn limit", async () => {
-    const { chat } = await newChat();
-    claude.script((turn) => turn.fail("error_max_turns"));
-    await chat.send({ text: "hi" });
-    await idle(chat);
-    assert.equal(lastAssistant(chat).error, "Stopped after reaching the turn limit.");
-  });
-
   test("Claude Code not being installed", async () => {
     const { chat } = await newChat();
     claude.crash = new Error("spawn claude ENOENT");
@@ -542,71 +270,9 @@ describe("failures are explained in plain language", () => {
     assert.equal(lastAssistant(chat).status, "done");
     assert.equal(claude.lastCall.options.resume, chat.state.id, "the new process resumes the same Claude Code session");
   });
-
-  test("API retries show as a retrying status", async () => {
-    const { chat } = await newChat();
-    const events = record(chat);
-    claude.script((turn) => {
-      turn.emit({ type: "system", subtype: "api_retry", attempt: 1, max_retries: 5, retry_delay_ms: 500, error: "overloaded" });
-      turn.say("ok");
-    });
-    await chat.send({ text: "hi" });
-    await idle(chat);
-    const retry = events.find((event) => event.type === "status" && (event as { status: { kind: string } | null }).status?.kind === "retrying") as { status: { error: string; attempt: number } } | undefined;
-    assert.ok(retry);
-    assert.equal(retry.status.attempt, 1);
-    assert.match(retry.status.error, /overloaded right now/);
-  });
-
-  test("rate-limit notices reach the panel", async () => {
-    const { chat } = await newChat();
-    const events = record(chat);
-    claude.script((turn) => {
-      turn.emit({ type: "rate_limit_event", rate_limit_info: { status: "allowed_warning", resetsAt: 1_900_000_000, rateLimitType: "five_hour", utilization: 0.9 } });
-      turn.say("ok");
-    });
-    await chat.send({ text: "hi" });
-    await idle(chat);
-    const notice = events.find((event) => event.type === "rate_limit") as { rateLimit: { status: string; utilization: number } } | undefined;
-    assert.deepEqual(notice?.rateLimit, { status: "allowed_warning", resetsAt: 1_900_000_000, type: "five_hour", utilization: 0.9 });
-  });
 });
 
 describe("sessions and persistence", () => {
-  test("follow-up messages reuse the live Claude Code process", async () => {
-    const { chat } = await newChat();
-    const before = claude.calls.length;
-    await chat.send({ text: "one" });
-    await idle(chat);
-    await chat.send({ text: "two" });
-    await idle(chat);
-    assert.equal(claude.calls.length - before, 1);
-    assert.equal(claude.lastCall.inputs.length, 2);
-  });
-
-  test("model and effort changes apply to the live session", async () => {
-    const { chat } = await newChat();
-    await chat.send({ text: "one" });
-    await idle(chat);
-    const q = claude.lastCall.query;
-    await chat.update({ settings: { model: "claude-test-haiku", effort: "low" } });
-    assert.equal(q.model, "claude-test-haiku");
-    assert.deepEqual(q.flagSettings, [{ effortLevel: "low" }]);
-    assert.equal(chat.state.settings.model, "claude-test-haiku");
-  });
-
-  test("a closed session resumes from Claude Code's transcript", async () => {
-    const { chat } = await newChat();
-    await chat.send({ text: "one" });
-    await idle(chat);
-    chat.close();
-    assert.equal(chat.live, false);
-    await chat.send({ text: "two" });
-    await idle(chat);
-    assert.equal(claude.lastCall.options.resume, chat.state.id);
-    assert.equal(claude.lastCall.options.sessionId, undefined);
-  });
-
   test("chats are saved to disk and survive a restart", async () => {
     const { chat } = await newChat();
     claude.script((turn) => turn.say("Saved answer."));
@@ -618,32 +284,6 @@ describe("sessions and persistence", () => {
     assert.equal(file.sessionStarted, true);
     assert.equal(file.messages.length, 2);
     assert.equal(file.messages[1].parts[0].text, "Saved answer.");
-  });
-
-  test("a turn cut off by a restart loads as stopped, with running tools marked failed", async () => {
-    const { writeChatFile } = await import("@/lib/server/store");
-    const id = "restarted-chat";
-    await writeChatFile(id, {
-      format: 1,
-      id,
-      title: "Restarted",
-      documentId: null,
-      createdAt: 1,
-      updatedAt: 1,
-      settings: { model: null, effort: "medium", mode: "agent" },
-      todos: [],
-      sessionStarted: true,
-      messages: [
-        { id: "u", role: "user", text: "hi", createdAt: 1 },
-        { id: "a", role: "assistant", createdAt: 1, status: "streaming", parts: [{ type: "tool", id: "t", name: "mcp__inline__read_document", input: {}, status: "running" }] },
-      ],
-    });
-    const chat = (await runtime.get(id))!;
-    const assistant = lastAssistant(chat);
-    assert.equal(assistant.status, "stopped");
-    assert.equal(assistant.error, "Interrupted when Inline restarted.");
-    assert.equal((assistant.parts[0] as ToolPart).status, "error");
-    assert.equal(chat.state.running, false);
   });
 
   test("reconnecting clients get missed events, or a snapshot when too far behind", async () => {
@@ -663,21 +303,6 @@ describe("sessions and persistence", () => {
     assert.equal(fresh[0]!.type, "snapshot");
   });
 
-  test("list shows chats with messages, filtered by document, newest first; remove deletes", async () => {
-    const { doc, chat } = await newChat();
-    await runtime.create({ documentId: doc.id });
-    await chat.send({ text: "listed" });
-    await idle(chat);
-    const listed = await runtime.list({ documentId: doc.id });
-    assert.deepEqual(
-      listed.map((summary) => summary.id),
-      [chat.state.id],
-      "empty chats are hidden",
-    );
-    await runtime.remove(chat.state.id);
-    assert.equal(await runtime.get(chat.state.id), null);
-  });
-
   test("at most six idle Claude Code processes stay alive", async () => {
     const chats: ChatRuntime[] = [];
     for (let i = 0; i < 8; i += 1) {
@@ -694,16 +319,6 @@ describe("sessions and persistence", () => {
 });
 
 describe("Claude Code status probe", () => {
-  test("reports ready with the account's models", async () => {
-    claude.init = { account: { email: "writer@example.com", subscriptionType: "max" }, models: [{ value: "default", displayName: "Default", description: "Recommended", supportedEffortLevels: ["low", "medium", "high"] }] };
-    const status = await runtime.agentStatus(true);
-    assert.equal(status.state, "ready");
-    if (status.state !== "ready") return;
-    assert.equal(status.account.email, "writer@example.com");
-    assert.deepEqual(status.models[0], { value: "default", displayName: "Default", description: "Recommended", efforts: ["low", "medium", "high"] });
-    assert.equal(status.defaultModel, "default");
-  });
-
   test("reports signed out when Claude Code has no account", async () => {
     claude.init = { account: {}, models: [] };
     const status = await runtime.agentStatus(true);

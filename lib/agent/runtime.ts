@@ -40,7 +40,7 @@ import { isUserSuggestion } from "@/lib/doc/review";
  * from Claude Code's transcript on the next message.
  */
 
-const BUILTIN_TOOLS = ["WebSearch", "WebFetch", "TodoWrite"];
+export const BUILTIN_TOOLS = ["WebSearch", "WebFetch", "TodoWrite"];
 const IDLE_CLOSE_MS = 15 * 60 * 1000;
 const MAX_LIVE_SESSIONS = 6;
 const EVENT_BUFFER = 4000;
@@ -59,6 +59,12 @@ type PersistedChat = {
   /** Whether Claude Code has a transcript for this chat id, so it can be resumed. */
   sessionStarted: boolean;
 };
+
+/** Starts a Claude Code session. Tests swap in a scripted stand-in (lib/agent/testing/fakeClaude.ts). */
+let startQuery: typeof query = query;
+export function setQueryImplementation(next: typeof query | null) {
+  startQuery = next ?? query;
+}
 
 export type SendInput = { text: string; documentId?: string | null; selection?: SelectionContext; attachments?: Attachment[] };
 
@@ -137,6 +143,7 @@ class ChatRuntime {
   private blocksDelivered = new Map<string, number>();
   private wroteThisTurn = new Set<string>();
   private interrupted = false;
+  private discarded = false;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private toolInputs = new Map<string, string>();
@@ -241,7 +248,7 @@ class ChatRuntime {
   }
 
   persistSoon() {
-    if (this.persistTimer) return;
+    if (this.persistTimer || this.discarded) return;
     this.persistTimer = setTimeout(() => {
       this.persistTimer = null;
       void this.persistNow();
@@ -259,7 +266,6 @@ class ChatRuntime {
     await write;
   }
 
-  private discarded = false;
   private writing: Promise<void> = Promise.resolve();
 
   /** Stop persisting this chat (it is being deleted) and wait for any write in flight. */
@@ -361,7 +367,7 @@ class ChatRuntime {
       context.push(`Open document: "${doc.meta.title}" (id ${doc.id}).`);
       const suggestions = doc.hunks.filter(isUserSuggestion).length;
       const pending = doc.hunks.length - suggestions;
-      if (pending) context.push(`${pending} earlier change${pending === 1 ? " is" : "s are"} by Claude still awaiting the user's review.`);
+      if (pending) context.push(`${pending} earlier change${pending === 1 ? "" : "s"} by Claude ${pending === 1 ? "is" : "are"} still awaiting the user's review.`);
       if (suggestions) context.push(`The user has ${suggestions} pending suggestion${suggestions === 1 ? "" : "s"} of their own (suggesting mode).`);
       if (doc.editorMode !== "editing") context.push(`The user's editor is in ${doc.editorMode} mode.`);
     } else {
@@ -434,7 +440,7 @@ class ChatRuntime {
     const input = new AsyncQueue<SDKUserMessage>();
     const settings = this.state.settings;
     const date = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
-    const q = query({
+    const q = startQuery({
       prompt: input,
       options: {
         cwd: workspaceDirSync(),
@@ -762,6 +768,8 @@ class ChatRuntime {
     this.idleTimer = setTimeout(() => {
       if (!this.state.running) this.close();
     }, IDLE_CLOSE_MS);
+    // Housekeeping only: it must not keep the server process alive on shutdown.
+    this.idleTimer.unref?.();
   }
 
   async interrupt() {
@@ -852,6 +860,10 @@ class AgentRuntime {
 
   async init() {
     if (!workspaceCache) workspaceCache = await workspaceDir();
+    // Browser tests run against a scripted Claude instead of a signed-in Claude Code.
+    if (process.env.INLINE_FAKE_CLAUDE === "1" && startQuery === query) {
+      setQueryImplementation((await import("@/lib/agent/testing/e2eModel")).e2eClaude().query);
+    }
   }
 
   async get(id: string) {
@@ -913,10 +925,11 @@ class AgentRuntime {
   async remove(id: string) {
     const chat = await this.get(id);
     if (chat) {
+      // Stop saving first, or a pending save would write the chat back after it is deleted.
+      const discarded = chat.discard();
       await chat.interrupt();
       chat.close();
-      // A pending save would otherwise write the chat back after it is deleted.
-      await chat.discard();
+      await discarded;
     }
     this.chats.delete(id);
     await deleteChatFile(id);
@@ -957,7 +970,7 @@ class AgentRuntime {
 async function probeClaudeCode(): Promise<AgentStatus> {
   await agentRuntime().init();
   const input = new AsyncQueue<SDKUserMessage>();
-  const q = query({
+  const q = startQuery({
     prompt: input,
     options: { cwd: workspaceDirSync(), tools: [], settingSources: [], persistSession: false, systemPrompt: "" },
   });
