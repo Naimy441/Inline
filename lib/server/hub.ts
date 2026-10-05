@@ -37,7 +37,7 @@ import {
 
 export type ChangeOrigin =
   | { kind: "client"; clientID: string }
-  | { kind: "agent"; author: string; tool?: string }
+  | { kind: "agent"; author: string; tool?: string; turn?: string }
   | { kind: "system"; label: string };
 
 export type AgentActivity = {
@@ -62,13 +62,15 @@ export type HubEvent =
   | { type: "hunks"; version: number; hunks: HunkJSON[] }
   | { type: "meta"; meta: DocumentMeta }
   | { type: "comments"; comments: DocComment[] }
-  | { type: "reset"; version: number; doc: unknown; hunks: HunkJSON[] }
+  | { type: "reset"; epoch: string; version: number; doc: unknown; hunks: HunkJSON[] }
   | { type: "activity"; activity: AgentActivity | null }
   | { type: "command"; command: ClientCommand }
   | { type: "deleted" };
 
 export type DocumentSnapshot = {
   meta: DocumentMeta;
+  /** Identifies this in-memory copy; versions restart at 0 when the server reloads a document. */
+  epoch: string;
   doc: unknown;
   version: number;
   comments: DocComment[];
@@ -88,9 +90,18 @@ export class StepConflictError extends Error {
   }
 }
 
+/** The client's steps were based on an earlier load of the document (the server restarted); it must reload. */
+export class StaleEpochError extends Error {
+  constructor(readonly epoch: string) {
+    super("The document was reloaded on the server.");
+  }
+}
+
 export class LiveDocument {
   doc: PMNode;
   version = 0;
+  /** Versions are only comparable within one epoch: a server restart starts a new one at version 0. */
+  readonly epoch = newId(10);
   hunks: Hunk[];
   comments: DocComment[];
   meta: DocumentMeta;
@@ -126,6 +137,7 @@ export class LiveDocument {
   snapshot(): DocumentSnapshot {
     return {
       meta: this.meta,
+      epoch: this.epoch,
       doc: this.doc.toJSON(),
       version: this.version,
       comments: this.comments,
@@ -170,8 +182,9 @@ export class LiveDocument {
    * suggesting mode the edit is recorded as a pending change for review, the
    * same way Claude's edits are.
    */
-  receiveClientSteps(version: number, stepsJSON: unknown[], clientID: string, options: { suggest?: boolean } = {}) {
+  receiveClientSteps(version: number, stepsJSON: unknown[], clientID: string, options: { suggest?: boolean; epoch?: string } = {}) {
     if (this.deleted) throw new Error("Document was deleted.");
+    if (options.epoch !== undefined && options.epoch !== this.epoch) throw new StaleEpochError(this.epoch);
     if (version !== this.version) throw new StepConflictError(this.version);
     const tr = new Transform(this.doc);
     for (const json of stepsJSON) {
@@ -196,7 +209,7 @@ export class LiveDocument {
     if (fixes) for (const step of fixes.steps) tr.step(step);
     const hunks =
       options.hunks ??
-      (origin.kind === "agent" ? recordAgentChange(this.doc, tr, this.hunks, origin.author) : mapHunks(this.hunks, tr.mapping));
+      (origin.kind === "agent" ? recordAgentChange(this.doc, tr, this.hunks, origin.author, Date.now(), origin.turn) : mapHunks(this.hunks, tr.mapping));
     this.commit(tr, origin, hunks);
     return true;
   }
@@ -363,12 +376,13 @@ export class LiveDocument {
       title: this.meta.title,
       doc: this.doc.toJSON(),
       wordCount: wordCount(docPlainText(this.doc)),
+      ...(this.hunks.length ? { hunks: this.hunksJSON() } : {}),
     };
     await writeVersion(version);
     this.dirtySinceVersion = false;
     this.lastAutoVersion = Date.now();
-    const { doc: _doc, ...summary } = version;
-    return summary;
+    const { doc: _doc, hunks, ...summary } = version;
+    return hunks?.length ? { ...summary, pendingChanges: hunks.length } : summary;
   }
 
   async versions(): Promise<VersionSummary[]> {
@@ -379,10 +393,23 @@ export class LiveDocument {
     const version = await readVersion(this.id, versionId);
     if (!version) throw new Error("Version not found.");
     await this.saveVersion("Before restoring a version", "auto");
+    // Pending changes (Claude's and the user's suggestions) are kept in that version, so restoring it brings them back.
     const restored = loadDoc(version.doc);
     const tr = new Transform(this.doc);
     tr.replaceWith(0, this.doc.content.size, restored.content);
-    this.applyTransform(tr, { kind: "system", label: "restore" }, { hunks: [] });
+    const hunks = (version.hunks ?? []).flatMap((json) => {
+      try {
+        const hunk = hunkFromJSON(json, schema);
+        return hunk.to <= tr.doc.content.size ? [hunk] : [];
+      } catch {
+        return [];
+      }
+    });
+    if (!this.applyTransform(tr, { kind: "system", label: "restore" }, { hunks }) && hunks.length) {
+      this.hunks = hunks;
+      this.emit({ type: "hunks", version: this.version, hunks: this.hunksJSON() });
+      this.schedulePersist();
+    }
     return version;
   }
 
@@ -449,7 +476,7 @@ export class LiveDocument {
   }
 
   resetEvent(): HubEvent {
-    return { type: "reset", version: this.version, doc: this.doc.toJSON(), hunks: this.hunksJSON() };
+    return { type: "reset", epoch: this.epoch, version: this.version, doc: this.doc.toJSON(), hunks: this.hunksJSON() };
   }
 }
 

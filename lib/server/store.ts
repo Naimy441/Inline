@@ -29,9 +29,11 @@ export type StoredVersion = {
   title: string;
   doc: unknown;
   wordCount: number;
+  /** Changes that were still pending review when the version was saved; restored with it. */
+  hunks?: HunkJSON[];
 };
 
-export type VersionSummary = Omit<StoredVersion, "doc">;
+export type VersionSummary = Omit<StoredVersion, "doc" | "hunks"> & { pendingChanges?: number };
 
 export function dataDir() {
   return path.resolve(process.env.INLINE_DATA_DIR || path.join(/* turbopackIgnore: true */ process.cwd(), ".inline"));
@@ -128,7 +130,7 @@ export async function listVersions(documentId: string): Promise<VersionSummary[]
   const versions = await Promise.all(ids.map((id) => readVersion(documentId, id)));
   return versions
     .filter((version): version is StoredVersion => Boolean(version))
-    .map(({ doc: _doc, ...summary }) => summary)
+    .map(({ doc: _doc, hunks, ...summary }) => (hunks?.length ? { ...summary, pendingChanges: hunks.length } : summary))
     .sort((a, b) => b.createdAt - a.createdAt);
 }
 

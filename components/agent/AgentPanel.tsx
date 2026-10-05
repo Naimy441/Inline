@@ -49,12 +49,12 @@ export const AgentPanel = forwardRef<
   AgentPanelHandle,
   {
     documentId: string;
-    pendingChanges: number;
+    hunks: ReadonlyArray<{ id: string; turn?: string }>;
     onClose: () => void;
-    onReview: (action: "next" | "accept" | "reject") => void;
+    onReview: (action: "next" | "accept" | "reject", ids: string[]) => void;
     initialPrompt?: string | null;
   }
->(function AgentPanel({ documentId, pendingChanges, onClose, onReview, initialPrompt }, ref) {
+>(function AgentPanel({ documentId, hunks, onClose, onReview, initialPrompt }, ref) {
   const { status, defaults } = useAgentStatus();
   const [chatId, setChatId] = useState<string | null>(() => (typeof window === "undefined" ? null : readChatId(documentId)));
   const [session, setSession] = useState<ChatSession | null>(null);
@@ -225,7 +225,7 @@ export const AgentPanel = forwardRef<
           <Onboarding state={status.state} message={"message" in status ? status.message : ""} />
         ) : chat?.messages.length ? (
           <div className="messages">
-            <MessageList messages={chat.messages} pendingChanges={pendingChanges} onRetry={() => session?.retry()} onReview={onReview} />
+            <MessageList messages={chat.messages} hunks={hunks} onRetry={() => session?.retry()} onReview={onReview} />
             {chat.running && chat.status && <RunStatusLine status={chat.status} />}
           </div>
         ) : (

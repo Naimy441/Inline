@@ -139,6 +139,33 @@ describe("context sent with each message", () => {
     assert.match(String(blocks[4]!.text), /Attachment "old\.txt" is no longer available/);
     assert.equal(blocks[5]!.text, "Use these");
   });
+  test("Word files arrive as readable Markdown and SVG images as their source", async () => {
+    const { chat } = await newChat();
+    const { documentToDocx } = await import("@/lib/doc/docx");
+    const { markdownToDoc } = await import("@/lib/doc/markdown");
+    const { DEFAULT_SETTINGS } = await import("@/lib/doc/settings");
+    const docx = await documentToDocx(markdownToDoc("# Brief\n\nKeep it **short**."), { id: "x", title: "Brief", createdAt: 0, updatedAt: 0, lastOpenedAt: 0, trashedAt: null, settings: DEFAULT_SETTINGS, wordCount: 0, preview: "" }, async () => null);
+    await saveUpload("word1", "docx", docx);
+    await saveUpload("broken1", "docx", new TextEncoder().encode("not really a docx"));
+    await saveUpload("svg1", "svg", new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>'));
+    let blocks: Array<Record<string, unknown>> = [];
+    claude.script((turn) => {
+      blocks = turn.blocks;
+    });
+    await chat.send({
+      text: "Read these",
+      attachments: [
+        { id: "word1", name: "brief.docx", mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: docx.length, kind: "text" },
+        { id: "broken1", name: "bad.docx", mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: 17, kind: "text" },
+        { id: "svg1", name: "dot.svg", mime: "image/svg+xml", size: 60, kind: "image" },
+      ],
+    });
+    await idle(chat);
+    assert.deepEqual(blocks.map((block) => block.type), ["text", "text", "text", "text", "text"]);
+    assert.equal(blocks[1]!.text, '<attachment name="brief.docx">\n# Brief\n\nKeep it **short**.\n</attachment>');
+    assert.match(String(blocks[2]!.text), /couldn't be read/);
+    assert.match(String(blocks[3]!.text), /<circle r="4"\/>/);
+  });
 });
 
 describe("tool use", () => {
@@ -338,5 +365,56 @@ describe("Claude Code status probe", () => {
     claude.init = { account: {}, models: [] };
     const cached = await runtime.agentStatus();
     assert.equal(cached, first);
+  });
+});
+
+describe("reviewing one turn's changes", () => {
+  test("each turn's edits are tagged with that turn, so its card can't touch the user's suggestions or other turns", async () => {
+    const { doc, chat } = await newChat("# Trip {.title}\n\nWe leave on Monday.\n\nPack light.\n\nBring a map.");
+    claude.script(async (turn) => {
+      await turn.tool("mcp__inline__edit_document", { old_string: "Monday", new_string: "Tuesday" });
+      turn.say("Done.");
+    });
+    await chat.send({ text: "Change the day." });
+    await idle(chat);
+    const firstTurn = lastAssistant(chat).id;
+
+    claude.script(async (turn) => {
+      await turn.tool("mcp__inline__edit_document", { old_string: "Pack light.", new_string: "Pack very light." });
+      turn.say("Done.");
+    });
+    await chat.send({ text: "Stress packing light." });
+    await idle(chat);
+    const secondTurn = lastAssistant(chat).id;
+
+    // The user's own suggestion (suggesting mode) is pending too.
+    const { Transform } = await import("prosemirror-transform");
+    const { schema } = await import("@/lib/doc/schema");
+    const at = doc.doc.textContent.indexOf("Bring");
+    let pos = 0;
+    doc.doc.descendants((node, offset) => {
+      if (!pos && node.isText && node.text!.startsWith("Bring")) pos = offset;
+      return !pos;
+    });
+    assert.ok(at >= 0 && pos > 0);
+    const tr = new Transform(doc.doc).insert(pos, schema.text("Also: "));
+    doc.receiveClientSteps(doc.version, tr.steps.map((step) => step.toJSON()), "tab", { suggest: true });
+
+    const turns = doc.hunksJSON().map((hunk) => [hunk.insertedText, hunk.turn ?? null]);
+    assert.deepEqual(
+      turns.sort(),
+      [
+        ["Also: ", null],
+        ["very ", secondTurn],
+        ["Tuesday", firstTurn],
+      ].sort(),
+    );
+
+    // Undo just the second turn: the first turn's edit and the user's suggestion stay pending.
+    const secondIds = doc.hunks.filter((hunk) => hunk.turn === secondTurn).map((hunk) => hunk.id);
+    doc.review("reject", secondIds);
+    assert.match(markdownOf(doc), /Pack light\./);
+    assert.match(markdownOf(doc), /Tuesday/);
+    assert.equal(doc.hunks.length, 2);
   });
 });

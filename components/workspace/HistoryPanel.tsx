@@ -134,8 +134,14 @@ function VersionPreview({ session, version, onClose, onRestored }: { session: Do
               setRestoring(true);
               try {
                 await session.whenSaved();
+                const hadPending = session.ui.get().hunks.length > 0;
                 await post(`/api/documents/${session.id}/versions/${version.id}/restore`);
-                toast("Version restored. The previous state was saved to history.", { tone: "success" });
+                toast(
+                  hadPending
+                    ? "Version restored. The previous state, with its pending changes, was saved to history."
+                    : "Version restored. The previous state was saved to history.",
+                  { tone: "success" },
+                );
                 onRestored();
               } finally {
                 setRestoring(false);

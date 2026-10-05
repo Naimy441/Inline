@@ -122,6 +122,24 @@ export function Workspace({ documentId }: { documentId: string }) {
     if (meta) document.title = `${meta.title} · Inline`;
   }, [meta]);
 
+  // Edits that couldn't be merged after the server's copy changed (e.g. a server restart).
+  const unmerged = ui.unmerged;
+  useEffect(() => {
+    if (!unmerged) return;
+    toast(`${unmerged.steps === 1 ? "An edit" : "Some edits"} couldn't be merged with the server's copy. Save them as a new document?`, {
+      tone: "error",
+      duration: 30_000,
+      action: {
+        label: "Save copy",
+        run: () =>
+          void session
+            .recoverUnmerged()
+            .then((id) => id && toast("Saved your edits as a new document.", { action: { label: "Open", run: () => router.push(`/d/${id}`) } }))
+            .catch(() => toast("Couldn't save the recovered edits.", { tone: "error" })),
+      },
+    });
+  }, [unmerged, session, router]);
+
   const askClaude = useCallback(
     (prompt?: string) => {
       const selection: SelectionContext | null = session.selection();
@@ -447,12 +465,12 @@ export function Workspace({ documentId }: { documentId: string }) {
               <AgentPanel
                 ref={agentRef}
                 documentId={documentId}
-                pendingChanges={ui.hunks.length}
+                hunks={ui.hunks}
                 initialPrompt={initialAsk}
                 onClose={() => setPanel(null)}
-                onReview={(action) => {
-                  if (action === "next") session.gotoChange(1);
-                  else void session.review(action, "all");
+                onReview={(action, ids) => {
+                  if (action === "next") session.gotoChange(1, ids);
+                  else void session.review(action, ids);
                 }}
               />
             )}

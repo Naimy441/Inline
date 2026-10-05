@@ -11,7 +11,9 @@ type Context = { params: Promise<{ id: string }> };
 export const GET = route(async (request, context: Context) => {
   const doc = await routeDocument(context);
   const param = new URL(request.url).searchParams.get("version");
-  const version = param == null ? null : Number(param);
+  const epoch = new URL(request.url).searchParams.get("epoch");
+  // Versions from an earlier load of the document (before a server restart) mean nothing now.
+  const version = param == null || (epoch != null && epoch !== doc.epoch) ? null : Number(param);
   documentHub().activeDocumentId = doc.id;
   doc.touch();
   return sse(request, (send) => {
