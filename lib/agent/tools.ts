@@ -15,6 +15,7 @@ import {
   markdownLines,
   numberLines,
   searchLines,
+  textblockLines,
   textblockRanges,
   wordCount,
   writeDocument,
@@ -249,7 +250,8 @@ export const TOOLS = [
       const body = numberLines(lines, offset, limit);
       const end = Math.min(lines.length, offset + limit - 1);
       const more = end < lines.length ? `\n(Showing lines ${offset}-${end} of ${lines.length}. Pass offset to read further.)` : "";
-      const empty = lines.length === 1 && !lines[0] ? "\n(The document is empty.)" : "";
+      const first = doc.doc.firstChild;
+      const empty = doc.doc.childCount === 1 && first?.isTextblock && first.content.size === 0 ? "\n(The document is empty.)" : "";
       return ok(`${header(doc, lines.length)}\n${body}${more}${empty}`);
     },
   }),
@@ -385,7 +387,7 @@ export const TOOLS = [
           const level = node.type.name === "heading" ? Number(node.attrs.level) : node.type.name === "title" ? 0 : 1;
           current = { label: `${"  ".repeat(Math.max(0, level - 1))}${node.type.name === "heading" ? "#".repeat(level) : `[${node.type.name}]`} ${node.textContent}`, line: entry.startLine, words: 0 };
         } else if (current) {
-          current.words += wordCount(node.textContent);
+          current.words += wordCount(node.textBetween(0, node.content.size, " ", " "));
         }
       }
       flush();
@@ -579,13 +581,11 @@ export const TOOLS = [
       const selection = doc.selection;
       if (selection && selection.to > selection.from) {
         const text = doc.doc.textBetween(selection.from, selection.to, "\n");
-        const serialized = serializeDoc(doc.doc);
-        const lines = blockLines(serialized).filter((entry) => entry.block.pos + entry.block.node.nodeSize > selection.from && entry.block.pos < selection.to);
+        const lines = textblockLines(serializeDoc(doc.doc)).filter((entry) => entry.pos + entry.node.nodeSize > selection.from && entry.pos < selection.to);
         const range = lines.length ? `lines ${lines[0]!.startLine}-${lines[lines.length - 1]!.endLine}` : "";
         parts.push(`Selection (${range}):\n"""\n${text.slice(0, 4000)}${text.length > 4000 ? "\n…" : ""}\n"""`);
       } else if (selection) {
-        const serialized = serializeDoc(doc.doc);
-        const entry = blockLines(serialized).find((item) => item.block.pos <= selection.from && item.block.pos + item.block.node.nodeSize >= selection.from);
+        const entry = textblockLines(serializeDoc(doc.doc)).find((item) => item.pos <= selection.from && item.pos + item.node.nodeSize >= selection.from);
         parts.push(entry ? `Cursor is on line ${entry.startLine}; nothing is selected.` : "Nothing is selected.");
       } else {
         parts.push("The user has no active selection.");
@@ -614,10 +614,9 @@ export const TOOLS = [
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
       if (!doc.hunks.length) return ok("No pending changes.");
-      const serialized = serializeDoc(doc.doc);
-      const entries = blockLines(serialized);
+      const entries = textblockLines(serializeDoc(doc.doc));
       const rows = doc.hunksJSON().map((hunk) => {
-        const entry = entries.find((item) => item.block.pos + item.block.node.nodeSize > hunk.from);
+        const entry = entries.find((item) => item.pos + item.node.nodeSize > hunk.from);
         const author = isUserSuggestion(hunk) ? "suggested by the user" : "by Claude";
         return `- ${hunk.id} (line ${entry?.startLine ?? "?"}, ${author}): "${clip(hunk.deletedText)}" → "${clip(hunk.insertedText ?? "")}"`;
       });
@@ -908,6 +907,8 @@ export const WRITE_TOOL_NAMES = TOOLS.filter((tool) => tool.write).map((tool) =>
 export async function runTool(name: string, args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
   const tool = TOOLS.find((item) => item.name === name);
   if (!tool) return fail(`Unknown tool ${name}.`);
+  // Every write tool is refused in Ask mode, including ones that only touch comments or versions.
+  if (tool.write && ctx.readOnly) return fail("You are in Ask mode, so documents can't be changed. Describe the change instead, or ask the user to switch to Agent mode.");
   const parsed = z.object(tool.shape).safeParse(args);
   if (!parsed.success) return fail(`Invalid arguments: ${parsed.error.issues.map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`).join("; ")}`);
   const run = wrapErrors(tool.handler as unknown as (...args: never[]) => Promise<ToolResult>);
