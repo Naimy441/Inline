@@ -362,3 +362,127 @@ export function selectedText(state: EditorState) {
   const { from, to } = state.selection;
   return state.doc.textBetween(from, to, "\n");
 }
+
+export type CaseKind = "lower" | "upper" | "title" | "sentence";
+
+const SMALL_WORDS = new Set(["a", "an", "and", "as", "at", "but", "by", "for", "in", "nor", "of", "on", "or", "the", "to", "up", "via"]);
+
+function recase(text: string, kind: CaseKind, atStart: boolean) {
+  if (kind === "lower") return text.toLowerCase();
+  if (kind === "upper") return text.toUpperCase();
+  if (kind === "sentence") {
+    let capitalize = atStart;
+    return text.toLowerCase().replace(/[\p{L}\p{N}]|[.!?]/gu, (char) => {
+      if (/[.!?]/.test(char)) {
+        capitalize = true;
+        return char;
+      }
+      if (capitalize) {
+        capitalize = false;
+        return char.toUpperCase();
+      }
+      return char;
+    });
+  }
+  let first = atStart;
+  return text.toLowerCase().replace(/[\p{L}\p{N}][\p{L}\p{N}'’]*/gu, (word) => {
+    const keepSmall = !first && SMALL_WORDS.has(word);
+    first = false;
+    return keepSmall ? word : word[0]!.toUpperCase() + word.slice(1);
+  });
+}
+
+/** Change the capitalization of the selected text, keeping its formatting. */
+export function changeCase(kind: CaseKind): Command {
+  return (state, dispatch) => {
+    const { from, to, empty } = state.selection;
+    if (empty) return false;
+    if (!dispatch) return true;
+    const tr = state.tr;
+    const edits: Array<{ from: number; to: number; text: string; node: PMNode }> = [];
+    let previousBlock = -1;
+    state.doc.nodesBetween(from, to, (node, pos, parent) => {
+      if (!node.isText || !parent) return true;
+      const start = Math.max(from, pos);
+      const end = Math.min(to, pos + node.nodeSize);
+      const blockStart = state.doc.resolve(start).start();
+      const atStart = blockStart !== previousBlock && state.doc.textBetween(blockStart, start).trim() === "";
+      previousBlock = blockStart;
+      const original = node.text!.slice(start - pos, end - pos);
+      const text = recase(original, kind, atStart || kind === "title");
+      if (text !== original) edits.push({ from: start, to: end, text, node });
+      return false;
+    });
+    // Apply from the end so earlier positions stay valid even if a length changes (ß → SS).
+    for (const edit of edits.reverse()) tr.replaceWith(edit.from, edit.to, schema.text(edit.text, edit.node.marks));
+    if (!tr.docChanged) return false;
+    tr.setSelection(TextSelection.create(tr.doc, from, tr.mapping.map(to)));
+    dispatch(tr);
+    return true;
+  };
+}
+
+/** Insert text at the cursor (special characters, dates). */
+export function insertText(text: string): Command {
+  return (state, dispatch) => {
+    dispatch?.(state.tr.insertText(text).scrollIntoView());
+    return true;
+  };
+}
+
+/**
+ * Insert a table of contents: a list of the document's headings, each linking
+ * to its heading by block id (#id), indented by level.
+ */
+export const insertTableOfContents: Command = (state, dispatch) => {
+  const headings: Array<{ level: number; text: string; id: string | null }> = [];
+  state.doc.forEach((node) => {
+    if (node.type === nodes.heading && node.textContent.trim() && (node.attrs.level as number) <= 3) {
+      headings.push({ level: node.attrs.level as number, text: node.textContent.trim(), id: (node.attrs.id as string | null) ?? null });
+    }
+  });
+  if (!headings.length) return false;
+  if (!dispatch) return true;
+  const top = Math.min(...headings.map((item) => item.level));
+  const paragraphs = headings.map((item) =>
+    nodes.paragraph!.create(
+      { indent: Math.min(MAX_INDENT, item.level - top) },
+      schema.text(item.text, item.id ? [marks.link!.create({ href: `#${item.id}` })] : []),
+    ),
+  );
+  const heading = nodes.paragraph!.create(null, schema.text("Contents", [marks.bold!.create()]));
+  const { $from } = state.selection;
+  const depth = Math.min(1, $from.depth);
+  const at = depth ? $from.before(depth) : state.selection.from;
+  const tr = state.tr.insert(at, [heading, ...paragraphs]);
+  dispatch(tr.scrollIntoView());
+  return true;
+};
+
+/** Position of the top-level block with this id, if it still exists. */
+export function blockPosById(doc: PMNode, id: string): number | null {
+  let found: number | null = null;
+  doc.descendants((node, pos) => {
+    if (found != null) return false;
+    if (node.attrs.id === id) {
+      found = pos;
+      return false;
+    }
+    return node.isBlock && !node.isTextblock;
+  });
+  return found;
+}
+
+/** Follow a link: in-document anchors (#block-id) move the cursor there, others open in a new tab. */
+export function followLink(href: string): Command {
+  return (state, dispatch) => {
+    if (href.startsWith("#")) {
+      const pos = blockPosById(state.doc, href.slice(1));
+      if (pos == null) return false;
+      dispatch?.(state.tr.setSelection(TextSelection.near(state.doc.resolve(pos + 1))).scrollIntoView());
+      return true;
+    }
+    if (dispatch) window.open(href, "_blank", "noopener,noreferrer");
+    return true;
+  };
+}

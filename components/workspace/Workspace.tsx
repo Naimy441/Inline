@@ -5,11 +5,11 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { SelectionContext } from "@/lib/agent/types";
 import { patch, post, uploadFile } from "@/lib/client/api";
-import { DocumentSession, type ClientCommand } from "@/lib/client/documentSession";
+import { DocumentSession, geometryFor, type ClientCommand } from "@/lib/client/documentSession";
 import { useTheme } from "@/lib/client/theme";
 import { docPlainText, wordCount } from "@/lib/doc/editing";
 import type { DocumentMeta } from "@/lib/doc/settings";
-import { insertImage } from "@/lib/editor/commands";
+import { insertImage, insertText } from "@/lib/editor/commands";
 import { AgentPanel, type AgentPanelHandle } from "@/components/agent/AgentPanel";
 import { IconButton } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
@@ -26,6 +26,8 @@ import { PageSetupDialog } from "@/components/workspace/PageSetupDialog";
 import { ReviewBar } from "@/components/workspace/ReviewBar";
 import { SelectionBubble } from "@/components/workspace/SelectionBubble";
 import { ShortcutsDialog } from "@/components/workspace/ShortcutsDialog";
+import { ContextMenu } from "@/components/workspace/ContextMenu";
+import { SpecialCharactersDialog } from "@/components/workspace/SpecialCharactersDialog";
 import { Toolbar } from "@/components/workspace/Toolbar";
 
 type Panel = "agent" | "comments" | "history" | null;
@@ -34,6 +36,7 @@ const PANEL_KEY = "inline-panel";
 const PANEL_WIDTH_KEY = "inline-panel-width";
 const ZOOM_KEY = "inline-zoom";
 const OUTLINE_KEY = "inline-outline";
+const FOCUS_KEY = "inline-focus-mode";
 
 function readStored<T>(key: string, fallback: T, parse: (raw: string) => T | null): T {
   try {
@@ -72,12 +75,15 @@ export function Workspace({ documentId }: { documentId: string }) {
   const [setup, setSetup] = useState<{ tab: "page" | "text" | "header" } | null>(null);
   const [shortcuts, setShortcuts] = useState(false);
   const [counting, setCounting] = useState(false);
+  const [charmap, setCharmap] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
 
   useEffect(() => {
     setPanelState(readStored<Panel>(PANEL_KEY, "agent", (raw) => (raw === "none" ? null : (["agent", "comments", "history"].includes(raw) ? (raw as Panel) : null))));
     setPanelWidth(readStored(PANEL_WIDTH_KEY, 420, (raw) => (Number(raw) >= 320 ? Math.min(760, Number(raw)) : null)));
     setZoomState(readStored(ZOOM_KEY, 1, (raw) => (Number(raw) >= 0.5 && Number(raw) <= 2 ? Number(raw) : null)));
     setOutline(readStored(OUTLINE_KEY, false, (raw) => raw === "1"));
+    setFocusMode(readStored(FOCUS_KEY, false, (raw) => raw === "1"));
   }, []);
 
   const setPanel = useCallback((next: Panel | ((current: Panel) => Panel)) => {
@@ -251,6 +257,30 @@ export function Workspace({ documentId }: { documentId: string }) {
     toggleAgent: () => setPanel((current) => (current === "agent" ? null : "agent")),
     shortcuts: () => setShortcuts(true),
     wordCount: () => setCounting(true),
+    specialCharacters: () => setCharmap(true),
+    notice: (message) => toast(message),
+    paste: (plain) => void session.paste(plain).catch((error: Error) => toast(error.message, { tone: "error" })),
+    clipboard: (action) => {
+      if (!session.clipboard(action)) toast(`Select some text to ${action}.`);
+    },
+    fitWidth: () => {
+      const canvas = document.querySelector<HTMLElement>(".canvas");
+      if (!canvas) return;
+      const width = geometryFor(meta).pageWidth + 80;
+      setZoom(Math.max(0.5, Math.min(2, Math.floor((canvas.clientWidth / width) * 20) / 20)));
+    },
+    fullScreen: () => {
+      if (document.fullscreenElement) void document.exitFullscreen();
+      else void document.documentElement.requestFullscreen?.().catch(() => toast("Full screen isn't available here."));
+    },
+    focusMode,
+    toggleFocusMode: () => {
+      const next = !focusMode;
+      setFocusMode(next);
+      store(FOCUS_KEY, next ? "1" : "0");
+      if (next) setPanel((current) => (current === "agent" ? null : current));
+      toast(next ? "Focus mode on: Claude is hidden until you turn it off in View." : "Focus mode off.");
+    },
     ask: (prompt) => {
       setPanel("agent");
       requestAnimationFrame(() => agentRef.current?.ask(null, prompt));
@@ -274,7 +304,7 @@ export function Workspace({ documentId }: { documentId: string }) {
   const openComments = ui.comments.filter((comment) => !comment.resolved).length;
 
   return (
-    <div className={`workspace${panel ? " has-panel" : ""}`} style={{ ["--panel-width" as string]: `${panelWidth}px` }}>
+    <div className={`workspace${panel ? " has-panel" : ""}${focusMode ? " is-focus" : ""}`} style={{ ["--panel-width" as string]: `${panelWidth}px` }}>
       <header className="titlebar">
         <button type="button" className="icon-btn icon-btn-md" aria-label="All documents" data-tip="All documents" onClick={() => router.push("/")}>
           <ArrowLeft size={17} />
@@ -434,13 +464,21 @@ export function Workspace({ documentId }: { documentId: string }) {
           Shortcuts
         </button>
         <span className="status-item">{Math.round(zoom * 100)}%</span>
-        <button type="button" className={`status-item${panel === "agent" ? " is-active" : ""}`} onClick={() => setPanel((current) => (current === "agent" ? null : "agent"))}>
+        <button type="button" className={`status-item status-claude${panel === "agent" ? " is-active" : ""}`} onClick={() => setPanel((current) => (current === "agent" ? null : "agent"))}>
           <PanelRight size={13} /> Claude
         </button>
       </footer>
 
       <PageSetupDialog open={Boolean(setup)} initialTab={setup?.tab} session={session} settings={meta?.settings} onClose={() => setSetup(null)} />
       <ShortcutsDialog open={shortcuts} onClose={() => setShortcuts(false)} />
+      <SpecialCharactersDialog
+        open={charmap}
+        onClose={() => setCharmap(false)}
+        onInsert={(char) => {
+          session.run(insertText(char));
+        }}
+      />
+      <ContextMenu session={session} hideClaude={focusMode} onAsk={() => askClaude()} onComment={startComment} onLink={() => setLinkEditing(true)} />
       <WordCountDialog open={counting} onClose={() => setCounting(false)} session={session} />
       <Toaster />
     </div>

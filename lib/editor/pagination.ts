@@ -1,6 +1,7 @@
 import type { Node as PMNode } from "prosemirror-model";
 import { Plugin, PluginKey, type EditorState } from "prosemirror-state";
 import { Decoration, DecorationSet, type EditorView } from "prosemirror-view";
+import { syncDomSelection } from "@/lib/editor/domSync";
 
 /**
  * Page layout for a single continuous ProseMirror document.
@@ -78,6 +79,7 @@ export function paginationPlugin(geometry: () => PageGeometry, onLayout?: (pages
         if (frame) return;
         frame = requestAnimationFrame(() => {
           frame = 0;
+          syncDomSelection(view);
           const result = measure(view, geometry());
           if (!result) return;
           const current = pageKey.getState(view.state)!;

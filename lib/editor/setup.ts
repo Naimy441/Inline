@@ -15,6 +15,7 @@ import { parseMarkdown } from "@/lib/doc/markdown";
 import { schema } from "@/lib/doc/schema";
 import {
   clearFormatting,
+  followLink,
   indent,
   insertPageBreak,
   outdent,
@@ -178,6 +179,14 @@ function markdownPastePlugin() {
         } catch {
           return null as unknown as Slice;
         }
+      },
+      handleClick(view, pos, event) {
+        // Ctrl/⌘-click follows links, as in other editors.
+        if (!(event.metaKey || event.ctrlKey)) return false;
+        const link = schema.marks.link!.isInSet(view.state.doc.resolve(pos).marks());
+        if (!link) return false;
+        event.preventDefault();
+        return followLink(link.attrs.href as string)(view.state, view.dispatch);
       },
       handleClickOn(view, _pos, node, nodePos, event) {
         // Task checkboxes are drawn with CSS in the left gutter of the item.

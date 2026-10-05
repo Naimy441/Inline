@@ -1,11 +1,14 @@
 "use client";
 
 import { redo, undo } from "prosemirror-history";
+import { AllSelection } from "prosemirror-state";
 import { createRef, useRef, useState, type RefObject } from "react";
 import type { DocumentSession } from "@/lib/client/documentSession";
 import {
+  changeCase,
   clearFormatting,
   insertHorizontalRule,
+  insertTableOfContents,
   insertPageBreak,
   insertTable,
   setAlign,
@@ -39,6 +42,14 @@ export type MenuActions = {
   shortcuts: () => void;
   wordCount: () => void;
   ask: (prompt: string) => void;
+  specialCharacters: () => void;
+  paste: (plain: boolean) => void;
+  clipboard: (action: "cut" | "copy") => void;
+  fitWidth: () => void;
+  fullScreen: () => void;
+  focusMode: boolean;
+  toggleFocusMode: () => void;
+  notice: (message: string) => void;
 };
 
 export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSession; actions: MenuActions; zoom: number; hunks: number }) {
@@ -75,6 +86,21 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
       { label: "Undo", shortcut: `${mod}Z`, onSelect: () => run(undo) },
       { label: "Redo", shortcut: `${mod}⇧Z`, onSelect: () => run(redo) },
       { kind: "separator" },
+      { label: "Cut", shortcut: `${mod}X`, onSelect: () => actions.clipboard("cut") },
+      { label: "Copy", shortcut: `${mod}C`, onSelect: () => actions.clipboard("copy") },
+      { label: "Paste", shortcut: `${mod}V`, onSelect: () => actions.paste(false) },
+      { label: "Paste without formatting", shortcut: `${mod}⇧V`, onSelect: () => actions.paste(true) },
+      {
+        label: "Select all",
+        shortcut: `${mod}A`,
+        onSelect: () => {
+          const view = session.view;
+          if (!view) return;
+          session.dispatch(view.state.tr.setSelection(new AllSelection(view.state.doc)));
+          view.focus();
+        },
+      },
+      { kind: "separator" },
       { label: "Find", shortcut: `${mod}F`, onSelect: () => actions.find(false) },
       { label: "Find and replace", shortcut: `${mod}H`, onSelect: () => actions.find(true) },
       { kind: "separator" },
@@ -86,10 +112,13 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
       { label: "Zoom in", onSelect: () => actions.zoom(Math.min(2, Math.round((zoom + 0.1) * 10) / 10)) },
       { label: "Zoom out", onSelect: () => actions.zoom(Math.max(0.5, Math.round((zoom - 0.1) * 10) / 10)) },
       { label: "Actual size", checked: zoom === 1, onSelect: () => actions.zoom(1) },
+      { label: "Fit to width", onSelect: actions.fitWidth },
       { kind: "separator" },
       { label: "Outline", onSelect: actions.toggleOutline },
-      { label: "Claude panel", shortcut: `${mod}J`, onSelect: actions.toggleAgent },
+      ...(actions.focusMode ? [] : [{ label: "Claude panel", shortcut: `${mod}J`, onSelect: actions.toggleAgent }]),
+      { label: "Focus mode", hint: "Hide Claude while you write", checked: actions.focusMode, onSelect: actions.toggleFocusMode },
       { label: "Dark theme", onSelect: actions.toggleTheme },
+      { label: "Full screen", onSelect: actions.fullScreen },
     ],
     Insert: [
       { label: "Image…", onSelect: actions.image },
@@ -99,6 +128,9 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
       },
       { label: "Link", shortcut: `${mod}K`, onSelect: actions.link },
       { label: "Comment", shortcut: `${mod}⌥M`, onSelect: actions.comment },
+      { kind: "separator" },
+      { label: "Special characters…", onSelect: actions.specialCharacters },
+      { label: "Table of contents", onSelect: () => !run(insertTableOfContents) && actions.notice("Add some headings first; the table of contents lists them.") },
       { kind: "separator" },
       { label: "Horizontal line", onSelect: () => run(insertHorizontalRule) },
       { label: "Page break", shortcut: `${mod}⏎`, onSelect: () => run(insertPageBreak) },
@@ -124,6 +156,16 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
           { label: "Superscript", shortcut: `${mod}.`, onSelect: () => run(toggle("superscript")) },
           { label: "Subscript", shortcut: `${mod},`, onSelect: () => run(toggle("subscript")) },
           { label: "Code", shortcut: `${mod}E`, onSelect: () => run(toggle("code")) },
+          { kind: "separator" },
+          {
+            label: "Capitalization",
+            submenu: [
+              { label: "lowercase", onSelect: () => run(changeCase("lower")) },
+              { label: "UPPERCASE", onSelect: () => run(changeCase("upper")) },
+              { label: "Title Case", onSelect: () => run(changeCase("title")) },
+              { label: "Sentence case", onSelect: () => run(changeCase("sentence")) },
+            ],
+          },
         ],
       },
       {
@@ -181,10 +223,14 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
     ],
     Tools: [
       { label: "Word count", onSelect: actions.wordCount },
-      { kind: "separator" },
-      { label: "Ask Claude to proofread", onSelect: () => actions.ask("Proofread the document and fix spelling, grammar and punctuation. Don't change the meaning or voice.") },
-      { label: "Ask Claude for feedback", onSelect: () => actions.ask("Read the document and give me your three most important suggestions to improve it. Don't edit yet.") },
-      { label: "Check for AI-sounding writing", onSelect: () => actions.ask("Run analyze_writing on the document and point out any passages that sound generic or AI-written. Suggest fixes but don't edit yet.") },
+      ...(actions.focusMode
+        ? []
+        : ([
+            { kind: "separator" },
+            { label: "Ask Claude to proofread", onSelect: () => actions.ask("Proofread the document and fix spelling, grammar and punctuation. Don't change the meaning or voice.") },
+            { label: "Ask Claude for feedback", onSelect: () => actions.ask("Read the document and give me your three most important suggestions to improve it. Don't edit yet.") },
+            { label: "Check for AI-sounding writing", onSelect: () => actions.ask("Run analyze_writing on the document and point out any passages that sound generic or AI-written. Suggest fixes but don't edit yet.") },
+          ] as MenuItem[])),
     ],
     Help: [{ label: "Keyboard shortcuts", shortcut: `${mod}/`, onSelect: actions.shortcuts }],
   };

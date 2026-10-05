@@ -10,6 +10,7 @@ import { schema } from "@/lib/doc/schema";
 import { pageSize, type DocComment, type DocumentMeta } from "@/lib/doc/settings";
 import { api, ApiError, post, Store } from "@/lib/client/api";
 import { setCommentState } from "@/lib/editor/comments";
+import { syncDomSelection } from "@/lib/editor/domSync";
 import { pageCount, relayout, type PageGeometry } from "@/lib/editor/pagination";
 import { setPresence } from "@/lib/editor/presence";
 import { gotoHunk, reviewHunkAtCursor, setHunks } from "@/lib/editor/review";
@@ -238,7 +239,13 @@ export class DocumentSession {
   }
 
   private keyBindings(): Record<string, Command> {
-    const delegate = (name: "link" | "find" | "replace" | "comment" | "askClaude"): Command => () => this.callbacks.onKeyCommand?.(name) ?? false;
+    // A shortcut pressed right after Shift+End can arrive before the browser's
+    // selectionchange, so read the DOM selection first or the command sees an
+    // empty range.
+    const delegate = (name: "link" | "find" | "replace" | "comment" | "askClaude"): Command => () => {
+      if (this.view) syncDomSelection(this.view);
+      return this.callbacks.onKeyCommand?.(name) ?? false;
+    };
     return {
       "Mod-k": delegate("link"),
       "Mod-h": delegate("replace"),
@@ -384,6 +391,7 @@ export class DocumentSession {
   private handleEvent(event: ServerEvent) {
     const view = this.view;
     if (!view) return;
+    syncDomSelection(view);
     switch (event.type) {
       case "snapshot":
         this.replaceState(event.snapshot);
@@ -483,6 +491,36 @@ export class DocumentSession {
   }
 
   // --- actions ------------------------------------------------------------------------------
+
+  /** Cut or copy the selection through the browser, so rich formatting goes to the clipboard. */
+  clipboard(action: "cut" | "copy") {
+    const view = this.view;
+    if (!view || view.state.selection.empty) return false;
+    view.focus();
+    return document.execCommand(action);
+  }
+
+  /** Paste from the system clipboard; `plain` drops formatting. */
+  async paste(plain = false) {
+    const view = this.view;
+    if (!view) return;
+    view.focus();
+    try {
+      if (!plain && navigator.clipboard.read) {
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+          if (item.types.includes("text/html")) {
+            view.pasteHTML(await (await item.getType("text/html")).text());
+            return;
+          }
+        }
+      }
+      const text = await navigator.clipboard.readText();
+      if (text) view.pasteText(text);
+    } catch {
+      throw new Error(`Your browser blocked access to the clipboard. Use ${/Mac|iP(hone|[oa]d)/.test(navigator.platform) ? "⌘" : "Ctrl+"}${plain ? "Shift+" : ""}V instead.`);
+    }
+  }
 
   run(command: Command) {
     const view = this.view;

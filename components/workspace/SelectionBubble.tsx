@@ -5,7 +5,7 @@ import { NodeSelection, type EditorState } from "prosemirror-state";
 import { useEffect, useRef, useState } from "react";
 import type { DocumentSession } from "@/lib/client/documentSession";
 import { schema } from "@/lib/doc/schema";
-import { linkAt, markActive, setLink, toggle } from "@/lib/editor/commands";
+import { followLink, linkAt, markActive, setLink, toggle } from "@/lib/editor/commands";
 
 const mod = typeof navigator !== "undefined" && /Mac|iP(hone|[oa]d)/.test(navigator.platform) ? "⌘" : "Ctrl+";
 
@@ -130,7 +130,17 @@ export function SelectionBubble({
   if (showLink && link) {
     return (
       <div className={`bubble${above ? " is-above" : ""}`} style={style} onMouseDown={(event) => event.preventDefault()}>
-        <a className="bubble-url" href={link.href} target="_blank" rel="noopener noreferrer">
+        <a
+          className="bubble-url"
+          href={link.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(event) => {
+            if (!link.href.startsWith("#")) return;
+            event.preventDefault();
+            session.run(followLink(link.href));
+          }}
+        >
           <ExternalLink size={13} /> {link.href.replace(/^https?:\/\//, "").slice(0, 48)}
         </a>
         <span className="bubble-sep" />

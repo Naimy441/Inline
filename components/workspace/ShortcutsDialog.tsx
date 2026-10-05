@@ -26,6 +26,8 @@ const GROUPS: Array<[string, Array<[string, string]>]> = [
       ["Inline code", `${mod} E`],
       ["Superscript / subscript", `${mod} . / ,`],
       ["Link", `${mod} K`],
+      ["Open link", `${mod} click`],
+      ["Paste without formatting", `${mod} ⇧ V`],
       ["Clear formatting", `${mod} \\`],
     ],
   ],

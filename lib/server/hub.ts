@@ -9,6 +9,7 @@ import {
   DEFAULT_SETTINGS,
   cleanTitle,
   normalizeSettings,
+  titleFromText,
   patchSettings,
   type CommentAuthor,
   type DocComment,
@@ -242,7 +243,10 @@ export class LiveDocument {
 
   updateMeta(patch: { title?: string; settings?: unknown }) {
     const next = { ...this.meta };
-    if (patch.title !== undefined) next.title = cleanTitle(patch.title);
+    if (patch.title !== undefined) {
+      next.title = cleanTitle(patch.title);
+      next.autoTitle = false;
+    }
     if (patch.settings !== undefined) next.settings = patchSettings(this.meta.settings, patch.settings);
     next.updatedAt = Date.now();
     this.meta = next;
@@ -395,6 +399,22 @@ export class LiveDocument {
     if (this.deleted) return;
     const text = docPlainText(this.doc);
     this.meta = { ...this.meta, wordCount: wordCount(text), preview: text.replace(/\s+/g, " ").trim().slice(0, 240) };
+    if (this.meta.autoTitle) {
+      let firstLine = "";
+      this.doc.descendants((node) => {
+        if (firstLine) return false;
+        if (node.isTextblock) {
+          firstLine = node.textContent.trim();
+          return false;
+        }
+        return true;
+      });
+      const title = titleFromText(firstLine);
+      if (title && title !== this.meta.title) {
+        this.meta = { ...this.meta, title };
+        this.emit({ type: "meta", meta: this.meta });
+      }
+    }
     await writeDocumentFile(this.toFile());
     if (this.dirtySinceVersion && Date.now() - this.lastAutoVersion > AUTO_VERSION_INTERVAL_MS) {
       await this.saveVersion("Autosave", "auto");
@@ -487,6 +507,7 @@ class DocumentHub {
     const meta: DocumentMeta = {
       id: newId(12),
       title: cleanTitle(input.title),
+      autoTitle: !input.title || /^untitled\b/i.test(input.title.trim()),
       createdAt: now,
       updatedAt: now,
       lastOpenedAt: now,
@@ -563,6 +584,7 @@ function normalizeFile(file: StoredDocumentFile): StoredDocumentFile {
       settings: normalizeSettings(meta.settings),
       wordCount: meta.wordCount ?? 0,
       preview: meta.preview ?? "",
+      autoTitle: meta.autoTitle ?? false,
     },
     doc: file.doc,
     comments: Array.isArray(file.comments) ? file.comments : [],

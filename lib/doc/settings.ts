@@ -64,6 +64,8 @@ export type DocumentMeta = {
   settings: DocumentSettings;
   wordCount: number;
   preview: string;
+  /** True until someone names the document; meanwhile the title follows its first line, like Google Docs. */
+  autoTitle?: boolean;
 };
 
 export type CommentReply = { id: string; author: CommentAuthor; body: string; createdAt: number };
@@ -191,6 +193,16 @@ export function cleanTitle(value: unknown) {
   if (typeof value !== "string") return "Untitled document";
   const title = value.replace(/\s+/g, " ").trim().slice(0, 200);
   return title || "Untitled document";
+}
+
+/** A title from the document's first non-empty line, cut at a word boundary. */
+export function titleFromText(firstLine: string) {
+  const line = firstLine.replace(/\s+/g, " ").trim();
+  if (!line) return null;
+  if (line.length <= 80) return line;
+  const cut = line.slice(0, 80);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > 40 ? cut.slice(0, space) : cut).replace(/[\s,;:.-]+$/, "")}…`;
 }
 
 export function fillHeaderTokens(text: string, context: { page: number; pages: number; title: string; date?: Date }) {
