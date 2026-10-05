@@ -53,32 +53,49 @@ export type PageMeasurer = {
 
 const PX_TO_PT = 0.75;
 
-/** UI that sits inside the document but is not part of what gets printed. */
-const SKIP = [
-  ".papers",
-  ".paper-chrome-probes",
-  ".paper-chrome-bar",
-  ".paper-chrome-hit",
-  ".manual-page-break",
-  ".suggestion-del",
-  ".img-handle",
-  ".page-break",
-  ".page-push",
-  "[data-caret-mark]",
-  "script",
-  "style",
-  "template",
-].join(",");
+/**
+ * Where the pieces of the paginated editor live in the DOM (see
+ * components/workspace/PageCanvas.tsx and the editor decorations).
+ */
+export type SnapshotLayout = {
+  /** One element per printed page, in order; their boxes define the PDF pages. */
+  pages: string;
+  /** The element whose text color is the theme's default ink (printed black). */
+  ink: string;
+  /** UI inside the page area that is not part of what gets printed. */
+  skip: string;
+  /** Tints that are editor state (review, comments, find), not document formatting. */
+  noBackground: string;
+};
 
-/** Review and selection tints that are editor state, not document formatting. */
-const NO_BACKGROUND = ".suggestion-add, .agent-edit, .comment-mark, .grammar-flash, .locked-region";
+export const EDITOR_LAYOUT: SnapshotLayout = {
+  pages: ".sheet",
+  ink: ".doc-content",
+  skip: [
+    ".page-gap",
+    ".page-break",
+    ".review-delete",
+    ".review-controls",
+    ".agent-caret",
+    ".agent-caret-flag",
+    ".np-mark",
+    ".ProseMirror-gapcursor",
+    ".ProseMirror-separator",
+    ".ProseMirror-trailingBreak",
+    ".column-resize-handle",
+    "script",
+    "style",
+    "template",
+  ].join(","),
+  noBackground: [".sheet", ".page-content", ".doc-content", ".review-insert", ".review-format", ".comment-hl", ".find-match", ".agent-range", ".np-space"].join(","),
+};
 
 type Placed = { page: number; x: number; y: number; width: number; height: number };
 type Inherited = { underline: boolean; strike: boolean };
 type Marker = { text: string; right: number; style: SnapshotStyle };
 
-export function snapshotPages(root: HTMLElement, title: string, measure: PageMeasurer = domMeasurer()): PdfDocumentModel {
-  const papers = [...root.querySelectorAll<HTMLElement>(".papers > .paper")];
+export function snapshotPages(root: HTMLElement, title: string, measure: PageMeasurer = domMeasurer(), layout: SnapshotLayout = EDITOR_LAYOUT): PdfDocumentModel {
+  const papers = [...root.querySelectorAll<HTMLElement>(layout.pages)];
   if (!papers.length) throw new Error("No pages to export.");
 
   const paperBoxes = papers.map((paper) => measure.box(paper));
@@ -89,7 +106,7 @@ export function snapshotPages(root: HTMLElement, title: string, measure: PageMea
     return { width: width * PX_TO_PT, height: height * PX_TO_PT, items: [] };
   });
 
-  const editor = root.querySelector(".editor");
+  const editor = root.querySelector(layout.ink);
   const ink = editor ? parseColor(measure.style(editor).color) : null;
 
   const pageAt = (centerY: number) => {
@@ -202,7 +219,7 @@ export function snapshotPages(root: HTMLElement, title: string, measure: PageMea
   };
 
   const paintBox = (el: HTMLElement, style: SnapshotStyle) => {
-    if (!el.matches(NO_BACKGROUND)) {
+    if (!el.matches(layout.noBackground)) {
       const fill = parseColor(el.style?.getPropertyValue("--doc-hl") || style.backgroundColor);
       if (fill && fill.alpha > 0) {
         for (const box of measure.boxes(el)) {
@@ -235,8 +252,33 @@ export function snapshotPages(root: HTMLElement, title: string, measure: PageMea
     }
   };
 
+  /** Checklist boxes are drawn with CSS (::before), so draw them here: 13px, 22px left of the item. */
+  const checkbox = (li: HTMLElement, style: SnapshotStyle) => {
+    const box = measure.box(li);
+    const em = cssPx(style.fontSize) * scale;
+    const side = 13 * scale;
+    const at = place({ left: box.left - 22 * scale, top: box.top + 0.2 * em, width: side, height: side });
+    const checked = li.getAttribute("data-checked") === "true";
+    const color: RGB = checked ? [0.102, 0.451, 0.91] : [0.502, 0.525, 0.545];
+    if (checked) add(at.page, { kind: "rect", x: at.x, y: at.y, width: at.width, height: at.height, fill: color });
+    const edges: Array<[number, number, number, number]> = [
+      [at.x, at.y, at.x + at.width, at.y],
+      [at.x + at.width, at.y, at.x + at.width, at.y + at.height],
+      [at.x + at.width, at.y + at.height, at.x, at.y + at.height],
+      [at.x, at.y + at.height, at.x, at.y],
+    ];
+    for (const [x1, y1, x2, y2] of edges) add(at.page, { kind: "line", x1, y1, x2, y2, width: 1.1, color });
+    if (checked) {
+      const w = at.width;
+      const tick = (x1: number, y1: number, x2: number, y2: number) =>
+        add(at.page, { kind: "line", x1: at.x + x1 * w, y1: at.y + y1 * w, x2: at.x + x2 * w, y2: at.y + y2 * w, width: 1.3, color: [1, 1, 1] });
+      tick(0.22, 0.52, 0.42, 0.72);
+      tick(0.42, 0.72, 0.8, 0.28);
+    }
+  };
+
   const walk = (el: HTMLElement, decoration: Inherited) => {
-    if (el.matches(SKIP)) return;
+    if (el.matches(layout.skip)) return;
     const style = measure.style(el);
     if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") return;
 
@@ -288,11 +330,13 @@ export function snapshotPages(root: HTMLElement, title: string, measure: PageMea
       }
     }
 
+    if (el.tagName === "LI" && el.classList.contains("task-item")) checkbox(el, style);
+
     if (el.tagName === "LI") {
       const text = markerText(el, style);
       const box = measure.box(el);
       const em = cssPx(style.fontSize) * scale;
-      marker = text ? { text, right: box.left - (el.parentElement?.classList.contains("dash-list") ? 0.6 * em : 0.3 * em), style } : null;
+      marker = text ? { text, right: box.left - 0.3 * em, style } : null;
     }
 
     for (const child of el.childNodes) {
@@ -310,7 +354,7 @@ export function snapshotPages(root: HTMLElement, title: string, measure: PageMea
 
 function markerText(li: HTMLElement, style: SnapshotStyle) {
   const list = li.parentElement;
-  if (list?.classList.contains("dash-list")) return "\u2013";
+  if (li.classList.contains("task-item")) return "";
   const type = style.listStyleType || (list?.tagName === "OL" ? "decimal" : "disc");
   if (type === "none") return "";
   if (type === "disc" || type === "square") return "\u2022";

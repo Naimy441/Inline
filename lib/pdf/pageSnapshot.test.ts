@@ -93,43 +93,46 @@ function fakeMeasurer(): PageMeasurer {
   };
 }
 
-// Two Letter pages (816 x 1056 CSS px) at 50% zoom, 12px apart, starting at (100, 50).
+// Two Letter pages (816 x 1056 CSS px) at 50% zoom, 12px apart, starting at (100, 50),
+// laid out the way components/workspace/PageCanvas.tsx renders them.
 const FIXTURE = `
-<div class="document">
-  <div class="papers">
-    <div class="paper" data-box="100 50 408 528"></div>
-    <div class="paper" data-box="100 590 408 528"></div>
+<div class="page-stack">
+  <div class="sheet" data-box="100 50 408 528">
+    <div class="sheet-header" data-box="100 50 408 48"><span data-box="148 62 300 10">Header text</span></div>
+    <div class="sheet-footer" data-box="100 530 408 48"><span class="sheet-number" data-box="450 556 6 8">1</span></div>
   </div>
-  <div class="editor" style="color: rgb(232, 234, 237)" data-box="100 98 408 1000">
-    <p id="hello" data-box="148 98 300 8">Hello world</p>
-    <p data-box="148 110 300 8"><span class="doc-highlight" style="--doc-hl: #ffff00" data-box="148 110 40 8">marked</span></p>
-    <p data-box="148 122 300 8"><span class="comment-mark" style="background-color: #fef7c0" data-box="148 122 40 8">noted</span><span class="suggestion-del" data-box="200 122 20 8">gone</span></p>
-    <div class="manual-page-break" data-box="148 134 300 11"><span class="manual-page-break-label">Page break</span></div>
-    <p data-box="148 146 300 8"><u style="text-decoration-line: underline" data-box="148 146 25 8">under</u> <a href="https://example.com" style="text-decoration-line: underline; color: #0b57d0" data-box="180 146 20 8">link</a></p>
-    <ol start="3" data-box="160 158 288 20">
-      <li data-box="160 158 288 8">third</li>
-      <li data-box="160 168 288 8">fourth</li>
-    </ol>
-    <ul class="dash-list" data-box="160 180 288 8"><li data-box="160 180 288 8">dash</li></ul>
-    <p data-wrap="4" data-box="148 192 20 8">abcdefgh</p>
-    <p data-box="148 210 300 8"><span style="font-family: Georgia, serif; font-weight: 700" data-box="148 210 40 8">Serif</span><span style="display: none">hidden</span></p>
-    <table data-box="148 224 300 20"><tbody><tr><td style="border-top-width: 1px; border-top-style: solid; border-top-color: #dadce0" data-box="148 224 150 20">cell</td></tr></tbody></table>
-    <div class="doc-image" data-box="148 250 100 50"><img src="x.png" data-box="148 250 100 50"><span class="img-handle" data-box="146 248 5 5"></span></div>
-    <p data-box="148 638 300 8">Second page</p>
+  <div class="sheet" data-box="100 590 408 528">
+    <div class="sheet-header" data-box="100 590 408 48"></div>
+    <div class="sheet-footer" data-box="100 1070 408 48"></div>
   </div>
-  <div class="chrome-layer">
-    <div class="chrome-page">
-      <div class="paper-footer-stack"><div class="paper-chrome-bar" data-box="148 540 300 10">Options</div></div>
-      <span class="page-num page-num-footer" data-box="450 556 6 8">1</span>
-      <div class="paper-header-stack"><textarea data-box="148 62 300 10" style="line-height: 20px">Header text</textarea></div>
+  <div class="page-content" data-box="148 98 312 1000">
+    <div class="doc-content ProseMirror" style="color: rgb(232, 234, 237)" data-box="148 98 312 1000">
+      <p id="hello" data-box="148 98 300 8">Hello world</p>
+      <p data-box="148 110 300 8"><mark style="background-color: #ffff00" data-box="148 110 40 8">marked</mark></p>
+      <p data-box="148 122 300 8"><span class="comment-hl" style="background-color: #fef7c0" data-box="148 122 40 8">noted</span><span class="review-delete" data-box="200 122 20 8">gone</span><span class="review-controls" data-box="220 122 30 8"><button>Keep</button></span></p>
+      <div class="page-break" data-page-break="true" data-box="148 134 300 11"></div>
+      <p data-box="148 146 300 8"><u style="text-decoration-line: underline" data-box="148 146 25 8">under</u> <a href="https://example.com" style="text-decoration-line: underline; color: #0b57d0" data-box="180 146 20 8">link</a></p>
+      <ol start="3" data-box="160 158 288 20">
+        <li data-box="160 158 288 8">third</li>
+        <li data-box="160 168 288 8">fourth</li>
+      </ol>
+      <ul data-box="160 180 288 18">
+        <li class="task-item" data-checked="true" data-box="160 180 288 8">done</li>
+        <li class="task-item" data-checked="false" data-box="160 190 288 8">todo</li>
+      </ul>
+      <p data-wrap="4" data-box="148 202 20 8">abcdefgh</p>
+      <p data-box="148 212 300 8"><span style="font-family: Georgia, serif; font-weight: 700" data-box="148 212 40 8">Serif</span><span style="display: none">hidden</span><span class="np-mark np-para" data-box="190 212 4 8">¶</span></p>
+      <table data-box="148 224 300 20"><tbody><tr><td style="border-top-width: 1px; border-top-style: solid; border-top-color: #dadce0" data-box="148 224 150 20">cell</td></tr></tbody></table>
+      <div class="doc-image" data-box="148 250 100 50"><img src="x.png" data-box="148 250 100 50"></div>
+      <div class="page-gap" data-box="148 300 300 340"><span>spacer</span></div>
+      <p data-box="148 638 300 8"><span class="review-insert" style="background-color: rgba(46, 160, 67, 0.16)" data-box="148 638 60 8">Second page</span></p>
     </div>
   </div>
-  <div class="paper-chrome-probes" style="visibility: hidden"><div>probe</div></div>
 </div>`;
 
 function snapshot() {
   const dom = new JSDOM(FIXTURE);
-  const root = dom.window.document.querySelector<HTMLElement>(".document")!;
+  const root = dom.window.document.querySelector<HTMLElement>(".page-stack")!;
   return snapshotPages(root, "Report", fakeMeasurer());
 }
 
@@ -137,7 +140,7 @@ const texts = (items: PdfItem[]) => items.filter((item): item is PdfText => item
 const find = (items: PdfItem[], text: string) => texts(items).find((item) => item.text === text);
 
 describe("snapshotPages", () => {
-  it("creates one page per paper in points at the paper's unzoomed size", () => {
+  it("creates one page per sheet in points at the sheet's unzoomed size", () => {
     const model = snapshot();
     assert.equal(model.title, "Report");
     assert.equal(model.pages.length, 2);
@@ -178,11 +181,12 @@ describe("snapshotPages", () => {
 
   it("leaves out editor UI, pending deletions, review tints and hidden nodes", () => {
     const all = snapshot().pages.flatMap((page) => texts(page.items).map((item) => item.text));
-    for (const absent of ["gone", "Page", "break", "Options", "probe", "hidden"]) assert.ok(!all.includes(absent), absent);
+    for (const absent of ["gone", "Keep", "spacer", "¶", "hidden"]) assert.ok(!all.includes(absent), absent);
     assert.ok(all.includes("noted"));
-    const fills = snapshot().pages[0].items.filter((item) => item.kind === "rect");
-    assert.equal(fills.length, 1, "only the document highlight is filled");
-    assert.deepEqual(fills[0].kind === "rect" && fills[0].fill, [1, 1, 0]);
+    const fills = snapshot().pages.flatMap((page) => page.items).filter((item) => item.kind === "rect").map((item) => item.kind === "rect" && item.fill);
+    // The highlight and the checked checklist box; no comment, review or paper tints.
+    assert.equal(fills.length, 2);
+    assert.deepEqual(fills[0], [1, 1, 0]);
   });
 
   it("draws underlines, link targets, table borders and images", () => {
@@ -209,7 +213,17 @@ describe("snapshotPages", () => {
     // Marker text is two characters wide and ends before the item's text.
     assert.ok(marker.x + 2 * CHAR * 0.75 < third.x);
     assert.ok(find(items, "4."));
-    assert.ok(find(items, "–"), "dash-list marker");
+  });
+
+  it("draws checklist boxes, filled when checked, instead of a bullet", () => {
+    const items = snapshot().pages[0].items;
+    const done = find(items, "done")!;
+    assert.ok(done && find(items, "todo"));
+    assert.equal(find(items, "\u2022"), undefined, "no bullet for task items");
+    const fills = items.filter((item) => item.kind === "rect");
+    assert.ok(fills.some((rect) => rect.kind === "rect" && rect.x < done.x && Math.abs(rect.y - (done.y - 8)) < 8), "checked box is filled");
+    const boxEdges = items.filter((item) => item.kind === "line" && item.x2 < done.x);
+    assert.ok(boxEdges.length >= 8, "both boxes are outlined");
   });
 
   it("splits a word that wraps across lines", () => {
@@ -227,9 +241,9 @@ describe("snapshotPages", () => {
     assert.equal(standardFont({ fontFamily: "Roboto", fontWeight: "700", fontStyle: "italic" }), "Helvetica-BoldOblique");
   });
 
-  it("renders the header field while it is being edited, plus page numbers", () => {
+  it("renders headers, footers and page numbers from the sheets", () => {
     const items = snapshot().pages[0].items;
-    assert.ok(find(items, "Header text"));
+    assert.ok(find(items, "Header") && find(items, "text"));
     assert.ok(find(items, "1"));
   });
 });

@@ -43,6 +43,8 @@ export function detectAiTropes(text: string): TropeHit[] {
       replace: " - ",
     });
   }
+  // WATERMARK is global, so .test() would resume from the last match on the next call.
+  WATERMARK.lastIndex = 0;
   if (WATERMARK.test(text)) {
     hits.push({
       id: "watermark",
@@ -75,25 +77,6 @@ export function cleanAiArtifacts(text: string) {
   next = next.replace(/\bit['’]s important to note that\s*/gi, "");
   next = next.replace(/\bit is important to note that\s*/gi, "");
   return next.replace(/[ \t]{2,}/g, " ");
-}
-
-export function cleanAiArtifactsInEditor(editor: HTMLElement): number {
-  const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
-  let fixes = 0;
-  const nodes: Text[] = [];
-  while (walker.nextNode()) {
-    const node = walker.currentNode as Text;
-    if (node.parentElement?.closest("[data-page-break],[data-page-push],[data-manual-break]")) continue;
-    nodes.push(node);
-  }
-  for (const node of nodes) {
-    const next = cleanAiArtifacts(node.data);
-    if (next !== node.data) {
-      node.data = next;
-      fixes += 1;
-    }
-  }
-  return fixes;
 }
 
 export function summarizeTropes(hits: TropeHit[]) {

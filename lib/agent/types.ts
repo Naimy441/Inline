@@ -1,221 +1,147 @@
-import type { AgentToolCall } from "@/lib/agent/toolCatalog";
+/**
+ * Chat types shared by the agent runtime (server) and the agent panel
+ * (client). Nothing here may import server-only code.
+ */
 
-export type AgentMode = "agent" | "plan" | "ask";
-export type ThinkingLevel = "none" | "low" | "medium" | "high" | "xhigh";
-export type AgentProvider = "openai" | "anthropic";
+export type AgentMode = "agent" | "ask";
+export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
-export type AgentSelection = {
-  text: string;
-  start: number;
-  end: number;
-  before: string;
-  after: string;
+export type Todo = { content: string; activeForm?: string; status: "pending" | "in_progress" | "completed" };
+
+export type TextPart = { type: "text"; id: string; text: string };
+export type ThinkingPart = { type: "thinking"; id: string; text: string; done?: boolean };
+export type ToolPart = {
+  type: "tool";
+  id: string; // tool_use id
+  name: string; // full tool name, e.g. mcp__inline__edit_document
+  input: Record<string, unknown> | null; // null while it streams
+  inputPreview?: string; // partial JSON while the input streams
+  status: "pending" | "running" | "done" | "error";
+  result?: string;
 };
+export type AssistantPart = TextPart | ThinkingPart | ToolPart;
 
-export type AgentEditDraft = {
-  find: string;
-  replace: string;
-  reason?: string;
-  /** Optional explicit intent. The text payload remains the source of truth. */
-  operation?: "replace" | "insert" | "delete";
-  /** Zero-based occurrence when the same text appears more than once. */
-  occurrence?: number;
-};
+export type SelectionContext = { documentId: string; text: string; from: number; to: number };
 
-export type AgentHistoryMessage = {
-  role: "user" | "assistant";
-  content: string;
-};
-
-export type AgentComment = {
-  id: string;
-  quote: string;
-  body: string;
-};
-
-export type AgentAttachment = {
+export type Attachment = {
   id: string;
   name: string;
+  mime: string;
+  size: number;
+  kind: "image" | "text" | "pdf";
+};
+
+export type UserMessage = {
+  id: string;
+  role: "user";
   text: string;
+  createdAt: number;
+  selection?: SelectionContext;
+  attachments?: Attachment[];
 };
 
-export type AgentLockedRange = {
+export type DocumentChange = { documentId: string; title: string; tool: string; added: number; removed: number };
+
+export type TurnUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  costUsd: number;
+  durationMs: number;
+  numTurns: number;
+};
+
+export type AssistantMessage = {
   id: string;
-  text: string;
-};
-
-export type AgentPriorEdit = {
-  find: string;
-  replace: string;
-  operation?: AgentEditDraft["operation"];
-  occurrence?: number;
-  status: "pending" | "accepted";
-};
-
-export type AgentTaskStatus = "pending" | "in_progress" | "done";
-export type AgentTaskKind = "research" | "draft" | "edit" | "cite" | "review";
-
-export type AgentTask = {
-  id: string;
-  title: string;
-  status: AgentTaskStatus;
-  kind?: AgentTaskKind;
-};
-
-export type AgentCitation = {
-  id: string;
-  author: string;
-  title: string;
-  year: string;
-  publisher?: string;
-  url?: string;
-  inline: string;
-  bibliography: string;
-};
-
-export type DocumentPageSlice = {
-  number: number;
-  start: number;
-  end: number;
-  text: string;
-};
-
-export type AgentContinuation = {
-  provider: AgentProvider;
-  model: string;
-  mode: AgentMode;
-  openaiResponseId?: string;
-  documentFingerprint?: string;
-};
-
-export type AgentRequest = {
-  title: string;
-  prompt: string;
-  document: string;
-  pages?: DocumentPageSlice[];
-  selection: Omit<AgentSelection, "start" | "end"> | null;
-  selections?: Array<Omit<AgentSelection, "start" | "end">>;
-  mode: AgentMode;
-  model: string;
-  thinkingLevel: ThinkingLevel;
-  nameChat: boolean;
-  history: AgentHistoryMessage[];
-  comments?: AgentComment[];
-  attachments?: AgentAttachment[];
-  lockedRanges?: AgentLockedRange[];
-  previousEdits?: AgentPriorEdit[];
-  preserveTone?: boolean;
-  pageCount?: number;
-  chatId?: string;
-  continuation?: AgentContinuation;
-  recentTools?: string[];
-};
-
-export type AgentResponse = {
-  message: string;
-  thinking?: string;
-  chatTitle?: string;
-  edits: AgentEditDraft[];
-  tasks: AgentTask[];
-  tools: AgentToolCall[];
-  citations?: AgentCitation[];
-  mock: boolean;
-  continuation?: AgentContinuation;
-};
-
-export type AgentStepStatus = "pending" | "active" | "complete";
-
-export type AgentStep = {
-  id: string;
-  name?: string;
-  title: string;
-  detail?: string;
-  status: AgentStepStatus;
-  hits?: string[];
-};
-
-export type AgentTimelineItem =
-  | { id: string; kind: "thinking"; text: string; startedAt?: number; durationSec?: number }
-  | { id: string; kind: "step"; step: AgentStep };
-
-export type AgentUsage = {
-  input: number;
-  output: number;
-  reasoning?: number;
-  cached?: number;
-};
-
-export type AgentStreamEvent =
-  | { type: "phase"; phase: "thinking" | "planning" | "editing" | "reviewing" }
-  | { type: "thinking"; delta: string }
-  | { type: "message"; delta: string; reset?: boolean }
-  | { type: "edits"; edits: AgentEditDraft[] }
-  | { type: "tool"; name: string; hidden?: boolean; args?: Record<string, unknown> }
-  | { type: "tool_result"; name: string; hidden?: boolean }
-  | { type: "client_tool"; call: AgentToolCall }
-  | { type: "step"; step: AgentStep }
-  | { type: "usage"; usage: AgentUsage }
-  | { type: "tasks"; tasks: AgentTask[] }
-  | { type: "citations"; citations: AgentCitation[] }
-  | { type: "done"; result: AgentResponse }
-  | { type: "error"; error: string };
-
-export type PendingEdit = AgentEditDraft & {
-  id: string;
-  status: "pending" | "accepted" | "rejected" | "missed";
-};
-
-export type AgentLiveTurn = {
-  phase: "thinking" | "planning" | "editing" | "reviewing";
-  thinking: string;
-  prompt: string;
-  selection: string | null;
-  message: string;
-  edits: PendingEdit[];
-  citations: AgentCitation[];
-  tools: string[];
-  steps: AgentStep[];
-  timeline: AgentTimelineItem[];
-  usage?: AgentUsage;
-};
-
-export type AgentTurn = {
-  id: string;
-  prompt: string;
-  selection: string | null;
-  selections?: string[];
-  message: string;
-  thinking?: string;
-  durationMs?: number;
-  mock: boolean;
-  mode: AgentMode;
-  model: string;
-  edits: PendingEdit[];
-  tasks?: AgentTask[];
-  tools?: Array<{ name: string; hidden?: boolean }>;
-  timeline?: AgentTimelineItem[];
-  citations?: AgentCitation[];
-  snapshotId?: string;
+  role: "assistant";
+  createdAt: number;
+  parts: AssistantPart[];
+  model?: string;
+  status: "streaming" | "done" | "stopped" | "error";
   error?: string;
+  usage?: TurnUsage;
+  changes?: DocumentChange[];
 };
 
-export type AgentChat = {
+export type ChatMessage = UserMessage | AssistantMessage;
+
+export type ChatSettings = { model: string | null; effort: Effort; mode: AgentMode };
+
+export type ChatSummary = {
   id: string;
   title: string;
-  titled: boolean;
+  documentId: string | null;
   createdAt: number;
   updatedAt: number;
-  mode: AgentMode;
-  model: string;
-  thinkingLevel: ThinkingLevel;
-  turns: AgentTurn[];
-  tasks: AgentTask[];
-  continuation?: AgentContinuation;
+  messageCount: number;
+  preview: string;
 };
 
-export type AgentQueueItem = {
+export type ContextUsage = { tokens: number; maxTokens: number; percentage: number };
+
+export type RateLimit = { status: "allowed" | "allowed_warning" | "rejected"; resetsAt?: number; type?: string; utilization?: number };
+
+export type QueuedMessage = { id: string; text: string; createdAt: number; selection?: SelectionContext; attachments?: Attachment[] };
+
+export type ChatState = {
   id: string;
-  prompt: string;
-  selection?: string | null;
-  chatId?: string;
+  title: string;
+  documentId: string | null;
+  createdAt: number;
+  updatedAt: number;
+  settings: ChatSettings;
+  messages: ChatMessage[];
+  todos: Todo[];
+  running: boolean;
+  queue: QueuedMessage[];
+  context?: ContextUsage;
+  status?: RunStatus;
 };
+
+export type RunStatus =
+  | { kind: "starting" }
+  | { kind: "thinking" }
+  | { kind: "responding" }
+  | { kind: "tool"; name: string }
+  | { kind: "retrying"; attempt: number; maxRetries: number; delayMs: number; error: string }
+  | { kind: "compacting" };
+
+/** Events streamed to the panel. Every event carries the chat's sequence number. */
+export type ChatEvent =
+  | { type: "snapshot"; chat: ChatState }
+  | { type: "message"; message: ChatMessage }
+  | { type: "part"; messageId: string; part: AssistantPart }
+  | { type: "text_delta"; messageId: string; partId: string; text: string }
+  | { type: "thinking_delta"; messageId: string; partId: string; text: string }
+  | { type: "tool_input_delta"; messageId: string; partId: string; json: string }
+  | { type: "tool_update"; messageId: string; part: ToolPart }
+  | { type: "message_done"; message: AssistantMessage }
+  | { type: "todos"; todos: Todo[] }
+  | { type: "change"; messageId: string; change: DocumentChange }
+  | { type: "status"; status: RunStatus | null }
+  | { type: "running"; running: boolean }
+  | { type: "queue"; queue: QueuedMessage[] }
+  | { type: "meta"; title: string; documentId: string | null; settings: ChatSettings; updatedAt: number }
+  | { type: "context"; context: ContextUsage }
+  | { type: "rate_limit"; rateLimit: RateLimit };
+
+export type SequencedChatEvent = ChatEvent & { seq: number };
+
+export type ModelOption = { value: string; displayName: string; description: string; efforts: Effort[] };
+
+export type AgentStatus =
+  | {
+      state: "ready";
+      account: { email?: string; organization?: string; plan?: string; provider?: string; tokenSource?: string };
+      models: ModelOption[];
+      defaultModel: string | null;
+      version?: string;
+      checkedAt: number;
+    }
+  | { state: "signed_out" | "unavailable"; message: string; checkedAt: number };
+
+/** Inline's tool names without the MCP prefix, for display. */
+export function shortToolName(name: string) {
+  return name.replace(/^mcp__inline__/, "");
+}

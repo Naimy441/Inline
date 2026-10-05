@@ -19,3 +19,9 @@
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+# local data: documents, versions, chats, uploads
+/.inline/
+
+# playwright
+/test-results/
+/playwright-report/

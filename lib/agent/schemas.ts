@@ -1,0 +1,35 @@
+import { z } from "zod";
+
+/** Request validation for the chat API. */
+
+export const EffortSchema = z.enum(["low", "medium", "high", "xhigh", "max"]);
+
+export const SettingsPatchSchema = z
+  .object({
+    model: z.string().max(120).nullable().optional(),
+    effort: EffortSchema.optional(),
+    mode: z.enum(["agent", "ask"]).optional(),
+  })
+  .strict();
+
+export const SelectionSchema = z.object({
+  documentId: z.string().max(80),
+  text: z.string().max(100_000),
+  from: z.number().int().min(0),
+  to: z.number().int().min(0),
+});
+
+export const AttachmentSchema = z.object({
+  id: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/),
+  name: z.string().max(300),
+  mime: z.string().max(120),
+  size: z.number().int().min(0),
+  kind: z.enum(["image", "text", "pdf"]),
+});
+
+export const SendSchema = z.object({
+  text: z.string().max(200_000),
+  documentId: z.string().max(80).nullable().optional(),
+  selection: SelectionSchema.optional(),
+  attachments: z.array(AttachmentSchema).max(10).optional(),
+});
