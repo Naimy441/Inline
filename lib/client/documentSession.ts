@@ -18,6 +18,7 @@ import { editorPlugins } from "@/lib/editor/setup";
 import { snapshotPages } from "@/lib/pdf/pageSnapshot";
 import { buildPdf } from "@/lib/pdf/pdfWriter";
 import { setInvisibles } from "@/lib/editor/invisibles";
+import { rebaseLocalEdits, unconfirmedEdits } from "@/lib/editor/resync";
 import { loadPreferences, preferences, setPreference } from "@/lib/client/preferences";
 
 /**
@@ -43,11 +44,11 @@ export type ClientCommand =
   | { kind: "scroll_to"; from: number; to: number; version: number }
   | { kind: "download"; url: string; filename: string };
 
-type Snapshot = { meta: DocumentMeta; doc: unknown; version: number; comments: DocComment[]; hunks: HunkJSON[]; activity: AgentActivity | null };
+type Snapshot = { meta: DocumentMeta; epoch?: string; doc: unknown; version: number; comments: DocComment[]; hunks: HunkJSON[]; activity: AgentActivity | null };
 
 type ServerEvent =
   | { type: "snapshot"; snapshot: Snapshot }
-  | { type: "reset"; version: number; doc: unknown; hunks: HunkJSON[] }
+  | { type: "reset"; epoch?: string; version: number; doc: unknown; hunks: HunkJSON[] }
   | { type: "steps"; version: number; steps: unknown[]; clientIDs: string[]; hunks?: HunkJSON[] }
   | { type: "hunks"; version: number; hunks: HunkJSON[] }
   | { type: "meta"; meta: DocumentMeta }
@@ -67,6 +68,11 @@ export type DocumentUiState = {
   sync: "saved" | "saving" | "error";
   pages: number;
   activeComment: string | null;
+  /**
+   * Local edits that couldn't be merged after the server's copy changed underneath them
+   * (for example after a server restart). Kept so the user can recover them as a new document.
+   */
+  unmerged: { doc: unknown; steps: number } | null;
   /** Set while the browser print dialog is open: pages are laid out with no gap between them. */
   printing: boolean;
   /** Editing changes the document directly; suggesting records edits for review; viewing is read-only. */
@@ -134,6 +140,7 @@ export class DocumentSession {
     sync: "saved",
     pages: 1,
     activeComment: null,
+    unmerged: null,
     printing: false,
     mode: "editing",
   });
@@ -148,6 +155,8 @@ export class DocumentSession {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
   private generation = 0;
+  /** The server's load of this document that our version numbers belong to. */
+  private epoch: string | null = null;
   private confirmWaiters: Array<() => void> = [];
   /** Whether the steps now being typed are suggestions. Lags `ui.mode` until earlier edits are confirmed. */
   private suggesting = false;
@@ -232,6 +241,7 @@ export class DocumentSession {
     try {
       const { document } = await api<{ document: Snapshot }>(`/api/documents/${this.id}`);
       if (this.destroyed || generation !== this.generation) return;
+      this.epoch = document.epoch ?? null;
       const mode = this.storedMode();
       this.suggesting = mode === "suggesting";
       this.ui.set((ui) => ({ ...ui, mode }));
@@ -360,6 +370,7 @@ export class DocumentSession {
       version: sendable.version,
       steps: sendable.steps.map((step) => step.toJSON()),
       clientID: String(sendable.clientID),
+      ...(this.epoch ? { epoch: this.epoch } : {}),
       ...(this.suggesting ? { suggest: true } : {}),
     };
     post<{ version: number }>(`/api/documents/${this.id}/steps`, body)
@@ -373,6 +384,11 @@ export class DocumentSession {
       })
       .catch((error: unknown) => {
         this.inflight = false;
+        if (error instanceof ApiError && error.status === 409 && error.body.stale) {
+          // The server reloaded the document (it restarted): our versions no longer line up.
+          void this.resync();
+          return;
+        }
         if (error instanceof ApiError && error.status === 409) {
           // Someone else got there first. Their steps usually arrive through the event
           // stream before this response, while the flush they trigger is skipped for the
@@ -408,11 +424,20 @@ export class DocumentSession {
     }
   }
 
+  /**
+   * Swap in the server's copy of the document, keeping local edits the server
+   * hasn't confirmed yet: they're replayed on top when the server's copy is the
+   * one they were typed against, and otherwise kept aside for recovery.
+   */
   private replaceState(snapshot: Snapshot) {
     const view = this.view;
     if (!view) return;
+    if (snapshot.epoch) this.epoch = snapshot.epoch;
     const { from, to } = view.state.selection;
-    let state = this.createState(snapshot);
+    const local = unconfirmedEdits(view.state);
+    const rebased = rebaseLocalEdits(this.createState(snapshot), local);
+    let state = rebased.state;
+    if (rebased.unmerged) this.ui.set((ui) => ({ ...ui, unmerged: rebased.unmerged }));
     const size = state.doc.content.size;
     try {
       state = state.apply(state.tr.setSelection(TextSelection.create(state.doc, Math.min(from, size), Math.min(to, size))));
@@ -431,7 +456,7 @@ export class DocumentSession {
     if (this.destroyed || !this.view) return;
     this.source?.close();
     const version = getVersion(this.view.state);
-    const source = new EventSource(`/api/documents/${this.id}/events?version=${version}`);
+    const source = new EventSource(`/api/documents/${this.id}/events?version=${version}${this.epoch ? `&epoch=${encodeURIComponent(this.epoch)}` : ""}`);
     this.source = source;
     source.onopen = () => this.ui.set((ui) => ({ ...ui, connection: "live" }));
     source.onmessage = (message) => {
@@ -460,7 +485,7 @@ export class DocumentSession {
         this.replaceState(event.snapshot);
         return;
       case "reset":
-        this.replaceState({ ...(this.currentSnapshotUi()), doc: event.doc, version: event.version, hunks: event.hunks });
+        this.replaceState({ ...(this.currentSnapshotUi()), epoch: event.epoch, doc: event.doc, version: event.version, hunks: event.hunks });
         return;
       case "steps": {
         const current = getVersion(view.state);
@@ -636,10 +661,11 @@ export class DocumentSession {
     }
   }
 
-  gotoChange(direction: 1 | -1) {
+  /** Move to the next or previous pending change, optionally only among `only` (ids). */
+  gotoChange(direction: 1 | -1, only?: readonly string[]) {
     const view = this.view;
     if (!view) return false;
-    const target = gotoHunk(view, direction);
+    const target = gotoHunk(view, direction, only);
     if (!target) return false;
     this.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, target.mappedFrom)).scrollIntoView());
     view.focus();
@@ -655,6 +681,20 @@ export class DocumentSession {
     const result = await post<{ comment: DocComment }>(`/api/documents/${this.id}/comments`, { from, to, version: getVersion(view.state), body });
     this.setActiveComment(result.comment.id);
     return result.comment;
+  }
+
+  /** Save local edits that couldn't be merged (see `unmerged`) as a new document, and return its id. */
+  async recoverUnmerged() {
+    const unmerged = this.ui.get().unmerged;
+    if (!unmerged) return null;
+    const title = `${this.meta?.title ?? "Untitled document"} (recovered edits)`;
+    const { document } = await post<{ document: { meta: DocumentMeta } }>("/api/documents", { title, doc: unmerged.doc, settings: this.meta?.settings });
+    this.ui.set((ui) => ({ ...ui, unmerged: null }));
+    return document.meta.id;
+  }
+
+  dismissUnmerged() {
+    this.ui.set((ui) => ({ ...ui, unmerged: null }));
   }
 
   async updateMeta(patch: { title?: string; settings?: Record<string, unknown> }) {
@@ -681,3 +721,4 @@ export class DocumentSession {
     this.dispatch(tr);
   }
 }
+

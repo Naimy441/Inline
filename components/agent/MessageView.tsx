@@ -67,15 +67,16 @@ function Part({ part, streaming }: { part: AssistantPart; streaming: boolean }) 
 export const AssistantView = memo(function AssistantView({
   message,
   isLast,
-  pendingChanges,
+  pending,
   onRetry,
   onReview,
 }: {
   message: AssistantMessage;
   isLast: boolean;
-  pendingChanges: number;
+  /** Ids of this turn's changes still awaiting review. */
+  pending: string[];
   onRetry: () => void;
-  onReview: (action: "next" | "accept" | "reject") => void;
+  onReview: (action: "next" | "accept" | "reject", ids: string[]) => void;
 }) {
   const streaming = message.status === "streaming";
   const changes = message.changes ?? [];
@@ -110,15 +111,15 @@ export const AssistantView = memo(function AssistantView({
             <span className="change-stat del">−{removed}</span>
             <span className="change-unit">words</span>
           </span>
-          {isLast && pendingChanges > 0 && (
+          {pending.length > 0 && (
             <span className="change-card-actions">
-              <button type="button" className="link-btn" onClick={() => onReview("next")}>
+              <button type="button" className="link-btn" onClick={() => onReview("next", pending)}>
                 Review
               </button>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => onReview("reject")}>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => onReview("reject", pending)}>
                 Undo all
               </button>
-              <button type="button" className="btn btn-secondary btn-sm" onClick={() => onReview("accept")}>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => onReview("accept", pending)}>
                 Keep all
               </button>
             </span>
@@ -134,17 +135,27 @@ export const AssistantView = memo(function AssistantView({
   );
 });
 
+const NO_IDS: string[] = [];
+
 export function MessageList({
   messages,
-  pendingChanges,
+  hunks,
   onRetry,
   onReview,
 }: {
   messages: ChatMessage[];
-  pendingChanges: number;
+  /** Pending changes in the open document; each card acts only on its own turn's. */
+  hunks: ReadonlyArray<{ id: string; turn?: string }>;
   onRetry: () => void;
-  onReview: (action: "next" | "accept" | "reject") => void;
+  onReview: (action: "next" | "accept" | "reject", ids: string[]) => void;
 }) {
+  const byTurn = new Map<string, string[]>();
+  for (const hunk of hunks) {
+    if (!hunk.turn) continue;
+    const ids = byTurn.get(hunk.turn) ?? [];
+    ids.push(hunk.id);
+    byTurn.set(hunk.turn, ids);
+  }
   return (
     <>
       {messages.map((message, index) =>
@@ -155,7 +166,7 @@ export function MessageList({
             key={message.id}
             message={message}
             isLast={index === messages.length - 1}
-            pendingChanges={pendingChanges}
+            pending={byTurn.get(message.id) ?? NO_IDS}
             onRetry={onRetry}
             onReview={onReview}
           />

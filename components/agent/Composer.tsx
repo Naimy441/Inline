@@ -235,7 +235,7 @@ export const Composer = forwardRef<
             type="file"
             multiple
             hidden
-            accept="image/*,application/pdf,.txt,.md,.csv,.json"
+            accept="image/*,application/pdf,.txt,.md,.csv,.json,.docx"
             onChange={(event) => {
               if (event.target.files) void attach(event.target.files);
               event.target.value = "";

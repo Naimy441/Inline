@@ -31,6 +31,8 @@ export type Hunk = {
   deleted: Slice;
   /** Who made the change: a chat id, "external" for MCP clients, or USER_AUTHOR for suggesting mode. */
   author: string;
+  /** The chat message (Claude's turn) that last changed this region, when known. */
+  turn?: string;
   createdAt: number;
 };
 
@@ -162,7 +164,7 @@ class ChangeMapping implements Mappable {
  * existing hunks they overlap so a single undo always restores the text the
  * user last accepted.
  */
-export function recordAgentChange(before: PMNode, tr: Transform, existing: readonly Hunk[], author: string, now = Date.now()): Hunk[] {
+export function recordAgentChange(before: PMNode, tr: Transform, existing: readonly Hunk[], author: string, now = Date.now(), turn?: string): Hunk[] {
   const ranges = changedRanges(before, tr);
   if (!ranges.length) return mapHunks(existing, tr.mapping);
   const mapping = new ChangeMapping([...ranges].sort((a, b) => a.fromA - b.fromA || a.fromB - b.fromB));
@@ -218,6 +220,7 @@ export function recordAgentChange(before: PMNode, tr: Transform, existing: reado
       to: toB,
       deleted,
       author,
+      ...(turn ? { turn } : {}),
       createdAt: first?.createdAt ?? now,
     });
   }
@@ -277,6 +280,7 @@ export function hunkFromJSON(json: HunkJSON, schema: Schema): Hunk {
     from: json.from,
     to: json.to,
     author: json.author,
+    ...(json.turn ? { turn: json.turn } : {}),
     createdAt: json.createdAt,
     deleted: Slice.fromJSON(schema, json.deleted),
   };
