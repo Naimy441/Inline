@@ -187,6 +187,22 @@ test.describe("phone", () => {
     await expect(page.getByRole("button", { name: "Import file" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Download all" })).toBeVisible();
     expect((await page.locator(".home-section-head h2").first().boundingBox())!.height).toBeLessThan(30);
+    // Mobile emulation widens the layout viewport when anything overflows, so check the width directly.
+    expect(await page.evaluate(() => window.innerWidth)).toBe(390);
+    // The new button floats above the document list.
+    const onTop = await page.evaluate(() => {
+      const fab = document.querySelector(".home-fab")!;
+      const box = fab.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+      return {
+        onTop: Boolean(hit && fab.contains(hit)),
+        hit: hit?.outerHTML.slice(0, 80),
+        box: [box.x, box.y, box.width, box.height].map(Math.round),
+        viewport: [innerWidth, innerHeight, visualViewport?.width, visualViewport?.height, visualViewport?.scale, scrollY],
+        page: [document.documentElement.scrollWidth, document.documentElement.scrollHeight],
+      };
+    });
+    expect(onTop.onTop, JSON.stringify(onTop)).toBe(true);
     await page.getByRole("button", { name: "New document" }).click();
     await expect(page).toHaveURL(/\/d\//);
     await expect(page.locator(".doc-content")).toBeVisible();
