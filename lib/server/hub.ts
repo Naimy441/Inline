@@ -28,6 +28,8 @@ import {
   writeVersion,
   type StoredDocumentFile,
   type VersionSummary,
+  documentFilePath,
+  FileSummaryCache,
 } from "@/lib/server/store";
 
 /**
@@ -568,6 +570,7 @@ export type CreateDocumentInput = {
 };
 
 class DocumentHub {
+  private metas = new FileSummaryCache<DocumentMeta>();
   private open = new Map<string, LiveDocument>();
   private loading = new Map<string, Promise<LiveDocument | null>>();
   /** The document most recently focused in a browser tab; the default target for MCP tools. */
@@ -645,19 +648,21 @@ class DocumentHub {
       await this.emptyTrash(Date.now() - TRASH_RETENTION_MS).catch((error) => log("error", "purging the trash failed", { error }));
     }
     const ids = await listDocumentIds();
-    const metas: DocumentMeta[] = [];
-    for (const id of ids) {
-      const live = this.open.get(id);
-      if (live) {
-        metas.push(live.meta);
-        continue;
-      }
-      const file = await readDocumentFile(id).catch((error) => {
-        log("error", "a document file couldn't be read; it is left out of the list", { documentId: id, error });
-        return null;
-      });
-      if (file) metas.push(normalizeFile(file).meta);
-    }
+    // Documents that aren't open are read only when their file changed since the last list.
+    const listed = await Promise.all(
+      ids.map(async (id) => {
+        const live = this.open.get(id);
+        if (live) return live.meta;
+        return this.metas.get(documentFilePath(id), async () => {
+          const file = await readDocumentFile(id).catch((error) => {
+            log("error", "a document file couldn't be read; it is left out of the list", { documentId: id, error });
+            return null;
+          });
+          return file ? normalizeFile(file).meta : null;
+        });
+      }),
+    );
+    const metas = listed.filter((meta): meta is DocumentMeta => Boolean(meta));
     return metas
       .filter((meta) => (options.trashed ? Boolean(meta.trashedAt) : !meta.trashedAt))
       .sort((a, b) => Math.max(b.lastOpenedAt, b.updatedAt) - Math.max(a.lastOpenedAt, a.updatedAt));

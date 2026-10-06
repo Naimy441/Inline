@@ -16,8 +16,6 @@ import { pageCount, relayout, type PageGeometry } from "@/lib/editor/pagination"
 import { setPresence } from "@/lib/editor/presence";
 import { gotoHunk, mapHunksThrough, reviewHunkAtCursor, setHunks } from "@/lib/editor/review";
 import { editorPlugins } from "@/lib/editor/setup";
-import { snapshotPages } from "@/lib/pdf/pageSnapshot";
-import { buildPdf } from "@/lib/pdf/pdfWriter";
 import { setInvisibles } from "@/lib/editor/invisibles";
 import { rebaseLocalEdits, unconfirmedEdits } from "@/lib/editor/resync";
 import { loadPreferences, preferences, setPreference } from "@/lib/client/preferences";
@@ -242,6 +240,8 @@ export class DocumentSession {
     const root = view.dom.closest<HTMLElement>(".page-stack");
     if (!root) throw new Error("The page layout isn't ready yet.");
     const title = this.meta?.title ?? "Untitled document";
+    // The PDF writer loads on first use, keeping it out of the editor's start-up code.
+    const [{ snapshotPages }, { buildPdf }] = await Promise.all([import("@/lib/pdf/pageSnapshot"), import("@/lib/pdf/pdfWriter")]);
     // Lay the pages out without review marks (as printing does) while they're read.
     root.classList.add("is-clean");
     let bytes: Uint8Array<ArrayBuffer>;

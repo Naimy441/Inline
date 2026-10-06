@@ -50,6 +50,36 @@ export function assertSafeId(id: string) {
   return id;
 }
 
+/**
+ * Something derived from a whole JSON file (a document's meta, a chat's
+ * summary), kept until the file changes. Lists then read only the files that
+ * changed since the last time, instead of parsing every document and chat.
+ */
+export class FileSummaryCache<T> {
+  private entries = new Map<string, { mtimeMs: number; size: number; value: T }>();
+
+  async get(file: string, read: () => Promise<T | null>): Promise<T | null> {
+    const stat = await fs.stat(file).catch(() => null);
+    if (!stat) {
+      this.entries.delete(file);
+      return null;
+    }
+    const cached = this.entries.get(file);
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.value;
+    const value = await read();
+    if (value !== null) this.entries.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, value });
+    return value;
+  }
+}
+
+export function documentFilePath(id: string) {
+  return dir("documents", `${assertSafeId(id)}.json`);
+}
+
+export function chatFilePath(id: string) {
+  return dir("chats", `${assertSafeId(id)}.json`);
+}
+
 const queues = new Map<string, Promise<void>>();
 
 /** Runs file operations one at a time per path, so a late write can't land after a newer one or a delete. */

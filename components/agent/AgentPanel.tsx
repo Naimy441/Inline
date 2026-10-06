@@ -138,10 +138,11 @@ export const AgentPanel = forwardRef<
   }, [initialPrompt]);
 
   // Keep the newest content in view while streaming, unless the user scrolled up.
+  // Only when the chat changed: reading scrollHeight forces a layout, which is costly next to a long document.
   useLayoutEffect(() => {
     const element = scroller.current;
     if (element && stick.current) element.scrollTop = element.scrollHeight;
-  });
+  }, [chat, ui.error]);
 
   const warm = useCallback(() => {
     if (!ready) return;
