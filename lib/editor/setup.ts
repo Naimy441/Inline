@@ -29,7 +29,7 @@ import {
 import { commentsPlugin } from "@/lib/editor/comments";
 import { findPlugin } from "@/lib/editor/find";
 import { invisiblesPlugin } from "@/lib/editor/invisibles";
-import { paginationPlugin, type PageGeometry } from "@/lib/editor/pagination";
+import { paginationPlugin, type PageGeometry, type PageLayout } from "@/lib/editor/pagination";
 import { placeholderPlugin } from "@/lib/editor/placeholder";
 import { presencePlugin } from "@/lib/editor/presence";
 import { reviewPlugin, type ReviewHandlers } from "@/lib/editor/review";
@@ -236,7 +236,7 @@ export type EditorPluginOptions = {
   review: ReviewHandlers;
   onActivateComment: (id: string | null) => void;
   geometry: () => PageGeometry;
-  onPages?: (pages: number) => void;
+  onPages?: (layout: PageLayout) => void;
   keys?: Record<string, Command>;
   placeholder?: string;
   /** Viewing mode: local edits are refused (changes from the server still apply). */

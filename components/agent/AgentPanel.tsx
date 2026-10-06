@@ -4,7 +4,7 @@ import { Check, CircleDashed, History, Loader2, MessageSquarePlus, Plus, Refresh
 import { useRouter } from "next/navigation";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Attachment, ChatMessage, DocumentMention, ChatSettings, SelectionContext, Todo } from "@/lib/agent/types";
-import { ActivityLine } from "@/components/agent/Activity";
+import { ActivityLine, isWaiting } from "@/components/agent/Activity";
 import { refreshAgentStatus, useAgentStatus } from "@/lib/client/agentStatus";
 import { ChatSession, newChatId, warmChat, type ChatUiState } from "@/lib/client/chatSession";
 import { Composer, type ComposerHandle } from "@/components/agent/Composer";
@@ -13,6 +13,7 @@ import { Button, IconButton } from "@/components/ui/Button";
 import { ChatHistory } from "@/components/agent/ChatHistory";
 import { toast } from "@/components/ui/Toast";
 import { post } from "@/lib/client/api";
+import { loadDraftSelection, saveDraftSelection } from "@/lib/client/drafts";
 
 export type AgentPanelHandle = {
   ask: (selection: SelectionContext | null, text?: string) => void;
@@ -70,7 +71,9 @@ export const AgentPanel = forwardRef<
   const [chatId, setChatId] = useState<string | null>(() => (typeof window === "undefined" ? null : readChatId(documentId)));
   const [session, setSession] = useState<ChatSession | null>(null);
   const [draftSettings, setDraftSettings] = useState<ChatSettings | null>(null);
-  const [selection, setSelection] = useState<SelectionContext | null>(null);
+  // The quoted selection is part of the unsent message: it survives closing the panel.
+  const [selection, setSelection] = useState<SelectionContext | null>(() => (typeof window === "undefined" ? null : loadDraftSelection(documentId)));
+  useEffect(() => saveDraftSelection(documentId, selection), [documentId, selection]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyButton = useRef<HTMLButtonElement>(null);
   const composer = useRef<ComposerHandle>(null);
@@ -214,7 +217,6 @@ export const AgentPanel = forwardRef<
       <header className="panel-header">
         <div className="panel-title">
           <span className="panel-title-text">{chat?.title && chat.messages.length ? chat.title : "New chat"}</span>
-          {chat?.running && <Loader2 size={13} className="spin muted" />}
         </div>
         <div className="panel-actions">
           <IconButton ref={historyButton} label="Chat history" size="sm" active={historyOpen} onClick={() => setHistoryOpen((value) => !value)}>
@@ -267,7 +269,7 @@ export const AgentPanel = forwardRef<
         ) : chat?.messages.length ? (
           <div className="messages">
             <MessageList messages={chat.messages} hunks={hunks} onRetry={retry} onReview={review} documentId={documentId} onRestore={restoreTo} />
-            {chat.running && <ActivityLine status={chat.status} message={lastAssistant(chat.messages)} />}
+            {chat.running && isWaiting(chat.status, lastAssistant(chat.messages)) && <ActivityLine status={chat.status} message={lastAssistant(chat.messages)} since={lastSent(chat.messages)} />}
           </div>
         ) : (
           <EmptyState onPick={(prompt) => composer.current?.setText(prompt)} />
@@ -320,6 +322,11 @@ export const AgentPanel = forwardRef<
 function lastAssistant(messages: ChatMessage[]) {
   const last = messages[messages.length - 1];
   return last?.role === "assistant" ? last : undefined;
+}
+
+function lastSent(messages: ChatMessage[]) {
+  for (let i = messages.length - 1; i >= 0; i -= 1) if (messages[i]!.role === "user") return messages[i]!.createdAt;
+  return undefined;
 }
 
 function TodoList({ todos, running }: { todos: Todo[]; running: boolean }) {

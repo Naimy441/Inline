@@ -84,6 +84,9 @@ export type DocumentSnapshot = {
 
 export type ClientSelection = { from: number; to: number; version: number; at: number };
 
+/** Pages as the user's editor laid them out at `version`: where each page after the first starts, and how full the last one is. */
+export type ClientLayout = { pages: number; starts: number[]; lastPageFill: number; version: number; words: number; at: number };
+
 const STEP_LOG_LIMIT = 2000;
 const PERSIST_DELAY_MS = 400;
 const AUTO_VERSION_INTERVAL_MS = 10 * 60 * 1000;
@@ -114,6 +117,9 @@ export class LiveDocument {
   meta: DocumentMeta;
   activity: AgentActivity | null = null;
   selection: ClientSelection | null = null;
+  /** The latest page layout an open editor reported; current only while its version matches. */
+  layout: ClientLayout | null = null;
+  private layoutWaiters = new Set<() => void>();
   /** The mode the user's editor is in, so Claude knows whether they're suggesting or only viewing. */
   editorMode: "editing" | "suggesting" | "viewing" = "editing";
   private log: Array<{ step: Step; clientID: string }> = [];
@@ -401,6 +407,37 @@ export class LiveDocument {
     const from = Math.max(0, Math.min(max, selection.from));
     const to = Math.max(from, Math.min(max, selection.to));
     this.selection = { from, to, version: this.version, at: Date.now() };
+  }
+
+  setLayout(layout: { pages: number; starts: number[]; lastPageFill: number; version: number }) {
+    if (layout.version !== this.version) return;
+    const max = this.doc.content.size;
+    const starts = layout.starts.filter((pos) => pos <= max).sort((a, b) => a - b);
+    this.layout = { pages: layout.pages, starts, lastPageFill: layout.lastPageFill, version: this.version, words: docWordCount(this.doc), at: Date.now() };
+    for (const resolve of this.layoutWaiters) resolve();
+    this.layoutWaiters.clear();
+  }
+
+  /**
+   * The page layout for the current text. When an editor has the document open
+   * but hasn't measured the latest change yet, wait a little for it to.
+   */
+  async currentLayout(timeoutMs = 2500): Promise<ClientLayout | null> {
+    const fresh = () => (this.layout && this.layout.version === this.version ? this.layout : null);
+    if (fresh() || this.listeners.size === 0) return fresh();
+    const deadline = Date.now() + timeoutMs;
+    while (!fresh() && Date.now() < deadline) {
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer);
+          this.layoutWaiters.delete(done);
+          resolve();
+        };
+        const timer = setTimeout(done, Math.max(0, deadline - Date.now()));
+        this.layoutWaiters.add(done);
+      });
+    }
+    return fresh();
   }
 
   // --- versions -------------------------------------------------------------

@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowUp, Brain, ChevronDown, FileText, Image as ImageIcon, MessageCircleQuestion, Paperclip, PenLine, Square, TextQuote, X } from "lucide-react";
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 import { BUDGET_OPTIONS } from "@/lib/agent/types";
 import type { AgentMode, Attachment, ChatSettings, ContextUsage, DocumentMention, Effort, ModelOption, SelectionContext } from "@/lib/agent/types";
 import { api, uploadFile } from "@/lib/client/api";
@@ -9,6 +9,7 @@ import { MenuButton } from "@/components/ui/Menu";
 import { CommandsDialog, useCommands } from "@/components/agent/CommandsDialog";
 import { expandSlashCommand, matchCommands, matchDocuments, type SlashCommand } from "@/lib/agent/commands";
 import { toast } from "@/components/ui/Toast";
+import { loadDraft, saveDraft } from "@/lib/client/drafts";
 
 /** Titles of the user's other documents, for @-mentions (loaded once per panel). */
 function useDocumentTitles(exclude: string | null) {
@@ -42,7 +43,7 @@ export const Composer = forwardRef<
     context?: ContextUsage;
     selection: SelectionContext | null;
     onClearSelection: () => void;
-    /** The open document, left out of @-mention suggestions. */
+    /** The open document, left out of @-mention suggestions. The unsent message is remembered per document. */
     documentId?: string | null;
     onSend: (input: { text: string; attachments: Attachment[]; mentions: DocumentMention[] }) => Promise<void> | void;
     onStop: () => void;
@@ -60,6 +61,30 @@ export const Composer = forwardRef<
   const [managing, setManaging] = useState(false);
   const [mentions, setMentions] = useState<DocumentMention[]>([]);
   const [caret, setCaret] = useState(0);
+
+  // Pick up the message left unsent when the panel was last closed. Read after
+  // mounting, so the server render and the first client render agree.
+  const restored = useRef<string | null>(null);
+  const skipSave = useRef(false);
+  useLayoutEffect(() => {
+    if (!documentId || restored.current === documentId) return;
+    restored.current = documentId;
+    // This render's effects still see the values from before the restore.
+    skipSave.current = true;
+    const draft = loadDraft(documentId);
+    setText(draft.text);
+    setAttachments(draft.attachments);
+    setMentions(draft.mentions);
+    setCaret(draft.text.length);
+  }, [documentId]);
+  useEffect(() => {
+    if (skipSave.current) {
+      skipSave.current = false;
+      return;
+    }
+    if (documentId && restored.current === documentId) saveDraft(documentId, { text, attachments, mentions });
+  }, [documentId, text, attachments, mentions]);
+
   const documents = useDocumentTitles(documentId ?? null);
   const slash = /^\/([a-z0-9-]*)$/i.exec(text);
   // Titles have spaces, so the query runs to the caret; the list hides once nothing matches.

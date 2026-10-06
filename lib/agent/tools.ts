@@ -22,7 +22,7 @@ import {
   writeDocument,
   type FormatSpec,
 } from "@/lib/doc/editing";
-import { serializeDoc } from "@/lib/doc/markdown";
+import { markdownToDoc, serializeDoc } from "@/lib/doc/markdown";
 import { changedRanges, isUserSuggestion } from "@/lib/doc/review";
 import { FONT_FAMILIES, PAPER_SIZES, type DocumentSettings } from "@/lib/doc/settings";
 import { documentHub, type LiveDocument } from "@/lib/server/hub";
@@ -31,6 +31,7 @@ import { readFile } from "node:fs/promises";
 import { attachmentText } from "@/lib/agent/attachments";
 import { findUpload } from "@/lib/server/store";
 import { detectAiTropes } from "@/lib/writing/tropes";
+import { describePageStarts, pageCount, pageCountNow } from "@/lib/agent/pages";
 
 /**
  * The tools Claude uses to work in Inline documents. They are transport
@@ -98,15 +99,22 @@ async function resolveDocument(ctx: ToolContext, id?: string): Promise<LiveDocum
   return active;
 }
 
-function estimatePages(doc: LiveDocument) {
-  const words = docWordCount(doc.doc);
-  return Math.max(1, Math.ceil(words / 450));
-}
-
 function header(doc: LiveDocument, lines: number) {
   const words = docWordCount(doc.doc);
+  const pages = pageCountNow(doc);
   const pending = doc.hunks.length ? ` · ${doc.hunks.length} change${doc.hunks.length === 1 ? "" : "s"} awaiting the user's review` : "";
-  return `Document "${doc.meta.title}" (id ${doc.id}) · ${words.toLocaleString()} words · ~${estimatePages(doc)} page${estimatePages(doc) === 1 ? "" : "s"} · ${lines} lines${pending}`;
+  return `Document "${doc.meta.title}" (id ${doc.id}) · ${words.toLocaleString()} words · ${pages.measured ? "" : "~"}${pages.pages} page${pages.pages === 1 ? "" : "s"} · ${lines} lines${pending}`;
+}
+
+/** Words, characters, sentences and paragraphs of plain text, counted the way the editor counts. */
+function textCounts(plain: string, words: number) {
+  const lint = lintWriting(plain);
+  const characters = plain.replace(/\n{2,}/g, "\n").length;
+  return { words, characters, charactersNoSpaces: plain.replace(/\s/g, "").length, sentences: lint.sentences, paragraphs: lint.paragraphs };
+}
+
+function inches(value: number) {
+  return `${Number(value.toFixed(2))}"`;
 }
 
 /**
@@ -447,6 +455,95 @@ export const TOOLS = [
       flush();
       const total = docWordCount(doc.doc);
       return ok(`${header(doc, markdownLines(serialized).length)}\n${rows.length ? rows.join("\n") : "(No headings.)"}\nTotal: ${total} words.`);
+    },
+  }),
+
+  defineTool({
+    name: "count_words",
+    title: "Count words",
+    description:
+      "Count words exactly as Inline's word count does, in any text you choose: a draft you are about to write (pass text; Markdown is fine, its syntax isn't counted), a line range of a document, or a whole document. Also returns characters, sentences and paragraphs, and with target_words how far off the target it is.\n\n" +
+      "Use it whenever the user asks for a length in words (\"exactly 500 words\", \"under 200 words\", \"cut this in half\"): count your draft before you insert it, then count the passage in the document after editing and adjust until it matches. Don't count words in your head.",
+    shape: {
+      text: z.string().max(1_000_000).optional().describe("Text or Markdown to count. Leave it out to count the document or a line range of it."),
+      document_id: documentId,
+      from_line: z.number().int().min(1).optional().describe("First line to count (from read_document). Leave out from_line and to_line to count the whole document."),
+      to_line: z.number().int().min(1).optional().describe("Last line to count (inclusive)."),
+      target_words: z.number().int().min(1).optional().describe("The length the user asked for, to report how far off it is."),
+    },
+    write: false,
+    async handler(args, ctx) {
+      let scope: string;
+      let plain: string;
+      let words: number;
+      if (args.text !== undefined) {
+        if (args.from_line !== undefined || args.to_line !== undefined) return fail("Pass either text or a line range, not both.");
+        scope = "The text";
+        try {
+          const parsed = markdownToDoc(args.text);
+          plain = docPlainText(parsed);
+          words = docWordCount(parsed);
+        } catch {
+          plain = args.text;
+          words = wordCount(args.text);
+        }
+      } else {
+        const doc = await resolveDocument(ctx, args.document_id);
+        const lines = lineRange(args.from_line, args.to_line);
+        if (lines) {
+          const ranges = textblockRanges(doc.doc, lines);
+          if (!ranges.length) return fail(`Lines ${lines.from}-${lines.to} hold no text. ${header(doc, markdownLines(serializeDoc(doc.doc)).length)}`);
+          plain = ranges.map((range) => doc.doc.textBetween(range.from, range.to, "\n", (node) => (node.type.name === "hard_break" ? "\n" : ""))).join("\n\n");
+          words = wordCount(plain);
+          scope = `Lines ${lines.from}-${lines.to} of "${doc.meta.title}"`;
+        } else {
+          plain = docPlainText(doc.doc);
+          words = docWordCount(doc.doc);
+          scope = `"${doc.meta.title}"`;
+        }
+      }
+      const counts = textCounts(plain, words);
+      const target = args.target_words;
+      const off = target === undefined ? "" : words === target ? ` (exactly the ${target} asked for)` : ` (${Math.abs(words - target).toLocaleString()} ${words < target ? "short of" : "over"} the ${target.toLocaleString()} asked for)`;
+      return ok(
+        [
+          `${scope}: ${counts.words.toLocaleString()} word${counts.words === 1 ? "" : "s"}${off}.`,
+          `Characters: ${counts.characters.toLocaleString()} (${counts.charactersNoSpaces.toLocaleString()} without spaces) · Sentences: ${counts.sentences.toLocaleString()} · Paragraphs: ${counts.paragraphs.toLocaleString()}`,
+        ].join("\n"),
+      );
+    },
+  }),
+
+  defineTool({
+    name: "get_page_count",
+    title: "Get page count",
+    description:
+      "How many pages a document fills in the user's editor with its current page size, margins, fonts, spacing and images; where each page starts (line numbers); and how full the last page is. When no editor has the document open, the count is an estimate from the word count.\n\n" +
+      "Use it whenever the user asks for a length in pages (\"write 5 pages\", \"keep it to one page\", \"cut a page\"): check before writing to plan how much to add, then check again after each round of edits and keep adjusting until the page count is right. Don't guess pages from word counts.",
+    shape: { document_id: documentId },
+    write: false,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      const count = await pageCount(doc);
+      const settings = doc.meta.settings;
+      const margins = settings.pageSetup.margins;
+      const sameMargins = margins.top === margins.bottom && margins.left === margins.right && margins.top === margins.left;
+      const setup = `${PAPER_SIZES[settings.pageSetup.paperSize].label.replace(/\s*\(.*\)$/, "")} ${settings.pageSetup.orientation}, ${sameMargins ? `${inches(margins.top)} margins` : `margins ${inches(margins.top)} top, ${inches(margins.bottom)} bottom, ${inches(margins.left)} left, ${inches(margins.right)} right`}, ${settings.fontFamily.split(",")[0]!.replace(/["']/g, "").trim()} ${settings.fontSize}pt, line spacing ${settings.lineSpacing}`;
+      const words = docWordCount(doc.doc);
+      const plural = count.pages === 1 ? "" : "s";
+      const lines: string[] = [];
+      if (count.measured) {
+        lines.push(`"${doc.meta.title}" (id ${doc.id}) fills ${count.pages} page${plural}, as laid out in the user's editor (${setup}).`);
+        lines.push(...describePageStarts(doc, count.starts ?? []));
+        const fill = Math.round((count.lastPageFill ?? 0) * 100);
+        const room = Math.round((1 - (count.lastPageFill ?? 0)) * count.wordsPerPage);
+        lines.push(`The last page is about ${fill}% full${room >= 10 ? ` (roughly ${room.toLocaleString()} more words would fill it)` : ""}.`);
+      } else {
+        lines.push(`"${doc.meta.title}" (id ${doc.id}) fills about ${count.pages} page${plural} (${setup}). No editor has measured the current text, so this is estimated from the word count.`);
+      }
+      lines.push(`${words.toLocaleString()} words; about ${count.wordsPerPage.toLocaleString()} words fit on a full page of paragraphs with this formatting. Headings, lists, tables, images and page breaks change that.`);
+      if (doc.hunks.some((hunk) => hunk.deleted.size > 0)) lines.push("Deleted text that is still awaiting review stays visible (struck through) and takes space until the user keeps or undoes the changes.");
+      return ok(lines.join("\n"));
     },
   }),
 
@@ -935,7 +1032,7 @@ export const TOOLS = [
             .map((range) => doc.doc.textBetween(range.from, range.to, "\n"))
             .join("\n\n")
         : docPlainText(doc.doc);
-      const lint = lintWriting(text, estimatePages(doc));
+      const lint = lintWriting(text, pageCountNow(doc).pages);
       const tropes = detectAiTropes(text);
       const stats = [
         `Words: ${lint.words} · Sentences: ${lint.sentences} · Paragraphs: ${lint.paragraphs} · ~${lint.pages} page(s)`,

@@ -9,7 +9,9 @@ import {
   FilePlus2,
   FileSearch,
   FileText,
+  Files,
   Globe,
+  Hash,
   History,
   ListTree,
   MessageSquare,
@@ -80,6 +82,10 @@ export function describeTool(part: ToolPart): Described {
       return { icon: <Search size={14} />, verb: "Searched for", target: str(field("pattern"), 48) ? `“${str(field("pattern"), 48)}”` : undefined, live: "Searching" };
     case "get_outline":
       return { icon: <ListTree size={14} />, verb: "Read", target: "the outline", live: "Reading" };
+    case "count_words":
+      return { icon: <Hash size={14} />, verb: "Counted words in", target: typeof input.text === "string" ? "a draft" : lines() ?? "the document", live: "Counting words in" };
+    case "get_page_count":
+      return { icon: <Files size={14} />, verb: "Counted", target: "pages", live: "Counting" };
     case "format_text":
       return { icon: <Paintbrush size={14} />, verb: "Formatted", target: str(field("text"), 48) ? `“${str(field("text"), 48)}”` : "text", live: "Formatting" };
     case "set_paragraph_style":

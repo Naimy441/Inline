@@ -1,8 +1,9 @@
 "use client";
 
-import { Brain, ChevronRight, CircleAlert, FileText, Image as ImageIcon, PenLine, RotateCcw, TextQuote } from "lucide-react";
+import { ChevronRight, CircleAlert, FileText, Image as ImageIcon, PenLine, RotateCcw, TextQuote } from "lucide-react";
 import { memo, useMemo, useRef, useState } from "react";
-import type { AssistantMessage, AssistantPart, ChatMessage, UserMessage } from "@/lib/agent/types";
+import type { AssistantMessage, AssistantPart, ChatMessage, ThinkingPart, UserMessage } from "@/lib/agent/types";
+import { Spark } from "@/components/agent/Activity";
 import { Markdown } from "@/components/agent/Markdown";
 import { ToolCall } from "@/components/agent/ToolCall";
 
@@ -41,25 +42,43 @@ export const UserBubble = memo(function UserBubble({ message }: { message: UserM
   );
 });
 
-function Thinking({ text, done }: { text: string; done?: boolean }) {
-  const [open, setOpen] = useState(false);
-  const preview = text.trim().split("\n").filter(Boolean).pop() ?? "";
+function thoughtFor(ms: number | undefined) {
+  if (ms === undefined) return "Thought";
+  const seconds = Math.max(1, Math.round(ms / 1000));
+  return seconds < 60 ? `Thought for ${seconds}s` : `Thought for ${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+/**
+ * Claude's reasoning, streamed in as it thinks. The newest block in the
+ * latest reply is open so it can be read live; earlier ones fold to one line.
+ * The block grows with its text rather than scrolling inside itself.
+ */
+function Reasoning({ part, live, latest }: { part: ThinkingPart; live: boolean; latest: boolean }) {
+  // Once the user opens or folds a block, that choice sticks.
+  const [choice, setChoice] = useState<boolean | null>(null);
+  const open = choice ?? latest;
+  const hasText = Boolean(part.text.trim());
+  const preview = !open && live ? (part.text.trim().split("\n").filter(Boolean).pop() ?? "") : "";
   return (
-    <div className={`thinking${open ? " is-open" : ""}`}>
-      <button type="button" className="thinking-head" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
-        <Brain size={14} />
-        <span className={done ? undefined : "shimmer"}>{done ? "Thought" : "Thinking"}</span>
-        {!open && !done && preview && <span className="thinking-preview">{preview}</span>}
-        <ChevronRight size={13} className="tool-chevron" />
+    <div className={`reasoning${open ? " is-open" : ""}${live ? " is-live" : ""}`}>
+      <button type="button" className="reasoning-head" onClick={() => setChoice(!open)} aria-expanded={open} disabled={!hasText}>
+        <Spark size={14} still={!live} />
+        <span className={live ? "shimmer" : undefined}>{live ? "Thinking" : thoughtFor(part.durationMs)}</span>
+        {preview && <span className="reasoning-preview">{preview}</span>}
+        {hasText && <ChevronRight size={13} className="tool-chevron" />}
       </button>
-      {open && text && <div className="thinking-body">{text}</div>}
+      {open && hasText && (
+        <div className="reasoning-body">
+          <Markdown text={part.text} streaming={live} />
+        </div>
+      )}
     </div>
   );
 }
 
-function Part({ part, streaming, writing }: { part: AssistantPart; streaming: boolean; writing?: boolean }) {
+function Part({ part, streaming, writing, latest }: { part: AssistantPart; streaming: boolean; writing?: boolean; latest?: boolean }) {
   if (part.type === "text") return part.text ? <Markdown text={part.text} streaming={streaming} caret={writing} /> : null;
-  if (part.type === "thinking") return part.text || !part.done ? <Thinking text={part.text} done={part.done || !streaming} /> : null;
+  if (part.type === "thinking") return part.text || (streaming && !part.done) ? <Reasoning part={part} live={streaming && !part.done} latest={Boolean(latest)} /> : null;
   if (part.name === "TodoWrite") return null;
   return <ToolCall part={part} />;
 }
@@ -72,9 +91,12 @@ export const AssistantView = memo(function AssistantView({
   onReview,
   documentId,
   onRestore,
+  latestThinking,
 }: {
   message: AssistantMessage;
   isLast: boolean;
+  /** The reasoning block shown open: the newest one, in the latest reply only. */
+  latestThinking?: string;
   /** The open document, which "Restore to before" applies to. */
   documentId?: string;
   /** Put the open document back to the version saved before this reply's edits. */
@@ -94,7 +116,7 @@ export const AssistantView = memo(function AssistantView({
   return (
     <div className="msg msg-assistant">
       {message.parts.map((part, index) => (
-        <Part key={`${part.type}-${part.id}`} part={part} streaming={streaming} writing={streaming && part.type === "text" && index === message.parts.length - 1} />
+        <Part key={`${part.type}-${part.id}`} part={part} streaming={streaming} writing={streaming && part.type === "text" && index === message.parts.length - 1} latest={part.type === "thinking" && part.id === latestThinking} />
       ))}
       {message.status === "stopped" && <div className="msg-note">Stopped.{message.error ? ` ${message.error}` : ""}</div>}
       {message.status === "error" && (
@@ -198,6 +220,8 @@ export function MessageList({
   onRestore?: (versionId: string) => void;
 }) {
   const byTurn = useStableGroups(hunks);
+  const last = messages[messages.length - 1];
+  const latestThinking = last?.role === "assistant" ? last.parts.findLast((part) => part.type === "thinking")?.id : undefined;
   return (
     <>
       {messages.map((message, index) =>
@@ -213,6 +237,7 @@ export function MessageList({
             onReview={onReview}
             documentId={documentId}
             onRestore={onRestore}
+            latestThinking={index === messages.length - 1 ? latestThinking : undefined}
           />
         ),
       )}

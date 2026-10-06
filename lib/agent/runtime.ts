@@ -22,6 +22,7 @@ import type {
   SelectionContext,
   SequencedChatEvent,
   Todo,
+  ThinkingPart,
   ToolPart,
   UserMessage,
   DocumentMention,
@@ -675,6 +676,7 @@ class ChatRuntime {
         const id = randomUUID();
         this.partsByBlock.set(key, id);
         this.addPart({ type: "thinking", id, text: block.thinking ?? "" });
+        this.thinkingStarted.set(id, Date.now());
         this.setStatus({ kind: "thinking" });
       } else if (block.type === "tool_use" && block.id && block.name) {
         this.partsByBlock.set(key, block.id);
@@ -711,13 +713,22 @@ class ChatRuntime {
       const partId = this.partsByBlock.get(`${apiId}:${event.index}`);
       const part = partId ? this.findPart(partId, "thinking") : undefined;
       if (part && !part.done) {
-        part.done = true;
+        this.finishThinking(part);
         this.emit({ type: "part", messageId: message.id, part });
       }
     }
   }
 
   private streamMessageId = "";
+  /** When each streamed thinking block began, to say how long Claude thought. */
+  private thinkingStarted = new Map<string, number>();
+
+  private finishThinking(part: ThinkingPart) {
+    part.done = true;
+    const started = this.thinkingStarted.get(part.id);
+    if (started !== undefined && part.durationMs === undefined) part.durationMs = Date.now() - started;
+    this.thinkingStarted.delete(part.id);
+  }
 
   private handleAssistant(api: { id: string; model?: string; content: Array<Record<string, unknown>> }, error?: string) {
     const message = this.current;
@@ -746,7 +757,7 @@ class ChatRuntime {
         const part = partId ? this.findPart(partId, "thinking") : undefined;
         if (part) {
           part.text = text || part.text;
-          part.done = true;
+          this.finishThinking(part);
           this.emit({ type: "part", messageId: message.id, part });
         } else if (text) {
           this.addPart({ type: "thinking", id: randomUUID(), text, done: true });
@@ -849,7 +860,7 @@ class ChatRuntime {
     if (error) message.error = error;
     for (const part of message.parts) {
       if (part.type === "tool" && (part.status === "pending" || part.status === "running")) part.status = status === "done" ? "done" : "error";
-      if (part.type === "thinking") part.done = true;
+      if (part.type === "thinking" && !part.done) this.finishThinking(part);
     }
     this.state.running = false;
     this.state.updatedAt = Date.now();
