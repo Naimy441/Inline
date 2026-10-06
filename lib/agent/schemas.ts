@@ -29,10 +29,14 @@ export const AttachmentSchema = z.object({
   kind: z.enum(["image", "text", "pdf"]),
 });
 
+/** Ids the panel picks for things it shows before the server answers. */
+export const ClientIdSchema = z.string().regex(/^[A-Za-z0-9_-]{8,80}$/);
+
 export const SendSchema = z.object({
   text: z.string().max(200_000),
   documentId: z.string().max(80).nullable().optional(),
   selection: SelectionSchema.optional(),
   attachments: z.array(AttachmentSchema).max(10).optional(),
   mentions: z.array(z.object({ id: z.string().max(80), title: z.string().max(300) })).max(20).optional(),
+  ids: z.object({ user: ClientIdSchema, assistant: ClientIdSchema }).optional(),
 });

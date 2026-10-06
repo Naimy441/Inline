@@ -3,9 +3,10 @@
 import { Check, CircleDashed, History, Loader2, MessageSquarePlus, Plus, RefreshCw, Terminal, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import type { Attachment, DocumentMention, ChatSettings, SelectionContext, Todo } from "@/lib/agent/types";
+import type { Attachment, ChatMessage, DocumentMention, ChatSettings, SelectionContext, Todo } from "@/lib/agent/types";
+import { ActivityLine } from "@/components/agent/Activity";
 import { refreshAgentStatus, useAgentStatus } from "@/lib/client/agentStatus";
-import { ChatSession, chatApi, type ChatUiState } from "@/lib/client/chatSession";
+import { ChatSession, newChatId, warmChat, type ChatUiState } from "@/lib/client/chatSession";
 import { Composer, type ComposerHandle } from "@/components/agent/Composer";
 import { MessageList, type TurnHunk } from "@/components/agent/MessageView";
 import { Button, IconButton } from "@/components/ui/Button";
@@ -17,6 +18,8 @@ export type AgentPanelHandle = {
   ask: (selection: SelectionContext | null, text?: string) => void;
   /** Send a message right away (the inline ⌘K prompt). */
   send: (selection: SelectionContext | null, text: string) => Promise<void>;
+  /** The user is about to send something: start Claude Code now. */
+  warm: () => void;
 };
 
 const EMPTY_UI: ChatUiState = { chat: null, connected: false, error: null, rateLimit: null };
@@ -75,12 +78,18 @@ export const AgentPanel = forwardRef<
   const stick = useRef(true);
   const prompted = useRef(false);
 
+  /** A session the panel created for a new chat; it is already showing the first message. */
+  const created = useRef<ChatSession | null>(null);
+  /** The id the next new chat will use, picked early so it can be warmed up while the user types. */
+  const draftId = useRef<string | null>(null);
+
   useEffect(() => {
     if (!chatId) {
       setSession(null);
       return;
     }
-    const next = new ChatSession(chatId);
+    const next = created.current?.id === chatId ? created.current : new ChatSession(chatId);
+    created.current = null;
     next.connect();
     setSession(next);
     writeChatId(documentId, chatId);
@@ -92,8 +101,9 @@ export const AgentPanel = forwardRef<
   const chat = ui.chat;
 
   // A chat id remembered from an earlier session may have been deleted.
+  const fresh = useRef(new Set<string>());
   useEffect(() => {
-    if (!chatId) return;
+    if (!chatId || fresh.current.has(chatId)) return;
     let cancelled = false;
     fetch(`/api/agent/chats/${chatId}`).then((response) => {
       if (!cancelled && response.status === 404) {
@@ -117,6 +127,7 @@ export const AgentPanel = forwardRef<
       else composer.current?.focus();
     },
     send: (selected, text) => send({ text, attachments: [], selected }),
+    warm,
   }));
 
   useEffect(() => {
@@ -132,17 +143,38 @@ export const AgentPanel = forwardRef<
     if (element && stick.current) element.scrollTop = element.scrollHeight;
   });
 
+  const warm = useCallback(() => {
+    if (!ready) return;
+    if (chatId) {
+      warmChat({ id: chatId, exists: true, documentId, settings });
+      return;
+    }
+    draftId.current ??= newChatId();
+    warmChat({ id: draftId.current, exists: false, documentId, settings });
+  }, [ready, chatId, documentId, settings]);
+
   const send = useCallback(
     async ({ text, attachments, mentions, selected }: { text: string; attachments: Attachment[]; mentions?: DocumentMention[]; selected?: SelectionContext | null }) => {
-      let target = session;
-      if (!target) {
-        const created = await chatApi.create({ documentId, settings });
-        target = new ChatSession(created.id);
-        setChatId(created.id);
-      }
       stick.current = true;
-      await target.send({ text, documentId, selection: (selected === undefined ? selection : selected) ?? undefined, attachments, mentions: mentions?.length ? mentions : undefined });
+      const input = { text, documentId, selection: (selected === undefined ? selection : selected) ?? undefined, attachments, mentions: mentions?.length ? mentions : undefined };
       setSelection(null);
+      try {
+        if (session) {
+          await session.send(input);
+          return;
+        }
+        // A new chat: show it with the message right away, and create it and send in one request.
+        const id = draftId.current ?? newChatId();
+        draftId.current = null;
+        const next = new ChatSession(id);
+        created.current = next;
+        fresh.current.add(id);
+        setChatId(id);
+        await next.create(input, settings);
+      } catch (error) {
+        setSelection(input.selection ?? null);
+        throw error;
+      }
     },
     [session, documentId, settings, selection],
   );
@@ -151,6 +183,14 @@ export const AgentPanel = forwardRef<
     if (session) void session.update({ settings: patch });
     else setDraftSettings({ ...settings, ...patch });
   };
+
+  // Stable callbacks, so replies that didn't change don't re-render while another streams.
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const reviewRef = useRef(onReview);
+  reviewRef.current = onReview;
+  const retry = useCallback(() => void sessionRef.current?.retry(), []);
+  const review = useCallback((action: "next" | "accept" | "reject", ids: string[]) => reviewRef.current(action, ids), []);
 
   const restoreTo = useCallback(
     async (versionId: string) => {
@@ -225,8 +265,8 @@ export const AgentPanel = forwardRef<
           <Onboarding state={status.state} message={"message" in status ? status.message : ""} />
         ) : chat?.messages.length ? (
           <div className="messages">
-            <MessageList messages={chat.messages} hunks={hunks} onRetry={() => session?.retry()} onReview={onReview} documentId={documentId} onRestore={restoreTo} />
-            {chat.running && chat.status && <RunStatusLine status={chat.status} />}
+            <MessageList messages={chat.messages} hunks={hunks} onRetry={retry} onReview={review} documentId={documentId} onRestore={restoreTo} />
+            {chat.running && <ActivityLine status={chat.status} message={lastAssistant(chat.messages)} />}
           </div>
         ) : (
           <EmptyState onPick={(prompt) => composer.current?.setText(prompt)} />
@@ -269,19 +309,16 @@ export const AgentPanel = forwardRef<
           onSend={send}
           onStop={() => void session?.interrupt()}
           onSettings={updateSettings}
+          onWarm={warm}
         />
       </div>
     </aside>
   );
 });
 
-function RunStatusLine({ status }: { status: NonNullable<import("@/lib/agent/types").ChatState["status"]> }) {
-  let text = "";
-  if (status.kind === "starting") text = "Starting Claude Code…";
-  else if (status.kind === "retrying") text = `${status.error} Retrying (${status.attempt}/${status.maxRetries})…`;
-  else if (status.kind === "compacting") text = "Summarizing earlier messages to free up context…";
-  if (!text) return null;
-  return <div className="run-status shimmer">{text}</div>;
+function lastAssistant(messages: ChatMessage[]) {
+  const last = messages[messages.length - 1];
+  return last?.role === "assistant" ? last : undefined;
 }
 
 function TodoList({ todos, running }: { todos: Todo[]; running: boolean }) {

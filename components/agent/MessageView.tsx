@@ -1,7 +1,7 @@
 "use client";
 
 import { Brain, ChevronRight, CircleAlert, FileText, Image as ImageIcon, PenLine, RotateCcw, TextQuote } from "lucide-react";
-import { memo, useState } from "react";
+import { memo, useMemo, useRef, useState } from "react";
 import type { AssistantMessage, AssistantPart, ChatMessage, UserMessage } from "@/lib/agent/types";
 import { Markdown } from "@/components/agent/Markdown";
 import { ToolCall } from "@/components/agent/ToolCall";
@@ -57,8 +57,8 @@ function Thinking({ text, done }: { text: string; done?: boolean }) {
   );
 }
 
-function Part({ part, streaming }: { part: AssistantPart; streaming: boolean }) {
-  if (part.type === "text") return part.text ? <Markdown text={part.text} streaming={streaming} /> : null;
+function Part({ part, streaming, writing }: { part: AssistantPart; streaming: boolean; writing?: boolean }) {
+  if (part.type === "text") return part.text ? <Markdown text={part.text} streaming={streaming} caret={writing} /> : null;
   if (part.type === "thinking") return part.text || !part.done ? <Thinking text={part.text} done={part.done || !streaming} /> : null;
   if (part.name === "TodoWrite") return null;
   return <ToolCall part={part} />;
@@ -93,10 +93,9 @@ export const AssistantView = memo(function AssistantView({
   const restorable = changes.find((change) => change.documentId === documentId)?.checkpoint;
   return (
     <div className="msg msg-assistant">
-      {message.parts.map((part) => (
-        <Part key={`${part.type}-${part.id}`} part={part} streaming={streaming} />
+      {message.parts.map((part, index) => (
+        <Part key={`${part.type}-${part.id}`} part={part} streaming={streaming} writing={streaming && part.type === "text" && index === message.parts.length - 1} />
       ))}
-      {streaming && !message.parts.length && <div className="msg-pending shimmer">Working…</div>}
       {message.status === "stopped" && <div className="msg-note">Stopped.{message.error ? ` ${message.error}` : ""}</div>}
       {message.status === "error" && (
         <div className="msg-error" role="alert">
@@ -198,13 +197,7 @@ export function MessageList({
   documentId?: string;
   onRestore?: (versionId: string) => void;
 }) {
-  const byTurn = new Map<string, TurnHunk[]>();
-  for (const hunk of hunks) {
-    if (!hunk.turn) continue;
-    const list = byTurn.get(hunk.turn) ?? [];
-    list.push(hunk);
-    byTurn.set(hunk.turn, list);
-  }
+  const byTurn = useStableGroups(hunks);
   return (
     <>
       {messages.map((message, index) =>
@@ -225,6 +218,29 @@ export function MessageList({
       )}
     </>
   );
+}
+
+/**
+ * Pending changes grouped by turn, keeping each turn's array identical while
+ * its changes are, so replies that didn't change skip re-rendering.
+ */
+function useStableGroups(hunks: ReadonlyArray<TurnHunk>) {
+  const previous = useRef(new Map<string, TurnHunk[]>());
+  return useMemo(() => {
+    const next = new Map<string, TurnHunk[]>();
+    for (const hunk of hunks) {
+      if (!hunk.turn) continue;
+      const list = next.get(hunk.turn) ?? [];
+      list.push(hunk);
+      next.set(hunk.turn, list);
+    }
+    for (const [turn, list] of next) {
+      const old = previous.current.get(turn);
+      if (old && old.length === list.length && old.every((hunk, i) => hunk.id === list[i]!.id && hunk.insertedText === list[i]!.insertedText && hunk.deletedText === list[i]!.deletedText)) next.set(turn, old);
+    }
+    previous.current = next;
+    return next;
+  }, [hunks]);
 }
 
 /** "claude-sonnet-5-5" → "Sonnet 5.5"; unknown ids are shown as they are. */

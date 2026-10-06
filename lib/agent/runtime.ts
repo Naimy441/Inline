@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { query, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createInlineSdkServer, mcpToolName } from "@/lib/agent/mcp";
 import { systemPrompt } from "@/lib/agent/prompt";
-import { type ToolContext } from "@/lib/agent/tools";
+import { documentListing, type ToolContext } from "@/lib/agent/tools";
 import type {
   AgentStatus,
   AssistantMessage,
@@ -51,6 +51,8 @@ const IDLE_CLOSE_MS = 15 * 60 * 1000;
 const MAX_LIVE_SESSIONS = 6;
 const EVENT_BUFFER = 4000;
 const PERSIST_DELAY_MS = 1500;
+/** A session started ahead of a message (the user is typing) closes sooner if nothing is sent. */
+const WARM_CLOSE_MS = 5 * 60 * 1000;
 
 type PersistedChat = {
   format: 1;
@@ -72,7 +74,17 @@ export function setQueryImplementation(next: typeof query | null) {
   startQuery = next ?? query;
 }
 
-export type SendInput = { text: string; documentId?: string | null; selection?: SelectionContext; attachments?: Attachment[]; mentions?: DocumentMention[] };
+export type SendInput = {
+  text: string;
+  documentId?: string | null;
+  selection?: SelectionContext;
+  attachments?: Attachment[];
+  mentions?: DocumentMention[];
+  /** Ids the panel already gave the message and the reply it shows right away, so the server's copies replace them in place. */
+  ids?: { user: string; assistant: string };
+};
+
+type TurnInput = Omit<SendInput, "documentId">;
 
 class AsyncQueue<T> implements AsyncIterable<T> {
   private items: T[] = [];
@@ -358,13 +370,14 @@ class ChatRuntime {
       this.state.documentId = input.documentId;
       this.emitMeta();
     }
+    const ids = input.ids && !this.state.messages.some((message) => message.id === input.ids!.user || message.id === input.ids!.assistant) ? input.ids : undefined;
     if (this.state.running) {
-      const queued: QueuedMessage = { id: randomUUID(), text, createdAt: Date.now(), selection: input.selection, attachments: input.attachments, mentions: input.mentions };
+      const queued: QueuedMessage = { id: ids?.user ?? randomUUID(), text, createdAt: Date.now(), selection: input.selection, attachments: input.attachments, mentions: input.mentions };
       this.state.queue.push(queued);
       this.emit({ type: "queue", queue: this.state.queue });
       return { queued: true, id: queued.id };
     }
-    await this.startTurn({ text, selection: input.selection, attachments: input.attachments, mentions: input.mentions });
+    await this.startTurn({ text, selection: input.selection, attachments: input.attachments, mentions: input.mentions, ids });
     return { queued: false, id: this.state.messages[this.state.messages.length - 2]!.id };
   }
 
@@ -374,12 +387,12 @@ class ChatRuntime {
     if (this.state.queue.length !== before) this.emit({ type: "queue", queue: this.state.queue });
   }
 
-  private async startTurn(input: { text: string; selection?: SelectionContext; attachments?: Attachment[]; mentions?: DocumentMention[] }) {
+  private async startTurn(input: TurnInput) {
     this.lastUsed = Date.now();
     if (this.idleTimer) clearTimeout(this.idleTimer);
     const now = Date.now();
-    const user: UserMessage = { id: randomUUID(), role: "user", text: input.text, createdAt: now, selection: input.selection, attachments: input.attachments, mentions: input.mentions };
-    const assistant: AssistantMessage = { id: randomUUID(), role: "assistant", createdAt: now, parts: [], status: "streaming", model: this.state.settings.model ?? undefined };
+    const user: UserMessage = { id: input.ids?.user ?? randomUUID(), role: "user", text: input.text, createdAt: now, selection: input.selection, attachments: input.attachments, mentions: input.mentions };
+    const assistant: AssistantMessage = { id: input.ids?.assistant ?? randomUUID(), role: "assistant", createdAt: now, parts: [], status: "streaming", model: this.state.settings.model ?? undefined };
     if (!this.state.messages.length || this.state.title === "New chat") {
       this.state.title = clip(input.text || input.attachments?.[0]?.name || "New chat", 60);
     }
@@ -402,8 +415,11 @@ class ChatRuntime {
     let message: SDKUserMessage;
     try {
       message = await this.buildUserMessage(input);
+      const live = this.live;
       this.ensureQuery();
       this.input!.push(message);
+      // A session that is already running (warmed up, or from the last message) starts on it right away.
+      if (live) this.setStatus({ kind: "thinking" });
     } catch (error) {
       this.finishTurn("error", errorText(error));
       return;
@@ -411,7 +427,10 @@ class ChatRuntime {
     void this.persistNow();
   }
 
-  private async buildUserMessage(input: { text: string; selection?: SelectionContext; attachments?: Attachment[]; mentions?: DocumentMention[] }): Promise<SDKUserMessage> {
+  /** The document version Claude last saw in full (sent with a message), so an unchanged document isn't sent again. */
+  private listed: { id: string; version: number } | null = null;
+
+  private async buildUserMessage(input: TurnInput): Promise<SDKUserMessage> {
     const context: string[] = [];
     context.push(
       this.state.settings.mode === "ask"
@@ -426,6 +445,16 @@ class ChatRuntime {
       if (pending) context.push(`${pending} earlier change${pending === 1 ? "" : "s"} by Claude ${pending === 1 ? "is" : "are"} still awaiting the user's review.`);
       if (suggestions) context.push(`The user has ${suggestions} pending suggestion${suggestions === 1 ? "" : "s"} of their own (suggesting mode).`);
       if (doc.editorMode !== "editing") context.push(`The user's editor is in ${doc.editorMode} mode.`);
+      // Small documents come with the message, saving Claude a read_document round trip before it can edit.
+      if (!this.listed || this.listed.id !== doc.id || this.listed.version !== doc.version) {
+        const listing = documentListing(doc);
+        if (listing) {
+          context.push(`The document as read_document would return it now (no need to read it again before editing, unless it changes):\n<document>\n${listing}\n</document>`);
+          this.listed = { id: doc.id, version: doc.version };
+        }
+      } else {
+        context.push("The document hasn't changed since you last saw it in full.");
+      }
     } else {
       context.push("No document is open.");
     }
@@ -592,12 +621,15 @@ class ChatRuntime {
 
   private handleSystem(message: SDKMessage & { subtype: string }) {
     if (message.subtype === "init") {
-      if (!this.sessionStarted) {
+      // A warmed-up session reports in before any message; only a turn creates a transcript to resume.
+      if (!this.sessionStarted && this.current) {
         this.sessionStarted = true;
         this.persistSoon();
       }
       const model = (message as { model?: string }).model;
       if (this.current && model) this.current.model = model;
+      // Claude Code is up; what remains is Claude thinking.
+      if (this.current && this.state.status?.kind === "starting") this.setStatus({ kind: "thinking" });
     } else if (message.subtype === "api_retry") {
       const retry = message as unknown as { attempt: number; max_retries: number; retry_delay_ms: number; error: string };
       this.setStatus({ kind: "retrying", attempt: retry.attempt, maxRetries: retry.max_retries, delayMs: retry.retry_delay_ms, error: ASSISTANT_ERRORS[retry.error] ?? retry.error });
@@ -605,6 +637,8 @@ class ChatRuntime {
       const status = (message as { status?: string | null }).status;
       if (status === "compacting") this.setStatus({ kind: "compacting" });
     } else if (message.subtype === "compact_boundary") {
+      // The summary may not keep the full text Claude was given.
+      this.listed = null;
       this.setStatus({ kind: "thinking" });
     }
   }
@@ -771,6 +805,11 @@ class ChatRuntime {
   private handleResult(result: Extract<SDKMessage, { type: "result" }>) {
     const message = this.current;
     if (!message) return;
+    // A warmed-up session may have reported in before this turn; either way it has a transcript now.
+    if (!this.sessionStarted) {
+      this.sessionStarted = true;
+      this.persistSoon();
+    }
     const usage = result.usage as unknown as Record<string, number>;
     message.usage = {
       inputTokens: usage.input_tokens ?? 0,
@@ -887,6 +926,22 @@ class ChatRuntime {
     await this.startTurn({ text: lastUser.text, selection: lastUser.selection, attachments: lastUser.attachments, mentions: lastUser.mentions });
   }
 
+  /**
+   * Start Claude Code now, while the user is still typing, so the message
+   * doesn't wait for the process to start. Closes again if nothing is sent.
+   */
+  warm() {
+    this.lastUsed = Date.now();
+    if (this.query || this.state.running || this.discarded) return false;
+    this.ensureQuery();
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => {
+      if (!this.state.running) this.close();
+    }, WARM_CLOSE_MS);
+    this.idleTimer.unref?.();
+    return true;
+  }
+
   close() {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     const q = this.query;
@@ -969,12 +1024,29 @@ class AgentRuntime {
     return chat;
   }
 
-  async create(input: { documentId?: string | null; settings?: Partial<ChatSettings> } = {}) {
+  /** A new chat. With an id (the panel picks one so it can show the chat before the server answers), creating it again returns the same chat. */
+  async create(input: { id?: string; documentId?: string | null; settings?: Partial<ChatSettings> } = {}) {
     await this.init();
+    if (input.id) {
+      const id = input.id;
+      const existing = await this.get(id);
+      if (existing) return existing;
+      const inFlight = this.creating.get(id);
+      if (inFlight) return inFlight;
+      const pending = this.createNew({ ...input, id }).finally(() => this.creating.delete(id));
+      this.creating.set(id, pending);
+      return pending;
+    }
+    return this.createNew(input);
+  }
+
+  private creating = new Map<string, Promise<ChatRuntime>>();
+
+  private async createNew(input: { id?: string; documentId?: string | null; settings?: Partial<ChatSettings> }) {
     const now = Date.now();
     const file: PersistedChat = {
       format: 1,
-      id: randomUUID(),
+      id: input.id ?? randomUUID(),
       title: "New chat",
       documentId: input.documentId ?? null,
       createdAt: now,
