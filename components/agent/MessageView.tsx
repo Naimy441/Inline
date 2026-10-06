@@ -100,7 +100,7 @@ export const AssistantView = memo(function AssistantView({
   /** The open document, which "Restore to before" applies to. */
   documentId?: string;
   /** Put the open document back to the version saved before this reply's edits. */
-  onRestore?: (versionId: string) => void;
+  onRestore?: (versionId: string, messageId: string) => void;
   /** This turn's changes still awaiting review. */
   pending: TurnHunk[];
   onRetry: () => void;
@@ -143,7 +143,7 @@ export const AssistantView = memo(function AssistantView({
           </span>
           {pending.length === 0 && restorable && onRestore && (
             <span className="change-card-actions">
-              <button type="button" className="link-btn" title="Put the document back as it was before this reply's edits" onClick={() => onRestore(restorable)}>
+              <button type="button" className="link-btn" title="Put the document back as it was before this reply's edits" onClick={() => onRestore(restorable, message.id)}>
                 Restore to before
               </button>
             </span>
@@ -186,7 +186,14 @@ export const AssistantView = memo(function AssistantView({
       )}
       {!streaming && message.usage && (
         <div className="msg-meta">
-          {formatDuration(message.usage.durationMs)} · {formatTokens(message.usage.outputTokens)} tokens{message.usage.costUsd > 0 ? ` · $${message.usage.costUsd < 0.01 ? "<0.01" : message.usage.costUsd.toFixed(2)}` : ""}{message.model ? ` · ${modelLabel(message.model)}` : ""}
+          {formatDuration(message.usage.durationMs)} · {formatTokens(message.usage.outputTokens)} tokens
+          {message.usage.costUsd > 0 && (
+            <>
+              {" · "}
+              <span data-tip="Cost of this reply">{message.usage.costUsd < 0.01 ? "<$0.01" : `$${message.usage.costUsd.toFixed(2)}`}</span>
+            </>
+          )}
+          {message.model ? ` · ${modelLabel(message.model)}` : ""}
         </div>
       )}
     </div>
@@ -217,7 +224,7 @@ export function MessageList({
   onRetry: () => void;
   onReview: (action: "next" | "accept" | "reject", ids: string[]) => void;
   documentId?: string;
-  onRestore?: (versionId: string) => void;
+  onRestore?: (versionId: string, messageId: string) => void;
 }) {
   const byTurn = useStableGroups(hunks);
   const last = messages[messages.length - 1];

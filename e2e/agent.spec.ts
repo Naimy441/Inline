@@ -98,10 +98,26 @@ test("a reply lists its changes, each kept or undone on its own, and can be rest
   await expect(page.locator(".review-bar")).toHaveCount(0);
   await expect(page.locator(".doc-content")).toHaveText("First beta gamma.");
 
-  // Once reviewed, the reply offers to put the document back as it was before it.
-  page.once("dialog", (dialog) => void dialog.accept());
+  // Once reviewed, the reply offers to put the document back as it was before it, rewinding the chat too.
   await card.getByRole("button", { name: "Restore to before" }).click();
+  const confirm = page.getByRole("dialog", { name: "Restore to before this reply?" });
+  await confirm.getByRole("button", { name: "Restore" }).click();
   await expect(page.locator(".doc-content")).toHaveText("Alpha beta gamma.");
+  await expect(page.locator(".msg-assistant")).toHaveCount(0);
+  await expect(page.getByLabel("Message Claude")).toHaveValue('replace "Alpha" with "First"');
+});
+
+test("the usage meter shows plan limits, the chat's cost and the limit Claude pauses at", async ({ page, request }) => {
+  await openWithClaude(page, request, "Alpha beta gamma.");
+  await ask(page, 'replace "Alpha" with "First"');
+  await expect(lastReply(page)).toContainText("Replaced Alpha with First.");
+  await page.getByRole("button", { name: "Usage" }).click();
+  const meter = page.locator(".usage-popover");
+  await expect(meter.getByRole("progressbar", { name: "Session" })).toBeVisible();
+  await expect(meter.getByRole("progressbar", { name: "Weekly · all models" })).toBeVisible();
+  await expect(meter).toContainText("This chat");
+  await meter.getByRole("radio", { name: "75%" }).click();
+  await expect(meter.getByRole("radio", { name: "75%" })).toHaveAttribute("aria-checked", "true");
 });
 
 test("typing @ suggests other documents and inserts the mention", async ({ page, request }) => {

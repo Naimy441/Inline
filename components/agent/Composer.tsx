@@ -1,9 +1,8 @@
 "use client";
 
 import { ArrowUp, Brain, ChevronDown, FileText, Image as ImageIcon, MessageCircleQuestion, Paperclip, PenLine, Square, TextQuote, X } from "lucide-react";
-import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
-import { BUDGET_OPTIONS } from "@/lib/agent/types";
-import type { AgentMode, Attachment, ChatSettings, ContextUsage, DocumentMention, Effort, ModelOption, SelectionContext } from "@/lib/agent/types";
+import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import type { AgentMode, Attachment, ChatSettings, DocumentMention, Effort, ModelOption, SelectionContext } from "@/lib/agent/types";
 import { api, uploadFile } from "@/lib/client/api";
 import { MenuButton } from "@/components/ui/Menu";
 import { CommandsDialog, useCommands } from "@/components/agent/CommandsDialog";
@@ -39,7 +38,8 @@ export const Composer = forwardRef<
     disabledReason?: string;
     settings: ChatSettings;
     models: ModelOption[];
-    context?: ContextUsage;
+    /** The usage meter, shown by the send button. */
+    meter?: ReactNode;
     selection: SelectionContext | null;
     onClearSelection: () => void;
     /** The open document, left out of @-mention suggestions. The unsent message is remembered per document. */
@@ -50,7 +50,7 @@ export const Composer = forwardRef<
     /** The user is writing a message: a chance to start Claude Code before it's sent. */
     onWarm?: () => void;
   }
->(function Composer({ running, disabled, disabledReason, settings, models, context, selection, documentId, onClearSelection, onSend, onStop, onSettings, onWarm }, ref) {
+>(function Composer({ running, disabled, disabledReason, settings, models, meter, selection, documentId, onClearSelection, onSend, onStop, onSettings, onWarm }, ref) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(0);
@@ -349,12 +349,6 @@ export const Composer = forwardRef<
               items={[
                 { kind: "label", label: "Thinking effort" },
                 ...efforts.map((value) => ({ label: EFFORT_LABELS[value], checked: settings.effort === value, onSelect: () => onSettings({ effort: value }) })),
-                { kind: "label", label: "Spending limit per message" },
-                ...BUDGET_OPTIONS.map((value) => ({
-                  label: value === null ? "No limit" : `$${value.toFixed(2)}`,
-                  checked: (settings.maxBudgetUsd ?? null) === value,
-                  onSelect: () => onSettings({ maxBudgetUsd: value }),
-                })),
               ]}
             >
               <Brain size={13} />
@@ -363,24 +357,7 @@ export const Composer = forwardRef<
           )}
         </div>
         <div className="composer-actions">
-          {context && context.percentage >= 40 && (
-            <span className="context-meter" title={`${context.tokens.toLocaleString()} of ${context.maxTokens.toLocaleString()} tokens of context used. Claude summarizes older messages automatically when it fills up.`}>
-              <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden>
-                <circle cx="8" cy="8" r="6.5" fill="none" stroke="var(--border-strong)" strokeWidth="2" />
-                <circle
-                  cx="8"
-                  cy="8"
-                  r="6.5"
-                  fill="none"
-                  stroke={context.percentage > 85 ? "var(--warning)" : "var(--muted)"}
-                  strokeWidth="2"
-                  strokeDasharray={`${(Math.min(100, context.percentage) / 100) * 40.8} 40.8`}
-                  transform="rotate(-90 8 8)"
-                />
-              </svg>
-              {Math.round(context.percentage)}%
-            </span>
-          )}
+          {meter}
           <button type="button" className="icon-btn icon-btn-sm" aria-label="Attach files" data-tip="Attach images, PDFs or text files" onClick={() => fileInput.current?.click()} disabled={disabled}>
             <Paperclip size={15} />
           </button>

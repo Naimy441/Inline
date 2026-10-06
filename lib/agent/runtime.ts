@@ -17,6 +17,7 @@ import type {
   DocumentChange,
   Effort,
   ModelOption,
+  PlanUsage,
   QueuedMessage,
   RunStatus,
   SelectionContext,
@@ -25,6 +26,7 @@ import type {
   ThinkingPart,
   ToolPart,
   UserMessage,
+  UsageWindow,
   DocumentMention,
 } from "@/lib/agent/types";
 import { DEFAULT_MAX_TURNS } from "@/lib/agent/types";
@@ -65,8 +67,18 @@ type PersistedChat = {
   settings: ChatSettings;
   messages: ChatMessage[];
   todos: Todo[];
-  /** Whether Claude Code has a transcript for this chat id, so it can be resumed. */
+  /** Whether Claude Code has a transcript for this chat's session, so it can be resumed. */
   sessionStarted: boolean;
+  /** Claude Code's session id; the chat id until a rewind forks a new session. */
+  sessionId?: string;
+  /** A rewind not yet applied: the next session forks `forkFrom` at this transcript entry, as `sessionId`. */
+  forkAt?: string | null;
+  forkFrom?: string | null;
+  /** Claude Code's running cost total for the session when it was last seen, to work out each reply's own cost. */
+  sessionCostUsd?: number;
+  rewoundUsd?: number;
+  /** "per-message" once each reply's usage.costUsd is its own cost (older files stored Claude Code's running total). */
+  costs?: "per-message";
 };
 
 /** Starts a Claude Code session. Tests swap in a scripted stand-in (lib/agent/testing/fakeClaude.ts). */
@@ -208,9 +220,25 @@ class ChatRuntime {
   lastUsed = Date.now();
   state: ChatState;
   private sessionStarted: boolean;
+  private sessionId: string;
+  private forkAt: string | null;
+  private sessionCostUsd: number | null;
+  /** The running cost total this query's replies are measured from; null until known. */
+  private costBase: number | null = null;
+  private resumedQuery = false;
+  /** Set when Claude is stopped at the user's usage limit: the reason shown on the reply. */
+  private limitStop: string | null = null;
+  private lastLimitCheck = 0;
+  /** Plan usage being fetched as a Claude Code session starts. */
+  private usageReady: Promise<PlanUsage | null> | null = null;
 
   constructor(file: PersistedChat) {
     this.sessionStarted = file.sessionStarted;
+    this.sessionId = file.sessionId ?? file.id;
+    this.forkAt = file.forkAt ?? null;
+    this.forkFrom = file.forkFrom ?? null;
+    this.sessionCostUsd = file.sessionCostUsd ?? null;
+    if (file.costs !== "per-message") perMessageCosts(file.messages);
     for (const message of file.messages) {
       if (message.role === "assistant" && message.status === "streaming") {
         message.status = "stopped";
@@ -229,11 +257,16 @@ class ChatRuntime {
       todos: file.todos,
       running: false,
       queue: [],
+      ...(file.rewoundUsd ? { rewoundUsd: file.rewoundUsd } : {}),
     };
   }
 
   get live() {
     return this.query !== null;
+  }
+
+  get liveQuery() {
+    return this.query;
   }
 
   /** Not running, not streaming to anyone and not holding a Claude Code session; safe to drop from memory. */
@@ -311,6 +344,12 @@ class ChatRuntime {
       messages: this.state.messages,
       todos: this.state.todos,
       sessionStarted: this.sessionStarted,
+      sessionId: this.sessionId,
+      forkAt: this.forkAt,
+      forkFrom: this.forkFrom,
+      ...(this.sessionCostUsd != null ? { sessionCostUsd: this.sessionCostUsd } : {}),
+      ...(this.state.rewoundUsd ? { rewoundUsd: this.state.rewoundUsd } : {}),
+      costs: "per-message",
     };
   }
 
@@ -354,7 +393,7 @@ class ChatRuntime {
       if (query && next.model !== this.state.settings.model) await query.setModel(next.model ?? undefined).catch(() => this.close());
       if (query && next.effort !== this.state.settings.effort) await query.applyFlagSettings({ effortLevel: next.effort }).catch(() => this.close());
       // Limits are fixed when Claude Code starts; the session resumes with the new ones on the next message.
-      if (query && !this.state.running && (next.maxTurns !== this.state.settings.maxTurns || next.maxBudgetUsd !== this.state.settings.maxBudgetUsd)) this.close();
+      if (query && !this.state.running && next.maxTurns !== this.state.settings.maxTurns) this.close();
       this.state.settings = next;
     }
     this.state.updatedAt = Date.now();
@@ -418,6 +457,11 @@ class ChatRuntime {
       message = await this.buildUserMessage(input);
       const live = this.live;
       this.ensureQuery();
+      const over = await this.overUsageLimit(true);
+      if (over) {
+        this.finishTurn("error", over);
+        return;
+      }
       this.input!.push(message);
       // A session that is already running (warmed up, or from the last message) starts on it right away.
       if (live) this.setStatus({ kind: "thinking" });
@@ -430,6 +474,34 @@ class ChatRuntime {
 
   /** The document version Claude last saw in full (sent with a message), so an unchanged document isn't sent again. */
   private listed: { id: string; version: number } | null = null;
+
+  /**
+   * The reason to stop when the plan usage is at or past the user's limit,
+   * else null. Uses usage fetched in the last minute, or fetches it when
+   * `fresh` is set (at the start of a reply) or 45 seconds have passed.
+   */
+  private async overUsageLimit(fresh = false): Promise<string | null> {
+    const limit = this.state.settings.usageLimit;
+    if (!limit) return null;
+    const runtime = agentRuntime();
+    let usage: PlanUsage | null = null;
+    if (fresh && this.usageReady) {
+      usage = await this.usageReady;
+      this.usageReady = null;
+    }
+    usage ??= runtime.cachedPlanUsage(60_000);
+    if (!usage && (fresh || Date.now() - this.lastLimitCheck > 45_000)) {
+      this.lastLimitCheck = Date.now();
+      usage = await runtime.planUsage({ query: this.query ?? undefined, maxAgeMs: 60_000 }).catch(() => null);
+    }
+    return usageLimitReason(usage, limit);
+  }
+
+  private stopAtLimit(reason: string) {
+    if (!this.state.running || this.limitStop) return;
+    this.limitStop = reason;
+    void this.interrupt(true);
+  }
 
   private async buildUserMessage(input: TurnInput): Promise<SDKUserMessage> {
     const context: string[] = [];
@@ -456,8 +528,16 @@ class ChatRuntime {
       } else {
         context.push("The document hasn't changed since you last saw it in full.");
       }
+      const since = Math.max(this.eventsToldAt, this.previousReplyAt());
+      this.eventsToldAt = Date.now();
+      const events = doc.userEvents.filter((event) => event.at > since).map((event) => event.text);
+      if (events.length) context.push(`Since your last reply, the user ${events.join("; ")}. The document may differ from what you last saw, so read it again before relying on earlier content.`);
     } else {
       context.push("No document is open.");
+    }
+    if (this.rewindNote) {
+      context.push(this.rewindNote);
+      this.rewindNote = null;
     }
     if (input.selection && !input.selection.text.trim() && doc && input.selection.documentId === doc.id) {
       const where = cursorContext(doc, input.selection.from);
@@ -496,6 +576,76 @@ class ChatRuntime {
     if (input.text) blocks.push({ type: "text", text: input.text });
     return { type: "user", message: { role: "user", content: blocks as never }, parent_tool_use_id: null };
   }
+
+  /** When the user's events were last told to Claude, so each is told once. */
+  private eventsToldAt = 0;
+
+  /** When Claude's previous reply in this chat started (0 for the first message). */
+  private previousReplyAt() {
+    const messages = this.state.messages;
+    for (let index = messages.length - 3; index >= 0; index -= 1) {
+      const message = messages[index]!;
+      if (message.role === "assistant") return message.createdAt;
+    }
+    return 0;
+  }
+
+  /**
+   * Rewind the chat to just before the user message that led to `messageId`
+   * (an assistant reply): that message and everything after it are removed,
+   * and Claude Code's session forks from the end of the last reply kept, so
+   * Claude forgets the rewound turns too. Returns the removed user message.
+   */
+  async rewind(messageId: string): Promise<UserMessage | null> {
+    if (this.state.running) {
+      await this.interrupt();
+      for (let waited = 0; this.state.running && waited < 6000; waited += 100) await new Promise((resolve) => setTimeout(resolve, 100));
+      if (this.state.running) throw new Error("Claude is still finishing its reply. Try again in a moment.");
+    }
+    const index = this.state.messages.findIndex((message) => message.id === messageId);
+    if (index < 0) throw new Error("That message is no longer in this chat.");
+    let start = index;
+    while (start > 0 && this.state.messages[start]!.role !== "user") start -= 1;
+    const removed = this.state.messages.slice(start);
+    const user = removed[0]?.role === "user" ? removed[0] : null;
+    const kept = this.state.messages.slice(0, start);
+    const spent = removed.reduce((sum, message) => sum + (message.role === "assistant" ? (message.usage?.costUsd ?? 0) : 0), 0);
+    if (spent) this.state.rewoundUsd = (this.state.rewoundUsd ?? 0) + spent;
+    this.state.messages = kept;
+    this.state.queue = [];
+    // The forked session hasn't seen the document since; send it in full again.
+    this.listed = null;
+    this.state.todos = [];
+    // Claude Code forgets the rewound turns too: the next message forks the session at the end of the
+    // last reply kept, or starts a new session when nothing is kept.
+    this.close();
+    const lastKept = [...kept].reverse().find((message) => message.role === "assistant") as AssistantMessage | undefined;
+    this.rewindNote = null;
+    if (!kept.length || !this.sessionStarted) {
+      this.sessionId = randomUUID();
+      this.sessionStarted = false;
+      this.forkAt = null;
+      this.forkFrom = null;
+      this.sessionCostUsd = null;
+    } else if (lastKept?.sessionPoint) {
+      // A fork still pending from an earlier rewind branches from the same original session.
+      this.forkFrom = this.forkAt ? this.forkFrom : this.sessionId;
+      this.forkAt = lastKept.sessionPoint;
+      this.sessionId = randomUUID();
+      this.sessionCostUsd = null;
+    } else if (user) {
+      // A reply from before rewinds were possible has no recorded point: keep the session and tell Claude.
+      this.rewindNote = `The user rewound this chat to before their message "${clip(user.text, 200)}". Disregard that message and everything after it.`;
+    }
+    this.state.updatedAt = Date.now();
+    this.emit({ type: "snapshot", chat: this.state });
+    await this.persistNow();
+    return user;
+  }
+
+  private forkFrom: string | null;
+  /** Told to Claude with the next message after a rewind that couldn't fork the session. */
+  private rewindNote: string | null = null;
 
   private toolContext(): ToolContext {
     return {
@@ -543,6 +693,9 @@ class ChatRuntime {
     const input = new AsyncQueue<SDKUserMessage>();
     const settings = this.state.settings;
     const date = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+    const fork = this.forkAt && this.forkFrom && this.sessionStarted ? { resume: this.forkFrom, resumeSessionAt: this.forkAt, forkSession: true, sessionId: this.sessionId } : null;
+    this.costBase = null;
+    this.resumedQuery = this.sessionStarted && !fork;
     const q = startQuery({
       prompt: input,
       options: {
@@ -551,14 +704,17 @@ class ChatRuntime {
         tools: BUILTIN_TOOLS,
         allowedTools: [mcpToolName("*"), ...BUILTIN_TOOLS],
         mcpServers: { inline: createInlineSdkServer(() => this.toolContext()) },
+        // Only Inline's tools: none of the user's own MCP servers or claude.ai connectors (Google Drive and so on).
+        strictMcpConfig: true,
+        settings: { disableClaudeAiConnectors: true },
+        env: { ...process.env, ENABLE_CLAUDEAI_MCP_SERVERS: "false" },
         settingSources: [],
         includePartialMessages: true,
         thinking: { type: "adaptive", display: "summarized" },
         effort: settings.effort,
         maxTurns: settings.maxTurns ?? DEFAULT_MAX_TURNS,
-        ...(settings.maxBudgetUsd ? { maxBudgetUsd: settings.maxBudgetUsd } : {}),
         ...(settings.model ? { model: settings.model } : {}),
-        ...(this.sessionStarted ? { resume: this.state.id } : { sessionId: this.state.id }),
+        ...(fork ? fork : this.sessionStarted ? { resume: this.sessionId } : { sessionId: this.sessionId }),
         persistSession: true,
         stderr: (data) => {
           if (process.env.INLINE_DEBUG_AGENT) process.stderr.write(`[claude ${this.state.id.slice(0, 8)}] ${data}`);
@@ -569,6 +725,14 @@ class ChatRuntime {
     this.input = input;
     agentRuntime().noteLive(this);
     void this.consume(q, input);
+    // Plan usage for the usage meter and limit, and the running cost total replies are measured from.
+    this.usageReady = agentRuntime()
+      .planUsage({ query: q, force: true })
+      .then((usage) => {
+        if (this.query === q && this.costBase === null && usage.sessionCostUsd != null) this.costBase = usage.sessionCostUsd;
+        return usage as PlanUsage;
+      })
+      .catch(() => null);
   }
 
   private async consume(q: Query, input: AsyncQueue<SDKUserMessage>) {
@@ -578,9 +742,9 @@ class ChatRuntime {
         if (this.query !== q) break;
         this.handle(message);
       }
-      if (this.query === q && this.current) this.finishTurn(this.interrupted ? "stopped" : "error", this.interrupted ? undefined : "Claude Code exited unexpectedly.");
+      if (this.query === q && this.current) this.finishTurn(this.interrupted && !this.limitStop ? "stopped" : "error", this.limitStop ?? (this.interrupted ? undefined : "Claude Code exited unexpectedly."));
     } catch (error) {
-      if (this.query === q && this.current) this.finishTurn(this.interrupted ? "stopped" : "error", this.interrupted ? undefined : describeFailure(errorText(error)));
+      if (this.query === q && this.current) this.finishTurn(this.interrupted && !this.limitStop ? "stopped" : "error", this.limitStop ?? (this.interrupted ? undefined : describeFailure(errorText(error))));
     } finally {
       input.close();
       if (this.query === q) {
@@ -601,10 +765,12 @@ class ChatRuntime {
         return;
       case "assistant":
         if (message.parent_tool_use_id) return;
+        if (this.current && message.uuid) this.current.sessionPoint = message.uuid;
         this.handleAssistant(message.message as unknown as { id: string; model?: string; content: Array<Record<string, unknown>> }, message.error);
         return;
       case "user":
         if (message.parent_tool_use_id) return;
+        if (this.current && message.uuid && !("isReplay" in message && message.isReplay)) this.current.sessionPoint = message.uuid;
         this.handleToolResults(message.message.content);
         return;
       case "result":
@@ -613,6 +779,10 @@ class ChatRuntime {
       case "rate_limit_event": {
         const info = message.rate_limit_info;
         this.emit({ type: "rate_limit", rateLimit: { status: info.status, resetsAt: info.resetsAt, type: info.rateLimitType, utilization: info.utilization } });
+        agentRuntime().noteRateLimit(info);
+        const limit = this.state.settings.usageLimit;
+        const over = limit ? usageLimitReason(agentRuntime().cachedPlanUsage(Infinity), limit) : null;
+        if (over) this.stopAtLimit(over);
         return;
       }
       default:
@@ -623,8 +793,10 @@ class ChatRuntime {
   private handleSystem(message: SDKMessage & { subtype: string }) {
     if (message.subtype === "init") {
       // A warmed-up session reports in before any message; only a turn creates a transcript to resume.
-      if (!this.sessionStarted && this.current) {
+      if ((!this.sessionStarted || this.forkAt) && this.current) {
         this.sessionStarted = true;
+        this.forkAt = null;
+        this.forkFrom = null;
         this.persistSoon();
       }
       const model = (message as { model?: string }).model;
@@ -810,6 +982,11 @@ class ChatRuntime {
     if (changed) {
       this.setStatus({ kind: "thinking" });
       this.persistSoon();
+      if (this.state.settings.usageLimit) {
+        void this.overUsageLimit().then((over) => {
+          if (over && this.current === message) this.stopAtLimit(over);
+        });
+      }
     }
   }
 
@@ -822,23 +999,28 @@ class ChatRuntime {
       this.persistSoon();
     }
     const usage = result.usage as unknown as Record<string, number>;
+    // Claude Code reports the session's running total; a reply's own cost is the difference from the last one.
+    const total = result.total_cost_usd ?? 0;
+    const base = this.costBase ?? (this.resumedQuery && this.sessionCostUsd != null && total > this.sessionCostUsd ? this.sessionCostUsd : 0);
+    this.costBase = total;
+    this.sessionCostUsd = total;
     message.usage = {
       inputTokens: usage.input_tokens ?? 0,
       outputTokens: usage.output_tokens ?? 0,
       cacheReadTokens: usage.cache_read_input_tokens ?? 0,
       cacheCreationTokens: usage.cache_creation_input_tokens ?? 0,
-      costUsd: result.total_cost_usd,
+      costUsd: Math.max(0, total - base),
       durationMs: result.duration_ms,
       numTurns: result.num_turns,
     };
-    if (this.interrupted) {
+    if (this.limitStop) {
+      this.finishTurn("error", this.limitStop);
+    } else if (this.interrupted) {
       this.finishTurn("stopped");
     } else if (result.subtype !== "success") {
       const reason =
         result.subtype === "error_max_turns"
           ? `Stopped after ${result.num_turns} steps, the limit for one message. Send "continue" to keep going.`
-          : result.subtype === "error_max_budget_usd"
-            ? `Stopped at the spending limit for one message ($${this.state.settings.maxBudgetUsd ?? "?"}). Raise it in the effort menu, or send "continue".`
           : result.errors?.length
             ? describeFailure(result.errors.join("\n"))
             : "Claude stopped because of an error.";
@@ -849,6 +1031,8 @@ class ChatRuntime {
       this.finishTurn(message.error ? "error" : "done", message.error);
     }
     void this.refreshContextUsage();
+    const q = this.query;
+    if (q) void agentRuntime().planUsage({ query: q, force: true }).catch(() => undefined);
   }
 
   private finishTurn(status: AssistantMessage["status"], error?: string) {
@@ -856,8 +1040,17 @@ class ChatRuntime {
     if (!message) return;
     if (status === "error") log("warn", "a Claude turn ended with an error", { chatId: this.state.id, error: error ?? message.error });
     this.current = null;
+    this.limitStop = null;
     message.status = status;
     if (error) message.error = error;
+    if (status === "error" && this.forkAt && /resume/i.test(error ?? message.error ?? "")) {
+      // The rewound session couldn't be forked: start a fresh one next time instead of failing forever.
+      this.forkAt = null;
+      this.forkFrom = null;
+      this.sessionStarted = false;
+      this.sessionId = randomUUID();
+      this.close();
+    }
     for (const part of message.parts) {
       if (part.type === "tool" && (part.status === "pending" || part.status === "running")) part.status = status === "done" ? "done" : "error";
       if (part.type === "thinking" && !part.done) this.finishThinking(part);
@@ -900,14 +1093,16 @@ class ChatRuntime {
     this.idleTimer.unref?.();
   }
 
-  async interrupt() {
+  async interrupt(atLimit = false) {
     if (!this.state.running) return;
+    if (!atLimit) this.limitStop = null;
     this.interrupted = true;
     this.state.queue = [];
     this.emit({ type: "queue", queue: [] });
     const q = this.query;
     if (!q) {
-      this.finishTurn("stopped");
+      if (this.limitStop) this.finishTurn("error", this.limitStop);
+      else this.finishTurn("stopped");
       return;
     }
     try {
@@ -919,7 +1114,8 @@ class ChatRuntime {
     setTimeout(() => {
       if (this.current && this.interrupted) {
         this.close();
-        this.finishTurn("stopped");
+        if (this.limitStop) this.finishTurn("error", this.limitStop);
+        else this.finishTurn("stopped");
       }
     }, 5000);
   }
@@ -985,6 +1181,62 @@ function describeFailure(text: string) {
   return clip(text, 600) || "Claude stopped because of an error.";
 }
 
+/** Older chat files stored Claude Code's running cost total on each reply; turn those into each reply's own cost. */
+function perMessageCosts(messages: ChatMessage[]) {
+  let previous = 0;
+  for (const message of messages) {
+    if (message.role !== "assistant" || !message.usage) continue;
+    const total = message.usage.costUsd;
+    // A total lower than the one before means Claude Code restarted and counted from zero again.
+    message.usage.costUsd = total >= previous ? total - previous : total;
+    previous = total;
+  }
+}
+
+type SDKUsage = Awaited<ReturnType<Query["usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET"]>>;
+
+const WINDOW_LABELS: Record<string, string> = {
+  five_hour: "Session",
+  seven_day: "Weekly · all models",
+  seven_day_opus: "Weekly · Opus",
+  seven_day_sonnet: "Weekly · Sonnet",
+};
+
+/** Claude Code's /usage answer as the panel shows it. */
+export function planUsageFrom(answer: SDKUsage, now = Date.now()): PlanUsage {
+  const limits = answer.rate_limits;
+  if (!answer.rate_limits_available || !limits) return { available: false, plan: answer.subscription_type ?? null, checkedAt: now };
+  const windows: UsageWindow[] = [];
+  for (const id of ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet"] as const) {
+    const window = limits[id];
+    if (window && window.utilization != null) windows.push({ id, label: WINDOW_LABELS[id]!, utilization: window.utilization, resetsAt: window.resets_at ? Date.parse(window.resets_at) || null : null });
+  }
+  for (const window of limits.model_scoped ?? []) {
+    if (window.utilization != null) windows.push({ id: `model:${window.display_name}`, label: `Weekly · ${window.display_name}`, utilization: window.utilization, resetsAt: window.resets_at ? Date.parse(window.resets_at) || null : null });
+  }
+  return { available: true, plan: answer.subscription_type ?? null, windows, checkedAt: now };
+}
+
+function formatReset(at: number, now = Date.now()) {
+  const minutes = Math.max(1, Math.round((at - now) / 60_000));
+  if (minutes < 60) return `in ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `in ${hours} hr${minutes % 60 ? ` ${minutes % 60} min` : ""}`;
+  return `on ${new Date(at).toLocaleDateString("en-US", { weekday: "long" })} at ${new Date(at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`;
+}
+
+/** Why Claude should stop when the 5-hour or weekly usage is at or past `limit` percent; null when it's under. */
+export function usageLimitReason(usage: PlanUsage | null, limit: number, now = Date.now()): string | null {
+  if (!usage?.available) return null;
+  const over = usage.windows
+    .filter((window) => (window.id === "five_hour" || window.id === "seven_day") && window.utilization >= limit && (!window.resetsAt || window.resetsAt > now))
+    .sort((a, b) => b.utilization - a.utilization)[0];
+  if (!over) return null;
+  const name = over.id === "five_hour" ? "5-hour session" : "weekly";
+  const resets = over.resetsAt ? ` It resets ${formatReset(over.resetsAt, now)}.` : "";
+  return `Paused at your usage limit: your ${name} usage is at ${Math.round(over.utilization)}% and your limit is ${limit}%.${resets} Raise or turn off the limit from the usage meter below the message box to keep going.`;
+}
+
 let workspaceCache: string | null = null;
 function workspaceDirSync() {
   if (!workspaceCache) throw new Error("Agent workspace not initialised.");
@@ -1001,6 +1253,8 @@ class AgentRuntime {
   private loading = new Map<string, Promise<ChatRuntime | null>>();
   private status: AgentStatus | null = null;
   private statusPromise: Promise<AgentStatus> | null = null;
+  private usage: PlanUsage | null = null;
+  private usagePromise: Promise<PlanUsage & { sessionCostUsd?: number }> | null = null;
   defaultSettings: ChatSettings = { model: null, effort: "medium", mode: "agent" };
 
   async init() {
@@ -1146,6 +1400,47 @@ class AgentRuntime {
     this.defaultSettings = { ...this.defaultSettings, ...patch };
   }
 
+  /** Plan usage seen within `maxAgeMs`, or null. */
+  cachedPlanUsage(maxAgeMs: number) {
+    return this.usage && Date.now() - this.usage.checkedAt <= maxAgeMs ? this.usage : null;
+  }
+
+  /**
+   * The account's plan usage (5-hour and weekly windows), from Claude Code's
+   * /usage. Asks through `query` when given (and reports that session's running
+   * cost), else through any live chat, else a short-lived Claude Code process.
+   */
+  async planUsage(options: { query?: Query; force?: boolean; maxAgeMs?: number } = {}): Promise<PlanUsage & { sessionCostUsd?: number }> {
+    const cached = this.cachedPlanUsage(options.maxAgeMs ?? 60_000);
+    if (cached && !options.force) return cached;
+    const ask = async (q: Query) => {
+      const answer = await withTimeout(q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }), 15_000, "Claude Code did not report usage in time.");
+      const usage = planUsageFrom(answer);
+      this.usage = usage;
+      return { ...usage, sessionCostUsd: answer.session?.total_cost_usd };
+    };
+    if (options.query) return ask(options.query);
+    if (!this.usagePromise) {
+      const live = [...this.chats.values()].find((chat) => chat.live)?.liveQuery;
+      this.usagePromise = (live ? ask(live) : withProbe((q) => ask(q))).finally(() => {
+        this.usagePromise = null;
+      });
+    }
+    return this.usagePromise;
+  }
+
+  /** Fold a rate-limit event from a running session into the cached usage. */
+  noteRateLimit(info: { rateLimitType?: string; utilization?: number; resetsAt?: number }) {
+    const usage = this.usage;
+    if (!usage?.available || !info.rateLimitType || info.utilization == null) return;
+    const utilization = info.utilization <= 1 ? info.utilization * 100 : info.utilization;
+    const resetsAt = info.resetsAt ? info.resetsAt * 1000 : null;
+    const windows = usage.windows.some((window) => window.id === info.rateLimitType)
+      ? usage.windows.map((window) => (window.id === info.rateLimitType ? { ...window, utilization, resetsAt: resetsAt ?? window.resetsAt } : window))
+      : [...usage.windows, { id: info.rateLimitType, label: WINDOW_LABELS[info.rateLimitType] ?? info.rateLimitType, utilization, resetsAt }];
+    this.usage = { ...usage, windows };
+  }
+
   /** Whether Claude Code is installed and signed in, and which models the account can use. Cached briefly. */
   async agentStatus(force = false): Promise<AgentStatus> {
     if (!force && this.status && Date.now() - this.status.checkedAt < (this.status.state === "ready" ? 5 * 60_000 : 10_000)) return this.status;
@@ -1161,6 +1456,34 @@ class AgentRuntime {
         });
     }
     return this.statusPromise;
+  }
+}
+
+/** Runs `use` against a short-lived Claude Code process that never sends a message. */
+async function withProbe<T>(use: (q: Query) => Promise<T>): Promise<T> {
+  await agentRuntime().init();
+  const input = new AsyncQueue<SDKUserMessage>();
+  const q = startQuery({
+    prompt: input,
+    options: { cwd: workspaceDirSync(), tools: [], settingSources: [], persistSession: false, systemPrompt: "", strictMcpConfig: true, settings: { disableClaudeAiConnectors: true } },
+  });
+  const drain = (async () => {
+    try {
+      for await (const message of q) void message;
+    } catch {
+      // surfaced through `use`
+    }
+  })();
+  try {
+    return await use(q);
+  } finally {
+    input.close();
+    try {
+      q.close();
+    } catch {
+      // ignore
+    }
+    await drain;
   }
 }
 

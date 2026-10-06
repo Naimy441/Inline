@@ -122,6 +122,8 @@ export class LiveDocument {
   private layoutWaiters = new Set<() => void>();
   /** The mode the user's editor is in, so Claude knows whether they're suggesting or only viewing. */
   editorMode: "editing" | "suggesting" | "viewing" = "editing";
+  /** What the user did outside Claude's replies (restored a version, undid Claude's changes), told to Claude with the next message. */
+  userEvents: Array<{ at: number; text: string }> = [];
   private log: Array<{ step: Step; clientID: string }> = [];
   private listeners = new Set<(event: HubEvent) => void>();
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -286,6 +288,11 @@ export class LiveDocument {
     }
     this.applyTransform(tr, { kind: "system", label: "review" }, { hunks: remaining });
     return { changed: true };
+  }
+
+  noteUserEvent(text: string) {
+    this.userEvents.push({ at: Date.now(), text });
+    if (this.userEvents.length > 20) this.userEvents.splice(0, this.userEvents.length - 20);
   }
 
   // --- meta -----------------------------------------------------------------

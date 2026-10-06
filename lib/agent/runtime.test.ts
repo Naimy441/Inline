@@ -501,3 +501,103 @@ describe("sessions and settings", () => {
     assert.equal(status.state === "ready" && status.defaultModel, "default");
   });
 });
+
+describe("costs, usage and rewinding", () => {
+  it("keeps Claude Code to Inline's tools, without the user's MCP servers or claude.ai connectors", async () => {
+    const fake = useModel((_turn, claude) => claude.say("hi"));
+    const { chat } = await newChat();
+    await turn(chat, "Hi");
+    const options = fake.sessions[0]!.options;
+    assert.equal(options.strictMcpConfig, true);
+    assert.deepEqual(options.settings, { disableClaudeAiConnectors: true });
+    assert.equal(options.env?.ENABLE_CLAUDEAI_MCP_SERVERS, "false");
+  });
+
+  it("costs each reply on its own, not Claude Code's running total, across restarts", async () => {
+    useModel((_turn, claude) => claude.say("hi"));
+    const { chat } = await newChat();
+    assert.equal((await turn(chat, "One")).usage?.costUsd, 0.0123);
+    assert.equal((await turn(chat, "Two")).usage?.costUsd, 0.0123);
+    chat.close();
+    assert.equal((await turn(chat, "Three")).usage?.costUsd, 0.0123);
+  });
+
+  it("turns the running totals in older chat files into each reply's cost", async () => {
+    useModel(() => undefined);
+    const id = "old-costs";
+    const reply = (n: number, costUsd: number) => ({ id: `a${n}`, role: "assistant", createdAt: n, status: "done", parts: [], usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0, costUsd, durationMs: 1, numTurns: 1 } });
+    await writeChatFile(id, {
+      format: 1,
+      id,
+      title: "Old chat",
+      documentId: null,
+      createdAt: 1,
+      updatedAt: 1,
+      settings: { model: null, effort: "medium", mode: "agent" },
+      messages: [reply(1, 0.1), reply(2, 0.25), reply(3, 0.05)],
+      todos: [],
+      sessionStarted: true,
+    });
+    const chat = await agentRuntime().require(id);
+    const costs = chat.state.messages.map((message) => (message.role === "assistant" ? Math.round((message.usage?.costUsd ?? 0) * 100) / 100 : null));
+    assert.deepEqual(costs, [0.1, 0.15, 0.05]);
+  });
+
+  it("rewinds the chat and forks Claude Code's session at the last reply kept", async () => {
+    const fake = useModel((turn, claude) => claude.say(`Answer to ${turn.text}`));
+    const { chat } = await newChat();
+    const first = await turn(chat, "One");
+    const second = await turn(chat, "Two");
+    await turn(chat, "Three");
+    assert.ok(first.sessionPoint, "each reply records where its turn ends in the transcript");
+
+    const removed = await chat.rewind(second.id);
+    assert.equal(removed?.text, "Two");
+    assert.deepEqual(
+      chat.state.messages.map((message) => message.id),
+      [chat.state.messages[0]!.id, first.id],
+    );
+    assert.ok(Math.abs((chat.state.rewoundUsd ?? 0) - 0.0246) < 1e-9, "the rewound replies still count toward the chat's total");
+
+    await turn(chat, "Two again");
+    const forked = fake.sessions.at(-1)!.options;
+    assert.equal(forked.resume, chat.state.id);
+    assert.equal(forked.resumeSessionAt, first.sessionPoint);
+    assert.equal(forked.forkSession, true);
+    assert.notEqual(forked.sessionId, chat.state.id);
+
+    // Rewinding everything starts a new session with no history.
+    await chat.rewind(lastAssistant(chat).id);
+    await chat.rewind(first.id);
+    assert.equal(chat.state.messages.length, 0);
+    await turn(chat, "Fresh start");
+    const fresh = fake.sessions.at(-1)!.options;
+    assert.equal(fresh.resume, undefined);
+    assert.ok(fresh.sessionId && fresh.sessionId !== chat.state.id && fresh.sessionId !== forked.sessionId);
+  });
+
+  it("tells Claude when the user restored a version or undid changes since its last reply", async () => {
+    const fake = useModel((_turn, claude) => claude.say("ok"));
+    const { doc, chat } = await newChat();
+    await turn(chat, "One");
+    doc.noteUserEvent('restored an earlier version of the document ("Before Claude\'s edits")');
+    await turn(chat, "Two");
+    assert.match(fake.turns[1]!.context, /Since your last reply, the user restored an earlier version/);
+    await turn(chat, "Three");
+    assert.doesNotMatch(fake.turns[2]!.context, /Since your last reply/, "each event is told once");
+  });
+
+  it("pauses at the user's usage limit instead of starting a reply", async () => {
+    const fake = useModel((_turn, claude) => claude.say("hi"));
+    fake.planLimits = { five_hour: 82, seven_day: 40 };
+    const { chat } = await newChat({ settings: { usageLimit: 75 } });
+    const reply = await turn(chat, "Hi");
+    assert.equal(reply.status, "error");
+    assert.match(reply.error ?? "", /usage limit: your 5-hour session usage is at 82% and your limit is 75%/);
+    assert.equal(fake.turns.length, 0, "nothing was sent to Claude");
+
+    fake.planLimits = { five_hour: 50, seven_day: 40 };
+    chat.close();
+    assert.equal((await turn(chat, "Hi again")).status, "done");
+  });
+});

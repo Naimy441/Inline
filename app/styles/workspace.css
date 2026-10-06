@@ -153,6 +153,29 @@
   color: var(--accent-text);
 }
 
+/* The desktop Claude button: a quiet text button that tints when the panel is open. */
+.btn.claude-toggle-text {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-2);
+  font-weight: 500;
+}
+
+.btn.claude-toggle-text svg {
+  color: currentColor;
+}
+
+.btn.claude-toggle-text:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.btn.claude-toggle-text.is-active {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
 /* Toolbar */
 
 .toolbar {
@@ -1334,8 +1357,7 @@ button.status-item:hover {
 
 .workspace.is-focus .claude-toggle,
 .workspace.is-focus .bubble-ask,
-.workspace.is-focus .bubble-ask + .bubble-sep,
-.workspace.is-focus .status-claude {
+.workspace.is-focus .bubble-ask + .bubble-sep {
   display: none !important;
 }
 
