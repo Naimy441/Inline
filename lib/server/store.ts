@@ -138,7 +138,25 @@ export async function writeDocumentFile(file: StoredDocumentFile) {
 
 export async function deleteDocumentFile(id: string) {
   await removeFile(dir("documents", `${assertSafeId(id)}.json`));
+  await removeFile(dir("thumbnails", `${id}.img`));
   await fs.rm(dir("versions", assertSafeId(id)), { recursive: true, force: true });
+}
+
+/** The small first-page image shown on the home page (WebP or JPEG). */
+export async function writeThumbnail(id: string, data: Uint8Array) {
+  const file = dir("thumbnails", `${assertSafeId(id)}.img`);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const temp = `${file}.${process.pid}.tmp`;
+  await fs.writeFile(temp, data);
+  await fs.rename(temp, file);
+}
+
+export async function readThumbnail(id: string): Promise<Uint8Array | null> {
+  try {
+    return new Uint8Array(await fs.readFile(dir("thumbnails", `${assertSafeId(id)}.img`)));
+  } catch {
+    return null;
+  }
 }
 
 export async function listDocumentIds() {

@@ -53,6 +53,15 @@ export function hasLegacyDocuments() {
   }
 }
 
+/** Stops offering the import in this browser; the old documents stay where they are. */
+export function dismissLegacyDocuments() {
+  try {
+    localStorage.setItem(DONE_KEY, "dismissed");
+  } catch {
+    // ignore
+  }
+}
+
 export async function importLegacyDocuments(): Promise<number> {
   const raw = localStorage.getItem(KEY);
   const docs = raw ? (JSON.parse(raw) as LegacyDocument[]) : [];

@@ -66,16 +66,20 @@ export type DocumentMeta = {
   preview: string;
   /** True until someone names the document; meanwhile the title follows its first line, like Google Docs. */
   autoTitle?: boolean;
-  /** Document tabs: set on every tab after the first, naming the first tab, which holds the title and the tab order. */
+  /** Document tabs: set on every tab but the root (the tab the document began with), naming the root, which holds the title and the tab order. */
   parentId?: string;
-  /** On the first tab: the ids of the other tabs, in order. */
+  /** On the root tab: every tab's id in order (older files list only the tabs after it). */
   tabs?: string[];
   /** The tab's own name ("Tab 1" when unnamed). */
   tabTitle?: string;
+  /** When the first-page thumbnail was last saved, and what it showed (a hash), so it's redrawn only when the page changes. */
+  thumbnailAt?: number;
+  thumbnailKey?: string;
 };
 
 /** One tab of a document, as the tabs list shows it. */
-export type DocumentTab = { id: string; title: string };
+export type DocumentTab = { id: string; title: string; root?: boolean; outline?: TabHeading[] };
+export type TabHeading = { pos: number; level: number; text: string };
 
 export type CommentReply = { id: string; author: CommentAuthor; body: string; createdAt: number };
 export type CommentAuthor = "user" | "claude";
@@ -193,6 +197,12 @@ export function patchSettings(current: DocumentSettings, patch: unknown): Docume
     pageNumbers: { ...current.pageNumbers, ...((p.pageNumbers as object) ?? {}) },
   };
   return normalizeSettings(merged, current);
+}
+
+/** The settings that decide where pages break, as a string, so a page count measured under other settings isn't trusted. */
+export function layoutKey(settings: DocumentSettings) {
+  const { paperSize, orientation, margins } = settings.pageSetup;
+  return [paperSize, orientation, margins.top, margins.right, margins.bottom, margins.left, settings.fontFamily, settings.fontSize, settings.lineSpacing, settings.paragraphSpacing].join("|");
 }
 
 /** Page dimensions in inches, accounting for orientation. */

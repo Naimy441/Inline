@@ -619,7 +619,7 @@
   gap: 8px;
   flex: 1;
   min-width: 0;
-  padding: 7px 8px;
+  padding: 7px 8px 7px 4px;
   border: 0;
   background: transparent;
   color: var(--text-2);
@@ -675,50 +675,73 @@
   box-shadow: 0 0 0 3px var(--selection);
 }
 
+.tab-toggle {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-left: 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.tab-toggle:hover:not(:disabled) {
+  background: var(--surface-active);
+  color: var(--text);
+}
+
+.tab-toggle:disabled {
+  cursor: default;
+}
+
+.tab-toggle svg {
+  transition: transform 0.15s var(--ease);
+}
+
+.tab-toggle.is-expanded svg {
+  transform: rotate(90deg);
+}
+
+.tab-row.is-open .tab-toggle {
+  color: var(--accent);
+}
+
+.tab-list li.is-dragging {
+  opacity: 0.45;
+}
+
+.tab-list li.drop-before > .tab-row {
+  box-shadow: 0 -2px 0 var(--accent);
+}
+
+.tab-list li.drop-after > .tab-row {
+  box-shadow: 0 2px 0 var(--accent);
+}
+
+.status-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 200px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.status-tab span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tab-outline {
   margin: 2px 0 6px 14px !important;
   padding-left: 8px !important;
   border-left: 1px solid var(--border);
-}
-
-.tabs-toggle {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  z-index: 5;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 220px;
-  height: 32px;
-  padding: 0 8px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 13px;
-  cursor: pointer;
-  transition: background 0.12s var(--ease), color 0.12s var(--ease), border-color 0.12s var(--ease);
-}
-
-.tabs-toggle:hover {
-  background: var(--surface);
-  border-color: var(--border);
-  color: var(--text);
-}
-
-.tabs-toggle.has-tabs {
-  padding: 0 12px 0 10px;
-  background: var(--surface);
-  border-color: var(--border);
-  box-shadow: var(--shadow-sm);
-  color: var(--text-2);
-}
-
-.tabs-toggle span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .tabs-backdrop {
@@ -1617,9 +1640,6 @@ button.status-item:hover {
     box-shadow: var(--shadow-lg);
     animation: tabs-in 0.18s var(--ease);
   }
-  .tabs-toggle:not(.has-tabs) {
-    display: none;
-  }
   .tabs-backdrop {
     display: block;
     position: absolute;
@@ -1627,9 +1647,7 @@ button.status-item:hover {
     z-index: 19;
     background: rgba(0, 0, 0, 0.18);
   }
-  .workspace-body:has(.tabs-toggle.has-tabs) .canvas {
-    padding-top: 40px;
-  }
+
 }
 
 @media (max-width: 860px) {
@@ -2069,4 +2087,12 @@ button.status-item:hover {
     transform: translateX(-16px);
     opacity: 0;
   }
+}
+
+/* Other tabs laid out for a PDF of the whole document: never seen. */
+.offscreen-pages {
+  position: fixed;
+  top: 0;
+  left: -100000px;
+  pointer-events: none;
 }

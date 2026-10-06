@@ -1059,6 +1059,25 @@ describe("get_page_count", () => {
     assert.match(result.text, /fills about 1 page .*estimated/);
   });
 
+  test("counts pages as they'll be once pending deletions are kept", async () => {
+    const { doc, ctx } = await setup();
+    await runTool("edit_document", { old_string: "lazy dog", new_string: "dog" }, ctx);
+    doc.setLayout({ version: doc.version, pages: 2, starts: [10], lastPageFill: 0.05, kept: { pages: 1, starts: [], lastPageFill: 0.9 } });
+    const result = await runTool("get_page_count", {}, ctx);
+    assert.match(result.text, /fills 1 page once the pending changes are kept/);
+    assert.match(result.text, /The editor shows 2 pages until then/);
+    assert.match(result.text, /The last page is about 90% full/);
+  });
+
+  test("a layout measured before the page setup changed is not used", async () => {
+    const { doc, ctx } = await setup();
+    doc.setLayout({ version: doc.version, pages: 2, starts: [], lastPageFill: 0.1 });
+    await runTool("update_document_settings", { margins: { left: 0.8, right: 0.8 } }, ctx);
+    assert.equal(doc.layoutIsCurrent(), false);
+    const result = await runTool("get_page_count", {}, ctx);
+    assert.match(result.text, /fills about 1 page .*estimated/);
+  });
+
   test("waits for an open editor to measure the latest change", async () => {
     const { doc, ctx } = await setup();
     const stop = doc.subscribe(() => undefined);
@@ -1178,7 +1197,7 @@ describe("export_document", () => {
     const online = await runTool("export_document", { format: "pdf" }, ctx);
     assert.equal(online.isError, undefined);
     assert.match(online.text, /Started the download of "Field notes\.pdf"/);
-    assert.deepEqual(commands, [{ kind: "export_pdf" }], "the editor draws the PDF from its own page layout");
+    assert.deepEqual(commands, [{ kind: "export_pdf", tabs: "all" }], "the editor draws the PDF from its own page layout");
   });
 });
 

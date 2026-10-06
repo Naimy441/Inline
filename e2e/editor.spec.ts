@@ -82,12 +82,12 @@ test("spelling underlines can be hidden, and a word added to the dictionary", as
   await expect(doc).toHaveAttribute("spellcheck", "false");
 });
 
-test("document tabs can be added, renamed, switched and deleted", async ({ page }) => {
+test("document tabs can be added, renamed, reordered, exported and deleted", async ({ page }) => {
   await newBlankDocument(page);
   const firstUrl = page.url();
   await page.locator(".doc-content").click();
   await page.keyboard.type("First tab text.");
-  await page.getByRole("button", { name: "Show tabs & outline" }).click();
+  await page.getByRole("button", { name: "Tabs & outline" }).click();
   const pane = page.getByRole("navigation", { name: "Document tabs" });
   await pane.getByRole("button", { name: "Add tab" }).click();
   await page.waitForURL((url) => url.href !== firstUrl);
@@ -98,14 +98,31 @@ test("document tabs can be added, renamed, switched and deleted", async ({ page 
   await page.locator(".doc-content").click();
   await page.keyboard.type("Second tab text.");
   await expect(page.locator(".sync-status")).toHaveText(/Saved/);
+  await expect(page.locator(".status-tab")).toHaveText("Notes");
+
+  // Drag Notes above Tab 1.
+  await pane.locator("li", { hasText: "Notes" }).dragTo(pane.locator("li", { hasText: "Tab 1" }), { targetPosition: { x: 40, y: 4 } });
+  await expect(pane.locator(".tab-name")).toHaveText(["Notes", "Tab 1"]);
+
+  // Downloads include every tab, in order.
+  const id = new URL(page.url()).pathname.split("/").pop();
+  const markdown = await (await page.request.get(`/api/documents/${id}/export?format=md&tabs=all`)).text();
+  expect(markdown.indexOf("Second tab text.")).toBeLessThan(markdown.indexOf("First tab text."));
+
+  // The first tab can be deleted too.
   await pane.getByRole("button", { name: "Tab 1", exact: true }).click();
   await expect(page.locator(".doc-content")).toContainText("First tab text.");
-  await expect(page.locator(".doc-content")).not.toContainText("Second tab text.");
-  await pane.locator(".tab-row", { hasText: "Notes" }).hover();
-  await pane.getByRole("button", { name: "Notes options" }).click();
+  await pane.locator(".tab-row", { hasText: "Tab 1" }).hover();
+  await pane.getByRole("button", { name: "Tab 1 options" }).click();
   await page.getByRole("menuitem", { name: /^Delete/ }).click();
   await page.getByRole("button", { name: "Delete tab" }).click();
   await expect(pane.locator(".tab-row")).toHaveCount(1);
+  await expect(page.locator(".doc-content")).toContainText("Second tab text.");
+  // The document lives on under the remaining tab.
+  const firstId = new URL(firstUrl).pathname.split("/").pop();
+  const list = (await (await page.request.get("/api/documents")).json()) as { documents: Array<{ id: string }> };
+  expect(list.documents.some((doc) => doc.id === id)).toBe(true);
+  expect(list.documents.some((doc) => doc.id === firstId)).toBe(false);
 });
 
 test("find highlights every match", async ({ page }) => {

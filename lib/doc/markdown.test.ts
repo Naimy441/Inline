@@ -119,3 +119,27 @@ describe("serializeDoc", () => {
     assert.equal(markdownToDoc(out).textContent, doc.textContent);
   });
 });
+
+describe("templates", () => {
+  it("every template parses and round-trips", async () => {
+    const { documentTemplates } = await import("./templates");
+    for (const template of documentTemplates(new Date(2026, 8, 4))) {
+      if (!template.markdown) continue;
+      assert.equal(roundTrip(template.markdown), docToMarkdown(markdownToDoc(roundTrip(template.markdown))), template.id);
+    }
+  });
+
+  it("the MLA paper indents paragraphs, hangs Works Cited and breaks before it", async () => {
+    const { documentTemplates } = await import("./templates");
+    const mla = documentTemplates(new Date(2026, 8, 4)).find((template) => template.id === "mla")!;
+    const doc = markdownToDoc(mla.markdown);
+    assert.ok(types(doc).includes("page_break"));
+    const indents: Record<string, number> = {};
+    doc.forEach((node) => (indents[node.textContent.slice(0, 12)] = node.attrs.textIndent as number));
+    assert.equal(indents["Begin your i"], 0.5);
+    assert.equal(indents["Lastname, Fi"], -0.5);
+    assert.ok(mla.markdown.includes("4 September 2026"));
+    assert.ok(mla.markdown.includes("4 Sept. 2026"));
+    assert.equal(mla.settings?.headerFooter?.header, "Lastname {page}");
+  });
+});

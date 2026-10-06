@@ -151,8 +151,10 @@ function paragraphProps(node: PMNode, options: { style?: string; numbering?: { n
   if (node.attrs.spaceAfter != null) spacing.push(`w:after="${Math.round(Number(node.attrs.spaceAfter) * 20)}"`);
   if (node.attrs.lineHeight) spacing.push(`w:line="${Math.round(Number(node.attrs.lineHeight) * 240)}" w:lineRule="auto"`);
   if (spacing.length) props.push(`<w:spacing ${spacing.join(" ")}/>`);
-  const indent = (Number(node.attrs.indent) || 0) * 720 + (options.indentTwips ?? 0);
-  if (indent) props.push(`<w:ind w:left="${indent}"/>`);
+  const textIndent = Number(node.attrs.textIndent) || 0;
+  const indent = (Number(node.attrs.indent) || 0) * 720 + (options.indentTwips ?? 0) + (textIndent < 0 ? Math.round(-textIndent * 1440) : 0);
+  const first = textIndent > 0 ? ` w:firstLine="${Math.round(textIndent * 1440)}"` : textIndent < 0 ? ` w:hanging="${Math.round(-textIndent * 1440)}"` : "";
+  if (indent || first) props.push(`<w:ind w:left="${indent}"${first}/>`);
   const align = node.attrs.align as string | undefined;
   if (align && align !== "left") props.push(`<w:jc w:val="${align === "justify" ? "both" : align}"/>`);
   return props.length ? `<w:pPr>${props.join("")}</w:pPr>` : "";

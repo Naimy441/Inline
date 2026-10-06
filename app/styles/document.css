@@ -521,6 +521,11 @@ img.ProseMirror-separator {
   user-select: none;
 }
 
+/* Hidden for an instant while pages are measured as they'll be once changes are kept. */
+.doc-content.measuring-kept .review-delete {
+  display: none !important;
+}
+
 .doc-content .review-delete.is-focused {
   background: color-mix(in srgb, var(--delete-text) 18%, transparent);
 }

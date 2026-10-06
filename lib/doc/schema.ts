@@ -38,13 +38,16 @@ const blockAttrs = {
   lineHeight: { default: null as string | null },
   spaceBefore: { default: null as number | null },
   spaceAfter: { default: null as number | null },
+  /** First-line indent in inches; negative is a hanging indent (works cited, bibliographies). */
+  textIndent: { default: null as number | null },
 };
 
 function blockStyle(node: PMNode, extra = ""): string {
   const parts: string[] = [];
-  const { align, indent, lineHeight, spaceBefore, spaceAfter } = node.attrs;
+  const { align, indent, lineHeight, spaceBefore, spaceAfter, textIndent } = node.attrs;
   if (align && align !== "left") parts.push(`text-align: ${align}`);
   if (indent) parts.push(`margin-left: ${Number(indent) * 0.5}in`);
+  if (textIndent) parts.push(`text-indent: ${textIndent}in`, ...(textIndent < 0 ? [`padding-left: ${-textIndent}in`] : []));
   if (lineHeight) parts.push(`line-height: ${lineHeight}`);
   if (spaceBefore != null) parts.push(`margin-top: ${spaceBefore}pt`);
   if (spaceAfter != null) parts.push(`margin-bottom: ${spaceAfter}pt`);
@@ -58,6 +61,15 @@ function blockDomAttrs(node: PMNode, extra: Record<string, string> = {}) {
   const style = blockStyle(node);
   if (style) attrs.style = style;
   return attrs;
+}
+
+/** "0.5in", "36pt" or "48px" in inches, rounded to a hundredth; null for none. */
+export function parseTextIndent(value: string): number | null {
+  const match = value.trim().match(/^(-?[\d.]+)(in|pt|px)$/);
+  if (!match) return null;
+  const amount = Number(match[1]) / (match[2] === "in" ? 1 : match[2] === "pt" ? 72 : 96);
+  const rounded = Math.round(Math.max(-3, Math.min(3, amount)) * 100) / 100;
+  return Number.isFinite(rounded) && rounded !== 0 ? rounded : null;
 }
 
 function parseBlockAttrs(dom: HTMLElement) {
@@ -76,6 +88,7 @@ function parseBlockAttrs(dom: HTMLElement) {
     lineHeight: style?.lineHeight && /^[\d.]+$/.test(style.lineHeight) ? style.lineHeight : null,
     spaceBefore: null,
     spaceAfter: null,
+    textIndent: parseTextIndent(style?.textIndent || ""),
   };
 }
 

@@ -25,7 +25,7 @@ import { CommentMargin, marginFits } from "@/components/workspace/CommentMargin"
 import { FindBar } from "@/components/workspace/FindBar";
 import { HistoryPanel, VersionPreview, type VersionSummary } from "@/components/workspace/HistoryPanel";
 import { prefetchVersions } from "@/lib/client/versions";
-import { addTab, rememberedRoot, useTabs } from "@/lib/client/tabs";
+import { addTab, rememberedRoot, takeScroll, useTabs } from "@/lib/client/tabs";
 import { documentMenus, MenuBar, type MenuActions } from "@/components/workspace/MenuBar";
 import { OutlinePanel } from "@/components/workspace/OutlinePanel";
 import { PageCanvas } from "@/components/workspace/PageCanvas";
@@ -168,6 +168,12 @@ export function Workspace({ documentId }: { documentId: string }) {
     const timer = setTimeout(() => prefetchVersions(documentId), 2500);
     return () => clearTimeout(timer);
   }, [ready, documentId]);
+  // A heading picked in another tab's outline.
+  useEffect(() => {
+    if (!ready) return;
+    const pos = takeScroll(documentId);
+    if (pos !== null) requestAnimationFrame(() => session.scrollTo(pos, pos));
+  }, [ready, documentId, session]);
   const prefs = useSyncExternalStore(preferences.subscribe, preferences.get, () => DEFAULT_PREFERENCES);
   const meta = ui.meta;
   // A document's tabs share one Claude chat, kept under the first tab's id.
@@ -288,31 +294,35 @@ export function Workspace({ documentId }: { documentId: string }) {
     return true;
   };
 
-  const [exporting, setExporting] = useState<"docx" | "md" | "html" | "txt" | null>(null);
+  const [exporting, setExporting] = useState<{ format: "docx" | "md" | "html" | "txt"; scope: "all" | "tab" } | null>(null);
+  const tabs = useTabs(documentId);
   const download = useCallback(
-    async (format: "docx" | "pdf" | "md" | "html" | "txt", changes?: "with" | "without") => {
+    async (format: "docx" | "pdf" | "md" | "html" | "txt", changes?: "with" | "without", scope: "all" | "tab" = "all") => {
+      // A document with tabs downloads all of them, in order, unless asked for the open tab only.
+      const others = scope === "all" && tabs && tabs.length > 1 ? tabs.map((tab) => tab.id) : null;
       if (format !== "pdf" && !changes && session.ui.get().hunks.length) {
-        setExporting(format);
+        setExporting({ format, scope });
         return;
       }
       if (format === "pdf") {
-        await session.exportPdf().catch((error: Error) => toast(`Couldn't export the PDF: ${error.message}`, { tone: "error" }));
+        const addTabs = others ? (await import("@/components/workspace/exportTabs")).withOtherTabs(documentId, others) : undefined;
+        await session.exportPdf(addTabs).catch((error: Error) => toast(`Couldn't export the PDF: ${error.message}`, { tone: "error" }));
         return;
       }
       await session.whenSaved();
       const link = document.createElement("a");
-      link.href = `/api/documents/${documentId}/export?format=${format}${changes === "without" ? "&changes=without" : ""}`;
+      link.href = `/api/documents/${documentId}/export?format=${format}${changes === "without" ? "&changes=without" : ""}${others ? "&tabs=all" : ""}`;
       link.download = "";
       document.body.append(link);
       link.click();
       link.remove();
     },
-    [session, documentId],
+    [session, documentId, tabs],
   );
 
   commandHandler.current = (command) => {
     if (command.kind === "print") void session.print();
-    else if (command.kind === "export_pdf") void session.exportPdf().catch((error: Error) => toast(`Couldn't export the PDF: ${error.message}`, { tone: "error" }));
+    else if (command.kind === "export_pdf") void download("pdf", undefined, command.tabs ?? "tab");
     else if (command.kind === "download") {
       const link = document.createElement("a");
       link.href = command.url;
@@ -484,13 +494,17 @@ export function Workspace({ documentId }: { documentId: string }) {
 
   const openComments = ui.comments.filter((comment) => !comment.resolved).length;
   const working = Boolean(ui.activity && ui.activity.status !== "idle");
-  const downloads: MenuItem[] = [
-    { label: "Word (.docx)", onSelect: () => void download("docx") },
-    { label: "PDF (.pdf)", onSelect: () => void download("pdf") },
-    { label: "Markdown (.md)", onSelect: () => void download("md") },
-    { label: "Web page (.html)", onSelect: () => void download("html") },
-    { label: "Plain text (.txt)", onSelect: () => void download("txt") },
+  const formats = (scope: "all" | "tab"): MenuItem[] => [
+    { label: "Word (.docx)", onSelect: () => void download("docx", undefined, scope) },
+    { label: "PDF (.pdf)", onSelect: () => void download("pdf", undefined, scope) },
+    { label: "Markdown (.md)", onSelect: () => void download("md", undefined, scope) },
+    { label: "Web page (.html)", onSelect: () => void download("html", undefined, scope) },
+    { label: "Plain text (.txt)", onSelect: () => void download("txt", undefined, scope) },
   ];
+  const downloads: MenuItem[] =
+    tabs && tabs.length > 1
+      ? [{ kind: "label", label: `All ${tabs.length} tabs` }, ...formats("all"), { kind: "separator" }, { label: "This tab only", submenu: formats("tab") }]
+      : formats("all");
   // Phones fold the title bar's buttons and the menu bar into one menu.
   const moreItems = (): MenuItem[] => [
     { label: "Mode", hint: EDITOR_MODES[ui.mode].label, icon: EDITOR_MODES[ui.mode].icon(16), submenu: modeMenuItems(ui.mode, (mode) => void session.setMode(mode)) },
@@ -517,6 +531,9 @@ export function Workspace({ documentId }: { documentId: string }) {
         </div>
         {compact ? (
           <div className="titlebar-actions">
+            <IconButton label="Tabs & outline" size="lg" active={outline} onClick={toggleOutline}>
+              <ListTree size={19} />
+            </IconButton>
             <IconButton label="Comments" size="lg" active={panel === "comments"} onClick={() => setPanel((current) => (current === "comments" ? null : "comments"))}>
               <MessageSquare size={19} />
               {openComments > 0 && <span className="badge">{openComments}</span>}
@@ -537,6 +554,9 @@ export function Workspace({ documentId }: { documentId: string }) {
             </IconButton>
             <IconButton label="Version history" active={panel === "history"} onPointerEnter={() => prefetchVersions(documentId)} onClick={() => setPanel((current) => (current === "history" ? null : "history"))}>
               <History size={16} />
+            </IconButton>
+            <IconButton label="Tabs & outline" active={outline} onClick={toggleOutline}>
+              <ListTree size={16} />
             </IconButton>
             <IconButton label="Comments" active={panel === "comments"} onClick={() => setPanel((current) => (current === "comments" ? null : "comments"))}>
               <MessageSquare size={16} />
@@ -590,13 +610,11 @@ export function Workspace({ documentId }: { documentId: string }) {
       />
 
       <div className="workspace-body">
-        {outline ? (
+        {outline && (
           <>
             <div className="tabs-backdrop" onClick={toggleOutline} aria-hidden />
             <WithEditorState session={session}>{(state) => <OutlinePanel session={session} state={state} meta={meta} readOnly={ui.mode === "viewing"} onClose={toggleOutline} />}</WithEditorState>
           </>
-        ) : (
-          <TabsToggle documentId={documentId} onOpen={toggleOutline} />
         )}
         <main
           ref={canvasRef}
@@ -694,6 +712,7 @@ export function Workspace({ documentId }: { documentId: string }) {
         <span className="status-item">
           {ui.pages} page{ui.pages === 1 ? "" : "s"}
         </span>
+        <TabStatus documentId={documentId} onOpen={() => !outline && toggleOutline()} />
         {ui.hunks.length > 0 && <span className="status-item is-accent">{ui.hunks.length} pending</span>}
         {ui.mode !== "editing" && (
           <button type="button" className={`status-item status-mode is-${ui.mode}`} onClick={() => void session.setMode("editing")} data-tip="Back to editing">
@@ -722,9 +741,9 @@ export function Workspace({ documentId }: { documentId: string }) {
             <Button
               variant="secondary"
               onClick={() => {
-                const format = exporting!;
+                const { format, scope } = exporting!;
                 setExporting(null);
-                void download(format, "without");
+                void download(format, "without", scope);
               }}
             >
               Without them
@@ -732,9 +751,9 @@ export function Workspace({ documentId }: { documentId: string }) {
             <Button
               variant="primary"
               onClick={() => {
-                const format = exporting!;
+                const { format, scope } = exporting!;
                 setExporting(null);
-                void download(format, "with");
+                void download(format, "with", scope);
               }}
             >
               Include them
@@ -930,14 +949,15 @@ function WordCountTable({ session }: { session: DocumentSession }) {
 }
 
 
-/** Opens the tabs pane; names the open tab when the document has more than one. */
-function TabsToggle({ documentId, onOpen }: { documentId: string; onOpen: () => void }) {
+/** The open tab's name in the status bar, when the document has more than one tab. */
+function TabStatus({ documentId, onOpen }: { documentId: string; onOpen: () => void }) {
   const tabs = useTabs(documentId);
   const current = tabs && tabs.length > 1 ? tabs.find((tab) => tab.id === documentId) : null;
+  if (!current) return null;
   return (
-    <button type="button" className={`tabs-toggle${current ? " has-tabs" : ""}`} aria-label="Show tabs & outline" data-tip="Show tabs & outline" onClick={onOpen}>
-      <ListTree size={16} />
-      {current && <span>{current.title}</span>}
+    <button type="button" className="status-item status-tab" onClick={onOpen} data-tip="Tabs & outline">
+      <ListTree size={12} />
+      <span>{current.title}</span>
     </button>
   );
 }

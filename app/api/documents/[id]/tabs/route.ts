@@ -21,7 +21,7 @@ export const POST = route(async (request, context: Context) => {
   return json({ id: tab.id, tabs: await hub.tabs(doc.id) }, { status: 201 });
 });
 
-const PatchBody = z.object({ title: z.string().max(100).optional(), index: z.number().int().min(1).optional() });
+const PatchBody = z.object({ title: z.string().max(100).optional(), index: z.number().int().min(0).optional() });
 
 /** Renames or moves this tab. */
 export const PATCH = route(async (request, context: Context) => {
@@ -37,15 +37,15 @@ export const PATCH = route(async (request, context: Context) => {
   return json({ tabs: await hub.tabs(doc.id) });
 });
 
-/** Deletes this tab for good (not the first tab). */
+/** Deletes this tab for good (a document keeps at least one). */
 export const DELETE = route(async (_request, context: Context) => {
   const doc = await routeDocument(context);
   const hub = documentHub();
-  const root = doc.meta.parentId;
+  let next;
   try {
-    await hub.deleteTab(doc.id);
+    next = await hub.deleteTab(doc.id);
   } catch (error) {
     throw new HttpError(400, (error as Error).message);
   }
-  return json({ tabs: root ? await hub.tabs(root) : [] });
+  return json({ tabs: await hub.tabs(next.id) });
 });
