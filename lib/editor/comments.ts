@@ -6,11 +6,14 @@ import { Decoration, DecorationSet } from "prosemirror-view";
  * of them are open (and which one is active) comes from the comment list.
  */
 
-type CommentsState = { open: Set<string>; active: string | null };
+type Range = { from: number; to: number };
+/** `draft` is the text a comment is being written about, highlighted while the editor isn't focused. */
+type CommentsState = { open: Set<string>; active: string | null; draft: Range | null };
+type CommentsPatch = Partial<{ open: string[]; active: string | null; draft: Range | null }>;
 
 export const commentsKey = new PluginKey<CommentsState>("comments");
 
-export function setCommentState(tr: Transaction, patch: Partial<{ open: string[]; active: string | null }>) {
+export function setCommentState(tr: Transaction, patch: CommentsPatch) {
   return tr.setMeta(commentsKey, patch);
 }
 
@@ -35,22 +38,34 @@ export function commentRanges(state: EditorState) {
   return ranges;
 }
 
+/** The range a comment is being drafted about, if any. */
+export function commentDraft(state: EditorState) {
+  return commentsKey.getState(state)?.draft ?? null;
+}
+
 export function commentsPlugin(onActivate: (id: string | null) => void) {
   return new Plugin<CommentsState>({
     key: commentsKey,
     state: {
-      init: () => ({ open: new Set(), active: null }),
+      init: () => ({ open: new Set(), active: null, draft: null }),
       apply(tr, value) {
-        const meta = tr.getMeta(commentsKey) as Partial<{ open: string[]; active: string | null }> | undefined;
-        if (!meta) return value;
-        return { open: meta.open ? new Set(meta.open) : value.open, active: meta.active !== undefined ? meta.active : value.active };
+        const meta = tr.getMeta(commentsKey) as CommentsPatch | undefined;
+        let draft = meta?.draft !== undefined ? meta.draft : value.draft;
+        if (draft && tr.docChanged && meta?.draft === undefined) {
+          const from = tr.mapping.map(draft.from, 1);
+          const to = tr.mapping.map(draft.to, -1);
+          draft = to > from ? { from, to } : null;
+        }
+        if (!meta) return draft === value.draft ? value : { ...value, draft };
+        return { open: meta.open ? new Set(meta.open) : value.open, active: meta.active !== undefined ? meta.active : value.active, draft };
       },
     },
     props: {
       decorations(state) {
         const value = commentsKey.getState(state);
-        if (!value || !value.open.size) return DecorationSet.empty;
+        if (!value || (!value.open.size && !value.draft)) return DecorationSet.empty;
         const decorations: Decoration[] = [];
+        if (value.draft) decorations.push(Decoration.inline(value.draft.from, value.draft.to, { class: "comment-hl is-draft" }));
         state.doc.descendants((node, pos) => {
           if (!node.isText) return true;
           for (const mark of node.marks) {

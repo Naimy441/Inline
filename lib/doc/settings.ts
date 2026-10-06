@@ -80,6 +80,8 @@ export type DocComment = {
   createdAt: number;
   resolved: boolean;
   replies: CommentReply[];
+  /** Client only: a comment still being saved, and the text it's about. */
+  pending?: { from: number; to: number };
 };
 
 export const FONT_FAMILIES = [

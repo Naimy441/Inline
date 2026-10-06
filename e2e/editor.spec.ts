@@ -42,6 +42,46 @@ test("comments attach to the selected text", async ({ page }) => {
   await expect(page.locator(".doc-content .comment-hl")).toHaveCount(1);
 });
 
+test("with no side panel open, comments float beside the page and save at once", async ({ page }) => {
+  await newBlankDocument(page);
+  const panel = page.locator(".agent-panel");
+  if (await panel.count()) await panel.getByRole("button", { name: "Close panel" }).click();
+  await page.locator(".doc-content").click();
+  await page.keyboard.type("A sentence worth a note.");
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Shift+End");
+  await page.keyboard.press("Control+Alt+m");
+  const draft = page.locator(".comment-float .comment-card.is-draft");
+  await expect(draft).toBeVisible();
+  await expect(page.locator(".doc-content .comment-hl.is-draft")).toHaveCount(1);
+  await page.keyboard.type("Floating note.");
+  await page.keyboard.press("Enter");
+  // The card is there straight away, then anchored to its saved highlight.
+  await expect(page.locator(".comment-float .comment-body")).toHaveText("Floating note.");
+  await expect(page.locator(".doc-content .comment-hl")).toHaveCount(1);
+  await expect(page.locator(".side-panel")).toHaveCount(0);
+});
+
+test("toolbar buttons show tooltips", async ({ page }) => {
+  await newBlankDocument(page);
+  await page.getByRole("toolbar", { name: "Formatting" }).getByRole("button", { name: "Bold" }).hover();
+  await expect(page.getByRole("tooltip")).toHaveText(/^Bold\s+(Ctrl|⌘)\+?B$/);
+});
+
+test("spelling underlines can be hidden, and a word added to the dictionary", async ({ page }) => {
+  await newBlankDocument(page);
+  const doc = page.locator(".doc-content");
+  await doc.click();
+  await page.keyboard.type("Zorblat is here.");
+  // Right-click on the word itself.
+  await doc.locator("p").first().click({ button: "right", position: { x: 12, y: 8 } });
+  await page.getByRole("menuitem", { name: /Add “Zorblat” to dictionary/ }).click();
+  await expect(doc.locator('[spellcheck="false"]')).toHaveText("Zorblat");
+  await doc.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Hide spelling underlines" }).click();
+  await expect(doc).toHaveAttribute("spellcheck", "false");
+});
+
 test("find highlights every match", async ({ page }) => {
   await newBlankDocument(page);
   await page.locator(".doc-content").click();

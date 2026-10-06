@@ -753,7 +753,8 @@ img.ProseMirror-separator {
   cursor: pointer;
 }
 
-.doc-content .comment-hl.is-active {
+.doc-content .comment-hl.is-active,
+.doc-content .comment-hl.is-draft {
   background: rgba(251, 188, 4, 0.45);
 }
 

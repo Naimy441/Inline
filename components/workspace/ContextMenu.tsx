@@ -1,6 +1,6 @@
 "use client";
 
-import { ClipboardPaste, Copy, Link2, Lock, LockOpen, MessageSquarePlus, RemoveFormatting, Scissors, Sparkles, Trash2 } from "lucide-react";
+import { BookPlus, ClipboardPaste, Copy, Link2, Lock, LockOpen, MessageSquarePlus, RemoveFormatting, Scissors, Sparkles, Trash2 } from "lucide-react";
 import { deleteSelection } from "prosemirror-commands";
 import { TextSelection } from "prosemirror-state";
 import { addColumnAfter, addColumnBefore, addRowAfter, addRowBefore, deleteColumn, deleteRow, deleteTable, isInTable } from "prosemirror-tables";
@@ -10,6 +10,8 @@ import { clearFormatting } from "@/lib/editor/commands";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { toast } from "@/components/ui/Toast";
 import { isTouch } from "@/lib/client/viewport";
+import { selectedWord } from "@/lib/editor/spelling";
+import { preferences } from "@/lib/client/preferences";
 
 /**
  * The editor's right-click menu. Shift+right-click still opens the browser's own
@@ -65,6 +67,8 @@ export function ContextMenu({
       .setSelectionLocked(lock)
       .then(() => toast(lock ? "Locked. Claude can't change this text." : "Unlocked. Claude can edit this text again."))
       .catch((error: Error) => toast(error.message, { tone: "error" }));
+  const word = session.view ? selectedWord(session.view) : null;
+  const spellcheck = preferences.get().spellcheck;
   const paste = (plain: boolean) => void session.paste(plain).catch((error: Error) => toast(error.message, { tone: "error" }));
 
   const items: MenuItem[] = [
@@ -104,6 +108,21 @@ export function ContextMenu({
       : []),
     { kind: "separator" },
     { label: "Clear formatting", icon: <RemoveFormatting size={14} />, shortcut: `⌘\\`, disabled: !hasSelection || readOnly, onSelect: () => run(clearFormatting) },
+    { kind: "separator" },
+    ...(word && spellcheck
+      ? [
+          {
+            label: `Add “${word.text.length > 24 ? `${word.text.slice(0, 23)}…` : word.text}” to dictionary`,
+            hint: "Stop underlining this word",
+            icon: <BookPlus size={14} />,
+            onSelect: () => {
+              session.addToDictionary(word.text);
+              toast(`“${word.text}” won't be underlined again.`);
+            },
+          },
+        ]
+      : []),
+    { label: spellcheck ? "Hide spelling underlines" : "Show spelling underlines", onSelect: () => session.setSpellcheck(!spellcheck) },
     { kind: "label", label: "Shift+right-click for spelling suggestions" },
   ];
 
