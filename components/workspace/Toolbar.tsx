@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 import { redo, redoDepth, undo, undoDepth } from "prosemirror-history";
 import type { EditorState } from "prosemirror-state";
-import { useRef, useState, type ReactNode } from "react";
+import { memo, useRef, useState, type ReactNode } from "react";
 import type { DocumentSession, EditorMode } from "@/lib/client/documentSession";
 import { EDITOR_MODES, modeMenuItems } from "@/components/workspace/modes";
 import { FONT_FAMILIES, type DocumentMeta } from "@/lib/doc/settings";
@@ -83,20 +83,56 @@ function fontLabel(value: string | null, fallback: string) {
   return FONT_FAMILIES.find((font) => font.value === family)?.label ?? family.split(",")[0]!.replace(/"/g, "");
 }
 
-export function Toolbar({
-  session,
-  state,
-  meta,
-  zoom,
-  zoomFit,
-  onZoom,
-  onLink,
-  onComment,
-  onImage,
-  mode,
-}: {
+/** What the toolbar shows about the selection; it re-renders only when one of these changes, not on every keystroke. */
+type Format = {
+  ready: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
+  empty: boolean;
+  kind: BlockKind | null;
+  align: Align;
+  list: ReturnType<typeof listKind>;
+  sizeAttr: string | null;
+  family: string | null;
+  color: string | null;
+  highlight: string | null;
+  lineHeight: ReturnType<typeof currentLineHeight>;
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+  strike: boolean;
+  link: boolean;
+};
+
+function formatOf(state: EditorState | null): Format {
+  const active = (name: keyof typeof schema.marks) => (state ? markActive(state, schema.marks[name]!) : false);
+  return {
+    ready: Boolean(state),
+    canUndo: Boolean(state && undoDepth(state)),
+    canRedo: Boolean(state && redoDepth(state)),
+    empty: !state || state.selection.empty,
+    kind: state ? blockKind(state) : null,
+    align: state ? currentAlign(state) : "left",
+    list: state ? listKind(state) : null,
+    sizeAttr: state ? markAttr(state, schema.marks.font_size!, "size") : null,
+    family: state ? markAttr(state, schema.marks.font_family!, "family") : null,
+    color: state ? markAttr(state, schema.marks.text_color!, "color") : null,
+    highlight: state ? markAttr(state, schema.marks.highlight!, "color") : null,
+    lineHeight: state ? currentLineHeight(state) : null,
+    bold: active("bold"),
+    italic: active("italic"),
+    underline: active("underline"),
+    strike: active("strike"),
+    link: active("link"),
+  };
+}
+
+function sameFormat(a: Format, b: Format) {
+  return (Object.keys(a) as Array<keyof Format>).every((key) => a[key] === b[key]);
+}
+
+type ToolbarProps = {
   session: DocumentSession;
-  state: EditorState | null;
   meta: DocumentMeta | null;
   zoom: number;
   zoomFit: boolean;
@@ -105,19 +141,34 @@ export function Toolbar({
   onComment: () => void;
   onImage: () => void;
   mode: EditorMode;
-}) {
+};
+
+export function Toolbar({ state, ...props }: ToolbarProps & { state: EditorState | null }) {
+  const next = formatOf(state);
+  const last = useRef(next);
+  if (!sameFormat(last.current, next)) last.current = next;
+  return <ToolbarView format={last.current} {...props} />;
+}
+
+const ToolbarView = memo(function ToolbarView({
+  format,
+  session,
+  meta,
+  zoom,
+  zoomFit,
+  onZoom,
+  onLink,
+  onComment,
+  onImage,
+  mode,
+}: ToolbarProps & { format: Format }) {
   const run = session.run.bind(session);
   const viewing = mode === "viewing";
-  const disabled = !state || viewing;
-  const kind = state ? blockKind(state) : null;
-  const align = state ? currentAlign(state) : "left";
-  const list = state ? listKind(state) : null;
+  const disabled = !format.ready || viewing;
+  const { kind, align, list, family, lineHeight } = format;
   const defaultSize = meta?.settings.fontSize ?? 11;
-  const sizeAttr = state ? markAttr(state, schema.marks.font_size!, "size") : null;
-  const size = sizeAttr ? Number.parseFloat(sizeAttr) : defaultSize;
-  const family = state ? markAttr(state, schema.marks.font_family!, "family") : null;
-  const active = (name: keyof typeof schema.marks) => (state ? markActive(state, schema.marks[name]!) : false);
-  const lineHeight = state ? currentLineHeight(state) : null;
+  const size = format.sizeAttr ? Number.parseFloat(format.sizeAttr) : defaultSize;
+  const active = (name: "bold" | "italic" | "underline" | "strike" | "link") => format[name];
 
   const setSize = (next: number) => {
     const value = Math.max(4, Math.min(144, Math.round(next * 2) / 2));
@@ -129,10 +180,10 @@ export function Toolbar({
   return (
     <div className={`toolbar${viewing ? " is-viewing" : ""}`} role="toolbar" aria-label="Formatting">
       <Group>
-        <IconButton label="Undo" shortcut={`${mod}Z`} disabled={disabled || !undoDepth(state)} onClick={() => run(undo)}>
+        <IconButton label="Undo" shortcut={`${mod}Z`} disabled={disabled || !format.canUndo} onClick={() => run(undo)}>
           <Undo2 size={16} />
         </IconButton>
-        <IconButton label="Redo" shortcut={`${mod}⇧Z`} disabled={disabled || !redoDepth(state)} onClick={() => run(redo)}>
+        <IconButton label="Redo" shortcut={`${mod}⇧Z`} disabled={disabled || !format.canRedo} onClick={() => run(redo)}>
           <Redo2 size={16} />
         </IconButton>
       </Group>
@@ -200,14 +251,14 @@ export function Toolbar({
           label="Text color"
           icon={<Baseline size={16} />}
           colors={TEXT_COLORS}
-          current={state ? markAttr(state, schema.marks.text_color!, "color") : null}
+          current={format.color}
           onPick={(color) => run(setMark(schema.marks.text_color!, color ? { color } : null))}
         />
         <ColorButton
           label="Highlight"
           icon={<Highlighter size={16} />}
           colors={HIGHLIGHTS}
-          current={state ? markAttr(state, schema.marks.highlight!, "color") : null}
+          current={format.highlight}
           onPick={(color) => run(setMark(schema.marks.highlight!, color ? { color } : null))}
         />
       </Group>
@@ -215,7 +266,7 @@ export function Toolbar({
         <IconButton label="Insert link" shortcut={`${mod}K`} disabled={disabled} active={active("link")} onClick={onLink}>
           <Link2 size={16} />
         </IconButton>
-        <IconButton label="Add comment" shortcut={`${mod}⌥M`} disabled={!state || state.selection.empty} onClick={onComment}>
+        <IconButton label="Add comment" shortcut={`${mod}⌥M`} disabled={!format.ready || format.empty} onClick={onComment}>
           <MessageSquarePlus size={16} />
         </IconButton>
         <IconButton label="Insert image" disabled={disabled} onClick={onImage}>
@@ -281,7 +332,7 @@ export function Toolbar({
       </MenuButton>
     </div>
   );
-}
+});
 
 /** A group of controls; editing groups are disabled in viewing mode. */
 function Group({ children, edit = true, className }: { children: ReactNode; edit?: boolean; className?: string }) {

@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 
 import { DEFAULT_SETTINGS } from "@/lib/doc/settings";
 import {
+  FileSummaryCache,
   assertSafeId,
   dataDir,
   deleteChatFile,
@@ -304,5 +305,25 @@ describe("dataDir", () => {
       assert.equal(dataDir(), path.resolve(process.env.INLINE_DATA_DIR!));
     });
     assert.equal(dataDir(), before);
+  });
+});
+
+describe("FileSummaryCache", () => {
+  it("reads a file once until it changes", async () => {
+    const file = path.join(mkdtempSync(path.join(tmpdir(), "inline-cache-")), "a.json");
+    writeFileSync(file, "one");
+    const cache = new FileSummaryCache<string>();
+    let reads = 0;
+    const read = async () => {
+      reads += 1;
+      return readFileSync(file, "utf8");
+    };
+    assert.equal(await cache.get(file, read), "one");
+    assert.equal(await cache.get(file, read), "one");
+    assert.equal(reads, 1);
+    writeFileSync(file, "changed");
+    assert.equal(await cache.get(file, read), "changed");
+    assert.equal(reads, 2);
+    assert.equal(await cache.get(path.join(path.dirname(file), "missing.json"), read), null);
   });
 });

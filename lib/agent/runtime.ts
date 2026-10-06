@@ -30,7 +30,7 @@ import { DEFAULT_MAX_TURNS } from "@/lib/agent/types";
 import { documentHub, type LiveDocument } from "@/lib/server/hub";
 import { findText, textblockLines } from "@/lib/doc/editing";
 import { serializeDoc } from "@/lib/doc/markdown";
-import { deleteChatFile, findUpload, listChatIds, readChatFile, workspaceDir, writeChatFile } from "@/lib/server/store";
+import { chatFilePath, deleteChatFile, FileSummaryCache, findUpload, listChatIds, readChatFile, workspaceDir, writeChatFile } from "@/lib/server/store";
 import { isUserSuggestion } from "@/lib/doc/review";
 import { log } from "@/lib/server/log";
 import { attachmentText } from "@/lib/agent/attachments";
@@ -986,6 +986,7 @@ function workspaceDirSync() {
 
 class AgentRuntime {
   private chats = new Map<string, ChatRuntime>();
+  private summaries = new FileSummaryCache<ChatSummary>();
   private loading = new Map<string, Promise<ChatRuntime | null>>();
   private status: AgentStatus | null = null;
   private statusPromise: Promise<AgentStatus> | null = null;
@@ -1066,18 +1067,19 @@ class AgentRuntime {
     await this.init();
     this.scheduleSweep();
     const ids = await listChatIds();
-    // Chats not already in memory are summarized from their files without being kept loaded.
-    const chats = await Promise.all(
+    // Chats not already in memory are summarized from their files without being kept loaded, and only read again once they change.
+    const summaries = await Promise.all(
       ids.map(async (id) => {
         const loaded = this.chats.get(id);
-        if (loaded) return loaded;
-        const file = await readChatFile<PersistedChat>(id).catch(() => null);
-        return file ? new ChatRuntime(file) : null;
+        if (loaded) return loaded.summary();
+        return this.summaries.get(chatFilePath(id), async () => {
+          const file = await readChatFile<PersistedChat>(id).catch(() => null);
+          return file ? new ChatRuntime(file).summary() : null;
+        });
       }),
     );
-    return chats
-      .filter((chat): chat is ChatRuntime => Boolean(chat))
-      .map((chat) => chat.summary())
+    return summaries
+      .filter((summary): summary is ChatSummary => Boolean(summary))
       .filter((summary) => summary.messageCount > 0 && (!options.documentId || summary.documentId === options.documentId))
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }

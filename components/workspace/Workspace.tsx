@@ -6,7 +6,7 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useS
 import type { EditorState } from "prosemirror-state";
 import type { SelectionContext } from "@/lib/agent/types";
 import { api, patch, post, uploadFile } from "@/lib/client/api";
-import { DocumentSession, geometryFor, type ClientCommand, type EditorMode } from "@/lib/client/documentSession";
+import { DocumentSession, geometryFor, type ClientCommand, type DocumentUiState, type EditorMode } from "@/lib/client/documentSession";
 import { useTheme } from "@/lib/client/theme";
 import { docPlainText, docWordCount, wordCount } from "@/lib/doc/editing";
 import type { DocumentMeta } from "@/lib/doc/settings";
@@ -141,7 +141,7 @@ export function Workspace({ documentId }: { documentId: string }) {
     [documentId],
   );
 
-  const ui = useSyncExternalStore(session.ui.subscribe, session.ui.get, session.ui.get);
+  const ui = useWorkspaceUi(session);
   const prefs = useSyncExternalStore(preferences.subscribe, preferences.get, () => DEFAULT_PREFERENCES);
   const meta = ui.meta;
 
@@ -466,7 +466,7 @@ export function Workspace({ documentId }: { documentId: string }) {
           <MenuBar session={session} actions={actions} zoom={effectiveZoom} hunks={ui.hunks.length} />
         </div>
         <div className="titlebar-status">
-          <SyncStatus sync={ui.sync} connection={ui.connection} compact={compact} />
+          <LiveSyncStatus session={session} compact={compact} />
           {ui.activity && ui.activity.status !== "idle" && (
             <span className="presence-pill">
               <Sparkles size={12} />
@@ -744,6 +744,43 @@ function TitleInput({ meta, onRename }: { meta: DocumentMeta | null; onRename: (
       }}
     />
   );
+}
+
+/**
+ * The session's UI state, except that saving/saved flips don't count as a
+ * change: they happen with every burst of typing and would re-render the whole
+ * workspace. LiveSyncStatus shows them on its own.
+ */
+function useWorkspaceUi(session: DocumentSession) {
+  const last = useRef<{ full: DocumentUiState; view: DocumentUiState } | null>(null);
+  const get = useCallback(() => {
+    const full = session.ui.get();
+    const previous = last.current;
+    if (previous && (previous.full === full || sameButSaving(previous.full, full))) {
+      previous.full = full;
+      return previous.view;
+    }
+    last.current = { full, view: full };
+    return full;
+  }, [session]);
+  return useSyncExternalStore(session.ui.subscribe, get, get);
+}
+
+function sameButSaving(a: DocumentUiState, b: DocumentUiState) {
+  for (const key of Object.keys(b) as Array<keyof DocumentUiState>) {
+    if (key === "sync") {
+      if ((a.sync === "error") !== (b.sync === "error")) return false;
+    } else if (a[key] !== b[key]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function LiveSyncStatus({ session, compact }: { session: DocumentSession; compact?: boolean }) {
+  const sync = useSyncExternalStore(session.ui.subscribe, () => session.ui.get().sync, () => session.ui.get().sync);
+  const connection = useSyncExternalStore(session.ui.subscribe, () => session.ui.get().connection, () => session.ui.get().connection);
+  return <SyncStatus sync={sync} connection={connection} compact={compact} />;
 }
 
 function SyncStatus({ sync, connection, compact }: { sync: "saved" | "saving" | "error"; connection: "connecting" | "live" | "reconnecting"; compact?: boolean }) {
