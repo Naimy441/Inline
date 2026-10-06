@@ -9,7 +9,22 @@ import { fillHeaderTokens, type DocumentMeta } from "@/lib/doc/settings";
  * behind a single continuous editor. The pagination plugin pushes content
  * across sheet boundaries; this component only draws the sheets.
  */
-export function PageCanvas({ session, meta, pages, zoom, printing }: { session: DocumentSession; meta: DocumentMeta | null; pages: number; zoom: number; printing: boolean }) {
+export function PageCanvas({
+  session,
+  meta,
+  pages,
+  zoom,
+  printing,
+  flow,
+}: {
+  session: DocumentSession;
+  meta: DocumentMeta | null;
+  pages: number;
+  zoom: number;
+  printing: boolean;
+  /** Reflow the text to the screen (phones): no sheets, margins or page breaks. */
+  flow: boolean;
+}) {
   const mount = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -33,21 +48,25 @@ export function PageCanvas({ session, meta, pages, zoom, printing }: { session: 
       }
     : undefined;
 
+  // The tree stays the same in both layouts so the editor's DOM is never remounted.
   return (
-    <div className="page-stack-wrap" style={{ zoom: printing ? 1 : zoom }}>
-      <div className="page-stack" style={{ width: geometry.pageWidth, height: totalHeight, ["--doc-font" as string]: settings?.fontFamily }}>
-        {Array.from({ length: pages }, (_, index) => (
-          <Sheet key={index} index={index} pages={pages} meta={meta} top={index * pitch} geometry={geometry} />
-        ))}
+    <div className={`page-stack-wrap${flow ? " is-flow" : ""}`} style={{ zoom: printing || flow ? 1 : zoom }}>
+      <div className="page-stack" style={{ width: flow ? undefined : geometry.pageWidth, height: flow ? undefined : totalHeight, ["--doc-font" as string]: settings?.fontFamily }}>
+        {!flow &&
+          Array.from({ length: pages }, (_, index) => <Sheet key={index} index={index} pages={pages} meta={meta} top={index * pitch} geometry={geometry} />)}
         <div
           className="page-content"
-          style={{
-            top: geometry.marginTop,
-            left: geometry.marginLeft,
-            width: geometry.pageWidth - geometry.marginLeft - geometry.marginRight,
-            minHeight: totalHeight - geometry.marginTop - geometry.marginBottom,
-            ...contentStyle,
-          }}
+          style={
+            flow
+              ? contentStyle
+              : {
+                  top: geometry.marginTop,
+                  left: geometry.marginLeft,
+                  width: geometry.pageWidth - geometry.marginLeft - geometry.marginRight,
+                  minHeight: totalHeight - geometry.marginTop - geometry.marginBottom,
+                  ...contentStyle,
+                }
+          }
         >
           <div ref={mount} className="editor-mount" />
         </div>

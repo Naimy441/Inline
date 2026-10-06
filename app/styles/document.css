@@ -639,9 +639,33 @@ img.ProseMirror-separator {
 
 /* Claude's cursor while it works */
 
+/* Claude's working range: a tint with an underline, and a light sweep while it edits. */
 .doc-content .agent-range {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 55%, transparent);
   border-radius: 2px;
+  transition: background 0.2s;
+}
+
+.doc-content .agent-range.agent-editing {
+  background-image: linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--accent) 22%, transparent) 50%, transparent 100%);
+  background-color: color-mix(in srgb, var(--accent) 18%, transparent);
+  background-size: 200% 100%;
+  animation: agent-sweep 1.6s linear infinite;
+}
+
+.doc-content .agent-range.agent-reading {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+@keyframes agent-sweep {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
 }
 
 .doc-content .agent-caret {
@@ -660,17 +684,23 @@ img.ProseMirror-separator {
   position: absolute;
   left: -2px;
   bottom: 100%;
-  padding: 1px 5px 2px;
-  border-radius: 3px 3px 3px 0;
+  padding: 2px 6px 2px;
+  border-radius: 4px 4px 4px 0;
   background: var(--accent);
   color: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
   font-family: var(--font-ui);
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 600;
   line-height: 1.3;
   font-style: normal;
   text-decoration: none;
   white-space: nowrap;
+}
+
+/* The label is CSS content so it never becomes part of the document's text. */
+.doc-content .agent-caret-flag::before {
+  content: "Claude";
 }
 
 .doc-content .agent-caret.agent-reading .agent-caret-flag::after {

@@ -1,14 +1,15 @@
 "use client";
 
-import { Check, CircleDashed, History, Loader2, MessageSquarePlus, Plus, RefreshCw, Terminal, Trash2, X } from "lucide-react";
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { Attachment, DocumentMention, ChatSettings, ChatSummary, SelectionContext, Todo } from "@/lib/agent/types";
+import { Check, CircleDashed, History, Loader2, MessageSquarePlus, Plus, RefreshCw, Terminal, X } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import type { Attachment, DocumentMention, ChatSettings, SelectionContext, Todo } from "@/lib/agent/types";
 import { refreshAgentStatus, useAgentStatus } from "@/lib/client/agentStatus";
 import { ChatSession, chatApi, type ChatUiState } from "@/lib/client/chatSession";
 import { Composer, type ComposerHandle } from "@/components/agent/Composer";
 import { MessageList, type TurnHunk } from "@/components/agent/MessageView";
 import { Button, IconButton } from "@/components/ui/Button";
-import { Menu } from "@/components/ui/Menu";
+import { ChatHistory } from "@/components/agent/ChatHistory";
 import { toast } from "@/components/ui/Toast";
 import { post } from "@/lib/client/api";
 
@@ -62,11 +63,11 @@ export const AgentPanel = forwardRef<
   }
 >(function AgentPanel({ documentId, hunks, onClose, onReview, initialPrompt }, ref) {
   const { status, defaults } = useAgentStatus();
+  const router = useRouter();
   const [chatId, setChatId] = useState<string | null>(() => (typeof window === "undefined" ? null : readChatId(documentId)));
   const [session, setSession] = useState<ChatSession | null>(null);
   const [draftSettings, setDraftSettings] = useState<ChatSettings | null>(null);
   const [selection, setSelection] = useState<SelectionContext | null>(null);
-  const [history, setHistory] = useState<ChatSummary[] | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyButton = useRef<HTMLButtonElement>(null);
   const composer = useRef<ComposerHandle>(null);
@@ -151,11 +152,6 @@ export const AgentPanel = forwardRef<
     else setDraftSettings({ ...settings, ...patch });
   };
 
-  const openHistory = async () => {
-    setHistoryOpen(true);
-    setHistory(await chatApi.list(documentId).catch(() => []));
-  };
-
   const restoreTo = useCallback(
     async (versionId: string) => {
       if (!window.confirm("Put the document back as it was before this reply's edits? The current text is saved to history first.")) return;
@@ -172,37 +168,6 @@ export const AgentPanel = forwardRef<
   const todos = chat?.todos ?? [];
   const showTodos = todos.length > 0 && (chat?.running || todos.some((todo) => todo.status !== "completed"));
 
-  const historyItems = useMemo(
-    () =>
-      history === null
-        ? [{ kind: "label" as const, label: "Loading…" }]
-        : history.length === 0
-          ? [{ kind: "label" as const, label: "No earlier chats for this document" }]
-          : [
-              { kind: "label" as const, label: "Chats for this document" },
-              ...history.slice(0, 20).map((item) => ({
-                label: item.title,
-                hint: item.preview,
-                checked: item.id === chatId,
-                onSelect: () => setChatId(item.id),
-                submenu: [
-                  { label: "Open", onSelect: () => setChatId(item.id) },
-                  {
-                    label: "Delete chat",
-                    icon: <Trash2 size={14} />,
-                    danger: true,
-                    onSelect: () => {
-                      void chatApi.remove(item.id).then(() => {
-                        if (item.id === chatId) setChatId(null);
-                      });
-                    },
-                  },
-                ],
-              })),
-            ],
-    [history, chatId],
-  );
-
   return (
     <aside className="agent-panel" aria-label="Claude">
       <header className="panel-header">
@@ -211,7 +176,7 @@ export const AgentPanel = forwardRef<
           {chat?.running && <Loader2 size={13} className="spin muted" />}
         </div>
         <div className="panel-actions">
-          <IconButton ref={historyButton} label="Chat history" size="sm" onClick={() => void openHistory()}>
+          <IconButton ref={historyButton} label="Chat history" size="sm" active={historyOpen} onClick={() => setHistoryOpen((value) => !value)}>
             <History size={15} />
           </IconButton>
           <IconButton
@@ -230,7 +195,22 @@ export const AgentPanel = forwardRef<
             <X size={16} />
           </IconButton>
         </div>
-        <Menu open={historyOpen} onClose={() => setHistoryOpen(false)} anchor={historyButton} items={historyItems} placement="bottom-end" className="history-menu" />
+        <ChatHistory
+          open={historyOpen}
+          onClose={() => setHistoryOpen(false)}
+          anchor={historyButton}
+          documentId={documentId}
+          currentChatId={chatId}
+          onOpenChat={setChatId}
+          onOpenElsewhere={(otherDocument, otherChat) => {
+            // Open the other document with this chat showing in its panel.
+            writeChatId(otherDocument, otherChat);
+            router.push(`/d/${otherDocument}`);
+          }}
+          onDeleted={(deleted) => {
+            if (deleted === chatId) setChatId(null);
+          }}
+        />
       </header>
 
       <div
@@ -254,7 +234,7 @@ export const AgentPanel = forwardRef<
       </div>
 
       <div className="panel-footer">
-        {showTodos && <TodoList todos={todos} />}
+        {showTodos && <TodoList todos={todos} running={Boolean(chat?.running)} />}
         {chat && chat.queue.length > 0 && (
           <div className="queue">
             {chat.queue.map((item) => (
@@ -304,10 +284,11 @@ function RunStatusLine({ status }: { status: NonNullable<import("@/lib/agent/typ
   return <div className="run-status shimmer">{text}</div>;
 }
 
-function TodoList({ todos }: { todos: Todo[] }) {
+function TodoList({ todos, running }: { todos: Todo[]; running: boolean }) {
   const [open, setOpen] = useState(true);
   const done = todos.filter((todo) => todo.status === "completed").length;
-  const active = todos.find((todo) => todo.status === "in_progress");
+  // Once Claude stops, an unfinished step is no longer in progress: no spinner.
+  const active = running ? todos.find((todo) => todo.status === "in_progress") : undefined;
   return (
     <div className="todos">
       <button type="button" className="todos-head" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
@@ -319,8 +300,8 @@ function TodoList({ todos }: { todos: Todo[] }) {
       {open && (
         <ol className="todos-list">
           {todos.map((todo, index) => (
-            <li key={index} className={`todo is-${todo.status}`}>
-              <span className="todo-mark">{todo.status === "completed" ? <Check size={12} /> : todo.status === "in_progress" ? <Loader2 size={12} className="spin" /> : null}</span>
+            <li key={index} className={`todo is-${todo.status === "in_progress" && !running ? "pending" : todo.status}`}>
+              <span className="todo-mark">{todo.status === "completed" ? <Check size={12} /> : todo.status === "in_progress" && running ? <Loader2 size={12} className="spin" /> : null}</span>
               <span>{todo.content}</span>
             </li>
           ))}

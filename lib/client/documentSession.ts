@@ -76,6 +76,10 @@ export type DocumentUiState = {
   unmerged: { doc: unknown; steps: number } | null;
   /** Set while the browser print dialog is open: pages are laid out with no gap between them. */
   printing: boolean;
+  /** Set while a PDF is being drawn from the page layout. */
+  exporting: boolean;
+  /** Phones: text reflows to the screen instead of sitting on fixed-size pages. Printing and export still use pages. */
+  flow: boolean;
   /** Editing changes the document directly; suggesting records edits for review; viewing is read-only. */
   mode: EditorMode;
 };
@@ -99,6 +103,16 @@ export function geometryFor(meta: DocumentMeta | null): PageGeometry & { pageWid
     marginRight: margins.right * PX_PER_IN,
     gap: 24,
   };
+}
+
+/** Effectively endless: reflowed text is one long page. */
+const FLOW_PAGE_HEIGHT = 10_000_000;
+
+function nextFrames(count: number) {
+  return new Promise<void>((resolve) => {
+    const step = (left: number) => (left <= 0 ? resolve() : requestAnimationFrame(() => step(left - 1)));
+    step(count);
+  });
 }
 
 /** Resolve once pagination has produced the same page count for a few frames in a row. */
@@ -143,6 +157,8 @@ export class DocumentSession {
     activeComment: null,
     unmerged: null,
     printing: false,
+    exporting: false,
+    flow: false,
     mode: "editing",
   });
   /** Bumped on every editor transaction so toolbars can re-read the state. */
@@ -174,7 +190,18 @@ export class DocumentSession {
   /** Page geometry for the current settings; sheets touch while printing so each sheet is one printed page. */
   geometry() {
     const geometry = geometryFor(this.meta);
-    return this.ui.get().printing ? { ...geometry, gap: 0 } : geometry;
+    const ui = this.ui.get();
+    if (ui.printing) return { ...geometry, gap: 0 };
+    // Reflowed text has no pages to break across.
+    if (ui.flow && !ui.exporting) return { ...geometry, pageHeight: FLOW_PAGE_HEIGHT, marginTop: 0, marginBottom: 0, gap: 0 };
+    return geometry;
+  }
+
+  /** Switch between pages and reflowed text (phones). */
+  setFlow(flow: boolean) {
+    if (this.ui.get().flow === flow) return;
+    this.ui.set((ui) => ({ ...ui, flow }));
+    if (this.view) relayout(this.view);
   }
 
   /**
@@ -190,6 +217,8 @@ export class DocumentSession {
     style.textContent = `@page { size: ${geometry.pageWidth / 96}in ${geometry.pageHeight / 96}in; margin: 0; }`;
     document.head.append(style);
     this.ui.set((ui) => ({ ...ui, printing: true }));
+    // Reflowed (phone) layouts switch to pages first; let React draw them.
+    if (this.ui.get().flow) await nextFrames(2);
     relayout(view);
     await settleLayout(() => pageCount(view.state));
     try {
@@ -217,12 +246,20 @@ export class DocumentSession {
     root.classList.add("is-clean");
     let bytes: Uint8Array<ArrayBuffer>;
     try {
+      if (this.ui.get().flow) {
+        this.ui.set((ui) => ({ ...ui, exporting: true }));
+        await nextFrames(2);
+      }
       relayout(view);
       await settleLayout(() => pageCount(view.state));
       bytes = buildPdf(snapshotPages(root, title));
     } finally {
       root.classList.remove("is-clean");
-      relayout(view);
+      if (this.ui.get().exporting) {
+        this.ui.set((ui) => ({ ...ui, exporting: false }));
+        await nextFrames(1);
+      }
+      if (this.view) relayout(this.view);
     }
     const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
     const link = document.createElement("a");

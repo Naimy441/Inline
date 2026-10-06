@@ -34,6 +34,15 @@ const model: FakeModel = async (turn, claude) => {
     return;
   }
 
+  // Edit, then keep the turn open, so the page shows where Claude is working.
+  const slowEdit = text.match(/^slowly replace "(.+)" with "(.+)"$/i);
+  if (slowEdit) {
+    await claude.call("edit_document", { document_id: documentId, old_string: slowEdit[1], new_string: slowEdit[2] });
+    claude.say("Still working on it.");
+    await claude.untilInterrupted();
+    return;
+  }
+
   if (/take your time/i.test(text)) {
     claude.say("Starting a long review.");
     await claude.untilInterrupted();

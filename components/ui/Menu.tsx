@@ -1,8 +1,9 @@
 "use client";
 
-import { Check, ChevronRight } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
+import { useIsPhone } from "@/lib/client/viewport";
 import { useAnchoredPosition, type Placement } from "./floating";
 
 export type MenuItem =
@@ -21,22 +22,32 @@ export type MenuItem =
   | { kind: "separator" }
   | { kind: "label"; label: string };
 
-/** Keyboard-navigable dropdown menu. */
-export function Menu({
-  open,
-  onClose,
-  anchor,
-  items,
-  placement = "bottom-start",
-  className,
-}: {
+type MenuProps = {
   open: boolean;
   onClose: () => void;
   anchor: RefObject<HTMLElement | null> | DOMRect | null;
   items: MenuItem[];
   placement?: Placement;
   className?: string;
-}) {
+  /** Shown at the top of the sheet on phones. */
+  title?: string;
+};
+
+/** A dropdown menu; on phones it opens as a bottom sheet with submenus drilling in. */
+export function Menu(props: MenuProps) {
+  const phone = useIsPhone();
+  return phone ? <MenuSheet {...props} /> : <MenuPopup {...props} />;
+}
+
+/** Keyboard-navigable dropdown menu. */
+function MenuPopup({
+  open,
+  onClose,
+  anchor,
+  items,
+  placement = "bottom-start",
+  className,
+}: MenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const style = useAnchoredPosition(open, anchor, ref, placement, 4);
   const [active, setActive] = useState(-1);
@@ -149,9 +160,89 @@ export function Menu({
         })}
       </div>
       {sub && subItem?.submenu && (
-        <Menu open onClose={() => { setSub(null); onClose(); }} anchor={sub.rect} items={subItem.submenu} placement="right-start" className="menu-sub" />
+        <MenuPopup open onClose={() => { setSub(null); onClose(); }} anchor={sub.rect} items={subItem.submenu} placement="right-start" className="menu-sub" />
       )}
     </>,
+    document.body,
+  );
+}
+
+/** Phone menus: a bottom sheet with large rows; submenus replace the list, with a back row. */
+function MenuSheet({ open, onClose, items, className, title }: MenuProps) {
+  const [stack, setStack] = useState<Array<{ title: string; items: MenuItem[] }>>([]);
+
+  useEffect(() => {
+    if (!open) setStack([]);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [open, onClose]);
+
+  if (!open || typeof document === "undefined") return null;
+  const level = stack[stack.length - 1];
+  const list = level?.items ?? items;
+  const heading = level?.title ?? title;
+  return createPortal(
+    <div
+      className="sheet-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <div role="menu" className={`menu menu-sheet${className ? ` ${className}` : ""}`}>
+        <div className="sheet-grabber" aria-hidden />
+        {level ? (
+          <button type="button" className="menu-sheet-back" onClick={() => setStack((current) => current.slice(0, -1))}>
+            <ChevronLeft size={18} />
+            <span>{heading}</span>
+          </button>
+        ) : (
+          heading && <div className="menu-sheet-title">{heading}</div>
+        )}
+        <div className="menu-sheet-list">
+          {list.map((item, index) => {
+            if (item.kind === "separator") return <div key={index} className="menu-sep" role="separator" />;
+            if (item.kind === "label") return <div key={index} className="menu-label">{item.label}</div>;
+            return (
+              <button
+                key={`${stack.length}-${index}`}
+                type="button"
+                role={item.checked !== undefined ? "menuitemcheckbox" : "menuitem"}
+                aria-checked={item.checked}
+                className={`menu-item${item.danger ? " is-danger" : ""}`}
+                disabled={item.disabled}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  if (item.submenu) {
+                    setStack((current) => [...current, { title: item.label, items: item.submenu! }]);
+                    return;
+                  }
+                  onClose();
+                  item.onSelect?.();
+                }}
+              >
+                <span className="menu-icon">{item.checked ? <Check size={16} /> : item.icon}</span>
+                <span className="menu-text">
+                  {item.label}
+                  {item.hint && <span className="menu-hint">{item.hint}</span>}
+                </span>
+                {item.submenu && <ChevronRight size={16} className="menu-chevron" />}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>,
     document.body,
   );
 }
@@ -163,12 +254,15 @@ export function MenuButton({
   className,
   placement,
   label,
+  title,
 }: {
   items: MenuItem[] | (() => MenuItem[]);
   children: ReactNode;
   className?: string;
   placement?: Placement;
   label?: string;
+  /** Sheet heading on phones; defaults to the label. */
+  title?: string;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLButtonElement>(null);
@@ -187,7 +281,7 @@ export function MenuButton({
       >
         {children}
       </button>
-      <Menu open={open} onClose={() => setOpen(false)} anchor={ref} items={open ? (typeof items === "function" ? items() : items) : []} placement={placement} />
+      <Menu open={open} onClose={() => setOpen(false)} anchor={ref} items={open ? (typeof items === "function" ? items() : items) : []} placement={placement} title={title ?? label} />
     </>
   );
 }

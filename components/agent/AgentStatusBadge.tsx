@@ -5,7 +5,12 @@ import { useAgentStatus } from "@/lib/client/agentStatus";
 /** Small "Claude Code connected" indicator. */
 export function AgentStatusBadge() {
   const { status } = useAgentStatus();
-  if (!status) return <span className="status-badge is-pending">Checking Claude Code…</span>;
+  if (!status)
+    return (
+      <span className="status-badge is-pending">
+        <span className="status-dot" /> Checking Claude Code…
+      </span>
+    );
   if (status.state === "ready") {
     const who = status.account.email ?? status.account.organization;
     return (

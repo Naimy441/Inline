@@ -10,7 +10,13 @@ function summary(hunks: HunkJSON[]) {
   const suggestions = hunks.filter(isUserSuggestion).length;
   const claude = hunks.length - suggestions;
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
-  if (!suggestions) return plural(claude, "change") + " by Claude";
+  if (!suggestions)
+    return (
+      <>
+        {plural(claude, "change")}
+        <span className="review-bar-by"> by Claude</span>
+      </>
+    );
   if (!claude) return plural(suggestions, "suggestion");
   return `${plural(claude, "change")} by Claude, ${plural(suggestions, "suggestion")}`;
 }
@@ -23,7 +29,7 @@ export function ReviewBar({ session, hunks }: { session: DocumentSession; hunks:
     <div className={`review-bar${onlySuggestions ? " is-suggestions" : ""}`} role="region" aria-label="Review pending changes">
       <span className="review-bar-count">
         <span className="review-bar-dot" />
-        {summary(hunks)}
+        <span className="review-bar-text">{summary(hunks)}</span>
       </span>
       <div className="review-bar-nav">
         <button type="button" className="icon-btn icon-btn-sm" aria-label="Previous change" data-tip="Previous change  ⌥[" onClick={() => session.gotoChange(-1)}>

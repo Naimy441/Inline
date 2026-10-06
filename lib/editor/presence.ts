@@ -40,7 +40,6 @@ function decorations(state: EditorState) {
         caret.contentEditable = "false";
         const flag = document.createElement("span");
         flag.className = "agent-caret-flag";
-        flag.textContent = "Claude";
         caret.append(flag);
         return caret;
       },

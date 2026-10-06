@@ -24,7 +24,7 @@ export const Button = forwardRef<
 
 export const IconButton = forwardRef<
   HTMLButtonElement,
-  ButtonHTMLAttributes<HTMLButtonElement> & { label: string; shortcut?: string; active?: boolean; size?: "sm" | "md" }
+  ButtonHTMLAttributes<HTMLButtonElement> & { label: string; shortcut?: string; active?: boolean; size?: "sm" | "md" | "lg" }
 >(function IconButton({ label, shortcut, active, size = "md", className, children, ...rest }, ref) {
   return (
     <button
