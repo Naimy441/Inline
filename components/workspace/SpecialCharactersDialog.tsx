@@ -77,6 +77,8 @@ export function SpecialCharactersDialog({ open, onClose, onInsert }: { open: boo
     return GROUPS.map((group) => ({ ...group, chars: group.chars.filter(([char, name]) => char === q || name.includes(q)) })).filter((group) => group.chars.length);
   }, [query]);
 
+  // Closed: skip building the grid, since the workspace re-renders on every keystroke.
+  if (!open) return null;
   return (
     <Dialog open={open} onClose={onClose} title="Special characters" width={520}>
       <input className="input" placeholder="Search, e.g. arrow, euro, check" value={query} onChange={(event) => setQuery(event.target.value)} autoFocus aria-label="Search characters" />

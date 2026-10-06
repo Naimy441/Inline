@@ -9,6 +9,7 @@ import {
   applyStringEdits,
   blockLines,
   docPlainText,
+  docWordCount,
   findText,
   insertMarkdown,
   lockedBetween,
@@ -98,12 +99,12 @@ async function resolveDocument(ctx: ToolContext, id?: string): Promise<LiveDocum
 }
 
 function estimatePages(doc: LiveDocument) {
-  const words = wordCount(docPlainText(doc.doc));
+  const words = docWordCount(doc.doc);
   return Math.max(1, Math.ceil(words / 450));
 }
 
 function header(doc: LiveDocument, lines: number) {
-  const words = wordCount(docPlainText(doc.doc));
+  const words = docWordCount(doc.doc);
   const pending = doc.hunks.length ? ` · ${doc.hunks.length} change${doc.hunks.length === 1 ? "" : "s"} awaiting the user's review` : "";
   return `Document "${doc.meta.title}" (id ${doc.id}) · ${words.toLocaleString()} words · ~${estimatePages(doc)} page${estimatePages(doc) === 1 ? "" : "s"} · ${lines} lines${pending}`;
 }
@@ -431,7 +432,7 @@ export const TOOLS = [
         }
       }
       flush();
-      const total = wordCount(docPlainText(doc.doc));
+      const total = docWordCount(doc.doc);
       return ok(`${header(doc, markdownLines(serialized).length)}\n${rows.length ? rows.join("\n") : "(No headings.)"}\nTotal: ${total} words.`);
     },
   }),

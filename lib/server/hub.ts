@@ -1,6 +1,6 @@
 import { Node as PMNode } from "prosemirror-model";
 import { Step, Transform } from "prosemirror-transform";
-import { docPlainText, rangeMarkTexts, wordCount } from "@/lib/doc/editing";
+import { docPlainText, docWordCount, rangeMarkTexts, wordCount } from "@/lib/doc/editing";
 import { blockIdFixes, ensureBlockIds, newId } from "@/lib/doc/ids";
 import { markdownToDoc } from "@/lib/doc/markdown";
 import { acceptHunks, hunkFromJSON, hunkToJSON, mapHunks, recordAgentChange, rejectHunks, USER_AUTHOR, type Hunk, type HunkJSON } from "@/lib/doc/review";
@@ -235,7 +235,8 @@ export class LiveDocument {
   private commit(tr: Transform, origin: ChangeOrigin, hunks: Hunk[]) {
     if (!tr.steps.length) return;
     const clientID = origin.kind === "client" ? origin.clientID : origin.kind === "agent" ? `agent:${origin.author}` : `system:${origin.label}`;
-    const hunksChanged = hunks.length !== this.hunks.length || hunks.some((hunk, i) => hunk !== this.hunks[i]) || this.hunks.length > 0;
+    // Clients map pending changes through the steps themselves, so the list is only sent when that wouldn't give the same result.
+    const hunksChanged = !onlyMapped(tr.before, this.hunks, tr, hunks);
     this.doc = tr.doc;
     this.hunks = hunks;
     for (const step of tr.steps) this.log.push({ step, clientID });
@@ -411,7 +412,7 @@ export class LiveDocument {
       author,
       title: this.meta.title,
       doc: this.doc.toJSON(),
-      wordCount: wordCount(docPlainText(this.doc)),
+      wordCount: docWordCount(this.doc),
       ...(this.hunks.length ? { hunks: this.hunksJSON() } : {}),
     };
     await writeVersion(version);
@@ -471,8 +472,7 @@ export class LiveDocument {
 
   async persist() {
     if (this.deleted) return;
-    const text = docPlainText(this.doc);
-    this.meta = { ...this.meta, wordCount: wordCount(text), preview: text.replace(/\s+/g, " ").trim().slice(0, 240) };
+    this.meta = { ...this.meta, wordCount: docWordCount(this.doc), preview: docPreview(this.doc) };
     if (this.meta.autoTitle) {
       let firstLine = "";
       this.doc.descendants((node) => {
@@ -530,6 +530,34 @@ export function loadDoc(json: unknown): PMNode {
 }
 
 // ---------------------------------------------------------------------------
+
+/**
+ * Whether `next` is exactly `previous` mapped through `tr`, with each change's
+ * text untouched: then a client mapping the hunks through the same steps ends
+ * up with the same list, and it needn't be sent again with every keystroke.
+ */
+function onlyMapped(before: PMNode, previous: readonly Hunk[], tr: Transform, next: readonly Hunk[]) {
+  if (previous.length !== next.length) return false;
+  for (let i = 0; i < previous.length; i += 1) {
+    const old = previous[i]!;
+    const hunk = next[i]!;
+    if (hunk.id !== old.id || hunk.deleted !== old.deleted || hunk.author !== old.author || hunk.turn !== old.turn || hunk.createdAt !== old.createdAt) return false;
+    const from = tr.mapping.map(old.from, 1);
+    if (hunk.from !== from || hunk.to !== Math.max(from, tr.mapping.map(old.to, -1))) return false;
+    if (tr.doc.textBetween(hunk.from, hunk.to, "\n") !== before.textBetween(old.from, old.to, "\n")) return false;
+  }
+  return true;
+}
+
+/** The first 240 characters of the text, read only as far as needed. */
+function docPreview(doc: PMNode) {
+  let text = "";
+  doc.forEach((child) => {
+    if (text.length > 480) return;
+    text += `${child.isText ? child.text : child.textBetween(0, child.content.size, "\n\n", (node) => (node.type.name === "hard_break" ? "\n" : ""))}\n\n`;
+  });
+  return text.replace(/\s+/g, " ").trim().slice(0, 240);
+}
 
 export type CreateDocumentInput = {
   title?: string;

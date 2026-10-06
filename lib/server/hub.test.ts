@@ -151,6 +151,21 @@ describe("review", () => {
     doc.review("reject", "all");
     assert.equal(doc.doc.textContent, "Very Alpha beta gamma.");
   });
+
+  it("sends pending changes with typing only when mapping alone wouldn't match", async () => {
+    const doc = await hub.create({ markdown: "Alpha beta gamma." });
+    const from = textPos(doc, "gamma");
+    doc.applyTransform(new Transform(doc.doc).replaceWith(from, from + 5, schema.text("delta")), { kind: "agent", author: "chat-1" });
+    const { events, stop } = record(doc);
+    doc.receiveClientSteps(doc.version, [insertStep(1, "Very ")], "tab-1");
+    const hunk = doc.hunks[0]!;
+    doc.receiveClientSteps(doc.version, [insertStep(hunk.from + 2, "X")], "tab-1");
+    stop();
+    const steps = events.filter((event) => event.type === "steps");
+    assert.equal(steps.length, 2);
+    assert.equal("hunks" in steps[0]! && steps[0].hunks, false, "typing away from a change doesn't resend the list");
+    assert.ok("hunks" in steps[1]! && steps[1].hunks?.[0]?.insertedText === "deXlta", "typing inside a change does");
+  });
 });
 
 describe("metadata and titles", () => {

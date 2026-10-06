@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import { geometryFor, type DocumentSession } from "@/lib/client/documentSession";
 import { fillHeaderTokens, type DocumentMeta } from "@/lib/doc/settings";
 
@@ -9,7 +9,7 @@ import { fillHeaderTokens, type DocumentMeta } from "@/lib/doc/settings";
  * behind a single continuous editor. The pagination plugin pushes content
  * across sheet boundaries; this component only draws the sheets.
  */
-export function PageCanvas({
+export const PageCanvas = memo(function PageCanvas({
   session,
   meta,
   pages,
@@ -73,9 +73,9 @@ export function PageCanvas({
       </div>
     </div>
   );
-}
+});
 
-function Sheet({
+const Sheet = memo(function Sheet({
   index,
   pages,
   meta,
@@ -106,8 +106,8 @@ function Sheet({
     const pn = settings.pageNumbers;
     if (pn.enabled && !(first && pn.skipFirst)) number = { where: pn.position, align: pn.align };
     const context = { page, pages, title: meta!.title };
-    header = fillHeaderTokens(header, context);
-    footer = fillHeaderTokens(footer, context);
+    if (header) header = fillHeaderTokens(header, context);
+    if (footer) footer = fillHeaderTokens(footer, context);
   }
   const zoneStyle = (height: number, align: string) => ({
     height,
@@ -129,4 +129,5 @@ function Sheet({
       </div>
     </div>
   );
-}
+});
+

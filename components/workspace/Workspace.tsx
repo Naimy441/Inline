@@ -2,12 +2,13 @@
 
 import { ArrowLeft, Check, CloudOff, Download, History, Loader2, MessageSquare, Moon, MoreHorizontal, PanelRight, Sparkles, Sun } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import type { EditorState } from "prosemirror-state";
 import type { SelectionContext } from "@/lib/agent/types";
 import { api, patch, post, uploadFile } from "@/lib/client/api";
 import { DocumentSession, geometryFor, type ClientCommand, type EditorMode } from "@/lib/client/documentSession";
 import { useTheme } from "@/lib/client/theme";
-import { docPlainText, wordCount } from "@/lib/doc/editing";
+import { docPlainText, docWordCount, wordCount } from "@/lib/doc/editing";
 import type { DocumentMeta } from "@/lib/doc/settings";
 import { insertImage, insertText } from "@/lib/editor/commands";
 import { AgentPanel, type AgentPanelHandle } from "@/components/agent/AgentPanel";
@@ -138,7 +139,6 @@ export function Workspace({ documentId }: { documentId: string }) {
 
   const ui = useSyncExternalStore(session.ui.subscribe, session.ui.get, session.ui.get);
   const prefs = useSyncExternalStore(preferences.subscribe, preferences.get, () => DEFAULT_PREFERENCES);
-  const state = useSyncExternalStore(session.editor.subscribe, session.editor.get, session.editor.get);
   const meta = ui.meta;
 
   useEffect(() => session.setFlow(phone), [session, phone]);
@@ -431,7 +431,6 @@ export function Workspace({ documentId }: { documentId: string }) {
     );
   }
 
-  const words = state ? wordCount(docPlainText(state.doc)) : (meta?.wordCount ?? 0);
   const openComments = ui.comments.filter((comment) => !comment.resolved).length;
   const working = Boolean(ui.activity && ui.activity.status !== "idle");
   const downloads: MenuItem[] = [
@@ -515,6 +514,8 @@ export function Workspace({ documentId }: { documentId: string }) {
         )}
       </header>
 
+      <WithEditorState session={session}>
+        {(state) => (
       <Toolbar
         session={session}
         state={state}
@@ -527,6 +528,8 @@ export function Workspace({ documentId }: { documentId: string }) {
         onImage={() => imageInput.current?.click()}
         mode={ui.mode}
       />
+        )}
+      </WithEditorState>
       <input
         ref={imageInput}
         type="file"
@@ -540,7 +543,7 @@ export function Workspace({ documentId }: { documentId: string }) {
       />
 
       <div className="workspace-body">
-        {outline && <OutlinePanel session={session} state={state} />}
+        {outline && <WithEditorState session={session}>{(state) => <OutlinePanel session={session} state={state} />}</WithEditorState>}
         <main
           ref={canvasRef}
           className="canvas"
@@ -570,9 +573,9 @@ export function Workspace({ documentId }: { documentId: string }) {
             void insertImageFile(file);
           }}
         >
-          {find && <FindBar session={session} state={state} replace={find.replace} onClose={() => setFind(null)} />}
+          {find && <WithEditorState session={session}>{(state) => <FindBar session={session} state={state} replace={find.replace} onClose={() => setFind(null)} />}</WithEditorState>}
           <OfflineNotice offline={ui.status === "ready" && (ui.connection === "reconnecting" || ui.sync === "error")} />
-          <AgentLocator canvas={canvasRef} state={state} active={working && !focusMode} label={ui.activity?.label ?? ""} />
+          <WithEditorState session={session}>{(state) => <AgentLocator canvas={canvasRef} state={state} active={working && !focusMode} label={ui.activity?.label ?? ""} />}</WithEditorState>
           {ui.status === "loading" && (
             <div className="canvas-loading">
               <Loader2 size={18} className="spin" />
@@ -580,7 +583,7 @@ export function Workspace({ documentId }: { documentId: string }) {
           )}
           <PageCanvas session={session} meta={meta} pages={ui.pages} zoom={effectiveZoom} printing={ui.printing} flow={flow} />
           <ReviewBar session={session} hunks={ui.hunks} />
-          <SelectionBubble session={session} state={state} linkEditing={linkEditing} onLinkEditing={setLinkEditing} onAsk={() => askClaude()} onComment={startComment} prompting={prompting} onPrompting={setPrompting} onInlineAsk={inlineAsk} />
+          <WithEditorState session={session}>{(state) => <SelectionBubble session={session} state={state} linkEditing={linkEditing} onLinkEditing={setLinkEditing} onAsk={() => askClaude()} onComment={startComment} prompting={prompting} onPrompting={setPrompting} onInlineAsk={inlineAsk} />}</WithEditorState>
         </main>
 
         {panel && phone && <div className="panel-backdrop" onClick={() => setPanel(null)} aria-hidden />}
@@ -629,7 +632,7 @@ export function Workspace({ documentId }: { documentId: string }) {
 
       <footer className="statusbar">
         <button type="button" className="status-item" onClick={() => setCounting(true)}>
-          {words.toLocaleString()} words
+          <WithEditorState session={session}>{(state) => <>{(state ? docWordCount(state.doc) : (meta?.wordCount ?? 0)).toLocaleString()} words</>}</WithEditorState>
         </button>
         <span className="status-item">
           {ui.pages} page{ui.pages === 1 ? "" : "s"}
@@ -699,6 +702,15 @@ export function Workspace({ documentId }: { documentId: string }) {
       <Toaster />
     </div>
   );
+}
+
+/**
+ * Renders its children with the live editor state. Only this subtree re-renders
+ * on a keystroke or selection change, not the whole workspace.
+ */
+function WithEditorState({ session, children }: { session: DocumentSession; children: (state: EditorState | null) => ReactNode }) {
+  const state = useSyncExternalStore(session.editor.subscribe, session.editor.get, session.editor.get);
+  return <>{children(state)}</>;
 }
 
 function TitleInput({ meta, onRename }: { meta: DocumentMeta | null; onRename: (title: string) => void }) {
@@ -779,6 +791,14 @@ function PanelResizer({ width, onResize }: { width: number; onResize: (width: nu
 }
 
 function WordCountDialog({ open, onClose, session }: { open: boolean; onClose: () => void; session: DocumentSession }) {
+  return (
+    <Dialog open={open} onClose={onClose} title="Word count" width={420}>
+      {open && <WordCountTable session={session} />}
+    </Dialog>
+  );
+}
+
+function WordCountTable({ session }: { session: DocumentSession }) {
   const state = session.view?.state;
   const text = state ? docPlainText(state.doc) : "";
   const selectionText = state && !state.selection.empty ? state.doc.textBetween(state.selection.from, state.selection.to, "\n") : "";
@@ -796,26 +816,24 @@ function WordCountDialog({ open, onClose, session }: { open: boolean; onClose: (
     ["Reading time (min)", Math.max(1, Math.round(all.words / 238)), undefined],
   ];
   return (
-    <Dialog open={open} onClose={onClose} title="Word count" width={420}>
-      <table className="stats-table">
-        <thead>
-          <tr>
-            <th />
-            <th>Document</th>
-            {selected && <th>Selection</th>}
+    <table className="stats-table">
+      <thead>
+        <tr>
+          <th />
+          <th>Document</th>
+          {selected && <th>Selection</th>}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(([label, value, selection]) => (
+          <tr key={label}>
+            <td>{label}</td>
+            <td>{value.toLocaleString()}</td>
+            {selected && <td>{selection?.toLocaleString() ?? ""}</td>}
           </tr>
-        </thead>
-        <tbody>
-          {rows.map(([label, value, selection]) => (
-            <tr key={label}>
-              <td>{label}</td>
-              <td>{value.toLocaleString()}</td>
-              {selected && <td>{selection?.toLocaleString() ?? ""}</td>}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </Dialog>
+        ))}
+      </tbody>
+    </table>
   );
 }
 

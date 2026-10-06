@@ -70,6 +70,7 @@ const GROUPS: Array<[string, Array<[string, string]>]> = [
 ];
 
 export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  if (!open) return null;
   return (
     <Dialog open={open} onClose={onClose} title="Keyboard shortcuts" width={720}>
       <div className="shortcut-grid">

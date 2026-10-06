@@ -131,6 +131,16 @@ function sameBreaks(a: Break[], b: Break[]) {
 const TEXTBLOCKS = new Set(["paragraph", "heading", "title", "subtitle", "code_block"]);
 const CONTAINERS = new Set(["bullet_list", "ordered_list", "list_item", "blockquote"]);
 
+/**
+ * A textblock's lines relative to its own top, kept per node. Reading line
+ * boxes (Range.getClientRects) is the costly part of a layout pass; a block an
+ * edit didn't touch is the same node object afterwards, so only blocks that
+ * changed are read again. An entry is used only while the block is still the
+ * same width and height, which catches decorations or fonts that rewrap it.
+ */
+type LineCache = { width: number; height: number; lines: Array<{ top: number; bottom: number }> };
+const lineCache = new WeakMap<PMNode, LineCache>();
+
 function measure(view: EditorView, geometry: PageGeometry): { breaks: Break[]; pages: number } | null {
   const root = view.dom as HTMLElement;
   if (!root.isConnected || !root.offsetWidth) return null;
@@ -158,6 +168,15 @@ function measure(view: EditorView, geometry: PageGeometry): { breaks: Break[]; p
     const dom = view.nodeDOM(pos) as HTMLElement | null;
     if (!dom || !(dom instanceof HTMLElement)) return;
     if (TEXTBLOCKS.has(node.type.name)) {
+      const box = dom.getBoundingClientRect();
+      const blockTop = natural(toLocal(box.top));
+      const blockHeight = natural(toLocal(box.bottom)) - blockTop;
+      const width = box.width;
+      const cached = lineCache.get(node);
+      if (cached && Math.abs(cached.width - width) < 0.5 && Math.abs(cached.height - blockHeight) < 0.5) {
+        for (const line of cached.lines) units.push({ kind: "line", top: blockTop + line.top, bottom: blockTop + line.bottom, block: node, blockPos: pos });
+        return;
+      }
       const range = document.createRange();
       range.selectNodeContents(dom);
       const lines: Array<{ top: number; bottom: number }> = [];
@@ -174,12 +193,11 @@ function measure(view: EditorView, geometry: PageGeometry): { breaks: Break[]; p
           lines.push({ top, bottom });
         }
       }
-      if (!lines.length) {
-        const rect = dom.getBoundingClientRect();
-        lines.push({ top: toLocal(rect.top), bottom: toLocal(rect.bottom) });
-      }
+      if (!lines.length) lines.push({ top: toLocal(box.top), bottom: toLocal(box.bottom) });
       lines.sort((a, b) => a.top - b.top);
-      for (const line of lines) units.push({ kind: "line", top: natural(line.top), bottom: natural(line.bottom), block: node, blockPos: pos });
+      const relative = lines.map((line) => ({ top: natural(line.top) - blockTop, bottom: natural(line.bottom) - blockTop }));
+      lineCache.set(node, { width, height: blockHeight, lines: relative });
+      for (const line of relative) units.push({ kind: "line", top: blockTop + line.top, bottom: blockTop + line.bottom, block: node, blockPos: pos });
       return;
     }
     if (CONTAINERS.has(node.type.name)) {

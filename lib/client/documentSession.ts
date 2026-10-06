@@ -14,7 +14,7 @@ import { setCommentState } from "@/lib/editor/comments";
 import { syncDomSelection } from "@/lib/editor/domSync";
 import { pageCount, relayout, type PageGeometry } from "@/lib/editor/pagination";
 import { setPresence } from "@/lib/editor/presence";
-import { gotoHunk, reviewHunkAtCursor, setHunks } from "@/lib/editor/review";
+import { gotoHunk, mapHunksThrough, reviewHunkAtCursor, setHunks } from "@/lib/editor/review";
 import { editorPlugins } from "@/lib/editor/setup";
 import { snapshotPages } from "@/lib/pdf/pageSnapshot";
 import { buildPdf } from "@/lib/pdf/pdfWriter";
@@ -540,6 +540,8 @@ export class DocumentSession {
         if (event.hunks) {
           tr = setHunks(tr, event.hunks, event.version);
           this.ui.set((ui) => ({ ...ui, hunks: event.hunks! }));
+        } else {
+          tr = mapHunksThrough(tr, view.state, steps, base, event.version);
         }
         this.dispatch(tr);
         this.updateSync();
