@@ -67,9 +67,8 @@
   /* Print the document as it reads, without review or collaboration marks. */
   .doc-content .np-mark,
   .doc-content .review-delete,
-  .doc-content .review-controls,
+  .review-layer,
   .doc-content .agent-caret,
-  .doc-content .review-block::after,
   .doc-content .is-empty::before {
     display: none !important;
   }
@@ -94,9 +93,8 @@
 /* The same clean view while a PDF is drawn from the pages (DocumentSession.exportPdf). */
 .page-stack.is-clean .doc-content .np-mark,
 .page-stack.is-clean .doc-content .review-delete,
-.page-stack.is-clean .doc-content .review-controls,
+.page-stack.is-clean .review-layer,
 .page-stack.is-clean .doc-content .agent-caret,
-.page-stack.is-clean .doc-content .review-block::after,
 .page-stack.is-clean .doc-content .is-empty::before {
   display: none !important;
 }

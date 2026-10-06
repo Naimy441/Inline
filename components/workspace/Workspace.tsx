@@ -8,6 +8,7 @@ import type { SelectionContext } from "@/lib/agent/types";
 import { api, patch, post, uploadFile } from "@/lib/client/api";
 import { DocumentSession, geometryFor, type ClientCommand, type DocumentUiState, type EditorMode } from "@/lib/client/documentSession";
 import { useTheme } from "@/lib/client/theme";
+import { useShortcut } from "@/lib/client/platform";
 import { docPlainText, docWordCount, wordCount } from "@/lib/doc/editing";
 import type { DocumentMeta } from "@/lib/doc/settings";
 import { insertImage, insertText } from "@/lib/editor/commands";
@@ -71,6 +72,7 @@ export function Workspace({ documentId }: { documentId: string }) {
   const agentRef = useRef<AgentPanelHandle>(null);
   const imageInput = useRef<HTMLInputElement>(null);
   const { dark, toggle: toggleTheme } = useTheme();
+  const keys = useShortcut();
 
   const [panel, setPanelState] = useState<Panel>("agent");
   const [panelWidth, setPanelWidth] = useState(420);
@@ -504,7 +506,7 @@ export function Workspace({ documentId }: { documentId: string }) {
               type="button"
               className={`btn btn-md claude-toggle${panel === "agent" ? " is-active" : ""}`}
               onClick={() => setPanel((current) => (current === "agent" ? null : "agent"))}
-              data-tip="Claude  ⌘J"
+              data-tip={`Claude  ${keys("⌘J")}`}
             >
               {/* With the panel closed, the button is where Claude shows it is working. */}
               {working && panel !== "agent" ? <Spark size={15} /> : <Sparkles size={15} />}

@@ -200,6 +200,26 @@
   bottom: calc(100% + 6px);
 }
 
+/* Buttons at the window's right edge: anchor the tip to their right side so it stays on screen. */
+.panel-actions > [data-tip]:last-child:hover::after,
+.panel-header > [data-tip]:last-child:hover::after,
+.titlebar-actions > [data-tip]:last-child:hover::after {
+  left: auto;
+  right: 0;
+  animation-name: tip-in-end;
+}
+
+@keyframes tip-in-end {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 @keyframes tip-in {
   from {
     opacity: 0;

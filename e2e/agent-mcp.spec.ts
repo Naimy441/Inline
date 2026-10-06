@@ -114,10 +114,10 @@ async function waitUntilSaved(page: Page) {
   await expect(page.locator(".sync-status")).toHaveText(/Saved/, { timeout: 15_000 });
 }
 
-/** Hover a pending change so its inline Keep / Undo controls appear. */
+/** Hover a pending change so its Keep / Undo controls appear in the margin. */
 async function revealControls(page: Page, text: string) {
   await page.locator(".doc-content .review-insert", { hasText: text }).first().hover();
-  await expect(page.locator(".doc-content .review-controls")).toBeVisible();
+  await expect(page.locator(".review-controls")).toBeVisible();
 }
 
 /**
@@ -232,7 +232,7 @@ test.describe("review of agent edits", () => {
     expect(await mcp.ok("get_pending_changes", { document_id: id })).toMatch(/1 pending change.*\n- \S+ \(line 1, by Claude\): "Tuesday" → "Thursday at noon"/);
 
     await revealControls(page, "Thursday");
-    await page.locator(".doc-content .review-keep").click();
+    await page.locator(".review-controls .review-keep").click();
 
     await expect(page.locator(".doc-content .review-insert")).toHaveCount(0);
     await expect(page.locator(".doc-content .review-delete")).toHaveCount(0);
@@ -246,6 +246,39 @@ test.describe("review of agent edits", () => {
     await expect(page.locator(".doc-content .review-insert")).toHaveCount(0);
   });
 
+  test("pages lay out again after Keep all removes struck-out text", async ({ page, request }) => {
+    const filler = "The clerk counted the names in his little book while the rain kept falling on the roof.";
+    const paragraphs = Array.from({ length: 40 }, (_, i) => `Paragraph ${i}. ${filler.repeat(1 + (i % 4))} Cut sentence ${i} is long enough to take most of a line on the page with it.`);
+    const { id } = await newDocumentInEditor(page, request, { title: "Keep all layout", markdown: paragraphs.join("\n\n") });
+    const edits = paragraphs.map((_, i) => ({ old_string: ` Cut sentence ${i} is long enough to take most of a line on the page with it.`, new_string: ` Short ${i}.` }));
+    await mcp.ok("multi_edit_document", { document_id: id, edits });
+    await expect(page.locator(".review-bar-count")).toHaveText("40 changes by Claude");
+
+    await page.locator(".review-bar .btn-primary").click();
+    await expect(page.locator(".doc-content .review-delete")).toHaveCount(0);
+
+    // Every line of text sits inside a page's text area, not in a margin or between pages.
+    const outside = () =>
+      page.evaluate(() => {
+        const sheets = [...document.querySelectorAll(".sheet")].map((sheet) => sheet.getBoundingClientRect());
+        const margin = 96 * (sheets[0]!.height / 1056);
+        const range = document.createRange();
+        const text = document.createTreeWalker(document.querySelector(".doc-content")!, NodeFilter.SHOW_TEXT);
+        let count = 0;
+        while (text.nextNode()) {
+          range.selectNodeContents(text.currentNode);
+          for (const line of range.getClientRects()) {
+            const middle = (line.top + line.bottom) / 2;
+            if (!sheets.some((sheet) => middle > sheet.top + margin && middle < sheet.bottom - margin)) count += 1;
+          }
+        }
+        return count;
+      });
+    // Nothing else changes the document, so a layout that went stale would stay stale.
+    await page.waitForTimeout(1000);
+    expect(await outside()).toBe(0);
+  });
+
   test("Undo in the editor restores the original text for the user and for the agent", async ({ page, request }) => {
     const { id } = await newDocumentInEditor(page, request, { title: "Undo flow", markdown: "Revenue grew 4% last year.\n\nCosts were flat." });
 
@@ -253,7 +286,7 @@ test.describe("review of agent edits", () => {
     await expect(page.locator(".doc-content .review-insert")).toContainText("staggering");
 
     await revealControls(page, "staggering");
-    await page.locator(".doc-content .review-undo").click();
+    await page.locator(".review-controls .review-undo").click();
 
     await expect(page.locator(".doc-content .review-insert")).toHaveCount(0);
     await expect(page.locator(".doc-content .review-delete")).toHaveCount(0);
@@ -659,7 +692,7 @@ test.describe("concurrent editing", () => {
 
     // Keeping in one tab clears the review in the other.
     await revealControls(other, "edited by the agent");
-    await other.locator(".doc-content .review-keep").click();
+    await other.locator(".review-controls .review-keep").click();
     await expect(page.locator(".doc-content .review-insert")).toHaveCount(0);
     await expect(page.locator(".doc-content p")).toHaveText(["Shared line, edited by the agent."]);
     await other.close();

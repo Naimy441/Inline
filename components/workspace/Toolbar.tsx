@@ -55,8 +55,6 @@ import { IconButton } from "@/components/ui/Button";
 import { MenuButton, type MenuItem } from "@/components/ui/Menu";
 import { Popover } from "@/components/ui/Popover";
 
-const mod = typeof navigator !== "undefined" && /Mac|iP(hone|[oa]d)/.test(navigator.platform) ? "⌘" : "Ctrl+";
-
 const BLOCK_LABELS: Record<BlockKind, string> = {
   paragraph: "Normal text",
   title: "Title",
@@ -180,10 +178,10 @@ const ToolbarView = memo(function ToolbarView({
   return (
     <div className={`toolbar${viewing ? " is-viewing" : ""}`} role="toolbar" aria-label="Formatting">
       <Group>
-        <IconButton label="Undo" shortcut={`${mod}Z`} disabled={disabled || !format.canUndo} onClick={() => run(undo)}>
+        <IconButton label="Undo" shortcut={`⌘Z`} disabled={disabled || !format.canUndo} onClick={() => run(undo)}>
           <Undo2 size={16} />
         </IconButton>
-        <IconButton label="Redo" shortcut={`${mod}⇧Z`} disabled={disabled || !format.canRedo} onClick={() => run(redo)}>
+        <IconButton label="Redo" shortcut={`⌘⇧Z`} disabled={disabled || !format.canRedo} onClick={() => run(redo)}>
           <Redo2 size={16} />
         </IconButton>
       </Group>
@@ -207,7 +205,7 @@ const ToolbarView = memo(function ToolbarView({
           items={(Object.keys(BLOCK_LABELS) as BlockKind[]).map((key) => ({
             label: BLOCK_LABELS[key],
             checked: kind === key,
-            shortcut: key === "paragraph" ? `${mod}⌥0` : key.startsWith("h") ? `${mod}⌥${key.slice(1)}` : undefined,
+            shortcut: key === "paragraph" ? `⌘⌥0` : key.startsWith("h") ? `⌘⌥${key.slice(1)}` : undefined,
             onSelect: () => run(setBlock(key)),
           }))}
         >
@@ -235,16 +233,16 @@ const ToolbarView = memo(function ToolbarView({
         </IconButton>
       </Group>
       <Group>
-        <IconButton label="Bold" shortcut={`${mod}B`} active={active("bold")} disabled={disabled} onClick={() => run(toggle("bold"))}>
+        <IconButton label="Bold" shortcut={`⌘B`} active={active("bold")} disabled={disabled} onClick={() => run(toggle("bold"))}>
           <Bold size={16} />
         </IconButton>
-        <IconButton label="Italic" shortcut={`${mod}I`} active={active("italic")} disabled={disabled} onClick={() => run(toggle("italic"))}>
+        <IconButton label="Italic" shortcut={`⌘I`} active={active("italic")} disabled={disabled} onClick={() => run(toggle("italic"))}>
           <Italic size={16} />
         </IconButton>
-        <IconButton label="Underline" shortcut={`${mod}U`} active={active("underline")} disabled={disabled} onClick={() => run(toggle("underline"))}>
+        <IconButton label="Underline" shortcut={`⌘U`} active={active("underline")} disabled={disabled} onClick={() => run(toggle("underline"))}>
           <Underline size={16} />
         </IconButton>
-        <IconButton label="Strikethrough" shortcut={`${mod}⇧X`} active={active("strike")} disabled={disabled} onClick={() => run(toggle("strike"))}>
+        <IconButton label="Strikethrough" shortcut={`⌘⇧X`} active={active("strike")} disabled={disabled} onClick={() => run(toggle("strike"))}>
           <Strikethrough size={16} />
         </IconButton>
         <ColorButton
@@ -263,10 +261,10 @@ const ToolbarView = memo(function ToolbarView({
         />
       </Group>
       <Group>
-        <IconButton label="Insert link" shortcut={`${mod}K`} disabled={disabled} active={active("link")} onClick={onLink}>
+        <IconButton label="Insert link" shortcut={`⌘K`} disabled={disabled} active={active("link")} onClick={onLink}>
           <Link2 size={16} />
         </IconButton>
-        <IconButton label="Add comment" shortcut={`${mod}⌥M`} disabled={!format.ready || format.empty} onClick={onComment}>
+        <IconButton label="Add comment" shortcut={`⌘⌥M`} disabled={!format.ready || format.empty} onClick={onComment}>
           <MessageSquarePlus size={16} />
         </IconButton>
         <IconButton label="Insert image" disabled={disabled} onClick={onImage}>
@@ -280,7 +278,7 @@ const ToolbarView = memo(function ToolbarView({
           items={(["left", "center", "right", "justify"] as Align[]).map((value) => ({
             label: value[0]!.toUpperCase() + value.slice(1),
             checked: align === value,
-            shortcut: `${mod}⇧${{ left: "L", center: "E", right: "R", justify: "J" }[value]}`,
+            shortcut: `⌘⇧${{ left: "L", center: "E", right: "R", justify: "J" }[value]}`,
             onSelect: () => run(setAlign(value)),
           }))}
         >
@@ -304,24 +302,24 @@ const ToolbarView = memo(function ToolbarView({
         </MenuButton>
       </Group>
       <Group>
-        <IconButton label="Checklist" shortcut={`${mod}⇧9`} active={list === "task"} disabled={disabled} onClick={() => run(toggleList("task"))}>
+        <IconButton label="Checklist" shortcut={`⌘⇧9`} active={list === "task"} disabled={disabled} onClick={() => run(toggleList("task"))}>
           <ListChecks size={16} />
         </IconButton>
-        <IconButton label="Bulleted list" shortcut={`${mod}⇧8`} active={list === "bullet"} disabled={disabled} onClick={() => run(toggleList("bullet"))}>
+        <IconButton label="Bulleted list" shortcut={`⌘⇧8`} active={list === "bullet"} disabled={disabled} onClick={() => run(toggleList("bullet"))}>
           <List size={16} />
         </IconButton>
-        <IconButton label="Numbered list" shortcut={`${mod}⇧7`} active={list === "ordered"} disabled={disabled} onClick={() => run(toggleList("ordered"))}>
+        <IconButton label="Numbered list" shortcut={`⌘⇧7`} active={list === "ordered"} disabled={disabled} onClick={() => run(toggleList("ordered"))}>
           <ListOrdered size={16} />
         </IconButton>
-        <IconButton label="Decrease indent" className="tb-indent" shortcut={`${mod}[`} disabled={disabled} onClick={() => run(outdent)}>
+        <IconButton label="Decrease indent" className="tb-indent" shortcut={`⌘[`} disabled={disabled} onClick={() => run(outdent)}>
           <IndentDecrease size={16} />
         </IconButton>
-        <IconButton label="Increase indent" className="tb-indent" shortcut={`${mod}]`} disabled={disabled} onClick={() => run(indent)}>
+        <IconButton label="Increase indent" className="tb-indent" shortcut={`⌘]`} disabled={disabled} onClick={() => run(indent)}>
           <IndentIncrease size={16} />
         </IconButton>
       </Group>
       <Group className="tb-clear-group">
-        <IconButton label="Clear formatting" shortcut={`${mod}\\`} disabled={disabled} onClick={() => run(clearFormatting)}>
+        <IconButton label="Clear formatting" shortcut={`⌘\\`} disabled={disabled} onClick={() => run(clearFormatting)}>
           <RemoveFormatting size={16} />
         </IconButton>
       </Group>

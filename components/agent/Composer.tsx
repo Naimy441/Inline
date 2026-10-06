@@ -9,6 +9,7 @@ import { MenuButton } from "@/components/ui/Menu";
 import { CommandsDialog, useCommands } from "@/components/agent/CommandsDialog";
 import { expandSlashCommand, matchCommands, matchDocuments, type SlashCommand } from "@/lib/agent/commands";
 import { toast } from "@/components/ui/Toast";
+import { Shortcut } from "@/components/ui/Button";
 import { loadDraft, saveDraft } from "@/lib/client/drafts";
 
 /** Titles of the user's other documents, for @-mentions (loaded once per panel). */
@@ -29,8 +30,6 @@ function useDocumentTitles(exclude: string | null) {
 export type ComposerHandle = { focus: () => void; setText: (text: string) => void };
 
 const EFFORT_LABELS: Record<Effort, string> = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max" };
-
-const mod = typeof navigator !== "undefined" && /Mac|iP(hone|[oa]d)/.test(navigator.platform) ? "⌘" : "Ctrl+";
 
 export const Composer = forwardRef<
   ComposerHandle,
@@ -409,7 +408,7 @@ export const Composer = forwardRef<
       </div>
       <div className="composer-hint">
         <span>
-          <kbd>⏎</kbd> send · <kbd>⇧⏎</kbd> new line · <kbd>{mod}L</kbd> add selection
+          <kbd>⏎</kbd> send · <kbd>⇧⏎</kbd> new line · <kbd><Shortcut keys="⌘L" /></kbd> add selection
         </span>
       </div>
     </div>

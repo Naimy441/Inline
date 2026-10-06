@@ -75,7 +75,7 @@ export const EDITOR_LAYOUT: SnapshotLayout = {
     ".page-gap",
     ".page-break",
     ".review-delete",
-    ".review-controls",
+    ".review-layer",
     ".agent-caret",
     ".agent-caret-flag",
     ".np-mark",
