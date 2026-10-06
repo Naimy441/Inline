@@ -12,7 +12,7 @@ import { pageSize, type DocComment, type DocumentMeta } from "@/lib/doc/settings
 import { api, ApiError, post, Store, uploadFile } from "@/lib/client/api";
 import { setCommentState } from "@/lib/editor/comments";
 import { syncDomSelection } from "@/lib/editor/domSync";
-import { pageCount, relayout, type PageGeometry } from "@/lib/editor/pagination";
+import { pageCount, relayout, type PageGeometry, type PageLayout } from "@/lib/editor/pagination";
 import { setPresence } from "@/lib/editor/presence";
 import { gotoHunk, mapHunksThrough, reviewHunkAtCursor, setHunks } from "@/lib/editor/review";
 import { editorPlugins } from "@/lib/editor/setup";
@@ -168,6 +168,9 @@ export class DocumentSession {
   private inflight = false;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private selectionTimer: ReturnType<typeof setTimeout> | null = null;
+  private layoutTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingLayout: PageLayout | null = null;
+  private reportedLayout: string | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
   private generation = 0;
@@ -317,7 +320,7 @@ export class DocumentSession {
     this.destroyed = true;
     window.removeEventListener("beforeunload", this.onBeforeUnload);
     this.source?.close();
-    for (const timer of [this.retryTimer, this.selectionTimer, this.reconnectTimer]) if (timer) clearTimeout(timer);
+    for (const timer of [this.retryTimer, this.selectionTimer, this.layoutTimer, this.reconnectTimer]) if (timer) clearTimeout(timer);
     this.view?.destroy();
     this.view = null;
   }
@@ -332,7 +335,10 @@ export class DocumentSession {
         review: { review: (action, ids) => void this.review(action, ids) },
         onActivateComment: (id) => this.setActiveComment(id),
         geometry: () => this.geometry(),
-        onPages: (pages) => this.ui.set((ui) => (ui.pages === pages ? ui : { ...ui, pages })),
+        onPages: (layout) => {
+          this.ui.set((ui) => (ui.pages === layout.pages ? ui : { ...ui, pages: layout.pages }));
+          this.scheduleLayoutReport(layout);
+        },
         keys: this.keyBindings(),
         readOnly: () => this.ui.get().mode === "viewing",
         substitutions: () => preferences.get().substitutions,
@@ -599,6 +605,39 @@ export class DocumentSession {
     this.ui.set((ui) => ({ ...ui, activeComment: id }));
     const view = this.view;
     if (view) view.dispatch(setCommentState(view.state.tr, { active: id }));
+  }
+
+  // --- layout reporting ----------------------------------------------------------------
+
+  /**
+   * Tell the server how the pages fell, so Claude can count pages ("write five
+   * pages"). Sent a moment after layout settles, for the version it measured.
+   */
+  private scheduleLayoutReport(layout: PageLayout) {
+    this.pendingLayout = layout;
+    if (this.layoutTimer) clearTimeout(this.layoutTimer);
+    this.layoutTimer = setTimeout(() => this.reportLayout(), 250);
+  }
+
+  private reportLayout() {
+    const view = this.view;
+    const layout = this.pendingLayout;
+    if (!view || !layout) return;
+    // Reflowed text (phones) and print layouts aren't the document's pages.
+    const ui = this.ui.get();
+    if (ui.flow || ui.printing || ui.exporting) return;
+    // Positions are only meaningful to the server once local edits are confirmed.
+    if (sendableSteps(view.state)) {
+      this.layoutTimer = setTimeout(() => this.reportLayout(), 400);
+      return;
+    }
+    const version = getVersion(view.state);
+    const key = `${version}:${layout.pages}:${layout.starts.join(",")}:${layout.lastPageFill.toFixed(2)}`;
+    if (key === this.reportedLayout) return;
+    this.reportedLayout = key;
+    void post(`/api/documents/${this.id}/layout`, { version, ...(this.epoch ? { epoch: this.epoch } : {}), ...layout }).catch(() => {
+      this.reportedLayout = null;
+    });
   }
 
   // --- selection reporting --------------------------------------------------------------

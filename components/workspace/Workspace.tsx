@@ -13,6 +13,7 @@ import { docPlainText, docWordCount, wordCount } from "@/lib/doc/editing";
 import type { DocumentMeta } from "@/lib/doc/settings";
 import { insertImage, insertText } from "@/lib/editor/commands";
 import { AgentPanel, type AgentPanelHandle } from "@/components/agent/AgentPanel";
+import { Spark } from "@/components/agent/Activity";
 import { Button, IconButton } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { MenuButton, type MenuItem } from "@/components/ui/Menu";
@@ -469,12 +470,6 @@ export function Workspace({ documentId }: { documentId: string }) {
         </div>
         <div className="titlebar-status">
           <LiveSyncStatus session={session} compact={compact} />
-          {ui.activity && ui.activity.status !== "idle" && (
-            <span className="presence-pill">
-              <Sparkles size={12} />
-              <span className="shimmer">{ui.activity.label || "Claude is working"}</span>
-            </span>
-          )}
         </div>
         {compact ? (
           <div className="titlebar-actions">
@@ -513,7 +508,8 @@ export function Workspace({ documentId }: { documentId: string }) {
               onClick={() => setPanel((current) => (current === "agent" ? null : "agent"))}
               data-tip={`Claude  ${keys("⌘J")}`}
             >
-              <Sparkles size={15} />
+              {/* With the panel closed, the button is where Claude shows it is working. */}
+              {working && panel !== "agent" ? <Spark size={15} /> : <Sparkles size={15} />}
               <span className="btn-label">Claude</span>
             </button>
           </div>

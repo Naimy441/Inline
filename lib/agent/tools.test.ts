@@ -73,6 +73,8 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   reply_to_comment: { comment_id: "missing", reply: "Done." },
   resolve_comment: { comment_id: "missing" },
   analyze_writing: {},
+  count_words: {},
+  get_page_count: {},
   list_documents: {},
   create_document: { title: "Another" },
   open_document: { document_id: "missing" },
@@ -991,6 +993,79 @@ describe("analyze_writing", () => {
     const result = await runTool("analyze_writing", { from_line: 7, to_line: 8 }, ctx);
     assert.match(result.text, /\(lines 7-8\)/);
     assert.match(result.text, /Words: 6/);
+  });
+});
+
+describe("count_words", () => {
+  test("counts the document as the editor's word count does", async () => {
+    const { ctx } = await setup();
+    const result = await runTool("count_words", {}, ctx);
+    assert.equal(result.isError, undefined, result.text);
+    assert.match(result.text, /^"Field notes": 18 words\./);
+    assert.match(result.text, /Paragraphs: 5/);
+  });
+
+  test("counts a draft without counting its Markdown", async () => {
+    const { ctx } = await setup();
+    const result = await runTool("count_words", { text: "## A **bold** start {align=center}\n\n- one item\n- two items", target_words: 10 }, ctx);
+    assert.match(result.text, /^The text: 7 words \(3 short of the 10 asked for\)\./);
+  });
+
+  test("counts a line range and reports hitting the target", async () => {
+    const { ctx } = await setup();
+    const result = await runTool("count_words", { from_line: 3, to_line: 3, target_words: 9 }, ctx);
+    assert.match(result.text, /^Lines 3-3 of "Field notes": 9 words \(exactly the 9 asked for\)\./);
+    const over = await runTool("count_words", { from_line: 3, to_line: 3, target_words: 5 }, ctx);
+    assert.match(over.text, /4 over the 5 asked for/);
+  });
+
+  test("text and a line range together are refused", async () => {
+    const { ctx } = await setup();
+    const result = await runTool("count_words", { text: "x", from_line: 1 }, ctx);
+    assert.equal(result.isError, true);
+  });
+});
+
+describe("get_page_count", () => {
+  test("estimates from the word count when no editor has measured the text", async () => {
+    const { ctx } = await setup({}, Array.from({ length: 40 }, () => "word ".repeat(50).trim()).join("\n\n"));
+    const result = await runTool("get_page_count", {}, ctx);
+    assert.equal(result.isError, undefined, result.text);
+    assert.match(result.text, /fills about \d+ pages .*estimated from the word count/);
+    assert.match(result.text, /2,000 words; about [\d,]+ words fit on a full page/);
+  });
+
+  test("uses the layout the editor reported for the current version", async () => {
+    const { doc, ctx } = await setup();
+    const third = findText(doc.doc, "Findings");
+    doc.setLayout({ version: doc.version, pages: 2, starts: [third], lastPageFill: 0.25 });
+    const result = await runTool("get_page_count", {}, ctx);
+    assert.match(result.text, /fills 2 pages, as laid out in the user's editor \(Letter portrait, 1" margins/);
+    assert.match(result.text, /Page 2 starts on line 5: “Findings…”/);
+    assert.match(result.text, /The last page is about 25% full/);
+    // The header other tools print uses the measured count too.
+    const read = await runTool("read_document", {}, ctx);
+    assert.match(read.text, / · 2 pages · /);
+  });
+
+  test("a layout for an older version is not used as the count", async () => {
+    const { doc, ctx } = await setup();
+    doc.setLayout({ version: doc.version, pages: 4, starts: [], lastPageFill: 0.5 });
+    await runTool("insert_content", { content: "More text.", position: "end" }, ctx);
+    const result = await runTool("get_page_count", {}, ctx);
+    assert.match(result.text, /fills about 1 page .*estimated/);
+  });
+
+  test("waits for an open editor to measure the latest change", async () => {
+    const { doc, ctx } = await setup();
+    const stop = doc.subscribe(() => undefined);
+    try {
+      setTimeout(() => doc.setLayout({ version: doc.version, pages: 3, starts: [], lastPageFill: 0.5 }), 50);
+      const result = await runTool("get_page_count", {}, ctx);
+      assert.match(result.text, /fills 3 pages, as laid out/);
+    } finally {
+      stop();
+    }
   });
 });
 

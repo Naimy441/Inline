@@ -9,7 +9,14 @@ export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 export type Todo = { content: string; activeForm?: string; status: "pending" | "in_progress" | "completed" };
 
 export type TextPart = { type: "text"; id: string; text: string };
-export type ThinkingPart = { type: "thinking"; id: string; text: string; done?: boolean };
+export type ThinkingPart = {
+  type: "thinking";
+  id: string;
+  text: string;
+  done?: boolean;
+  /** How long Claude thought, once it's done (absent for chats saved before it was recorded). */
+  durationMs?: number;
+};
 export type ToolPart = {
   type: "tool";
   id: string; // tool_use id

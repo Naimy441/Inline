@@ -122,27 +122,6 @@
   color: var(--warning);
 }
 
-.presence-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  max-width: 320px;
-  height: 24px;
-  padding: 0 10px;
-  border-radius: 999px;
-  background: var(--accent-soft);
-  color: var(--accent-text);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.presence-pill > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .titlebar-actions {
   display: flex;
   align-items: center;
@@ -1285,9 +1264,6 @@ button.status-item:hover {
     flex: none;
     margin-left: 0;
   }
-  .presence-pill {
-    display: none;
-  }
   .menubar {
     display: none;
   }
@@ -1357,7 +1333,6 @@ button.status-item:hover {
 /* Focus mode hides everything to do with Claude. */
 
 .workspace.is-focus .claude-toggle,
-.workspace.is-focus .presence-pill,
 .workspace.is-focus .bubble-ask,
 .workspace.is-focus .bubble-ask + .bubble-sep,
 .workspace.is-focus .status-claude {
