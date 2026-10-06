@@ -316,7 +316,8 @@
 
 @media (max-width: 720px) {
   .home-header {
-    grid-template-columns: auto 1fr auto;
+    /* minmax(0, …): the search gives way, not the page, when the actions need room. */
+    grid-template-columns: auto minmax(0, 1fr) auto;
     gap: 10px;
     height: calc(56px + env(safe-area-inset-top));
     padding: env(safe-area-inset-top) 12px 0 16px;

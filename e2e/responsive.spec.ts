@@ -26,6 +26,11 @@ async function openDocument(page: Page, id: string) {
 
 /** Nothing on the page is wider than the screen. */
 async function expectNoSidewaysScroll(page: Page) {
+  // Web fonts change widths; measure with the real ones (ready can resolve before they're requested).
+  await page.evaluate(() => Promise.all(["400 14px Inter", "600 14px Inter"].map((font) => document.fonts.load(font).catch(() => [])))); // offline: system fonts
+  await page.evaluate(() => new Promise(requestAnimationFrame));
+  // Mobile emulation widens the layout viewport to fit overflowing content, so compare with the screen.
+  expect(await page.evaluate(() => window.innerWidth)).toBe(page.viewportSize()!.width);
   const overflow = await page.evaluate(() => ({
     page: document.documentElement.scrollWidth - window.innerWidth,
     canvas: (() => {
@@ -187,8 +192,6 @@ test.describe("phone", () => {
     await expect(page.getByRole("button", { name: "Import file" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Download all" })).toBeVisible();
     expect((await page.locator(".home-section-head h2").first().boundingBox())!.height).toBeLessThan(30);
-    // Mobile emulation widens the layout viewport when anything overflows, so check the width directly.
-    expect(await page.evaluate(() => window.innerWidth)).toBe(390);
     // The new button floats above the document list.
     const onTop = await page.evaluate(() => {
       const fab = document.querySelector(".home-fab")!;
