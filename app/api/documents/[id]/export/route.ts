@@ -2,6 +2,7 @@ import { documentToDocx } from "@/lib/doc/docx";
 import { docPlainText } from "@/lib/doc/editing";
 import { documentHtmlFile } from "@/lib/doc/html";
 import { docToMarkdown } from "@/lib/doc/markdown";
+import { rejectHunks } from "@/lib/doc/review";
 import { HttpError, route, routeDocument } from "@/lib/server/http";
 import { loadImage } from "@/lib/server/images";
 
@@ -23,11 +24,15 @@ export const GET = route(async (request, context: Context) => {
   const doc = await routeDocument(context);
   const format = new URL(request.url).searchParams.get("format") ?? "docx";
   if (!(format in TYPES)) throw new HttpError(400, "Unsupported format. Use docx, html, md or txt.");
+  // Pending changes are part of the text by default; ?changes=without exports the text as it was before them.
+  const changes = new URL(request.url).searchParams.get("changes") ?? "with";
+  if (changes !== "with" && changes !== "without") throw new HttpError(400, "changes must be with or without.");
+  const content = changes === "without" && doc.hunks.length ? rejectHunks(doc.doc, doc.hunks, "all").tr.doc : doc.doc;
   let body: BodyInit;
-  if (format === "docx") body = (await documentToDocx(doc.doc, doc.meta, loadImage)) as Uint8Array<ArrayBuffer>;
-  else if (format === "html") body = documentHtmlFile(doc.doc, doc.meta);
-  else if (format === "md") body = docToMarkdown(doc.doc);
-  else body = docPlainText(doc.doc);
+  if (format === "docx") body = (await documentToDocx(content, doc.meta, loadImage)) as Uint8Array<ArrayBuffer>;
+  else if (format === "html") body = documentHtmlFile(content, doc.meta);
+  else if (format === "md") body = docToMarkdown(content);
+  else body = docPlainText(content);
   const name = filename(doc.meta.title, format);
   return new Response(body, {
     headers: {

@@ -11,7 +11,7 @@ import { docPlainText, wordCount } from "@/lib/doc/editing";
 import type { DocumentMeta } from "@/lib/doc/settings";
 import { insertImage, insertText } from "@/lib/editor/commands";
 import { AgentPanel, type AgentPanelHandle } from "@/components/agent/AgentPanel";
-import { IconButton } from "@/components/ui/Button";
+import { Button, IconButton } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { MenuButton } from "@/components/ui/Menu";
 import { toast, Toaster } from "@/components/ui/Toast";
@@ -159,9 +159,10 @@ export function Workspace({ documentId }: { documentId: string }) {
 
   /** The inline ⌘K prompt: sends straight to Claude about the selection, or the cursor when nothing is selected. */
   const inlineAsk = useCallback(
-    (text: string) => {
+    (text: string, only?: SelectionContext) => {
       const view = session.view;
       const selection: SelectionContext | null =
+        only ??
         session.selection() ?? (view ? { documentId: session.id, text: "", from: view.state.selection.from, to: view.state.selection.from } : null);
       const deliver = (tries: number) => {
         if (agentRef.current) void agentRef.current.send(selection, text).catch(() => toast("Couldn't send that to Claude.", { tone: "error" }));
@@ -172,6 +173,25 @@ export function Workspace({ documentId }: { documentId: string }) {
     },
     [session, setPanel],
   );
+
+  /** Spelling and grammar for the selection, or the paragraph at the cursor (⌘⌥X). */
+  const checkSpelling = useCallback(() => {
+    const view = session.view;
+    if (!view) return;
+    let selection = session.selection();
+    if (!selection) {
+      const { $from } = view.state.selection;
+      const from = $from.start();
+      const to = $from.end();
+      const text = view.state.doc.textBetween(from, to, "\n");
+      if (!text.trim()) {
+        toast("Put the cursor in a paragraph or select some text to check.");
+        return;
+      }
+      selection = { documentId: session.id, text, from, to };
+    }
+    inlineAsk("Fix spelling, grammar and punctuation in the selected text only. Don't change the meaning, voice or wording beyond what's needed. If it's already correct, say so and don't edit.", selection);
+  }, [session, inlineAsk]);
 
   const startComment = useCallback(() => {
     if (!session.view || session.view.state.selection.empty) {
@@ -190,15 +210,20 @@ export function Workspace({ documentId }: { documentId: string }) {
     return true;
   };
 
+  const [exporting, setExporting] = useState<"docx" | "md" | "html" | "txt" | null>(null);
   const download = useCallback(
-    async (format: "docx" | "pdf" | "md" | "html" | "txt") => {
+    async (format: "docx" | "pdf" | "md" | "html" | "txt", changes?: "with" | "without") => {
+      if (format !== "pdf" && !changes && session.ui.get().hunks.length) {
+        setExporting(format);
+        return;
+      }
       if (format === "pdf") {
         await session.exportPdf().catch((error: Error) => toast(`Couldn't export the PDF: ${error.message}`, { tone: "error" }));
         return;
       }
       await session.whenSaved();
       const link = document.createElement("a");
-      link.href = `/api/documents/${documentId}/export?format=${format}`;
+      link.href = `/api/documents/${documentId}/export?format=${format}${changes === "without" ? "&changes=without" : ""}`;
       link.download = "";
       document.body.append(link);
       link.click();
@@ -245,6 +270,11 @@ export function Workspace({ documentId }: { documentId: string }) {
         setPrompting(true);
         return;
       }
+      if (event.altKey && !event.shiftKey && event.code === "KeyX" && session.view?.hasFocus() && session.ui.get().mode !== "viewing") {
+        event.preventDefault();
+        checkSpelling();
+        return;
+      }
       if (key === "j" && !event.shiftKey && !event.altKey) {
         event.preventDefault();
         setPanel((current) => (current === "agent" ? null : "agent"));
@@ -264,7 +294,7 @@ export function Workspace({ documentId }: { documentId: string }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [askClaude, setPanel, session]);
+  }, [askClaude, checkSpelling, setPanel, session]);
 
   const insertImageFile = async (file: File) => {
     try {
@@ -355,6 +385,7 @@ export function Workspace({ documentId }: { documentId: string }) {
       setPreference("substitutions", !prefs.substitutions);
       toast(prefs.substitutions ? "Automatic substitutions off." : "Automatic substitutions on.");
     },
+    checkSpelling,
     ask: (prompt) => {
       setPanel("agent");
       requestAnimationFrame(() => agentRef.current?.ask(null, prompt));
@@ -465,6 +496,21 @@ export function Workspace({ documentId }: { documentId: string }) {
           onDragOver={(event) => {
             if (event.dataTransfer.types.includes("Files")) event.preventDefault();
           }}
+          onPasteCapture={(event) => {
+            if (!(event.target as HTMLElement).closest?.(".doc-content")) return;
+            const data = event.clipboardData;
+            const image = Array.from(data.files).find((item) => item.type.startsWith("image/"));
+            // A screenshot or copied image file: upload it. Pasted HTML is left to the editor.
+            if (image && !data.types.includes("text/html")) {
+              event.preventDefault();
+              event.stopPropagation();
+              void insertImageFile(image);
+              return;
+            }
+            if (data.types.includes("text/html") && data.getData("text/html").includes("data:image/")) {
+              setTimeout(() => void session.uploadInlineImages(), 0);
+            }
+          }}
           onDrop={(event) => {
             const file = Array.from(event.dataTransfer.files).find((item) => item.type.startsWith("image/"));
             if (!file) return;
@@ -551,6 +597,41 @@ export function Workspace({ documentId }: { documentId: string }) {
 
       <PageSetupDialog open={Boolean(setup)} initialTab={setup?.tab} session={session} settings={meta?.settings} onClose={() => setSetup(null)} />
       <ShortcutsDialog open={shortcuts} onClose={() => setShortcuts(false)} />
+      <Dialog
+        open={exporting !== null}
+        onClose={() => setExporting(null)}
+        title="Download with pending changes?"
+        description={`${ui.hunks.length} change${ui.hunks.length === 1 ? " is" : "s are"} still waiting for review.`}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setExporting(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                const format = exporting!;
+                setExporting(null);
+                void download(format, "without");
+              }}
+            >
+              Without them
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                const format = exporting!;
+                setExporting(null);
+                void download(format, "with");
+              }}
+            >
+              Include them
+            </Button>
+          </>
+        }
+      >
+        <p>Include the pending changes as they appear now, or download the text as it was before them. Nothing in the document changes either way.</p>
+      </Dialog>
       <SpecialCharactersDialog
         open={charmap}
         onClose={() => setCharmap(false)}

@@ -20,9 +20,9 @@ function formatTokens(count: number) {
 export const UserBubble = memo(function UserBubble({ message }: { message: UserMessage }) {
   return (
     <div className="msg msg-user">
-      {(message.selection || Boolean(message.attachments?.length)) && (
+      {(message.selection?.text.trim() || Boolean(message.attachments?.length)) && (
         <div className="msg-context">
-          {message.selection && (
+          {message.selection?.text.trim() && (
             <span className="chip chip-quote" title={message.selection.text}>
               <TextQuote size={12} />
               <span className="chip-text">{message.selection.text}</span>

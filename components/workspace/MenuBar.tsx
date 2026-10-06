@@ -45,6 +45,8 @@ export type MenuActions = {
   connectClaudeCode: () => void;
   wordCount: () => void;
   ask: (prompt: string) => void;
+  /** Spelling and grammar for the selection or the current paragraph. */
+  checkSpelling: () => void;
   specialCharacters: () => void;
   paste: (plain: boolean) => void;
   clipboard: (action: "cut" | "copy") => void;
@@ -240,6 +242,7 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
         ? []
         : ([
             { kind: "separator" },
+            { label: "Check spelling & grammar here", shortcut: `${mod}⌥X`, onSelect: actions.checkSpelling },
             { label: "Ask Claude to proofread", onSelect: () => actions.ask("Proofread the document and fix spelling, grammar and punctuation. Don't change the meaning or voice.") },
             { label: "Ask Claude for feedback", onSelect: () => actions.ask("Read the document and give me your three most important suggestions to improve it. Don't edit yet.") },
             {

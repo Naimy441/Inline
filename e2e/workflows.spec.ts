@@ -103,6 +103,55 @@ test.describe("home page", () => {
 });
 
 test.describe("editing", () => {
+  // A 1x1 PNG.
+  const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
+
+  const paste = (page: Page, data: { html?: string; png?: boolean }) =>
+    page.locator(".doc-content").evaluate((element, { html, png }) => {
+      const transfer = new DataTransfer();
+      if (html) transfer.setData("text/html", html);
+      if (png) {
+        const bytes = Uint8Array.from(atob(png), (c) => c.charCodeAt(0));
+        transfer.items.add(new File([bytes], "shot.png", { type: "image/png" }));
+      }
+      element.dispatchEvent(new ClipboardEvent("paste", { clipboardData: transfer, bubbles: true, cancelable: true }));
+    }, { html: data.html, png: data.png ? PNG : undefined });
+
+  test("pasted images are uploaded instead of kept as data URLs", async ({ page, request }) => {
+    await openDocument(page, await createDocument(request, "Paste images", "Text."));
+    await page.locator(".doc-content").click();
+    await paste(page, { png: true });
+    const images = page.locator(".doc-content .doc-image img");
+    await expect(images).toHaveCount(1);
+    await expect(images.first()).toHaveAttribute("src", /^\/api\/uploads\//);
+
+    await paste(page, { html: `<p>From a web page</p><img src="data:image/png;base64,${PNG}">` });
+    await expect(images).toHaveCount(2);
+    await expect(images.nth(1)).toHaveAttribute("src", /^\/api\/uploads\//);
+  });
+
+  test("a selected image can be resized by dragging its handle", async ({ page, request }) => {
+    const id = await createDocument(request, "Resize", "Before.");
+    await openDocument(page, id);
+    await page.locator(".doc-content").click();
+    await paste(page, { png: true });
+    const image = page.locator(".doc-content .doc-image img");
+    await expect(image).toHaveAttribute("src", /^\/api\/uploads\//);
+    await image.evaluate((img) => ((img as HTMLImageElement).style.width = "200px"));
+    await image.click();
+    const handle = page.locator(".doc-content .image-handle-right");
+    await expect(handle).toBeVisible();
+    const box = (await handle.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 120, box.y + box.height / 2, { steps: 5 });
+    await page.mouse.up();
+    await expect(image).toHaveAttribute("style", /width: 3\d\dpx/);
+    await expect
+      .poll(async () => ((await (await request.get(`/api/documents/${id}`)).json()) as { document: { doc: unknown } }).document.doc)
+      .toMatchObject({ content: expect.arrayContaining([expect.objectContaining({ type: "image", attrs: expect.objectContaining({ width: expect.stringMatching(/^3\d\dpx$/) }) })]) });
+  });
+
   test("undo and redo", async ({ page, request }) => {
     await openDocument(page, await createDocument(request, "Undo", "Start"));
     const doc = page.locator(".doc-content");
@@ -236,6 +285,25 @@ test.describe("downloads", () => {
     expect(pdf.name).toBe("Export me.pdf");
     expect(pdf.bytes.subarray(0, 5).toString()).toBe("%PDF-");
     expect(pdf.bytes.toString("latin1")).toContain("Heading");
+  });
+
+  test("asks whether to include pending changes", async ({ page, request }) => {
+    await openDocument(page, await createDocument(request, "Pending export", "Original text."));
+    await page.locator(".doc-content").click();
+    await page.keyboard.press("ControlOrMeta+Alt+Shift+X");
+    await page.keyboard.press("End");
+    await page.keyboard.type(" Added.");
+    await expect(page.locator(".doc-content .review-insert")).toContainText("Added.");
+
+    const download = async (choice: string) => {
+      const pending = page.waitForEvent("download");
+      await menu(page, "File", "Download", "Markdown (.md)");
+      await page.getByRole("dialog").getByRole("button", { name: choice }).click();
+      const file = await pending;
+      return (await readFile((await file.path())!)).toString();
+    };
+    expect(await download("Without them")).toBe("Original text.");
+    expect(await download("Include them")).toBe("Original text. Added.");
   });
 });
 
