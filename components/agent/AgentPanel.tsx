@@ -62,15 +62,18 @@ export const AgentPanel = forwardRef<
   AgentPanelHandle,
   {
     documentId: string;
+    /** Where the open chat is remembered: the document's first tab, so every tab shares it. */
+    chatKey?: string;
     hunks: ReadonlyArray<TurnHunk>;
     onClose: () => void;
     onReview: (action: "next" | "accept" | "reject", ids: string[]) => void;
     initialPrompt?: string | null;
   }
->(function AgentPanel({ documentId, hunks, onClose, onReview, initialPrompt }, ref) {
+>(function AgentPanel({ documentId, chatKey: chatKeyProp, hunks, onClose, onReview, initialPrompt }, ref) {
+  const chatKey = chatKeyProp ?? documentId;
   const { status, defaults } = useAgentStatus();
   const router = useRouter();
-  const [chatId, setChatId] = useState<string | null>(() => (typeof window === "undefined" ? null : readChatId(documentId)));
+  const [chatId, setChatId] = useState<string | null>(() => (typeof window === "undefined" ? null : readChatId(chatKey)));
   const [session, setSession] = useState<ChatSession | null>(null);
   const [draftSettings, setDraftSettings] = useState<ChatSettings | null>(null);
   // The quoted selection is part of the unsent message: it survives closing the panel.
@@ -97,9 +100,9 @@ export const AgentPanel = forwardRef<
     created.current = null;
     next.connect();
     setSession(next);
-    writeChatId(documentId, chatId);
+    writeChatId(chatKey, chatId);
     return () => next.close();
-  }, [chatId, documentId]);
+  }, [chatId, chatKey]);
 
   const store = session?.ui ?? emptyStore;
   const ui = useSyncExternalStore(store.subscribe, store.get, () => EMPTY_UI);
@@ -112,14 +115,14 @@ export const AgentPanel = forwardRef<
     let cancelled = false;
     fetch(`/api/agent/chats/${chatId}`).then((response) => {
       if (!cancelled && response.status === 404) {
-        writeChatId(documentId, null);
+        writeChatId(chatKey, null);
         setChatId(null);
       }
     });
     return () => {
       cancelled = true;
     };
-  }, [chatId, documentId]);
+  }, [chatId, chatKey]);
 
   const settings: ChatSettings = chat?.settings ?? draftSettings ?? defaults ?? { model: null, effort: "medium", mode: "agent" };
   const models = status?.state === "ready" ? status.models : [];
@@ -233,7 +236,7 @@ export const AgentPanel = forwardRef<
             size="sm"
             onClick={() => {
               setChatId(null);
-              writeChatId(documentId, null);
+              writeChatId(chatKey, null);
               setSelection(null);
               composer.current?.focus();
             }}
