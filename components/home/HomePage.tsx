@@ -1,10 +1,10 @@
 "use client";
 
-import { Copy, Download, FilePlus2, FileText, FileUp, MoreHorizontal, Moon, Pencil, Plus, RotateCcw, Search, Sun, Trash2 } from "lucide-react";
+import { Copy, Download, FilePlus2, FileText, FileUp, Moon, MoreVertical, Pencil, Plus, RotateCcw, Search, Sun, Trash2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, del, patch, post } from "@/lib/client/api";
-import { hasLegacyDocuments, htmlToDocJSON, importLegacyDocuments } from "@/lib/client/legacyImport";
+import { dismissLegacyDocuments, hasLegacyDocuments, htmlToDocJSON, importLegacyDocuments } from "@/lib/client/legacyImport";
 import { useTheme } from "@/lib/client/theme";
 import type { DocumentMeta } from "@/lib/doc/settings";
 import { documentTemplates, type DocumentTemplate } from "@/lib/doc/templates";
@@ -154,6 +154,17 @@ export function HomePage() {
             <Button size="sm" variant="primary" onClick={runLegacyImport}>
               Import them
             </Button>
+            <IconButton
+              label="Dismiss"
+              size="sm"
+              className="home-banner-close"
+              onClick={() => {
+                dismissLegacyDocuments();
+                setLegacy(false);
+              }}
+            >
+              <X size={15} />
+            </IconButton>
           </div>
         )}
 
@@ -228,9 +239,11 @@ export function HomePage() {
           {view === "trash" && <p className="home-note">Documents in the trash are deleted forever after 30 days.</p>}
 
           {documents === null ? (
-            <div className="doc-list">
-              {[0, 1, 2].map((key) => (
-                <div key={key} className="doc-row skeleton" />
+            <div className="doc-grid">
+              {[0, 1, 2, 3].map((key) => (
+                <div key={key} className="doc-card skeleton">
+                  <div className="doc-card-cover" />
+                </div>
               ))}
             </div>
           ) : filtered.length === 0 ? (
@@ -247,9 +260,9 @@ export function HomePage() {
               )}
             </div>
           ) : (
-            <div className="doc-list">
+            <div className="doc-grid">
               {filtered.map((doc) => (
-                <DocumentRow
+                <DocumentCard
                   key={doc.id}
                   doc={doc}
                   trashed={view === "trash"}
@@ -298,17 +311,28 @@ export function HomePage() {
 }
 
 function TemplateThumb({ template }: { template: DocumentTemplate }) {
-  const lines = template.markdown
-    .split("\n")
-    .filter((line) => line.trim() && line.trim() !== "&nbsp;" && !line.startsWith("|") && line !== "\\pagebreak")
-    .slice(0, 7);
-  if (!lines.length) {
+  const [failed, setFailed] = useState(false);
+  if (!template.markdown) {
     return (
       <span className="template-thumb is-blank">
         <FilePlus2 size={26} strokeWidth={1.5} />
       </span>
     );
   }
+  if (!failed) {
+    return (
+      <span className="template-thumb is-image" aria-hidden>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={`/templates/${template.id}.webp`} alt="" loading="lazy" onError={() => setFailed(true)} />
+      </span>
+    );
+  }
+  return <TextCover lines={template.markdown.split("\n")} />;
+}
+
+/** A cover drawn from text, for documents (and templates) without a saved picture of their first page. */
+function TextCover({ lines: raw }: { lines: string[] }) {
+  const lines = raw.filter((line) => line.trim() && line.trim() !== "&nbsp;" && !line.startsWith("|") && line !== "\\pagebreak").slice(0, 14);
   return (
     <span className="template-thumb" aria-hidden>
       {lines.map((line, index) => {
@@ -330,7 +354,7 @@ function TemplateThumb({ template }: { template: DocumentTemplate }) {
   );
 }
 
-function DocumentRow({
+function DocumentCard({
   doc,
   trashed,
   onOpen,
@@ -350,28 +374,40 @@ function DocumentRow({
   onDelete: () => void;
 }) {
   const [menu, setMenu] = useState(false);
+  const [broken, setBroken] = useState(false);
   const ref = useRef<HTMLButtonElement>(null);
+  const sentences = doc.preview.split(/(?<=[.!?])\s+/);
   return (
-    <div className="doc-row" role="button" tabIndex={0} onClick={() => !trashed && onOpen()} onKeyDown={(event) => event.key === "Enter" && !trashed && onOpen()}>
-      <FileText size={18} className="doc-row-icon" />
-      <div className="doc-row-main">
-        <span className="doc-row-title">{doc.title}</span>
-        <span className="doc-row-preview">{doc.preview || "Empty document"}</span>
+    <div className="doc-card" role="button" tabIndex={0} aria-label={doc.title} onClick={() => !trashed && onOpen()} onKeyDown={(event) => event.key === "Enter" && !trashed && onOpen()}>
+      <div className="doc-card-cover">
+        {doc.thumbnailAt && !broken ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={`/api/documents/${doc.id}/thumbnail?v=${doc.thumbnailAt}`} alt="" loading="lazy" onError={() => setBroken(true)} />
+        ) : doc.preview ? (
+          <TextCover lines={sentences} />
+        ) : (
+          <span className="template-thumb is-blank" />
+        )}
       </div>
-      <span className="doc-row-meta">{doc.wordCount.toLocaleString()} words</span>
-      <span className="doc-row-meta doc-row-time">{relativeTime(trashed && doc.trashedAt ? doc.trashedAt : Math.max(doc.updatedAt, doc.lastOpenedAt))}</span>
-      <button
-        ref={ref}
-        type="button"
-        className="icon-btn icon-btn-sm doc-row-menu"
-        aria-label="Document actions"
-        onClick={(event) => {
-          event.stopPropagation();
-          setMenu(true);
-        }}
-      >
-        <MoreHorizontal size={16} />
-      </button>
+      <div className="doc-card-info">
+        <span className="doc-card-title">{doc.title}</span>
+        <div className="doc-card-meta">
+          <FileText size={14} className="doc-card-icon" />
+          <span className="doc-card-time" title={`${doc.wordCount.toLocaleString()} words`}>{relativeTime(trashed && doc.trashedAt ? doc.trashedAt : Math.max(doc.updatedAt, doc.lastOpenedAt))}</span>
+          <button
+            ref={ref}
+            type="button"
+            className="icon-btn icon-btn-sm doc-card-menu"
+            aria-label="Document actions"
+            onClick={(event) => {
+              event.stopPropagation();
+              setMenu(true);
+            }}
+          >
+            <MoreVertical size={16} />
+          </button>
+        </div>
+      </div>
       <Menu
         open={menu}
         onClose={() => setMenu(false)}

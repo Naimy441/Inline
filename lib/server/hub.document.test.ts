@@ -882,16 +882,20 @@ describe("unloading idle documents", () => {
 describe("DocumentHub tabs", () => {
   it("tabs share one title, stay out of the document list, and follow renames, moves and deletes", async () => {
     const hub = freshHub();
-    const root = await hub.create({ title: "Report", markdown: "First tab." });
+    const root = await hub.create({ title: "Report", markdown: "## Plan\n\nFirst tab." });
     const second = await hub.createTab(root.id, { title: "Notes", markdown: "Second tab." });
     const third = await hub.createTab(second.id);
-    assert.deepEqual(await hub.tabs(third.id), [
-      { id: root.id, title: "Tab 1" },
-      { id: second.id, title: "Notes" },
-      { id: third.id, title: "Tab 3" },
-    ]);
+    assert.deepEqual(
+      (await hub.tabs(third.id)).map(({ outline: _, ...tab }) => tab),
+      [
+        { id: root.id, title: "Tab 1", root: true },
+        { id: second.id, title: "Notes" },
+        { id: third.id, title: "Tab 3" },
+      ],
+    );
     assert.equal(second.meta.parentId, root.id);
     assert.equal(second.meta.title, "Report");
+    assert.deepEqual((await hub.tabs(root.id))[0]!.outline, [{ pos: 0, level: 2, text: "Plan" }]);
     const listed = (await hub.list()).map((meta) => meta.id);
     assert.ok(listed.includes(root.id));
     assert.ok(!listed.includes(second.id) && !listed.includes(third.id));
@@ -905,23 +909,40 @@ describe("DocumentHub tabs", () => {
     const events: HubEvent[] = [];
     const stop = root.subscribe((event) => events.push(event));
     await hub.renameTab(third.id, "Appendix");
-    await hub.moveTab(third.id, 1);
+    await hub.moveTab(third.id, 0);
     assert.deepEqual(
       (await hub.tabs(root.id)).map((tab) => tab.title),
-      ["Tab 1", "Appendix", "Notes"],
+      ["Appendix", "Tab 1", "Notes"],
+    );
+    // Any tab can move, the root included; names stay put.
+    await hub.moveTab(root.id, 2);
+    assert.deepEqual(
+      (await hub.tabs(root.id)).map((tab) => tab.title),
+      ["Appendix", "Notes", "Tab 1"],
     );
     assert.ok(events.some((event) => event.type === "tabs"));
     stop();
 
-    await assert.rejects(hub.deleteTab(root.id), /first tab/);
     await hub.deleteTab(second.id);
-    assert.deepEqual((await hub.tabs(root.id)).map((tab) => tab.id), [root.id, third.id]);
+    assert.deepEqual((await hub.tabs(root.id)).map((tab) => tab.id), [third.id, root.id]);
     assert.equal(await hub.get(second.id), null);
 
-    // Duplicating copies every tab; deleting the document deletes its tabs.
+    // Duplicating copies every tab in order.
     const copy = await hub.duplicate(third.id);
-    assert.deepEqual((await hub.tabs(copy.id)).map((tab) => tab.title), ["Tab 1", "Appendix"]);
-    await hub.remove(root.id);
-    assert.equal(await hub.get(third.id), null);
+    assert.deepEqual((await hub.tabs(copy.id)).map((tab) => tab.title), ["Appendix", "Tab 1"]);
+
+    // Deleting the root hands the document to the next tab.
+    const next = await hub.deleteTab(root.id);
+    assert.equal(next.id, third.id);
+    assert.equal(third.meta.parentId, undefined);
+    assert.equal(third.meta.title, "Annual report");
+    assert.deepEqual((await hub.tabs(third.id)).map(({ outline: _, ...tab }) => tab), [{ id: third.id, title: "Appendix", root: true }]);
+    assert.ok((await hub.list()).some((meta) => meta.id === third.id));
+    await assert.rejects(hub.deleteTab(third.id), /at least one tab/);
+
+    // Deleting a document deletes its tabs.
+    const tabs = (await hub.tabs(copy.id)).map((tab) => tab.id);
+    await hub.remove(copy.id);
+    for (const id of tabs) assert.equal(await hub.get(id), null);
   });
 });

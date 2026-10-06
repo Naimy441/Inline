@@ -27,7 +27,13 @@ export type PageGeometry = {
 type Break = { pos: number; height: number; inline: boolean };
 
 /** What a layout pass found: the page count, where each page after the first starts, and how full the last page is (0-1). */
-export type PageLayout = { pages: number; starts: number[]; lastPageFill: number };
+export type PageLayout = {
+  pages: number;
+  starts: number[];
+  lastPageFill: number;
+  /** The same once pending changes are kept, when struck-out deleted text is showing (it takes space until then). */
+  kept?: { pages: number; starts: number[]; lastPageFill: number };
+};
 type PageState = { breaks: Break[]; pages: number; decorations: DecorationSet; epoch: number };
 
 export const pageKey = new PluginKey<PageState>("pagination");
@@ -86,7 +92,11 @@ export function paginationPlugin(geometry: () => PageGeometry, onLayout?: (layou
           const result = measure(view, geometry());
           if (!result) return;
           const current = pageKey.getState(view.state)!;
-          const report = () => onLayout?.({ pages: result.pages, starts: result.breaks.map((item) => item.pos), lastPageFill: result.lastPageFill });
+          const report = () => {
+            if (!onLayout) return;
+            const kept = measureKept(view, geometry());
+            onLayout({ pages: result.pages, starts: result.breaks.map((item) => item.pos), lastPageFill: result.lastPageFill, ...(kept ? { kept } : {}) });
+          };
           if (sameBreaks(current.breaks, result.breaks) && current.pages === result.pages) {
             settle = 0;
             report();
@@ -168,7 +178,7 @@ const CONTAINERS = new Set(["bullet_list", "ordered_list", "list_item", "blockqu
 type LineCache = { width: number; height: number; lines: Array<{ top: number; bottom: number }> };
 const lineCache = new WeakMap<PMNode, LineCache>();
 
-function measure(view: EditorView, geometry: PageGeometry): { breaks: Break[]; pages: number; lastPageFill: number } | null {
+function measure(view: EditorView, geometry: PageGeometry, keepCache = true): { breaks: Break[]; pages: number; lastPageFill: number } | null {
   const root = view.dom as HTMLElement;
   if (!root.isConnected || !root.offsetWidth) return null;
   const rootRect = root.getBoundingClientRect();
@@ -223,7 +233,7 @@ function measure(view: EditorView, geometry: PageGeometry): { breaks: Break[]; p
       if (!lines.length) lines.push({ top: toLocal(box.top), bottom: toLocal(box.bottom) });
       lines.sort((a, b) => a.top - b.top);
       const relative = lines.map((line) => ({ top: natural(line.top) - blockTop, bottom: natural(line.bottom) - blockTop }));
-      lineCache.set(node, { width, height: blockHeight, lines: relative });
+      if (keepCache) lineCache.set(node, { width, height: blockHeight, lines: relative });
       for (const line of relative) units.push({ kind: "line", top: blockTop + line.top, bottom: blockTop + line.bottom, block: node, blockPos: pos });
       return;
     }
@@ -276,6 +286,23 @@ function measure(view: EditorView, geometry: PageGeometry): { breaks: Break[]; p
   if (forceNext) page += 1;
   const lastPageFill = forceNext || !units.length ? 0 : Math.max(0, Math.min(1, (lastBottom - page * pitch) / contentHeight));
   return { breaks: dedupe(breaks), pages: page + 1, lastPageFill };
+}
+
+/**
+ * The layout as it will be once every pending change is kept: struck-out
+ * deleted text hidden for one synchronous measurement, then shown again
+ * before the browser paints, so nothing flickers.
+ */
+function measureKept(view: EditorView, geometry: PageGeometry): PageLayout["kept"] {
+  const root = view.dom as HTMLElement;
+  if (!root.querySelector(".review-delete")) return undefined;
+  root.classList.add("measuring-kept");
+  try {
+    const result = measure(view, geometry, false);
+    return result ? { pages: result.pages, starts: dedupe(result.breaks).map((item) => item.pos), lastPageFill: result.lastPageFill } : undefined;
+  } finally {
+    root.classList.remove("measuring-kept");
+  }
 }
 
 function dedupe(breaks: Break[]) {

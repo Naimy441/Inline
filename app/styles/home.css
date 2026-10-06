@@ -84,6 +84,11 @@
   color: var(--accent-text);
 }
 
+.home-banner > span {
+  flex: 1;
+  min-width: 0;
+}
+
 .home-section + .home-section {
   margin-top: 36px;
 }
@@ -210,87 +215,128 @@
   line-height: 1.35;
 }
 
-.doc-list {
+/* Recent documents as covers, like Google Docs' home. */
+.doc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 20px 16px;
+}
+
+.doc-card {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius);
   background: var(--surface);
   overflow: hidden;
-}
-
-.doc-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
-  align-items: center;
-  gap: 14px;
-  min-height: 60px;
-  padding: 10px 12px 10px 16px;
   cursor: pointer;
-  transition: background 0.12s;
+  transition: border-color 0.15s, box-shadow 0.2s var(--ease);
 }
 
-.doc-row + .doc-row {
-  border-top: 1px solid var(--border);
-}
-
-.doc-row:hover,
-.doc-row:focus-visible {
-  background: var(--surface-hover);
+.doc-card:hover,
+.doc-card:focus-visible {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-sm);
   outline: none;
 }
 
-.doc-row.skeleton {
+.doc-card-cover {
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2, var(--surface-hover));
+  padding: 12px 12px 0;
+}
+
+.doc-card-cover img,
+.doc-card-cover .template-thumb {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 8.5 / 11;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 2px 2px 0 0;
+  box-shadow: none;
+  background: #fff;
+}
+
+.doc-card-cover .template-thumb {
+  background: var(--paper);
+}
+
+.doc-card.skeleton {
   cursor: default;
+  min-height: 230px;
   background: linear-gradient(90deg, var(--surface) 0%, var(--surface-hover) 50%, var(--surface) 100%);
   background-size: 200% 100%;
   animation: shimmer 1.4s linear infinite;
 }
 
-.doc-row-icon {
-  color: var(--accent);
+.doc-card.skeleton .doc-card-cover {
+  background: none;
 }
 
-.doc-row-main {
+.doc-card-info {
   display: flex;
   flex-direction: column;
-  min-width: 0;
+  gap: 2px;
+  padding: 10px 6px 8px 12px;
 }
 
-.doc-row-title {
+.doc-card-title {
   font-weight: 500;
+  font-size: 13.5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  padding-right: 6px;
 }
 
-.doc-row-preview {
-  font-size: 12.5px;
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.doc-row-meta {
+.doc-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
   font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
-.doc-row-time {
-  min-width: 84px;
-  text-align: right;
+.doc-card-icon {
+  flex: none;
+  color: var(--accent);
 }
 
-.doc-row-menu {
-  opacity: 0;
+.doc-card-time {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.doc-row:hover .doc-row-menu,
-.doc-row:focus-within .doc-row-menu {
-  opacity: 1;
+.doc-card-menu {
+  flex: none;
+  margin-left: auto;
+}
+
+.template-thumb.is-image {
+  padding: 0;
+  gap: 0;
+  background: #fff;
+}
+
+.template-thumb.is-image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+}
+
+.home-banner-close {
+  flex: none;
+  color: inherit;
 }
 
 .home-empty {
@@ -389,35 +435,32 @@
     display: none;
   }
   .home-banner {
-    flex-direction: column;
-    align-items: stretch;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 10px;
   }
-  .doc-list {
-    border-radius: 14px;
+  .home-banner > .btn {
+    grid-row: 2;
+    grid-column: 1 / -1;
   }
-  .doc-row {
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
-    gap: 12px;
-    min-height: 64px;
-    padding: 10px 4px 10px 14px;
+  .home-banner-close {
+    grid-row: 1;
+    grid-column: 2;
+    align-self: start;
   }
-  .doc-row-title {
-    font-size: 15px;
+  .doc-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px 12px;
   }
-  .doc-row-preview {
-    font-size: 13px;
+  .doc-card-cover {
+    padding: 10px 10px 0;
   }
-  .doc-row-meta:not(.doc-row-time) {
-    display: none;
+  .doc-card-title {
+    font-size: 14px;
   }
-  .doc-row-time {
-    min-width: 0;
-  }
-  .doc-row-menu {
-    opacity: 1;
-    min-width: 40px;
-    height: 40px;
+  .doc-card-menu {
+    min-width: 36px;
+    height: 36px;
   }
   .segmented button {
     height: 32px;

@@ -519,7 +519,8 @@ export const TOOLS = [
     title: "Get page count",
     description:
       "How many pages a document fills in the user's editor with its current page size, margins, fonts, spacing and images; where each page starts (line numbers); and how full the last page is. When no editor has the document open, the count is an estimate from the word count.\n\n" +
-      "Use it whenever the user asks for a length in pages (\"write 5 pages\", \"keep it to one page\", \"cut a page\"): check before writing to plan how much to add, then check again after each round of edits and keep adjusting until the page count is right. Don't guess pages from word counts.",
+      "Use it whenever the user asks for a length in pages (\"write 5 pages\", \"keep it to one page\", \"cut a page\"): check before writing to plan how much to add, then check again after each round of edits and keep adjusting until the page count is right. Don't guess pages from word counts.\n\n" +
+      "Counts are for the document once your pending changes are kept: deleted text still showing struck through for review is not counted. Fit the length by changing the text. Don't change margins, page size, font, font size or spacing to make it fit unless the user asks for that.",
     shape: { document_id: documentId },
     write: false,
     async handler(args, ctx) {
@@ -533,7 +534,9 @@ export const TOOLS = [
       const plural = count.pages === 1 ? "" : "s";
       const lines: string[] = [];
       if (count.measured) {
-        lines.push(`"${doc.meta.title}" (id ${doc.id}) fills ${count.pages} page${plural}, as laid out in the user's editor (${setup}).`);
+        const pending = doc.hunks.some((hunk) => hunk.deleted.size > 0);
+        lines.push(`"${doc.meta.title}" (id ${doc.id}) fills ${count.pages} page${plural}${pending ? " once the pending changes are kept" : ""}, as laid out in the user's editor (${setup}).`);
+        if (count.showing) lines.push(`The editor shows ${count.showing} pages until then, because deleted text awaiting review stays on the page struck through. That is not part of the length; don't cut more to make up for it.`);
         lines.push(...describePageStarts(doc, count.starts ?? []));
         const fill = Math.round((count.lastPageFill ?? 0) * 100);
         const room = Math.round((1 - (count.lastPageFill ?? 0)) * count.wordsPerPage);
@@ -542,7 +545,6 @@ export const TOOLS = [
         lines.push(`"${doc.meta.title}" (id ${doc.id}) fills about ${count.pages} page${plural} (${setup}). No editor has measured the current text, so this is estimated from the word count.`);
       }
       lines.push(`${words.toLocaleString()} words; about ${count.wordsPerPage.toLocaleString()} words fit on a full page of paragraphs with this formatting. Headings, lists, tables, images and page breaks change that.`);
-      if (doc.hunks.some((hunk) => hunk.deleted.size > 0)) lines.push("Deleted text that is still awaiting review stays visible (struck through) and takes space until the user keeps or undoes the changes.");
       return ok(lines.join("\n"));
     },
   }),
@@ -603,7 +605,7 @@ export const TOOLS = [
     name: "set_paragraph_style",
     title: "Set paragraph style",
     description:
-      "Change the paragraph style of the blocks on the given lines: type (paragraph, heading with level 1-6, title, subtitle), alignment, indent level, line spacing and space before/after. Lists, tables and quotes are changed with edit_document instead.",
+      "Change the paragraph style of the blocks on the given lines: type (paragraph, heading with level 1-6, title, subtitle), alignment, indent level, first-line or hanging indent, line spacing and space before/after. Lists, tables and quotes are changed with edit_document instead.",
     shape: {
       document_id: documentId,
       from_line: z.number().int().min(1),
@@ -615,6 +617,7 @@ export const TOOLS = [
       line_spacing: z.number().min(0.8).max(4).nullable().optional().describe("Line spacing multiple (e.g. 1.15, 1.5, 2), or null for the document default."),
       space_before: z.number().min(0).max(144).nullable().optional().describe("Points of space before, or null for default."),
       space_after: z.number().min(0).max(144).nullable().optional().describe("Points of space after, or null for default."),
+      text_indent: z.number().min(-3).max(3).nullable().optional().describe("First-line indent in inches (0.5 for essays); negative for a hanging indent (-0.5 for works cited); null for none."),
     },
     write: true,
     async handler(args, ctx) {
@@ -1202,18 +1205,23 @@ export const TOOLS = [
     name: "export_document",
     title: "Export document",
     description:
-      "Export a document as Word (.docx), PDF, Markdown, HTML or plain text. The file is downloaded in the user's browser. docx/md/html/txt are also available at a returned URL; PDF is drawn from the editor's page layout, so the document must be open in Inline.",
-    shape: { document_id: documentId, format: z.enum(["docx", "pdf", "md", "html", "txt"]) },
+      "Export a document as Word (.docx), PDF, Markdown, HTML or plain text. The file is downloaded in the user's browser. docx/md/html/txt are also available at a returned URL; PDF is drawn from the editor's page layout, so the document must be open in Inline. A document with tabs exports all of them in order, each starting on a new page, unless all_tabs is false.",
+    shape: {
+      document_id: documentId,
+      format: z.enum(["docx", "pdf", "md", "html", "txt"]),
+      all_tabs: z.boolean().optional().describe("For a document with tabs: export every tab (default true) or only this one."),
+    },
     write: false,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
+      const tabs = args.all_tabs === false ? "tab" : "all";
       if (args.format === "pdf") {
-        const viewers = doc.sendCommand({ kind: "export_pdf" });
+        const viewers = doc.sendCommand({ kind: "export_pdf", tabs });
         return viewers
           ? ok(`Started the download of "${doc.meta.title}.pdf" in the user's editor.`)
           : fail("PDF export needs the document open in the Inline editor. Ask the user to open it, or export docx/html instead.");
       }
-      const url = `/api/documents/${doc.id}/export?format=${args.format}`;
+      const url = `/api/documents/${doc.id}/export?format=${args.format}${tabs === "all" && (doc.meta.parentId || doc.meta.tabs?.length) ? "&tabs=all" : ""}`;
       const filename = `${doc.meta.title.replace(/[\\/:*?"<>|]+/g, "-")}.${args.format}`;
       const viewers = doc.sendCommand({ kind: "download", url, filename });
       return ok(`${viewers ? `Started the download of "${filename}" in the user's browser.` : "No editor is open to download into."} The file is available at ${url} on the Inline server.`);

@@ -8,6 +8,7 @@ import { emptyDoc, schema } from "@/lib/doc/schema";
 import {
   DEFAULT_SETTINGS,
   cleanTitle,
+  layoutKey,
   normalizeSettings,
   titleFromText,
   patchSettings,
@@ -15,6 +16,7 @@ import {
   type DocComment,
   type DocumentMeta,
   type DocumentTab,
+  type TabHeading,
   type DocumentSettings,
 } from "@/lib/doc/settings";
 import { log } from "@/lib/server/log";
@@ -57,7 +59,7 @@ export type AgentActivity = {
 
 export type ClientCommand =
   | { kind: "print" }
-  | { kind: "export_pdf" }
+  | { kind: "export_pdf"; tabs?: "all" | "tab" }
   | { kind: "open_document"; documentId: string }
   | { kind: "scroll_to"; from: number; to: number; version: number }
   | { kind: "download"; url: string; filename: string };
@@ -87,7 +89,9 @@ export type DocumentSnapshot = {
 export type ClientSelection = { from: number; to: number; version: number; at: number };
 
 /** Pages as the user's editor laid them out at `version`: where each page after the first starts, and how full the last one is. */
-export type ClientLayout = { pages: number; starts: number[]; lastPageFill: number; version: number; words: number; at: number };
+type PageFall = { pages: number; starts: number[]; lastPageFill: number };
+/** How the user's editor laid the pages out; `kept` is the layout once pending changes are kept, when deleted text is still showing. */
+export type ClientLayout = PageFall & { version: number; words: number; at: number; settings?: string; kept?: PageFall };
 
 const STEP_LOG_LIMIT = 2000;
 const PERSIST_DELAY_MS = 400;
@@ -319,9 +323,15 @@ export class LiveDocument {
   }
 
   /** Changes to the tab fields (and a title taken from another tab), without the side effects of updateMeta. */
-  setTabMeta(patch: Partial<Pick<DocumentMeta, "tabs" | "tabTitle" | "parentId" | "title">>) {
+  setTabMeta(patch: Partial<Pick<DocumentMeta, "tabs" | "tabTitle" | "parentId" | "title" | "autoTitle" | "lastOpenedAt">>) {
     this.meta = { ...this.meta, ...patch };
     this.emit({ type: "meta", meta: this.meta });
+    this.schedulePersist();
+  }
+
+  /** A new first-page thumbnail was saved. */
+  setThumbnail(key: string) {
+    this.meta = { ...this.meta, thumbnailAt: Date.now(), thumbnailKey: key };
     this.schedulePersist();
   }
 
@@ -434,13 +444,26 @@ export class LiveDocument {
     this.selection = { from, to, version: this.version, at: Date.now() };
   }
 
-  setLayout(layout: { pages: number; starts: number[]; lastPageFill: number; version: number }) {
+  setLayout(layout: PageFall & { version: number; settings?: string; kept?: PageFall }) {
     if (layout.version !== this.version) return;
+    if (layout.settings !== undefined && layout.settings !== layoutKey(this.meta.settings)) return;
     const max = this.doc.content.size;
-    const starts = layout.starts.filter((pos) => pos <= max).sort((a, b) => a - b);
-    this.layout = { pages: layout.pages, starts, lastPageFill: layout.lastPageFill, version: this.version, words: docWordCount(this.doc), at: Date.now() };
+    const clean = (fall: PageFall): PageFall => ({ pages: fall.pages, starts: fall.starts.filter((pos) => pos <= max).sort((a, b) => a - b), lastPageFill: fall.lastPageFill });
+    this.layout = {
+      ...clean(layout),
+      ...(layout.kept ? { kept: clean(layout.kept) } : {}),
+      version: this.version,
+      settings: layoutKey(this.meta.settings),
+      words: docWordCount(this.doc),
+      at: Date.now(),
+    };
     for (const resolve of this.layoutWaiters) resolve();
     this.layoutWaiters.clear();
+  }
+
+  /** Whether the last reported layout is for the current text and page settings. */
+  layoutIsCurrent() {
+    return Boolean(this.layout && this.layout.version === this.version && this.layout.settings === layoutKey(this.meta.settings));
   }
 
   /**
@@ -448,7 +471,7 @@ export class LiveDocument {
    * but hasn't measured the latest change yet, wait a little for it to.
    */
   async currentLayout(timeoutMs = 2500): Promise<ClientLayout | null> {
-    const fresh = () => (this.layout && this.layout.version === this.version ? this.layout : null);
+    const fresh = () => (this.layoutIsCurrent() ? this.layout : null);
     if (fresh() || this.listeners.size === 0) return fresh();
     const deadline = Date.now() + timeoutMs;
     while (!fresh() && Date.now() < deadline) {
@@ -707,30 +730,38 @@ class DocumentHub {
 
   // --- tabs -------------------------------------------------------------------
 
-  /** A document's tabs, the first tab (which holds the title and tab order) first. */
+  /**
+   * A document's tabs in order. The root (the tab the document was created
+   * with) holds the title and the order, which may put it anywhere.
+   */
   async family(id: string): Promise<{ root: LiveDocument; tabs: LiveDocument[] }> {
     const doc = await this.require(id);
     const root = (doc.meta.parentId && (await this.get(doc.meta.parentId))) || doc;
-    const children = await Promise.all((root.meta.tabs ?? []).map((child) => this.get(child)));
-    const tabs = children.filter((child): child is LiveDocument => Boolean(child && !child.meta.trashedAt && child.meta.parentId === root.id));
-    return { root, tabs: [root, ...tabs] };
+    const order = tabOrder(root.meta);
+    const members = await Promise.all(order.map((member) => (member === root.id ? root : this.get(member))));
+    const tabs = members.filter((member): member is LiveDocument => Boolean(member && (member === root || (!member.meta.trashedAt && member.meta.parentId === root.id))));
+    return { root, tabs };
   }
 
   async tabs(id: string): Promise<DocumentTab[]> {
-    const { tabs } = await this.family(id);
-    return tabs.map((tab, index) => ({ id: tab.id, title: tabTitle(tab.meta, index) }));
+    const { root, tabs } = await this.family(id);
+    return listTabs(root, tabs);
   }
 
   async createTab(id: string, input: { title?: string; markdown?: string } = {}) {
     const { root, tabs } = await this.family(id);
+    const names = new Set(tabs.map((tab, index) => tabTitle(tab.meta, index)));
+    let n = tabs.length + 1;
+    while (names.has(`Tab ${n}`)) n += 1;
     const tab = await this.create({
       title: root.meta.title,
       markdown: input.markdown,
       settings: root.meta.settings,
       parentId: root.id,
-      tabTitle: input.title?.trim() || `Tab ${tabs.length + 1}`,
+      tabTitle: input.title?.trim() || `Tab ${n}`,
     });
-    root.setTabMeta({ tabs: [...tabs.slice(1).map((item) => item.id), tab.id] });
+    // Name the root's tab too, so its name doesn't change when tabs move.
+    root.setTabMeta({ tabs: [...tabs.map((item) => item.id), tab.id], ...(root.meta.tabTitle ? {} : { tabTitle: tabTitle(root.meta, tabs.indexOf(root)) }) });
     await this.announceTabs(root.id);
     return tab;
   }
@@ -741,29 +772,40 @@ class DocumentHub {
     await this.announceTabs(id);
   }
 
-  /** Deletes a tab for good. The first tab holds the document, so it can't be deleted. */
-  async deleteTab(id: string) {
-    const doc = await this.require(id);
-    if (!doc.meta.parentId) throw new Error("The first tab can't be deleted.");
-    const { root } = await this.family(id);
-    root.setTabMeta({ tabs: (root.meta.tabs ?? []).filter((item) => item !== id) });
+  /**
+   * Deletes a tab for good; a document keeps at least one. Deleting the root
+   * hands the title and tab order to the next tab. Returns the root afterwards.
+   */
+  async deleteTab(id: string): Promise<LiveDocument> {
+    const { root, tabs } = await this.family(id);
+    if (tabs.length < 2) throw new Error("A document needs at least one tab.");
+    const order = tabs.map((tab) => tab.id).filter((item) => item !== id);
+    let next = root;
+    if (id === root.id) {
+      next = tabs.find((tab) => tab.id !== id)!;
+      next.setTabMeta({ parentId: undefined, tabs: order, title: root.meta.title, autoTitle: root.meta.autoTitle, lastOpenedAt: Math.max(root.meta.lastOpenedAt, next.meta.lastOpenedAt) });
+      for (const tab of tabs) if (tab !== root && tab !== next) tab.setTabMeta({ parentId: next.id });
+      root.setTabMeta({ tabs: undefined });
+    } else {
+      root.setTabMeta({ tabs: order });
+    }
     await this.remove(id);
-    await this.announceTabs(root.id);
+    await this.announceTabs(next.id);
+    return next;
   }
 
-  /** Moves a tab to a new position (0 is the first tab, which can't move). */
+  /** Moves a tab to a new position (0 is first). */
   async moveTab(id: string, index: number) {
     const { root, tabs } = await this.family(id);
-    if (id === root.id) throw new Error("The first tab can't be moved.");
-    const order = tabs.slice(1).map((item) => item.id).filter((item) => item !== id);
-    order.splice(Math.max(0, Math.min(order.length, index - 1)), 0, id);
+    const order = tabs.map((item) => item.id).filter((item) => item !== id);
+    order.splice(Math.max(0, Math.min(order.length, index)), 0, id);
     root.setTabMeta({ tabs: order });
     await this.announceTabs(root.id);
   }
 
   private async announceTabs(id: string) {
-    const { tabs } = await this.family(id);
-    const list = tabs.map((tab, index) => ({ id: tab.id, title: tabTitle(tab.meta, index) }));
+    const { root, tabs } = await this.family(id);
+    const list = listTabs(root, tabs);
     for (const tab of tabs) tab.emitTabs(list);
   }
 
@@ -820,19 +862,21 @@ class DocumentHub {
       settings: source.meta.settings,
     });
     if (source.meta.tabTitle) copy.setTabMeta({ tabTitle: source.meta.tabTitle });
-    const copies: string[] = [];
-    for (const tab of tabs.slice(1)) {
-      const child = await this.create({ title: copy.meta.title, doc: tab.doc.toJSON(), settings: tab.meta.settings, parentId: copy.id, tabTitle: tab.meta.tabTitle });
-      copies.push(child.id);
+    if (tabs.length > 1) {
+      const order: string[] = [];
+      for (const tab of tabs) {
+        if (tab === source) order.push(copy.id);
+        else order.push((await this.create({ title: copy.meta.title, doc: tab.doc.toJSON(), settings: tab.meta.settings, parentId: copy.id, tabTitle: tab.meta.tabTitle })).id);
+      }
+      copy.setTabMeta({ tabs: order });
     }
-    if (copies.length) copy.setTabMeta({ tabs: copies });
     return copy;
   }
 
   async remove(id: string) {
     const live = await this.get(id);
     // Deleting a document deletes its other tabs too.
-    for (const child of live?.meta.tabs ?? []) await this.remove(child);
+    for (const child of live?.meta.tabs ?? []) if (child !== id) await this.remove(child);
     live?.markDeleted();
     this.open.delete(id);
     await deleteDocumentFile(id);
@@ -902,6 +946,7 @@ function normalizeFile(file: StoredDocumentFile): StoredDocumentFile {
       ...(typeof meta.parentId === "string" ? { parentId: meta.parentId } : {}),
       ...(Array.isArray(meta.tabs) && meta.tabs.length ? { tabs: meta.tabs.filter((item): item is string => typeof item === "string") } : {}),
       ...(typeof meta.tabTitle === "string" && meta.tabTitle.trim() ? { tabTitle: meta.tabTitle } : {}),
+      ...(typeof meta.thumbnailAt === "number" ? { thumbnailAt: meta.thumbnailAt, thumbnailKey: String(meta.thumbnailKey ?? "") } : {}),
     },
     doc: file.doc,
     comments: Array.isArray(file.comments) ? file.comments : [],
@@ -911,6 +956,27 @@ function normalizeFile(file: StoredDocumentFile): StoredDocumentFile {
 
 export function tabTitle(meta: DocumentMeta, index: number) {
   return meta.tabTitle || `Tab ${index + 1}`;
+}
+
+/** Every tab's id in order; older files list only the tabs after the root. */
+function tabOrder(root: DocumentMeta) {
+  const tabs = root.tabs ?? [];
+  return tabs.includes(root.id) ? tabs : [root.id, ...tabs];
+}
+
+function listTabs(root: LiveDocument, tabs: LiveDocument[]): DocumentTab[] {
+  return tabs.map((tab, index) => ({ id: tab.id, title: tabTitle(tab.meta, index), ...(tab === root ? { root: true } : {}), outline: docOutline(tab.doc) }));
+}
+
+/** A tab's title and headings, as the tabs pane lists them. */
+export function docOutline(doc: PMNode): TabHeading[] {
+  const entries: TabHeading[] = [];
+  doc.forEach((node, pos) => {
+    const level = node.type.name === "title" ? 0 : node.type.name === "heading" ? (node.attrs.level as number) : 9;
+    const text = node.textContent.trim();
+    if (level <= 4 && text) entries.push({ pos, level, text: text.slice(0, 120) });
+  });
+  return entries.slice(0, 200);
 }
 
 function cleanTabTitle(value: string) {

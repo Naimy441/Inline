@@ -10,7 +10,8 @@ import { ALIGNMENTS, MARKDOWN_MARKS, MAX_INDENT, safeHref, schema, type Align } 
  * separated by a blank line, and the few things plain Markdown can't say are
  * written with small, well-known extensions:
  *
- *   # Annual report {.title}        title / subtitle styles, alignment, indent
+ *   # Annual report {.title}        title / subtitle styles, alignment, indent,
+ *   Text {first-line=0.5}            first-line (or hanging=0.5) indent in inches
  *   ==highlight==  <u>underline</u>  <sup>sup</sup>  <sub>sub</sub>
  *   &nbsp;                           an intentionally empty paragraph
  *   \pagebreak                       a page break
@@ -118,6 +119,9 @@ function blockAttrTokens(node: PMNode, context: BlockContext): string[] {
   if (!context.inTable && align && align !== "left") tokens.push(`align=${align}`);
   const indent = Number(node.attrs.indent) || 0;
   if (indent > 0) tokens.push(`indent=${indent}`);
+  const textIndent = Number(node.attrs.textIndent) || 0;
+  if (textIndent > 0) tokens.push(`first-line=${textIndent}`);
+  if (textIndent < 0) tokens.push(`hanging=${-textIndent}`);
   return tokens;
 }
 
@@ -641,6 +645,10 @@ class BlockBuilder {
       if (align && ALIGNMENTS.includes(align)) nodeAttrs.align = align;
       const indent = Number(spec.values.indent);
       if (Number.isFinite(indent) && indent > 0) nodeAttrs.indent = Math.min(MAX_INDENT, Math.round(indent));
+      const firstLine = Number(spec.values["first-line"]);
+      const hanging = Number(spec.values.hanging);
+      if (Number.isFinite(firstLine) && firstLine > 0) nodeAttrs.textIndent = Math.min(3, firstLine);
+      else if (Number.isFinite(hanging) && hanging > 0) nodeAttrs.textIndent = -Math.min(3, hanging);
     }
     if (nodeType !== "heading") delete nodeAttrs.level;
     let content = this.inline(tokens);

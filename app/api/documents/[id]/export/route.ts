@@ -1,9 +1,12 @@
+import type { Node as PMNode } from "prosemirror-model";
 import { documentToDocx } from "@/lib/doc/docx";
 import { docPlainText } from "@/lib/doc/editing";
 import { documentHtmlFile } from "@/lib/doc/html";
 import { docToMarkdown } from "@/lib/doc/markdown";
 import { rejectHunks } from "@/lib/doc/review";
+import { schema } from "@/lib/doc/schema";
 import { HttpError, route, routeDocument } from "@/lib/server/http";
+import { documentHub, type LiveDocument } from "@/lib/server/hub";
 import { loadImage } from "@/lib/server/images";
 
 type Context = { params: Promise<{ id: string }> };
@@ -20,6 +23,15 @@ function filename(title: string, extension: string) {
   return `${base}.${extension}`;
 }
 
+function joinTabs(docs: PMNode[]) {
+  const blocks: PMNode[] = [];
+  docs.forEach((doc, index) => {
+    if (index) blocks.push(schema.nodes.page_break.create());
+    doc.forEach((block) => blocks.push(block));
+  });
+  return schema.nodes.doc.create(null, blocks);
+}
+
 export const GET = route(async (request, context: Context) => {
   const doc = await routeDocument(context);
   const format = new URL(request.url).searchParams.get("format") ?? "docx";
@@ -27,7 +39,11 @@ export const GET = route(async (request, context: Context) => {
   // Pending changes are part of the text by default; ?changes=without exports the text as it was before them.
   const changes = new URL(request.url).searchParams.get("changes") ?? "with";
   if (changes !== "with" && changes !== "without") throw new HttpError(400, "changes must be with or without.");
-  const content = changes === "without" && doc.hunks.length ? rejectHunks(doc.doc, doc.hunks, "all").tr.doc : doc.doc;
+  const textOf = (tab: LiveDocument) => (changes === "without" && tab.hunks.length ? rejectHunks(tab.doc, tab.hunks, "all").tr.doc : tab.doc);
+  // ?tabs=all exports every tab of the document in order, each starting on a new page.
+  const all = new URL(request.url).searchParams.get("tabs") === "all";
+  const tabs = all ? (await documentHub().family(doc.id)).tabs : [doc];
+  const content = tabs.length === 1 ? textOf(tabs[0]!) : joinTabs(tabs.map(textOf));
   let body: BodyInit;
   if (format === "docx") body = (await documentToDocx(content, doc.meta, loadImage)) as Uint8Array<ArrayBuffer>;
   else if (format === "html") body = documentHtmlFile(content, doc.meta);

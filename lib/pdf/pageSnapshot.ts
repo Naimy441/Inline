@@ -94,7 +94,14 @@ type Placed = { page: number; x: number; y: number; width: number; height: numbe
 type Inherited = { underline: boolean; strike: boolean };
 type Marker = { text: string; right: number; style: SnapshotStyle };
 
-export function snapshotPages(root: HTMLElement, title: string, measure: PageMeasurer = domMeasurer(), layout: SnapshotLayout = EDITOR_LAYOUT): PdfDocumentModel {
+export function snapshotPages(
+  root: HTMLElement,
+  title: string,
+  measure: PageMeasurer = domMeasurer(),
+  layout: SnapshotLayout = EDITOR_LAYOUT,
+  /** Read only the first few pages (thumbnails): later blocks are skipped without being walked. */
+  maxPages = Infinity,
+): PdfDocumentModel {
   const papers = [...root.querySelectorAll<HTMLElement>(layout.pages)];
   if (!papers.length) throw new Error("No pages to export.");
 
@@ -134,7 +141,11 @@ export function snapshotPages(root: HTMLElement, title: string, measure: PageMea
     };
   };
 
-  const add = (page: number, item: PdfItem) => pages[page].items.push(item);
+  const add = (page: number, item: PdfItem) => {
+    if (page < maxPages) pages[page].items.push(item);
+  };
+  const lastPaper = paperBoxes[Math.min(paperBoxes.length, maxPages) - 1]!;
+  const limit = maxPages < paperBoxes.length ? lastPaper.top + lastPaper.height : Infinity;
 
   const textColor = (style: SnapshotStyle): RGB | null => {
     const parsed = parseColor(style.color);
@@ -279,6 +290,8 @@ export function snapshotPages(root: HTMLElement, title: string, measure: PageMea
 
   const walk = (el: HTMLElement, decoration: Inherited) => {
     if (el.matches(layout.skip)) return;
+    // Past the last page asked for: the rest of the document is below it.
+    if (limit !== Infinity && el.parentElement?.matches(layout.ink) && measure.box(el).top > limit) return;
     const style = measure.style(el);
     if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") return;
 
@@ -349,7 +362,7 @@ export function snapshotPages(root: HTMLElement, title: string, measure: PageMea
 
   for (const child of root.children) walk(child as HTMLElement, { underline: false, strike: false });
 
-  return { title: title.trim() || "Untitled document", pages };
+  return { title: title.trim() || "Untitled document", pages: pages.slice(0, maxPages) };
 }
 
 function markerText(li: HTMLElement, style: SnapshotStyle) {

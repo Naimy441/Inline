@@ -25,7 +25,7 @@ test.describe("home page", () => {
     const title = `Budget ${Date.now()}`;
     await createDocument(request, title, "Numbers and plans.");
     await page.goto("/");
-    const row = page.locator(".doc-row", { hasText: title });
+    const row = page.locator(".doc-card", { hasText: title });
     await expect(row).toHaveCount(1);
 
     await page.getByLabel("Search documents").fill("no document matches this");
@@ -62,7 +62,7 @@ test.describe("home page", () => {
     await request.patch(`/api/documents/${id}`, { data: { trashed: true } });
     await page.goto("/");
     await page.getByRole("tab", { name: /Trash/ }).click();
-    await expect(page.locator(".doc-row", { hasText: title })).toHaveCount(1);
+    await expect(page.locator(".doc-card", { hasText: title })).toHaveCount(1);
     await expect(page.getByText("deleted forever after 30 days")).toBeVisible();
     await page.getByRole("button", { name: "Empty trash" }).click();
     await page.getByRole("dialog", { name: "Empty the trash?" }).getByRole("button", { name: "Delete forever" }).click();

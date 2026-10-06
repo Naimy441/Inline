@@ -21,6 +21,16 @@ function longDate(now: Date) {
   return now.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
 }
 
+const MLA_MONTHS = ["Jan.", "Feb.", "Mar.", "Apr.", "May", "June", "July", "Aug.", "Sept.", "Oct.", "Nov.", "Dec."];
+
+/** MLA dates read day, month, year: 4 September 2026 (4 Sept. 2026 in Works Cited). */
+function mlaDate(now: Date, short = false) {
+  const month = short ? MLA_MONTHS[now.getMonth()] : now.toLocaleDateString("en-US", { month: "long" });
+  return `${now.getDate()} ${month} ${now.getFullYear()}`;
+}
+
+const TIMES = "\"Times New Roman\", Times, serif";
+
 export function documentTemplates(now = new Date()): DocumentTemplate[] {
   const date = longDate(now);
   return [
@@ -36,27 +46,73 @@ export function documentTemplates(now = new Date()): DocumentTemplate[] {
       title: "Essay",
       description: "Title, introduction, body and conclusion",
       documentTitle: "Untitled essay",
-      settings: { fontFamily: "Georgia, serif", fontSize: 12, lineSpacing: 1.5 },
+      settings: { fontFamily: "Georgia, serif", fontSize: 12, lineSpacing: 1.5, paragraphSpacing: 6 },
       markdown: `# Essay title {.title}
 
 A one-line summary of the argument {.subtitle}
 
 ## Introduction
 
-Open with the question your essay answers and why it matters. End the paragraph with your thesis in one clear sentence.
+Open with the question your essay answers and why it matters to the reader. Give only the background they need to follow you, then end the paragraph with your thesis in one clear sentence. {first-line=0.5}
 
 ## The first point
 
-Make one claim per section. Support it with evidence, then explain what the evidence shows.
+Make one claim per section and state it in the first sentence. Support it with evidence, a quotation, a figure or an example, then explain what the evidence shows and how it serves the thesis. {first-line=0.5}
 
 ## The second point
 
-Build on the first point or address the strongest objection to it.
+Build on the first point, or take on the strongest objection to your argument and show why the thesis still holds. {first-line=0.5}
 
 ## Conclusion
 
-Return to the thesis and say what follows from it. Don't introduce new evidence here.`,
+Return to the thesis in new words and say what follows from it: why it matters, or what question it opens next. Don't introduce new evidence here. {first-line=0.5}`,
       suggestion: "Help me develop this essay. Ask me what it's about first.",
+    },
+    {
+      id: "mla",
+      title: "MLA paper",
+      description: "MLA 8 heading, page numbers and Works Cited",
+      documentTitle: "MLA paper",
+      settings: {
+        fontFamily: TIMES,
+        fontSize: 12,
+        lineSpacing: 2,
+        paragraphSpacing: 0,
+        pageSetup: { margins: { top: 1, right: 1, bottom: 1, left: 1 } },
+        headerFooter: { header: "Lastname {page}", headerAlign: "right" },
+      },
+      markdown: `Your Name
+
+Professor Name
+
+Subject Name
+
+${mlaDate(now)}
+
+Title of Your Paper {align=center}
+
+Begin your introduction here. In MLA style the whole paper is double-spaced in 12-point Times New Roman with one-inch margins, and every paragraph starts half an inch in. Your last name and the page number sit in the top right of every page. End the introduction with your thesis. {first-line=0.5}
+
+SECTION HEADER
+
+*Subsection heading.* Use a run-in heading like this one when a section has parts. Support each claim with a source and cite it in parentheses with the author's last name and the page number, with no comma between them (Lastname 14). If the paper lists steps or ideas inline, number them in parentheses: (1) the first idea, (2) the second idea, (3) the third idea and (4) the fourth. {first-line=0.5}
+
+*Another subsection.* When you name the author in the sentence, as Lastname does, the citation needs only the page number (27). Quotations longer than four lines are set as a block, indented half an inch, with no quotation marks. {first-line=0.5}
+
+CONCLUSION
+
+Bring the argument together. Restate the thesis in light of the evidence and say why it matters, without adding new sources. {first-line=0.5}
+
+\\pagebreak
+
+Works Cited {align=center}
+
+Lastname, Firstname. *Title of the Book*. Publisher, 2020. {hanging=0.5}
+
+Lastname, Firstname, and Firstname Lastname. "Title of the Article." *Name of the Journal*, vol. 12, no. 3, 2019, pp. 45–67. {hanging=0.5}
+
+Organization Name. "Title of the Web Page." *Name of the Website*, ${mlaDate(now, true)}, www.example.com/page. {hanging=0.5}`,
+      suggestion: "Help me write this MLA paper. Ask me for the topic and sources first.",
     },
     {
       id: "report",
@@ -243,7 +299,7 @@ by Your Name {align=center}
 
 ## Chapter One {align=center}
 
-The first line of the story goes here.`,
+The first line of the story goes here. Manuscripts indent every paragraph half an inch and leave no space between them. {first-line=0.5}`,
       suggestion: "Help me outline the first chapter.",
     },
   ];

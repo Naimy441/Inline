@@ -518,6 +518,8 @@ export type BlockStyle = {
   line_spacing?: number | null;
   space_before?: number | null;
   space_after?: number | null;
+  /** First-line indent in inches; negative for a hanging indent; null for none. */
+  text_indent?: number | null;
 };
 
 export function applyBlockStyle(tr: Transform, lines: { from: number; to: number }, style: BlockStyle): number {
@@ -539,6 +541,7 @@ export function applyBlockStyle(tr: Transform, lines: { from: number; to: number
     if (style.line_spacing !== undefined) attrs.lineHeight = style.line_spacing ? String(style.line_spacing) : null;
     if (style.space_before !== undefined) attrs.spaceBefore = style.space_before;
     if (style.space_after !== undefined) attrs.spaceAfter = style.space_after;
+    if (style.text_indent !== undefined) attrs.textIndent = style.text_indent ? Math.max(-3, Math.min(3, style.text_indent)) : null;
     tr.setNodeMarkup(range.pos, type, attrs, node.marks);
   }
   return ranges.length;

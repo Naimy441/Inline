@@ -18,9 +18,10 @@ export function setTabs(tabs: DocumentTab[]) {
     for (const tab of tabs) next[tab.id] = tabs;
     return next;
   });
-  // Remember each tab's first tab, which keys the document's Claude chat, for the next visit.
+  // Remember each tab's root, which keys the document's Claude chat, for the next visit.
+  const root = tabs.find((tab) => tab.root)?.id ?? tabs[0]?.id;
   try {
-    for (const tab of tabs.slice(1)) localStorage.setItem(`${ROOT_KEY}${tab.id}`, tabs[0]!.id);
+    for (const tab of tabs) if (root && tab.id !== root) localStorage.setItem(`${ROOT_KEY}${tab.id}`, root);
   } catch {
     // ignore
   }
@@ -47,7 +48,7 @@ export function useTabs(documentId: string) {
   return all[documentId] ?? null;
 }
 
-/** The id of the document's first tab, as far as this browser knows it. */
+/** The id of the document's root tab, as far as this browser knows it. */
 export function rememberedRoot(documentId: string) {
   try {
     return localStorage.getItem(`${ROOT_KEY}${documentId}`) ?? documentId;
@@ -74,8 +75,35 @@ export async function renameTab(tabId: string, title: string) {
   }
 }
 
+export async function moveTab(tabId: string, index: number) {
+  const previous = lists.get()[tabId];
+  if (previous) {
+    const order = previous.filter((tab) => tab.id !== tabId);
+    order.splice(index, 0, previous.find((tab) => tab.id === tabId)!);
+    setTabs(order);
+  }
+  try {
+    const result = await patch<{ tabs: DocumentTab[] }>(`/api/documents/${tabId}/tabs`, { index });
+    setTabs(result.tabs);
+  } catch (error) {
+    if (previous) setTabs(previous);
+    throw error;
+  }
+}
+
 export async function deleteTab(tabId: string) {
   const previous = lists.get()[tabId];
+  // Deleting the root hands the document to the next tab; its Claude chat goes with it.
+  if (previous?.find((tab) => tab.root)?.id === tabId) {
+    const heir = previous.find((tab) => tab.id !== tabId)?.id;
+    try {
+      const chat = localStorage.getItem(`inline-chat:${tabId}`);
+      if (heir && chat) localStorage.setItem(`inline-chat:${heir}`, chat);
+      if (heir) localStorage.removeItem(`${ROOT_KEY}${heir}`);
+    } catch {
+      // ignore
+    }
+  }
   const result = await del<{ tabs: DocumentTab[] }>(`/api/documents/${tabId}/tabs`);
   if (result.tabs.length) setTabs(result.tabs);
   lists.set((current) => {
@@ -83,5 +111,19 @@ export async function deleteTab(tabId: string) {
     delete next[tabId];
     return next;
   });
-  return previous ?? null;
+  return result.tabs;
+}
+
+let pendingScroll: { id: string; pos: number } | null = null;
+
+/** Scroll to a heading once the tab opening next has loaded. */
+export function scrollAfterOpen(id: string, pos: number) {
+  pendingScroll = { id, pos };
+}
+
+export function takeScroll(id: string) {
+  if (pendingScroll?.id !== id) return null;
+  const pos = pendingScroll.pos;
+  pendingScroll = null;
+  return pos;
 }

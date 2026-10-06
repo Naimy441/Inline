@@ -1,25 +1,24 @@
 "use client";
 
-import { FileText, MoreVertical, PanelLeftClose, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronRight, FileText, MoreVertical, PanelLeftClose, Pencil, Plus, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { EditorState } from "prosemirror-state";
 import { useMemo, useRef, useState } from "react";
 import type { DocumentSession } from "@/lib/client/documentSession";
-import { addTab, deleteTab, renameTab, useTabs } from "@/lib/client/tabs";
-import type { DocumentMeta } from "@/lib/doc/settings";
+import { addTab, deleteTab, moveTab, renameTab, scrollAfterOpen, useTabs } from "@/lib/client/tabs";
+import type { DocumentMeta, TabHeading } from "@/lib/doc/settings";
 import { IconButton } from "@/components/ui/Button";
 import { confirmDialog } from "@/components/ui/Confirm";
 import { Menu } from "@/components/ui/Menu";
 import { toast } from "@/components/ui/Toast";
-import { isCompact } from "@/lib/client/viewport";
 
 /** A tab just added from this pane, named as soon as its page opens. */
 let renameOnOpen: string | null = null;
 
-type Entry = { pos: number; level: number; text: string };
+const COLLAPSED_KEY = "inline-tab-outline-collapsed";
 
-function outline(state: EditorState): Entry[] {
-  const entries: Entry[] = [];
+function outline(state: EditorState): TabHeading[] {
+  const entries: TabHeading[] = [];
   state.doc.forEach((node, pos) => {
     if (node.type.name === "title") entries.push({ pos, level: 0, text: node.textContent });
     else if (node.type.name === "heading" && (node.attrs.level as number) <= 4) entries.push({ pos, level: node.attrs.level as number, text: node.textContent });
@@ -27,7 +26,15 @@ function outline(state: EditorState): Entry[] {
   return entries.filter((entry) => entry.text.trim());
 }
 
-/** The tabs pane in the left margin, like Google Docs': the document's tabs, with the open tab's outline under it. */
+function readCollapsed(): Set<string> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]") as string[]);
+  } catch {
+    return new Set();
+  }
+}
+
+/** The tabs pane in the left margin, like Google Docs': the document's tabs, each with its outline. */
 export function OutlinePanel({
   session,
   state,
@@ -50,10 +57,26 @@ export function OutlinePanel({
     return id;
   });
   const [menu, setMenu] = useState<{ id: string; rect: DOMRect } | null>(null);
+  // Each tab's outline stays open until its arrow is pressed.
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => (typeof window === "undefined" ? new Set() : readCollapsed()));
+  const [drag, setDrag] = useState<{ id: string; over: string | null; after: boolean } | null>(null);
   const entries = useMemo(() => (state ? outline(state) : []), [state?.doc]); // eslint-disable-line react-hooks/exhaustive-deps
   const head = state?.selection.head ?? 0;
   const current = [...entries].reverse().find((entry) => entry.pos <= head);
   const failed = (error: Error) => toast(error.message || "Couldn't change the tabs.", { tone: "error" });
+
+  const toggleOutline = (id: string) =>
+    setCollapsed((value) => {
+      const next = new Set(value);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      try {
+        localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next].slice(-500)));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
 
   const add = () =>
     void addTab(session.id)
@@ -73,13 +96,26 @@ export function OutlinePanel({
     });
     if (!ok) return;
     const index = tabs.findIndex((item) => item.id === id);
-    const next = tabs[index - 1] ?? tabs[0]!;
-    if (id === session.id) router.push(`/d/${next.id}`);
+    const next = tabs[index - 1] ?? tabs[index + 1];
+    if (id === session.id && next) router.push(`/d/${next.id}`);
     void deleteTab(id).catch(failed);
   };
 
-  const menuTab = menu ? tabs.find((tab) => tab.id === menu.id) : null;
-  const menuIndex = menuTab ? tabs.indexOf(menuTab) : -1;
+  const move = (id: string, index: number) => {
+    if (index < 0 || index >= tabs.length || tabs[index]?.id === id) return;
+    void moveTab(id, index).catch(failed);
+  };
+
+  const openHeading = (tabId: string, pos: number) => {
+    if (tabId === session.id) session.scrollTo(pos + 1, pos + 1);
+    else {
+      scrollAfterOpen(tabId, pos + 1);
+      router.push(`/d/${tabId}`);
+    }
+  };
+
+  const menuIndex = menu ? tabs.findIndex((tab) => tab.id === menu.id) : -1;
+  const menuTab = menuIndex >= 0 ? tabs[menuIndex] : null;
 
   return (
     <nav className="outline" aria-label="Document tabs">
@@ -95,11 +131,50 @@ export function OutlinePanel({
         </IconButton>
       </div>
       <ul className="tab-list">
-        {tabs.map((tab) => {
+        {tabs.map((tab, index) => {
           const open = tab.id === session.id;
+          const headings = open ? entries : (tab.outline ?? []);
+          const expanded = headings.length > 0 && !collapsed.has(tab.id);
+          const dropping = drag && drag.over === tab.id && drag.id !== tab.id ? (drag.after ? " drop-after" : " drop-before") : "";
           return (
-            <li key={tab.id}>
+            <li
+              key={tab.id}
+              draggable={!readOnly && renaming === null}
+              onDragStart={(event) => {
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData("text/plain", tab.title);
+                setDrag({ id: tab.id, over: null, after: false });
+              }}
+              onDragOver={(event) => {
+                if (!drag) return;
+                event.preventDefault();
+                const box = event.currentTarget.getBoundingClientRect();
+                const after = event.clientY > box.top + Math.min(box.height, 34) / 2;
+                if (drag.over !== tab.id || drag.after !== after) setDrag({ ...drag, over: tab.id, after });
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                if (!drag || drag.id === tab.id) return setDrag(null);
+                const from = tabs.findIndex((item) => item.id === drag.id);
+                let to = index + (drag.after ? 1 : 0);
+                if (from < to) to -= 1;
+                setDrag(null);
+                move(drag.id, to);
+              }}
+              onDragEnd={() => setDrag(null)}
+              className={`${drag?.id === tab.id ? "is-dragging" : ""}${dropping}`}
+            >
               <div className={`tab-row${open ? " is-open" : ""}${menu?.id === tab.id ? " has-menu" : ""}`}>
+                <button
+                  type="button"
+                  className={`tab-toggle${expanded ? " is-expanded" : ""}`}
+                  aria-label={expanded ? `Hide ${tab.title} outline` : `Show ${tab.title} outline`}
+                  aria-expanded={expanded}
+                  disabled={!headings.length}
+                  onClick={() => toggleOutline(tab.id)}
+                >
+                  {headings.length ? <ChevronRight size={13} /> : <FileText size={13} />}
+                </button>
                 {renaming === tab.id ? (
                   <TabNameInput
                     initial={tab.title}
@@ -113,13 +188,9 @@ export function OutlinePanel({
                     type="button"
                     className="tab-name"
                     aria-current={open ? "page" : undefined}
-                    onClick={() => {
-                      if (!open) router.push(`/d/${tab.id}`);
-                      if (isCompact()) onClose();
-                    }}
+                    onClick={() => !open && router.push(`/d/${tab.id}`)}
                     onDoubleClick={() => !readOnly && setRenaming(tab.id)}
                   >
-                    <FileText size={14} />
                     <span>{tab.title}</span>
                   </button>
                 )}
@@ -134,17 +205,14 @@ export function OutlinePanel({
                   </button>
                 )}
               </div>
-              {open && entries.length > 0 && (
+              {expanded && (
                 <ul className="tab-outline">
-                  {entries.map((entry) => (
+                  {headings.map((entry) => (
                     <li key={entry.pos}>
                       <button
                         type="button"
-                        className={`outline-item level-${entry.level}${current === entry ? " is-current" : ""}`}
-                        onClick={() => {
-                          session.scrollTo(entry.pos + 1, entry.pos + 1);
-                          if (isCompact()) onClose();
-                        }}
+                        className={`outline-item level-${entry.level}${open && current === entry ? " is-current" : ""}`}
+                        onClick={() => openHeading(tab.id, entry.pos)}
                       >
                         {entry.text}
                       </button>
@@ -164,12 +232,15 @@ export function OutlinePanel({
         title={menuTab?.title}
         items={[
           { label: "Rename", icon: <Pencil size={14} />, onSelect: () => menu && setRenaming(menu.id) },
+          { label: "Move up", icon: <ArrowUp size={14} />, disabled: menuIndex <= 0, onSelect: () => menu && move(menu.id, menuIndex - 1) },
+          { label: "Move down", icon: <ArrowDown size={14} />, disabled: menuIndex < 0 || menuIndex >= tabs.length - 1, onSelect: () => menu && move(menu.id, menuIndex + 1) },
+          { kind: "separator" },
           {
             label: "Delete",
             icon: <Trash2 size={14} />,
             danger: true,
-            disabled: menuIndex === 0,
-            hint: menuIndex === 0 ? "The first tab holds the document" : undefined,
+            disabled: tabs.length < 2,
+            hint: tabs.length < 2 ? "A document keeps at least one tab" : undefined,
             onSelect: () => menu && void remove(menu.id),
           },
         ]}

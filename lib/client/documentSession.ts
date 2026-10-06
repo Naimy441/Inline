@@ -8,11 +8,12 @@ import { dataUrlToBlob, ImageView } from "@/lib/editor/imageView";
 import { EditorView } from "prosemirror-view";
 import type { HunkJSON } from "@/lib/doc/review";
 import { schema } from "@/lib/doc/schema";
-import { pageSize, type DocComment, type DocumentMeta, type DocumentTab } from "@/lib/doc/settings";
+import { layoutKey, pageSize, type DocComment, type DocumentMeta, type DocumentTab } from "@/lib/doc/settings";
 import { setTabs } from "@/lib/client/tabs";
 import { api, ApiError, del, patch, post, Store, uploadFile } from "@/lib/client/api";
 import { setCommentState } from "@/lib/editor/comments";
 import { syncDomSelection } from "@/lib/editor/domSync";
+import type { PdfDocumentModel } from "@/lib/pdf/pdfWriter";
 import { pageCount, relayout, type PageGeometry, type PageLayout } from "@/lib/editor/pagination";
 import { setPresence } from "@/lib/editor/presence";
 import { gotoHunk, mapHunksThrough, reviewHunkAtCursor, setHunks } from "@/lib/editor/review";
@@ -41,7 +42,7 @@ export type AgentActivity = {
 
 export type ClientCommand =
   | { kind: "print" }
-  | { kind: "export_pdf" }
+  | { kind: "export_pdf"; tabs?: "all" | "tab" }
   | { kind: "open_document"; documentId: string }
   | { kind: "scroll_to"; from: number; to: number; version: number }
   | { kind: "download"; url: string; filename: string };
@@ -117,6 +118,33 @@ function nextFrames(count: number) {
   });
 }
 
+/** A short hash (FNV-1a) naming what a thumbnail shows. */
+function hashText(text: string) {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `${(hash >>> 0).toString(36)}${text.length.toString(36)}`;
+}
+
+/** Resolve once every image in the element has loaded (or failed), so it can be drawn. */
+function imagesLoaded(root: HTMLElement) {
+  const pending = [...root.querySelectorAll("img")].filter((img) => !img.complete);
+  return Promise.race([
+    Promise.all(
+      pending.map(
+        (img) =>
+          new Promise((resolve) => {
+            img.addEventListener("load", resolve, { once: true });
+            img.addEventListener("error", resolve, { once: true });
+          }),
+      ),
+    ),
+    new Promise((resolve) => setTimeout(resolve, 5000)),
+  ]);
+}
+
 /** Resolve once pagination has produced the same page count for a few frames in a row. */
 function settleLayout(pages: () => number) {
   return new Promise<void>((resolve) => {
@@ -144,6 +172,8 @@ function randomClientId() {
 export type SessionCallbacks = {
   onCommand?: (command: ClientCommand) => void;
   onKeyCommand?: (name: "link" | "find" | "replace" | "comment" | "askClaude") => boolean;
+  /** A read-only copy laid out off screen (exporting another tab): no live connection. */
+  offline?: boolean;
 };
 
 export class DocumentSession {
@@ -237,21 +267,36 @@ export class DocumentSession {
 
   /**
    * Download a PDF drawn from the laid-out pages (lib/pdf), so breaks, margins,
-   * headers and wrapping match the screen. Review marks and other editor UI are
-   * left out.
+   * headers and wrapping match the screen. `addTabs` adds the document's other
+   * tabs to this one's pages.
    */
-  async exportPdf() {
+  async exportPdf(addTabs?: (own: PdfDocumentModel) => Promise<PdfDocumentModel>) {
+    const own = await this.pdfModel();
+    const model = addTabs ? await addTabs(own) : own;
+    const { buildPdf } = await import("@/lib/pdf/pdfWriter");
+    const bytes = buildPdf(model);
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${model.title.replace(/[\\/:*?"<>|]+/g, "-").trim() || "Untitled document"}.pdf`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  }
+
+  /** The laid-out pages as a PDF page model, read from the screen without review marks. */
+  async pdfModel(): Promise<PdfDocumentModel> {
     const view = this.view;
     if (!view) throw new Error("The document isn't open yet.");
     await this.whenSaved();
     const root = view.dom.closest<HTMLElement>(".page-stack");
     if (!root) throw new Error("The page layout isn't ready yet.");
     const title = this.meta?.title ?? "Untitled document";
-    // The PDF writer loads on first use, keeping it out of the editor's start-up code.
-    const [{ snapshotPages }, { buildPdf }] = await Promise.all([import("@/lib/pdf/pageSnapshot"), import("@/lib/pdf/pdfWriter")]);
+    // The PDF code loads on first use, keeping it out of the editor's start-up code.
+    const { snapshotPages } = await import("@/lib/pdf/pageSnapshot");
     // Lay the pages out without review marks (as printing does) while they're read.
     root.classList.add("is-clean");
-    let bytes: Uint8Array<ArrayBuffer>;
     try {
       if (this.ui.get().flow) {
         this.ui.set((ui) => ({ ...ui, exporting: true }));
@@ -259,7 +304,8 @@ export class DocumentSession {
       }
       relayout(view);
       await settleLayout(() => pageCount(view.state));
-      bytes = buildPdf(snapshotPages(root, title));
+      await imagesLoaded(root);
+      return snapshotPages(root, title);
     } finally {
       root.classList.remove("is-clean");
       if (this.ui.get().exporting) {
@@ -268,14 +314,6 @@ export class DocumentSession {
       }
       if (this.view) relayout(this.view);
     }
-    const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${title.replace(/[\\/:*?"<>|]+/g, "-").trim() || "Untitled document"}.pdf`;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }
 
   async start(mount: HTMLElement) {
@@ -291,7 +329,7 @@ export class DocumentSession {
       this.suggesting = mode === "suggesting";
       this.ui.set((ui) => ({ ...ui, mode }));
       this.view = new EditorView(mount, {
-        editable: () => this.ui.get().mode !== "viewing",
+        editable: () => !this.callbacks.offline && this.ui.get().mode !== "viewing",
         state: this.createState(document),
         dispatchTransaction: (tr) => this.dispatch(tr),
         nodeViews: { image: (node, view, getPos) => new ImageView(node, view, getPos) },
@@ -304,9 +342,10 @@ export class DocumentSession {
         },
       });
       this.applySnapshotUi(document);
-      window.addEventListener("beforeunload", this.onBeforeUnload);
       this.ui.set((ui) => ({ ...ui, status: "ready" }));
       this.editor.set(this.view.state);
+      if (this.callbacks.offline) return;
+      window.addEventListener("beforeunload", this.onBeforeUnload);
       this.connect();
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) this.ui.set((ui) => ({ ...ui, status: "error", error: "This document doesn't exist or was deleted." }));
@@ -338,7 +377,7 @@ export class DocumentSession {
     this.destroyed = true;
     window.removeEventListener("beforeunload", this.onBeforeUnload);
     this.source?.close();
-    for (const timer of [this.retryTimer, this.selectionTimer, this.layoutTimer, this.reconnectTimer]) if (timer) clearTimeout(timer);
+    for (const timer of [this.retryTimer, this.selectionTimer, this.layoutTimer, this.reconnectTimer, this.thumbnailTimer]) if (timer) clearTimeout(timer);
     this.view?.destroy();
     this.view = null;
   }
@@ -581,7 +620,7 @@ export class DocumentSession {
       case "meta": {
         const previous = this.meta;
         this.ui.set((ui) => ({ ...ui, meta: event.meta }));
-        if (previous && JSON.stringify(previous.settings.pageSetup) !== JSON.stringify(event.meta.settings.pageSetup)) relayout(view);
+        if (previous && layoutKey(previous.settings) !== layoutKey(event.meta.settings)) relayout(view);
         return;
       }
       case "comments":
@@ -655,12 +694,44 @@ export class DocumentSession {
       return;
     }
     const version = getVersion(view.state);
-    const key = `${version}:${layout.pages}:${layout.starts.join(",")}:${layout.lastPageFill.toFixed(2)}`;
+    const settings = this.meta ? layoutKey(this.meta.settings) : undefined;
+    const key = JSON.stringify([version, settings, layout]);
+    this.scheduleThumbnail(layout);
     if (key === this.reportedLayout) return;
     this.reportedLayout = key;
-    void post(`/api/documents/${this.id}/layout`, { version, ...(this.epoch ? { epoch: this.epoch } : {}), ...layout }).catch(() => {
+    void post(`/api/documents/${this.id}/layout`, { version, ...(this.epoch ? { epoch: this.epoch } : {}), ...(settings ? { settings } : {}), ...layout }).catch(() => {
       this.reportedLayout = null;
     });
+  }
+
+  // --- thumbnail ----------------------------------------------------------------------------
+
+  private thumbnailTimer: ReturnType<typeof setTimeout> | null = null;
+  private thumbnailKey: string | null = null;
+
+  private scheduleThumbnail(layout: PageLayout) {
+    if (this.callbacks.offline) return;
+    if (this.thumbnailTimer) clearTimeout(this.thumbnailTimer);
+    this.thumbnailTimer = setTimeout(() => void this.saveThumbnail(layout).catch(() => undefined), 2500);
+  }
+
+  /** Save a small picture of the first page for the home page, when what the first page shows has changed. */
+  private async saveThumbnail(layout: PageLayout) {
+    const view = this.view;
+    const meta = this.meta;
+    const ui = this.ui.get();
+    if (!view || !meta || this.destroyed || ui.flow || ui.printing || ui.exporting || document.visibilityState !== "visible") return;
+    const end = Math.min(layout.starts[0] ?? view.state.doc.content.size, view.state.doc.content.size);
+    const key = hashText(`${meta.title}\n${JSON.stringify(meta.settings)}\n${JSON.stringify(view.state.doc.slice(0, end).content.toJSON())}`);
+    if (key === (this.thumbnailKey ?? meta.thumbnailKey)) return;
+    const root = view.dom.closest<HTMLElement>(".page-stack");
+    if (!root) return;
+    const [{ snapshotPages }, { renderThumbnail }] = await Promise.all([import("@/lib/pdf/pageSnapshot"), import("@/lib/pdf/thumbnail")]);
+    const page = snapshotPages(root, meta.title, undefined, undefined, 1).pages[0];
+    const image = page ? await renderThumbnail(page) : null;
+    if (!image || this.destroyed) return;
+    const response = await fetch(`/api/documents/${this.id}/thumbnail?key=${key}`, { method: "PUT", body: image, headers: { "Content-Type": image.type } });
+    if (response.ok) this.thumbnailKey = key;
   }
 
   // --- selection reporting --------------------------------------------------------------

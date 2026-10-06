@@ -1,6 +1,6 @@
 import { blockLines, docWordCount, textblockLines } from "@/lib/doc/editing";
 import { serializeDoc } from "@/lib/doc/markdown";
-import { pageSize, type DocumentSettings } from "@/lib/doc/settings";
+import { layoutKey, pageSize, type DocumentSettings } from "@/lib/doc/settings";
 import type { ClientLayout, LiveDocument } from "@/lib/server/hub";
 
 /**
@@ -20,6 +20,12 @@ export type PageCount = {
   wordsPerPage: number;
   /** Where pages 2, 3, … start (measured only). */
   starts?: number[];
+  /**
+   * Pages the editor shows right now, when that differs from `pages` because
+   * deleted text awaiting review is still showing struck through. `pages` and
+   * the rest describe the document once the pending changes are kept.
+   */
+  showing?: number;
 };
 
 /** Rough words on a full page of plain paragraphs, from the page setup and default font. */
@@ -43,7 +49,7 @@ function fullPages(layout: { pages: number; lastPageFill: number }) {
 
 /** Page count without waiting: measured if the editor's last report is current, else estimated. */
 export function pageCountNow(doc: LiveDocument): PageCount {
-  return pageCountFrom(doc, doc.layout && doc.layout.version === doc.version ? doc.layout : null);
+  return pageCountFrom(doc, doc.layoutIsCurrent() ? doc.layout : null);
 }
 
 /** Page count, waiting briefly for an open editor to measure the latest change. */
@@ -51,18 +57,29 @@ export async function pageCount(doc: LiveDocument): Promise<PageCount> {
   return pageCountFrom(doc, await doc.currentLayout());
 }
 
+/**
+ * Counts describe the document as it will be once pending changes are kept:
+ * the word count already leaves out deleted text, so the page count must too,
+ * or cutting text appears not to shorten it (the struck-out words stay on the
+ * page until the user reviews them).
+ */
 function pageCountFrom(doc: LiveDocument, layout: ClientLayout | null): PageCount {
   const words = docWordCount(doc.doc);
-  const earlier = doc.layout;
+  const earlier = doc.layout && doc.layout.settings === layoutKey(doc.meta.settings) ? doc.layout : null;
   // A layout measured for earlier text still says how many words this formatting fits on a page.
-  const measuredRate = (sample: ClientLayout | null) => (sample && sample.words >= 150 && fullPages(sample) >= 0.5 ? Math.round(sample.words / fullPages(sample)) : null);
+  const measuredRate = (sample: ClientLayout | null) => {
+    const fall = sample ? (sample.kept ?? sample) : null;
+    return sample && fall && sample.words >= 150 && fullPages(fall) >= 0.5 ? Math.round(sample.words / fullPages(fall)) : null;
+  };
   if (layout) {
+    const fall = layout.kept ?? layout;
     return {
-      pages: layout.pages,
+      pages: fall.pages,
       measured: true,
-      lastPageFill: layout.lastPageFill,
+      lastPageFill: fall.lastPageFill,
       wordsPerPage: measuredRate(layout) ?? wordsPerPageFromSettings(doc.meta.settings),
-      starts: layout.starts,
+      starts: fall.starts,
+      ...(layout.kept && layout.kept.pages !== layout.pages ? { showing: layout.pages } : {}),
     };
   }
   const wordsPerPage = measuredRate(earlier) ?? wordsPerPageFromSettings(doc.meta.settings);
