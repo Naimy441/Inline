@@ -3,15 +3,21 @@
 import { Check, CircleDashed, History, Loader2, MessageSquarePlus, Plus, RefreshCw, Terminal, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import type { Attachment, ChatSettings, SelectionContext, Todo } from "@/lib/agent/types";
+import type { Attachment, DocumentMention, ChatSettings, SelectionContext, Todo } from "@/lib/agent/types";
 import { refreshAgentStatus, useAgentStatus } from "@/lib/client/agentStatus";
 import { ChatSession, chatApi, type ChatUiState } from "@/lib/client/chatSession";
 import { Composer, type ComposerHandle } from "@/components/agent/Composer";
-import { MessageList } from "@/components/agent/MessageView";
+import { MessageList, type TurnHunk } from "@/components/agent/MessageView";
 import { Button, IconButton } from "@/components/ui/Button";
 import { ChatHistory } from "@/components/agent/ChatHistory";
+import { toast } from "@/components/ui/Toast";
+import { post } from "@/lib/client/api";
 
-export type AgentPanelHandle = { ask: (selection: SelectionContext | null, text?: string) => void };
+export type AgentPanelHandle = {
+  ask: (selection: SelectionContext | null, text?: string) => void;
+  /** Send a message right away (the inline ⌘K prompt). */
+  send: (selection: SelectionContext | null, text: string) => Promise<void>;
+};
 
 const EMPTY_UI: ChatUiState = { chat: null, connected: false, error: null, rateLimit: null };
 const emptyStore = { subscribe: () => () => undefined, get: () => EMPTY_UI };
@@ -50,7 +56,7 @@ export const AgentPanel = forwardRef<
   AgentPanelHandle,
   {
     documentId: string;
-    hunks: ReadonlyArray<{ id: string; turn?: string }>;
+    hunks: ReadonlyArray<TurnHunk>;
     onClose: () => void;
     onReview: (action: "next" | "accept" | "reject", ids: string[]) => void;
     initialPrompt?: string | null;
@@ -110,6 +116,7 @@ export const AgentPanel = forwardRef<
       if (text) composer.current?.setText(text);
       else composer.current?.focus();
     },
+    send: (selected, text) => send({ text, attachments: [], selected }),
   }));
 
   useEffect(() => {
@@ -126,7 +133,7 @@ export const AgentPanel = forwardRef<
   });
 
   const send = useCallback(
-    async ({ text, attachments }: { text: string; attachments: Attachment[] }) => {
+    async ({ text, attachments, mentions, selected }: { text: string; attachments: Attachment[]; mentions?: DocumentMention[]; selected?: SelectionContext | null }) => {
       let target = session;
       if (!target) {
         const created = await chatApi.create({ documentId, settings });
@@ -134,7 +141,7 @@ export const AgentPanel = forwardRef<
         setChatId(created.id);
       }
       stick.current = true;
-      await target.send({ text, documentId, selection: selection ?? undefined, attachments });
+      await target.send({ text, documentId, selection: (selected === undefined ? selection : selected) ?? undefined, attachments, mentions: mentions?.length ? mentions : undefined });
       setSelection(null);
     },
     [session, documentId, settings, selection],
@@ -144,6 +151,19 @@ export const AgentPanel = forwardRef<
     if (session) void session.update({ settings: patch });
     else setDraftSettings({ ...settings, ...patch });
   };
+
+  const restoreTo = useCallback(
+    async (versionId: string) => {
+      if (!window.confirm("Put the document back as it was before this reply's edits? The current text is saved to history first.")) return;
+      try {
+        await post(`/api/documents/${documentId}/versions/${versionId}/restore`);
+        toast("Restored. The text before restoring is in version history.");
+      } catch (error) {
+        toast(error instanceof Error ? error.message : "Couldn't restore that version.");
+      }
+    },
+    [documentId],
+  );
 
   const todos = chat?.todos ?? [];
   const showTodos = todos.length > 0 && (chat?.running || todos.some((todo) => todo.status !== "completed"));
@@ -205,7 +225,7 @@ export const AgentPanel = forwardRef<
           <Onboarding state={status.state} message={"message" in status ? status.message : ""} />
         ) : chat?.messages.length ? (
           <div className="messages">
-            <MessageList messages={chat.messages} hunks={hunks} onRetry={() => session?.retry()} onReview={onReview} />
+            <MessageList messages={chat.messages} hunks={hunks} onRetry={() => session?.retry()} onReview={onReview} documentId={documentId} onRestore={restoreTo} />
             {chat.running && chat.status && <RunStatusLine status={chat.status} />}
           </div>
         ) : (
@@ -244,6 +264,7 @@ export const AgentPanel = forwardRef<
           models={models}
           context={chat?.context}
           selection={selection}
+          documentId={documentId}
           onClearSelection={() => setSelection(null)}
           onSend={send}
           onStop={() => void session?.interrupt()}

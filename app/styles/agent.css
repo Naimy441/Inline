@@ -1158,3 +1158,46 @@
   font-size: 13px;
   color: var(--muted);
 }
+
+/* One reply's pending changes, each with its own Keep / Undo. */
+.turn-diff {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+.turn-diff-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+}
+.turn-diff-item + .turn-diff-item {
+  border-top: 1px solid var(--border);
+}
+.turn-diff-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.turn-diff-text del,
+.turn-diff-text ins {
+  text-decoration-thickness: 1px;
+}
+.turn-diff-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}

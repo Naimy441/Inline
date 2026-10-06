@@ -11,6 +11,8 @@ const GROUPS: Array<[string, Array<[string, string]>]> = [
     "Claude",
     [
       ["Ask Claude about the selection", `${mod} L`],
+      ["Edit with Claude inline", `${mod} K`],
+      ["Check spelling & grammar here", `${mod} ⌥ X`],
       ["Show or hide Claude", `${mod} J`],
       ["Keep the change at the cursor", `${mod} ⇧ ⏎`],
       ["Undo the change at the cursor", `${mod} ⇧ ⌫`],

@@ -79,6 +79,63 @@ test("each reply's Undo all touches only that reply's changes", async ({ page, r
   await expect(page.locator(".doc-content")).toHaveText("First beta gamma.");
 });
 
+test("a reply lists its changes, each kept or undone on its own, and can be restored", async ({ page, request }) => {
+  await openWithClaude(page, request, "Alpha beta gamma.");
+  await ask(page, 'replace "Alpha" with "First"');
+  await expect(lastReply(page)).toContainText("Replaced Alpha with First.");
+  const card = lastReply(page).locator(".change-card");
+  await card.getByRole("button", { name: /Show 1 change/ }).click();
+  const item = lastReply(page).locator(".turn-diff-item");
+  await expect(item).toHaveCount(1);
+  await expect(item.locator("del")).toHaveText("Alpha");
+  await expect(item.locator("ins")).toHaveText("First");
+  await item.getByRole("button", { name: "Keep this change" }).click();
+  await expect(page.locator(".review-bar")).toHaveCount(0);
+  await expect(page.locator(".doc-content")).toHaveText("First beta gamma.");
+
+  // Once reviewed, the reply offers to put the document back as it was before it.
+  page.once("dialog", (dialog) => void dialog.accept());
+  await card.getByRole("button", { name: "Restore to before" }).click();
+  await expect(page.locator(".doc-content")).toHaveText("Alpha beta gamma.");
+});
+
+test("typing @ suggests other documents and inserts the mention", async ({ page, request }) => {
+  const title = `Mention target ${Date.now()}`;
+  await request.post("/api/documents", { data: { title, markdown: "Other text." } });
+  await openWithClaude(page, request, "Main text.");
+  const composer = page.getByLabel("Message Claude");
+  await composer.pressSequentially("Compare with @Mention tar");
+  const option = page.getByRole("listbox", { name: "Documents" }).getByRole("option", { name: title });
+  await expect(option).toBeVisible();
+  await composer.press("Enter");
+  await expect(composer).toHaveValue(`Compare with @${title} `);
+  await expect(page.getByRole("listbox", { name: "Documents" })).toHaveCount(0);
+});
+
+test("the inline prompt sends an edit about the selection straight to Claude", async ({ page, request }) => {
+  await openWithClaude(page, request, "The meeting is on Tuesday.");
+  await page.getByRole("button", { name: "Hide Claude" }).or(page.locator(".claude-toggle")).first().click();
+  await page.locator(".doc-content").click();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.press("ControlOrMeta+k");
+  const prompt = page.getByLabel("Ask Claude to edit");
+  await expect(prompt).toBeFocused();
+  await prompt.fill('replace "Tuesday" with "Thursday"');
+  await prompt.press("Enter");
+  await expect(prompt).toHaveCount(0);
+  // The panel opens with the message sent, and the edit lands for review.
+  await expect(page.locator(".msg-user-text").last()).toHaveText('replace "Tuesday" with "Thursday"');
+  await expect(page.locator(".doc-content .review-insert")).toContainText("Thursday");
+});
+
+test("the spelling shortcut sends the paragraph at the cursor to Claude", async ({ page, request }) => {
+  await openWithClaude(page, request, "Ths sentence has a typo.");
+  await page.locator(".doc-content").click();
+  await page.keyboard.press("ControlOrMeta+Alt+x");
+  await expect(page.locator(".msg-user-text").last()).toContainText("Fix spelling, grammar and punctuation in the selected text only.");
+  await expect(page.locator(".chip-quote").last()).toContainText("Ths sentence has a typo.");
+});
+
 test("a failed edit is shown as a failed tool call", async ({ page, request }) => {
   await openWithClaude(page, request, "Nothing to see here.");
   await ask(page, 'replace "missing words" with "anything"');
