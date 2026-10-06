@@ -41,6 +41,11 @@ test("Claude edits the document and the user keeps the change", async ({ page, r
   await expect(lastReply(page).locator(".tool.is-error")).toHaveCount(0);
   await expect(page.locator(".todos")).toContainText("Make the edit");
   await expect(lastReply(page).locator(".change-card")).toContainText("Edited");
+  // The reasoning is shown in full in the latest reply, with no scrolling inside it.
+  const reasoning = lastReply(page).locator(".reasoning");
+  await expect(reasoning).toHaveClass(/is-open/);
+  await expect(reasoning.locator(".reasoning-body")).toContainText("read the document, then make the edit.");
+  await expect(reasoning.locator(".reasoning-head")).toContainText(/Thought/);
 
   await expect(page.locator(".doc-content .review-insert")).toContainText("Thursday");
   await expect(page.locator(".review-bar")).toBeVisible();
@@ -186,10 +191,31 @@ test("a message shows at once, with a live line saying what Claude is doing", as
   await expect(page.locator(".activity .spark")).toBeVisible();
   release();
   await expect(lastReply(page)).toContainText("Starting a long review.");
-  await expect(page.locator(".activity")).toBeVisible();
+  // While text streams, its writing dot is the sign of life; the waiting line steps aside.
+  await expect(lastReply(page).locator(".md.is-writing")).toBeVisible();
+  await expect(page.locator(".activity")).toHaveCount(0);
   await page.getByRole("button", { name: "Stop" }).click();
   await expect(page.locator(".activity")).toHaveCount(0);
   await expect(page.locator(".msg-user")).toHaveCount(1);
+});
+
+test("closing the panel keeps the unsent message", async ({ page, request }) => {
+  await openWithClaude(page, request, "Some text.");
+  const composer = page.getByLabel("Message Claude");
+  await composer.fill("A draft I'm still writing");
+  await page.getByRole("button", { name: "Close panel" }).click();
+  await expect(composer).toHaveCount(0);
+  await showClaude(page);
+  await expect(composer).toHaveValue("A draft I'm still writing");
+  await page.reload();
+  await showClaude(page);
+  await expect(page.getByLabel("Message Claude")).toHaveValue("A draft I'm still writing");
+  // Sending clears it for good.
+  await ask(page, "hello");
+  await expect(page.getByLabel("Message Claude")).toHaveValue("");
+  await page.reload();
+  await showClaude(page);
+  await expect(page.getByLabel("Message Claude")).toHaveValue("");
 });
 
 test("an error explains itself and Retry runs the message again", async ({ page, request }) => {

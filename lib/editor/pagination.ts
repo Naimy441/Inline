@@ -25,6 +25,9 @@ export type PageGeometry = {
 };
 
 type Break = { pos: number; height: number; inline: boolean };
+
+/** What a layout pass found: the page count, where each page after the first starts, and how full the last page is (0-1). */
+export type PageLayout = { pages: number; starts: number[]; lastPageFill: number };
 type PageState = { breaks: Break[]; pages: number; decorations: DecorationSet; epoch: number };
 
 export const pageKey = new PluginKey<PageState>("pagination");
@@ -55,7 +58,7 @@ function decorate(doc: PMNode, breaks: Break[]) {
   );
 }
 
-export function paginationPlugin(geometry: () => PageGeometry, onLayout?: (pages: number) => void) {
+export function paginationPlugin(geometry: () => PageGeometry, onLayout?: (layout: PageLayout) => void) {
   return new Plugin<PageState>({
     key: pageKey,
     state: {
@@ -83,15 +86,17 @@ export function paginationPlugin(geometry: () => PageGeometry, onLayout?: (pages
           const result = measure(view, geometry());
           if (!result) return;
           const current = pageKey.getState(view.state)!;
+          const report = () => onLayout?.({ pages: result.pages, starts: result.breaks.map((item) => item.pos), lastPageFill: result.lastPageFill });
           if (sameBreaks(current.breaks, result.breaks) && current.pages === result.pages) {
             settle = 0;
+            report();
             return;
           }
           // Guard against layout oscillation (e.g. a font still loading).
           if (settle > 4) return;
           settle += 1;
           view.dispatch(view.state.tr.setMeta(pageKey, result).setMeta("addToHistory", false));
-          onLayout?.(result.pages);
+          report();
         });
       };
       const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => schedule()) : null;
@@ -141,7 +146,7 @@ const CONTAINERS = new Set(["bullet_list", "ordered_list", "list_item", "blockqu
 type LineCache = { width: number; height: number; lines: Array<{ top: number; bottom: number }> };
 const lineCache = new WeakMap<PMNode, LineCache>();
 
-function measure(view: EditorView, geometry: PageGeometry): { breaks: Break[]; pages: number } | null {
+function measure(view: EditorView, geometry: PageGeometry): { breaks: Break[]; pages: number; lastPageFill: number } | null {
   const root = view.dom as HTMLElement;
   if (!root.isConnected || !root.offsetWidth) return null;
   const rootRect = root.getBoundingClientRect();
@@ -216,6 +221,7 @@ function measure(view: EditorView, geometry: PageGeometry): { breaks: Break[]; p
   let shift = 0;
   let forceNext = false;
   let firstOnPage = true;
+  let lastBottom = 0;
 
   for (const unit of units) {
     const top = unit.top + shift;
@@ -243,9 +249,11 @@ function measure(view: EditorView, geometry: PageGeometry): { breaks: Break[]; p
     // Units taller than a page simply overflow onto the following pages.
     const end = unit.bottom + shift;
     while (end > page * pitch + contentHeight + pitch) page += 1;
+    lastBottom = end;
   }
   if (forceNext) page += 1;
-  return { breaks: dedupe(breaks), pages: page + 1 };
+  const lastPageFill = forceNext || !units.length ? 0 : Math.max(0, Math.min(1, (lastBottom - page * pitch) / contentHeight));
+  return { breaks: dedupe(breaks), pages: page + 1, lastPageFill };
 }
 
 function dedupe(breaks: Break[]) {

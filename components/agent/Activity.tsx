@@ -5,10 +5,11 @@ import type { AssistantMessage, RunStatus, ToolPart } from "@/lib/agent/types";
 import { describeTool } from "@/components/agent/ToolCall";
 
 /**
- * The line under a running reply that says what Claude is doing right now,
- * from the moment a message is sent until the reply is done: a turning spark,
- * a word for the current step and the time so far. It never goes blank, so
- * there is always a sign of life, including the pauses between steps.
+ * Signs of life while Claude works. Reasoning streams into its own block
+ * (Reasoning in MessageView), text gets a writing dot and a running tool shows
+ * on its own row; this line fills the waiting moments in between: before the
+ * first output, between steps, while retrying or summarizing. A turning spark,
+ * a word for the moment and the time so far.
  */
 
 /** Words for the quiet stretches while Claude thinks, changed every few seconds. */
@@ -42,10 +43,27 @@ function formatElapsed(seconds: number) {
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
-export function Spark({ size = 16 }: { size?: number }) {
+/**
+ * Whether nothing else on screen is moving: no reasoning or text streaming and
+ * no tool row running. That is when the waiting line shows.
+ */
+export function isWaiting(status: RunStatus | undefined, message: AssistantMessage | undefined) {
+  if (!status || status.kind === "starting" || status.kind === "retrying" || status.kind === "compacting") return true;
+  const last = message?.parts[message.parts.length - 1];
+  if (!last) return true;
+  if (status.kind === "responding") return last.type !== "text";
+  if (status.kind === "tool") {
+    const tool = runningTool(message);
+    // The plan has no row of its own (it shows above the composer).
+    return !tool || tool.name === "TodoWrite";
+  }
+  return !(last.type === "thinking" && !last.done);
+}
+
+export function Spark({ size = 16, still }: { size?: number; still?: boolean }) {
   // Eight rounded rays, like the mark Claude shows while it works.
   return (
-    <svg className="spark" width={size} height={size} viewBox="0 0 24 24" aria-hidden>
+    <svg className={still ? "spark is-still" : "spark"} width={size} height={size} viewBox="0 0 24 24" aria-hidden>
       {Array.from({ length: 8 }, (_, index) => (
         // The rotation sits on a group: the ray's own CSS animation would replace a transform on the ray itself.
         <g key={index} transform={`rotate(${index * 45} 12 12)`}>
@@ -56,8 +74,9 @@ export function Spark({ size = 16 }: { size?: number }) {
   );
 }
 
-export function ActivityLine({ status, message }: { status: RunStatus | undefined; message: AssistantMessage | undefined }) {
-  const [started] = useState(() => Date.now());
+export function ActivityLine({ status, message, since }: { status: RunStatus | undefined; message: AssistantMessage | undefined; since?: number }) {
+  // Timed from the message being sent, so the count carries on when the line comes back between steps.
+  const [started] = useState(() => Math.min(since ?? Date.now(), Date.now()));
   const [now, setNow] = useState(started);
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -66,7 +85,8 @@ export function ActivityLine({ status, message }: { status: RunStatus | undefine
   const elapsed = Math.floor((now - started) / 1000);
   const text = label(status, message, elapsed, elapsed);
   return (
-    <div className="activity">
+    // Between steps it fades in after a beat, so a quick hand-off doesn't flash it.
+    <div className={message?.parts.length ? "activity is-between" : "activity"}>
       <span className="sr-only" role="status">
         Claude is working
       </span>

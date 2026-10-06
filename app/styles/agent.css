@@ -242,14 +242,14 @@
   white-space: pre;
 }
 
-/* Thinking and tool calls share one compact row style */
+/* Reasoning and tool calls share one compact row style */
 
-.thinking,
+.reasoning,
 .tool {
   min-width: 0;
 }
 
-.thinking-head,
+.reasoning-head,
 .tool-head {
   display: flex;
   align-items: center;
@@ -266,13 +266,18 @@
   text-align: left;
 }
 
-.thinking-head:hover,
+.reasoning-head:not(:disabled):hover,
 .tool-head:hover {
   background: var(--surface-hover);
   color: var(--text-2);
 }
 
-.thinking-head > svg:first-child {
+.reasoning-head:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.reasoning-head > .spark {
   flex: none;
 }
 
@@ -283,19 +288,19 @@
   transition: transform 0.15s var(--ease), opacity 0.12s;
 }
 
-.thinking-head:hover .tool-chevron,
+.reasoning-head:hover .tool-chevron,
 .tool-head:hover .tool-chevron,
-.is-open > .thinking-head .tool-chevron,
+.is-open > .reasoning-head .tool-chevron,
 .is-open > .tool-head .tool-chevron {
   opacity: 1;
 }
 
-.is-open > .thinking-head .tool-chevron,
+.is-open > .reasoning-head .tool-chevron,
 .is-open > .tool-head .tool-chevron {
   transform: rotate(90deg);
 }
 
-.thinking-preview {
+.reasoning-preview {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -304,16 +309,45 @@
   color: var(--faint);
 }
 
-.thinking-body {
-  margin: 4px 0 6px 6px;
-  padding: 2px 0 2px 12px;
-  border-left: 2px solid var(--border);
+/* The reasoning itself: quieter than the reply, and as tall as its text (no scrolling inside it). */
+.reasoning-body {
+  margin: 2px 0 4px 6px;
+  padding: 0 0 0 13px;
+  border-left: 1.5px solid var(--border);
   color: var(--muted);
+}
+
+.reasoning-body > .md {
   font-size: 12.5px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  max-height: 320px;
-  overflow-y: auto;
+  line-height: 1.6;
+}
+
+.reasoning-body > .md :is(p, ul, ol, blockquote) {
+  margin: 0 0 6px;
+}
+
+.reasoning-body > .md > :last-child {
+  margin-bottom: 0;
+}
+
+.reasoning-body > .md :is(strong, h1, h2, h3, h4) {
+  color: var(--text-2);
+  font-size: inherit;
+  font-weight: 600;
+}
+
+.reasoning.is-live .reasoning-body {
+  border-left-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+/* A still spark marks a finished thought. */
+.spark.is-still {
+  color: var(--faint);
+  animation: none;
+}
+
+.spark.is-still .spark-ray {
+  animation: none;
 }
 
 .tool-icon {
@@ -867,7 +901,7 @@
     font-size: 15px;
   }
 
-  .thinking-head,
+  .reasoning-head,
   .tool-head {
     min-height: 34px;
     font-size: 14px;
@@ -1214,6 +1248,17 @@
   color: var(--muted);
 }
 
+/* Between steps the line waits a beat before showing, so quick hand-offs don't flash it. */
+.activity.is-between {
+  animation: activity-in 0.2s var(--ease) 0.35s both;
+}
+
+@keyframes activity-in {
+  from {
+    opacity: 0;
+  }
+}
+
 .spark {
   flex: none;
   color: var(--accent);
@@ -1333,7 +1378,7 @@
 /* New messages and steps settle in rather than pop */
 .msg-user,
 .msg-assistant > .tool,
-.msg-assistant > .thinking,
+.msg-assistant > .reasoning,
 .change-card {
   animation: settle-in 0.22s var(--ease) both;
 }
@@ -1350,10 +1395,11 @@
   .spark-ray,
   .activity-dots > span,
   .activity-label,
+  .activity.is-between,
   .md.is-writing > :last-child::after,
   .msg-user,
   .msg-assistant > .tool,
-  .msg-assistant > .thinking,
+  .msg-assistant > .reasoning,
   .change-card {
     animation: none !important;
   }
