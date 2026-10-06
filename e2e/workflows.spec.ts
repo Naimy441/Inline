@@ -64,8 +64,8 @@ test.describe("home page", () => {
     await page.getByRole("tab", { name: /Trash/ }).click();
     await expect(page.locator(".doc-row", { hasText: title })).toHaveCount(1);
     await expect(page.getByText("deleted forever after 30 days")).toBeVisible();
-    page.once("dialog", (dialog) => void dialog.accept());
     await page.getByRole("button", { name: "Empty trash" }).click();
+    await page.getByRole("dialog", { name: "Empty the trash?" }).getByRole("button", { name: "Delete forever" }).click();
     await expect(page.getByText("Trash is empty.")).toBeVisible();
     const list = (await (await request.get("/api/documents?trashed=1")).json()) as { documents: unknown[] };
     expect(list.documents).toHaveLength(0);
@@ -221,7 +221,7 @@ test.describe("editing", () => {
   test("a saved version can be restored", async ({ page, request }) => {
     await openDocument(page, await createDocument(request, "History", "The original wording."));
     await menu(page, "File", "Version history");
-    await page.getByPlaceholder("Name this version (optional)").fill("Checkpoint");
+    await page.getByPlaceholder("Name the current version").fill("Checkpoint");
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(page.locator(".version-row", { hasText: "Checkpoint" })).toHaveCount(1);
 
@@ -232,8 +232,8 @@ test.describe("editing", () => {
     await expect(page.locator(".sync-status")).toHaveText(/Saved/);
 
     await page.locator(".version-row", { hasText: "Checkpoint" }).click();
-    await expect(page.locator(".version-preview")).toContainText("The original wording.");
-    await page.getByRole("button", { name: "Restore this version" }).click();
+    await expect(page.locator(".version-page")).toContainText("The original wording.");
+    await page.getByRole("button", { name: "Restore", exact: true }).click();
     await expect(doc).toContainText("The original wording.");
     await expect(doc).not.toContainText("Rewritten entirely.");
   });
@@ -241,7 +241,7 @@ test.describe("editing", () => {
   test("a saved version can be compared with the current text", async ({ page, request }) => {
     await openDocument(page, await createDocument(request, "Compare", "The meeting is on Tuesday.\n\nSecond paragraph."));
     await menu(page, "File", "Version history");
-    await page.getByPlaceholder("Name this version (optional)").fill("Before");
+    await page.getByPlaceholder("Name the current version").fill("Before");
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(page.locator(".version-row", { hasText: "Before" })).toHaveCount(1);
 
@@ -253,7 +253,7 @@ test.describe("editing", () => {
     await expect(page.locator(".sync-status")).toHaveText(/Saved/);
 
     await page.locator(".version-row", { hasText: "Before" }).click();
-    await page.getByRole("tab", { name: "Compare with now" }).click();
+    await page.getByRole("tab", { name: "Changes since" }).click();
     const diff = page.getByLabel("Changes since this version");
     await expect(diff.locator("del")).toHaveText("Tuesday");
     await expect(diff.locator("ins")).toHaveText("Thursday");

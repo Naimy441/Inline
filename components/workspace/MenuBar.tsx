@@ -61,6 +61,9 @@ export type MenuActions = {
   setMode: (mode: EditorMode) => void;
   showInvisibles: boolean;
   toggleInvisibles: () => void;
+  /** The browser's spelling underlines. */
+  spellcheck: boolean;
+  toggleSpellcheck: () => void;
   substitutions: boolean;
   toggleSubstitutions: () => void;
 };
@@ -176,6 +179,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       ...(actions.focusMode ? [] : [{ label: "Claude panel", shortcut: `⌘J`, onSelect: actions.toggleAgent }]),
       { label: "Focus mode", hint: "Hide Claude while you write", checked: actions.focusMode, onSelect: actions.toggleFocusMode },
       { label: "Show non-printing characters", shortcut: `⌘⇧P`, checked: actions.showInvisibles, onSelect: actions.toggleInvisibles },
+      { label: "Show spelling underlines", checked: actions.spellcheck, onSelect: actions.toggleSpellcheck },
       { label: "Dark theme", checked: actions.dark, onSelect: actions.toggleTheme },
       { label: "Full screen", onSelect: actions.fullScreen },
     ],

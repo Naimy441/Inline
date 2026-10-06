@@ -10,18 +10,21 @@ import { DocumentSession, geometryFor, type ClientCommand, type DocumentUiState,
 import { useTheme } from "@/lib/client/theme";
 import { useShortcut } from "@/lib/client/platform";
 import { docPlainText, docWordCount, wordCount } from "@/lib/doc/editing";
-import type { DocumentMeta } from "@/lib/doc/settings";
+import type { DocComment, DocumentMeta } from "@/lib/doc/settings";
 import { insertImage, insertText } from "@/lib/editor/commands";
 import { AgentPanel, type AgentPanelHandle } from "@/components/agent/AgentPanel";
 import { Spark } from "@/components/agent/Activity";
 import { Button, IconButton } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
+import { ConfirmHost } from "@/components/ui/Confirm";
 import { MenuButton, type MenuItem } from "@/components/ui/Menu";
 import { toast, Toaster } from "@/components/ui/Toast";
 import { InlineLogo } from "@/components/ui/Logo";
 import { CommentsPanel } from "@/components/workspace/CommentsPanel";
+import { CommentMargin, marginFits } from "@/components/workspace/CommentMargin";
 import { FindBar } from "@/components/workspace/FindBar";
-import { HistoryPanel } from "@/components/workspace/HistoryPanel";
+import { HistoryPanel, VersionPreview, type VersionSummary } from "@/components/workspace/HistoryPanel";
+import { prefetchVersions } from "@/lib/client/versions";
 import { documentMenus, MenuBar, type MenuActions } from "@/components/workspace/MenuBar";
 import { OutlinePanel } from "@/components/workspace/OutlinePanel";
 import { PageCanvas } from "@/components/workspace/PageCanvas";
@@ -91,7 +94,10 @@ export function Workspace({ documentId }: { documentId: string }) {
   useEffect(() => {
     if (prompting) agentRef.current?.warm();
   }, [prompting]);
-  const [draftComment, setDraftComment] = useState(false);
+  /** The text a new comment is being written about. */
+  const [draftComment, setDraftComment] = useState<{ from: number; to: number } | null>(null);
+  /** A saved version shown in place of the document, from version history. */
+  const [versionShown, setVersionShown] = useState<VersionSummary | null>(null);
   const [setup, setSetup] = useState<{ tab: "page" | "text" | "header" } | null>(null);
   const [shortcuts, setShortcuts] = useState(false);
   const [counting, setCounting] = useState(false);
@@ -145,6 +151,13 @@ export function Workspace({ documentId }: { documentId: string }) {
   );
 
   const ui = useWorkspaceUi(session);
+  // Warm version history once the document is open, so the panel opens with its list.
+  const ready = ui.status === "ready";
+  useEffect(() => {
+    if (!ready) return;
+    const timer = setTimeout(() => prefetchVersions(documentId), 2500);
+    return () => clearTimeout(timer);
+  }, [ready, documentId]);
   const prefs = useSyncExternalStore(preferences.subscribe, preferences.get, () => DEFAULT_PREFERENCES);
   const meta = ui.meta;
 
@@ -234,9 +247,25 @@ export function Workspace({ documentId }: { documentId: string }) {
       toast("Select the text you want to comment on.");
       return;
     }
-    setPanel("comments");
-    setDraftComment(true);
-  }, [session, setPanel]);
+    const { from, to } = session.view.state.selection;
+    // With no side panel open and room beside the page, the comment is written in the margin next to its text.
+    if (panel !== null || phone || !marginFits(canvasRef.current)) setPanel("comments");
+    setDraftComment({ from, to });
+    session.setCommentDraft({ from, to });
+  }, [session, setPanel, panel, phone]);
+  const endDraft = useCallback(() => {
+    setDraftComment(null);
+    session.setCommentDraft(null);
+  }, [session]);
+  const askAboutComment = useCallback(
+    (comment: DocComment) => {
+      setPanel("agent");
+      requestAnimationFrame(() =>
+        agentRef.current?.ask(null, `Address this comment (id ${comment.id}) on “${comment.quote}”: ${comment.body}\nThen reply to the comment saying what you changed and resolve it.`),
+      );
+    },
+    [setPanel],
+  );
 
   keyHandler.current = (name) => {
     if (name === "find" || name === "replace") setFind({ replace: name === "replace" });
@@ -413,6 +442,8 @@ export function Workspace({ documentId }: { documentId: string }) {
     setMode: (mode) => void session.setMode(mode),
     showInvisibles: prefs.showInvisibles,
     toggleInvisibles: () => session.setShowInvisibles(!prefs.showInvisibles),
+    spellcheck: prefs.spellcheck,
+    toggleSpellcheck: () => session.setSpellcheck(!prefs.spellcheck),
     substitutions: prefs.substitutions,
     toggleSubstitutions: () => {
       setPreference("substitutions", !prefs.substitutions);
@@ -491,7 +522,7 @@ export function Workspace({ documentId }: { documentId: string }) {
             <IconButton label={dark ? "Light theme" : "Dark theme"} onClick={toggleTheme}>
               {dark ? <Sun size={16} /> : <Moon size={16} />}
             </IconButton>
-            <IconButton label="Version history" active={panel === "history"} onClick={() => setPanel((current) => (current === "history" ? null : "history"))}>
+            <IconButton label="Version history" active={panel === "history"} onPointerEnter={() => prefetchVersions(documentId)} onClick={() => setPanel((current) => (current === "history" ? null : "history"))}>
               <History size={16} />
             </IconButton>
             <IconButton label="Comments" active={panel === "comments"} onClick={() => setPanel((current) => (current === "comments" ? null : "comments"))}>
@@ -549,7 +580,7 @@ export function Workspace({ documentId }: { documentId: string }) {
         {outline && <WithEditorState session={session}>{(state) => <OutlinePanel session={session} state={state} />}</WithEditorState>}
         <main
           ref={canvasRef}
-          className="canvas"
+          className={`canvas${versionShown && panel === "history" ? " is-previewing" : ""}${!panel && !phone && (draftComment || ui.comments.some((comment) => !comment.resolved)) && marginFits(canvasRef.current) ? " with-comments" : ""}`}
           style={{ ["--canvas-pad" as string]: `${canvasPad}px` }}
           onDragOver={(event) => {
             if (event.dataTransfer.types.includes("Files")) event.preventDefault();
@@ -584,7 +615,13 @@ export function Workspace({ documentId }: { documentId: string }) {
               <Loader2 size={18} className="spin" />
             </div>
           )}
+          {versionShown && panel === "history" && <VersionPreview key={versionShown.id} session={session} version={versionShown} onClose={() => setVersionShown(null)} />}
           <PageCanvas session={session} meta={meta} pages={ui.pages} zoom={effectiveZoom} printing={ui.printing} flow={flow} />
+          {!panel && !phone && (
+            <WithEditorState session={session}>
+              {(state) => <CommentMargin session={session} state={state} canvas={canvasRef} comments={ui.comments} active={ui.activeComment} draft={draftComment} onDraftDone={endDraft} onAskClaude={askAboutComment} />}
+            </WithEditorState>
+          )}
           <ReviewBar session={session} hunks={ui.hunks} />
           <WithEditorState session={session}>{(state) => <SelectionBubble session={session} state={state} linkEditing={linkEditing} onLinkEditing={setLinkEditing} onAsk={() => askClaude()} onComment={startComment} prompting={prompting} onPrompting={setPrompting} onInlineAsk={inlineAsk} />}</WithEditorState>
         </main>
@@ -618,17 +655,12 @@ export function Workspace({ documentId }: { documentId: string }) {
                 comments={ui.comments}
                 active={ui.activeComment}
                 draft={draftComment}
-                onDraftDone={() => setDraftComment(false)}
+                onDraftDone={endDraft}
                 onClose={() => setPanel(null)}
-                onAskClaude={(comment) => {
-                  setPanel("agent");
-                  requestAnimationFrame(() =>
-                    agentRef.current?.ask(null, `Address this comment (id ${comment.id}) on “${comment.quote}”: ${comment.body}\nThen reply to the comment saying what you changed and resolve it.`),
-                  );
-                }}
+                onAskClaude={askAboutComment}
               />
             )}
-            {panel === "history" && <HistoryPanel session={session} onClose={() => setPanel(null)} />}
+            {panel === "history" && <HistoryPanel session={session} selected={versionShown} onSelect={setVersionShown} onClose={() => setPanel(null)} />}
           </div>
         )}
       </div>
@@ -700,6 +732,7 @@ export function Workspace({ documentId }: { documentId: string }) {
       <ContextMenu session={session} hideClaude={focusMode} readOnly={ui.mode === "viewing"} onAsk={() => askClaude()} onComment={startComment} onLink={() => setLinkEditing(true)} />
       <WordCountDialog open={counting} onClose={() => setCounting(false)} session={session} />
       <Toaster />
+      <ConfirmHost />
     </div>
   );
 }

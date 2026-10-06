@@ -9,7 +9,7 @@ import { EditorView } from "prosemirror-view";
 import type { HunkJSON } from "@/lib/doc/review";
 import { schema } from "@/lib/doc/schema";
 import { pageSize, type DocComment, type DocumentMeta } from "@/lib/doc/settings";
-import { api, ApiError, post, Store, uploadFile } from "@/lib/client/api";
+import { api, ApiError, del, patch, post, Store, uploadFile } from "@/lib/client/api";
 import { setCommentState } from "@/lib/editor/comments";
 import { syncDomSelection } from "@/lib/editor/domSync";
 import { pageCount, relayout, type PageGeometry, type PageLayout } from "@/lib/editor/pagination";
@@ -17,6 +17,7 @@ import { setPresence } from "@/lib/editor/presence";
 import { gotoHunk, mapHunksThrough, reviewHunkAtCursor, setHunks } from "@/lib/editor/review";
 import { editorPlugins } from "@/lib/editor/setup";
 import { setInvisibles } from "@/lib/editor/invisibles";
+import { normalizeWord, setDictionary } from "@/lib/editor/spelling";
 import { rebaseLocalEdits, unconfirmedEdits } from "@/lib/editor/resync";
 import { loadPreferences, preferences, setPreference } from "@/lib/client/preferences";
 import { formatShortcut, isApple } from "@/lib/client/platform";
@@ -292,7 +293,7 @@ export class DocumentSession {
         state: this.createState(document),
         dispatchTransaction: (tr) => this.dispatch(tr),
         nodeViews: { image: (node, view, getPos) => new ImageView(node, view, getPos) },
-        attributes: { class: "doc-content", spellcheck: "true", "aria-label": "Document", role: "textbox", "aria-multiline": "true" },
+        attributes: () => ({ class: "doc-content", spellcheck: preferences.get().spellcheck ? "true" : "false", "aria-label": "Document", role: "textbox", "aria-multiline": "true" }),
         handleDOMEvents: {
           focus: () => {
             this.reportSelection();
@@ -343,6 +344,7 @@ export class DocumentSession {
         readOnly: () => this.ui.get().mode === "viewing",
         substitutions: () => preferences.get().substitutions,
         showInvisibles: loadPreferences().showInvisibles,
+        dictionary: loadPreferences().dictionary,
       }),
     });
     return state.apply(setHunks(state.tr, snapshot.hunks, snapshot.version));
@@ -566,7 +568,8 @@ export class DocumentSession {
         return;
       }
       case "comments":
-        this.ui.set((ui) => ({ ...ui, comments: event.comments }));
+        // Comments still being saved stay until the server answers.
+        this.ui.set((ui) => ({ ...ui, comments: [...event.comments, ...ui.comments.filter((comment) => comment.pending && !event.comments.some((item) => item.body === comment.body && item.quote === comment.quote && item.createdAt >= comment.createdAt - 5000))] }));
         this.syncCommentPlugin(event.comments);
         return;
       case "activity":
@@ -687,6 +690,22 @@ export class DocumentSession {
     this.reportSelection();
   }
 
+  /** Show or hide the browser's spelling underlines. */
+  setSpellcheck(on: boolean) {
+    setPreference("spellcheck", on);
+    this.view?.setProps({});
+  }
+
+  /** Never underline this word as misspelled again (in every document, in this browser). */
+  addToDictionary(word: string) {
+    const normalized = normalizeWord(word);
+    if (!normalized) return;
+    const words = [...new Set([...preferences.get().dictionary, normalized])];
+    setPreference("dictionary", words);
+    const view = this.view;
+    if (view) view.dispatch(setDictionary(view.state.tr, words));
+  }
+
   setShowInvisibles(on: boolean) {
     setPreference("showInvisibles", on);
     const view = this.view;
@@ -753,15 +772,78 @@ export class DocumentSession {
     return true;
   }
 
-  async addComment(body: string) {
+  /** Highlight the text a comment is being written about (or clear it). */
+  setCommentDraft(range: { from: number; to: number } | null) {
+    const view = this.view;
+    if (view) view.dispatch(setCommentState(view.state.tr, { draft: range }));
+  }
+
+  /**
+   * Comment on `range` (the selection by default). The comment shows at once
+   * and is saved in the background; it's removed again if saving fails.
+   */
+  async addComment(body: string, range?: { from: number; to: number }) {
     const view = this.view;
     if (!view) return;
-    await this.whenSaved();
-    const { from, to } = view.state.selection;
+    const { from, to } = range ?? view.state.selection;
     if (from === to) throw new Error("Select some text to comment on.");
-    const result = await post<{ comment: DocComment }>(`/api/documents/${this.id}/comments`, { from, to, version: getVersion(view.state), body });
-    this.setActiveComment(result.comment.id);
-    return result.comment;
+    const pending: DocComment = { id: `pending-${Date.now()}`, author: "user", body, quote: view.state.doc.textBetween(from, to, " "), createdAt: Date.now(), resolved: false, replies: [], pending: { from, to } };
+    this.updateComments((comments) => [...comments, pending]);
+    this.setActiveComment(pending.id);
+    try {
+      await this.whenSaved();
+      const result = await post<{ comment: DocComment }>(`/api/documents/${this.id}/comments`, { from, to, version: getVersion(view.state), body });
+      this.updateComments((comments) => {
+        const rest = comments.filter((comment) => comment.id !== pending.id);
+        return rest.some((comment) => comment.id === result.comment.id) ? rest : [...rest, result.comment];
+      });
+      if (this.ui.get().activeComment === pending.id) this.setActiveComment(result.comment.id);
+      return result.comment;
+    } catch (error) {
+      this.updateComments((comments) => comments.filter((comment) => comment.id !== pending.id));
+      throw error;
+    }
+  }
+
+  private updateComments(change: (comments: DocComment[]) => DocComment[]) {
+    const comments = change(this.ui.get().comments);
+    this.ui.set((ui) => ({ ...ui, comments }));
+    this.syncCommentPlugin(comments);
+  }
+
+  /** Change a comment at once and save it in the background, putting it back if saving fails. */
+  private async optimistic(change: (comments: DocComment[]) => DocComment[], save: () => Promise<unknown>) {
+    const before = this.ui.get().comments;
+    this.updateComments(change);
+    try {
+      await save();
+    } catch (error) {
+      this.updateComments(() => before);
+      throw error;
+    }
+  }
+
+  replyToComment(id: string, body: string) {
+    const reply = { id: `pending-${Date.now()}`, author: "user" as const, body, createdAt: Date.now() };
+    return this.optimistic(
+      (comments) => comments.map((comment) => (comment.id === id ? { ...comment, replies: [...comment.replies, reply] } : comment)),
+      () => post(`/api/documents/${this.id}/comments/${id}/replies`, { body }),
+    );
+  }
+
+  resolveComment(id: string, resolved: boolean) {
+    if (resolved && this.ui.get().activeComment === id) this.setActiveComment(null);
+    return this.optimistic(
+      (comments) => comments.map((comment) => (comment.id === id ? { ...comment, resolved } : comment)),
+      () => patch(`/api/documents/${this.id}/comments/${id}`, { resolved }),
+    );
+  }
+
+  deleteComment(id: string) {
+    return this.optimistic(
+      (comments) => comments.filter((comment) => comment.id !== id),
+      () => del(`/api/documents/${this.id}/comments/${id}`),
+    );
   }
 
   /** Save local edits that couldn't be merged (see `unmerged`) as a new document, and return its id. */

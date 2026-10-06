@@ -13,6 +13,7 @@ import { Button, IconButton } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { Menu } from "@/components/ui/Menu";
 import { toast } from "@/components/ui/Toast";
+import { confirmDialog } from "@/components/ui/Confirm";
 import { InlineLogo } from "@/components/ui/Logo";
 
 type Snapshot = { meta: DocumentMeta };
@@ -204,7 +205,13 @@ export function HomePage() {
                 variant="ghost"
                 icon={<Trash2 size={15} />}
                 onClick={async () => {
-                  if (!window.confirm(`Delete ${trashed.length} document${trashed.length === 1 ? "" : "s"} in the trash forever? This can't be undone.`)) return;
+                  const ok = await confirmDialog({
+                    title: "Empty the trash?",
+                    body: `${trashed.length} document${trashed.length === 1 ? " is" : "s are"} deleted forever. This can't be undone.`,
+                    confirmLabel: "Delete forever",
+                    danger: true,
+                  });
+                  if (!ok) return;
                   try {
                     const { deleted } = await del<{ deleted: number }>("/api/documents?trashed=1");
                     toast(`Deleted ${deleted} document${deleted === 1 ? "" : "s"} permanently.`);

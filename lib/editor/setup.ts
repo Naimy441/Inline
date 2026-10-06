@@ -28,6 +28,7 @@ import {
 } from "@/lib/editor/commands";
 import { commentsPlugin } from "@/lib/editor/comments";
 import { findPlugin } from "@/lib/editor/find";
+import { spellingPlugin } from "@/lib/editor/spelling";
 import { invisiblesPlugin } from "@/lib/editor/invisibles";
 import { paginationPlugin, type PageGeometry, type PageLayout } from "@/lib/editor/pagination";
 import { placeholderPlugin } from "@/lib/editor/placeholder";
@@ -244,6 +245,8 @@ export type EditorPluginOptions = {
   readOnly?: () => boolean;
   substitutions?: () => boolean;
   showInvisibles?: boolean;
+  /** Words the browser shouldn't underline as misspelled. */
+  dictionary?: string[];
 };
 
 function readOnlyPlugin(readOnly: () => boolean) {
@@ -271,6 +274,7 @@ export function editorPlugins(options: EditorPluginOptions) {
     commentsPlugin(options.onActivateComment),
     findPlugin(),
     invisiblesPlugin(options.showInvisibles ?? false),
+    spellingPlugin(options.dictionary ?? []),
     placeholderPlugin(options.placeholder ?? "Start writing, or ask Claude to draft something…"),
     paginationPlugin(options.geometry, options.onPages),
   ];

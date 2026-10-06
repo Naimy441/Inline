@@ -452,7 +452,7 @@ test.describe("comments", () => {
 
     // The user replies in the UI.
     await card.click();
-    const replyBox = card.locator(".comment-reply-box input");
+    const replyBox = card.locator(".comment-reply-box textarea");
     await replyBox.fill("Source is the Q3 board deck.");
     await replyBox.press("Enter");
     await expect(card.locator(".comment-reply .comment-body")).toHaveText("Source is the Q3 board deck.");

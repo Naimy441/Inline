@@ -6,10 +6,14 @@ import { Store } from "@/lib/client/api";
 export type Preferences = {
   substitutions: boolean;
   showInvisibles: boolean;
+  /** The browser's red spelling underlines. */
+  spellcheck: boolean;
+  /** Words never underlined as misspelled (normalized: lower case). */
+  dictionary: string[];
 };
 
 const KEY = "inline-preferences";
-const DEFAULTS: Preferences = { substitutions: true, showInvisibles: false };
+const DEFAULTS: Preferences = { substitutions: true, showInvisibles: false, spellcheck: true, dictionary: [] };
 
 function load(): Preferences {
   if (typeof window === "undefined") return DEFAULTS;
@@ -18,6 +22,8 @@ function load(): Preferences {
     return {
       substitutions: typeof raw.substitutions === "boolean" ? raw.substitutions : DEFAULTS.substitutions,
       showInvisibles: typeof raw.showInvisibles === "boolean" ? raw.showInvisibles : DEFAULTS.showInvisibles,
+      spellcheck: typeof raw.spellcheck === "boolean" ? raw.spellcheck : DEFAULTS.spellcheck,
+      dictionary: Array.isArray(raw.dictionary) ? raw.dictionary.filter((word): word is string => typeof word === "string").slice(0, 5000) : DEFAULTS.dictionary,
     };
   } catch {
     return DEFAULTS;
