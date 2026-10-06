@@ -1,6 +1,6 @@
 import { sendableSteps, getVersion } from "prosemirror-collab";
 import { Plugin, PluginKey, type EditorState, type Transaction } from "prosemirror-state";
-import { Mapping } from "prosemirror-transform";
+import { Mapping, type Step } from "prosemirror-transform";
 import { Decoration, DecorationSet, type EditorView } from "prosemirror-view";
 import { isUserSuggestion, type HunkJSON } from "@/lib/doc/review";
 
@@ -24,6 +24,22 @@ type ReviewMeta = { hunks?: HunkJSON[]; version?: number; focused?: string | nul
 
 export function setHunks(tr: Transaction, hunks: HunkJSON[], version: number) {
   return tr.setMeta(reviewKey, { hunks, version } satisfies ReviewMeta);
+}
+
+/**
+ * Carry the pending changes through steps that arrived without a new list
+ * (the server leaves it out when plain mapping gives the same result), the
+ * same way the server maps them (lib/doc/review.ts mapHunks).
+ */
+export function mapHunksThrough(tr: Transaction, state: EditorState, steps: readonly Step[], fromVersion: number, toVersion: number) {
+  const review = reviewKey.getState(state);
+  if (!review || !review.hunks.length || review.version !== fromVersion) return tr;
+  const mapping = new Mapping(steps.map((step) => step.getMap()));
+  const hunks = review.hunks.map((hunk) => {
+    const from = mapping.map(hunk.from, 1);
+    return { ...hunk, from, to: Math.max(from, mapping.map(hunk.to, -1)) };
+  });
+  return setHunks(tr, hunks, toVersion);
 }
 
 function unconfirmedMapping(state: EditorState) {

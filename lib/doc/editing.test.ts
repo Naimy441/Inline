@@ -3,6 +3,9 @@ import { describe, it } from "node:test";
 import type { Node as PMNode } from "prosemirror-model";
 import { Transform } from "prosemirror-transform";
 import {
+  docPlainText,
+  docWordCount,
+  wordCount,
   applyBlockStyle,
   applyFormat,
   applyStringEdit,
@@ -216,5 +219,15 @@ describe("whole-document operations", () => {
     const tr = new Transform(doc("One\n\nTwo"));
     applyBlockStyle(tr, { from: 1, to: 3 }, { type: "heading", level: 2, align: "center" });
     assert.equal(docToMarkdown(tr.doc), "## One {align=center}\n\n## Two {align=center}");
+  });
+});
+
+describe("docWordCount", () => {
+  it("matches counting the whole plain text, and recounts only what changed", () => {
+    const doc = markdownToDoc("# Title here\n\nOne two three.\n\n- first item\n- second item\n\n> quoted words\n\nline one  \nline two");
+    assert.equal(docWordCount(doc), wordCount(docPlainText(doc)));
+    const tr = new Transform(doc).insert(doc.child(0).nodeSize + doc.child(1).nodeSize - 2, schema.text(" four"));
+    assert.equal(docWordCount(tr.doc), wordCount(docPlainText(tr.doc)));
+    assert.equal(docWordCount(tr.doc), docWordCount(doc) + 1);
   });
 });

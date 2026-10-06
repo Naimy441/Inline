@@ -123,6 +123,26 @@ export function wordCount(text: string): number {
   return (text.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) ?? []).length;
 }
 
+const blockWords = new WeakMap<PMNode, number>();
+
+/**
+ * wordCount(docPlainText(doc)), counted per top-level block and cached by
+ * node. Blocks an edit didn't touch are the same objects in the new document,
+ * so a keystroke recounts one paragraph instead of the whole document.
+ */
+export function docWordCount(doc: PMNode): number {
+  let total = 0;
+  doc.forEach((child) => {
+    let count = blockWords.get(child);
+    if (count === undefined) {
+      count = child.isText ? wordCount(child.text ?? "") : wordCount(child.textBetween(0, child.content.size, "\n\n", (node) => (node.type.name === "hard_break" ? "\n" : "")));
+      blockWords.set(child, count);
+    }
+    total += count;
+  });
+  return total;
+}
+
 // ---------------------------------------------------------------------------
 // String edits
 // ---------------------------------------------------------------------------

@@ -207,10 +207,10 @@ export function titleFromText(firstLine: string) {
 }
 
 export function fillHeaderTokens(text: string, context: { page: number; pages: number; title: string; date?: Date }) {
-  const date = (context.date ?? new Date()).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+  if (!text.includes("{")) return text;
   return text
     .replace(/\{page\}/gi, String(context.page))
     .replace(/\{pages\}/gi, String(context.pages))
-    .replace(/\{title\}/gi, context.title)
-    .replace(/\{date\}/gi, date);
+    .replace(/\{title\}/gi, () => context.title)
+    .replace(/\{date\}/gi, () => (context.date ?? new Date()).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }));
 }
