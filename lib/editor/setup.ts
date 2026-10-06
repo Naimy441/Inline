@@ -33,6 +33,7 @@ import { paginationPlugin, type PageGeometry } from "@/lib/editor/pagination";
 import { placeholderPlugin } from "@/lib/editor/placeholder";
 import { presencePlugin } from "@/lib/editor/presence";
 import { reviewPlugin, type ReviewHandlers } from "@/lib/editor/review";
+import { isApple } from "@/lib/client/platform";
 
 const nodes = schema.nodes;
 
@@ -151,7 +152,7 @@ const liftEmptyBlock: Command = (state, dispatch) => {
 };
 
 function buildKeymap(extra: Record<string, Command>) {
-  const mac = typeof navigator !== "undefined" && /Mac|iP(hone|[oa]d)/.test(navigator.platform);
+  const mac = isApple();
   const bindings: Record<string, Command> = {
     "Mod-z": undo,
     "Shift-Mod-z": redo,

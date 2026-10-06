@@ -109,7 +109,7 @@ const FIXTURE = `
     <div class="doc-content ProseMirror" style="color: rgb(232, 234, 237)" data-box="148 98 312 1000">
       <p id="hello" data-box="148 98 300 8">Hello world</p>
       <p data-box="148 110 300 8"><mark style="background-color: #ffff00" data-box="148 110 40 8">marked</mark></p>
-      <p data-box="148 122 300 8"><span class="comment-hl" style="background-color: #fef7c0" data-box="148 122 40 8">noted</span><span class="review-delete" data-box="200 122 20 8">gone</span><span class="review-controls" data-box="220 122 30 8"><button>Keep</button></span></p>
+      <p data-box="148 122 300 8"><span class="comment-hl" style="background-color: #fef7c0" data-box="148 122 40 8">noted</span><span class="review-delete" data-box="200 122 20 8">gone</span></p><div class="review-layer" data-box="148 122 300 8"><div class="review-controls" data-box="450 122 30 8"><button>Keep</button></div></div>
       <div class="page-break" data-page-break="true" data-box="148 134 300 11"></div>
       <p data-box="148 146 300 8"><u style="text-decoration-line: underline" data-box="148 146 25 8">under</u> <a href="https://example.com" style="text-decoration-line: underline; color: #0b57d0" data-box="180 146 20 8">link</a></p>
       <ol start="3" data-box="160 158 288 20">

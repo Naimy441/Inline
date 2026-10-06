@@ -1,6 +1,7 @@
 "use client";
 
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { useShortcut } from "@/lib/client/platform";
 
 type Variant = "primary" | "secondary" | "ghost" | "danger" | "accent";
 
@@ -26,13 +27,14 @@ export const IconButton = forwardRef<
   HTMLButtonElement,
   ButtonHTMLAttributes<HTMLButtonElement> & { label: string; shortcut?: string; active?: boolean; size?: "sm" | "md" | "lg" }
 >(function IconButton({ label, shortcut, active, size = "md", className, children, ...rest }, ref) {
+  const keys = useShortcut();
   return (
     <button
       ref={ref}
       type="button"
       aria-label={label}
       aria-pressed={active === undefined ? undefined : active}
-      data-tip={shortcut ? `${label}  ${shortcut}` : label}
+      data-tip={shortcut ? `${label}  ${keys(shortcut)}` : label}
       className={`icon-btn icon-btn-${size}${active ? " is-active" : ""}${className ? ` ${className}` : ""}`}
       {...rest}
     >
@@ -43,6 +45,12 @@ export const IconButton = forwardRef<
 
 export function Spinner({ size = 14 }: { size?: number }) {
   return <span className="spinner" style={{ width: size, height: size }} aria-hidden />;
+}
+
+/** A shortcut written in Mac notation ("⌘L"), shown for the user's platform. */
+export function Shortcut({ keys }: { keys: string }) {
+  const format = useShortcut();
+  return <>{format(keys)}</>;
 }
 
 export function Kbd({ children }: { children: ReactNode }) {

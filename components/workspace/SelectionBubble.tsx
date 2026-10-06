@@ -7,8 +7,7 @@ import type { DocumentSession } from "@/lib/client/documentSession";
 import { schema } from "@/lib/doc/schema";
 import { followLink, linkAt, markActive, setLink, toggle } from "@/lib/editor/commands";
 import { isTouch } from "@/lib/client/viewport";
-
-const mod = typeof navigator !== "undefined" && /Mac|iP(hone|[oa]d)/.test(navigator.platform) ? "⌘" : "Ctrl+";
+import { useShortcut } from "@/lib/client/platform";
 
 /**
  * Floating actions for the current selection (Ask Claude, comment, quick
@@ -37,6 +36,7 @@ export function SelectionBubble({
   /** Send the inline prompt to Claude about the selection (or the cursor). */
   onInlineAsk?: (text: string) => void;
 }) {
+  const keys = useShortcut();
   const [dragging, setDragging] = useState(false);
   const [focused, setFocused] = useState(false);
   const [href, setHref] = useState("");
@@ -230,10 +230,10 @@ export function SelectionBubble({
   return (
     <div className={`bubble${above ? " is-above" : ""}`} ref={bubble} style={style} onMouseDown={(event) => event.preventDefault()}>
       <button type="button" className="bubble-btn bubble-ask" onClick={onAsk}>
-        <Sparkles size={14} /> Ask Claude <kbd>{mod}L</kbd>
+        <Sparkles size={14} /> Ask Claude <kbd>{keys("⌘L")}</kbd>
       </button>
       {onPrompting && (
-        <button type="button" className="bubble-btn" aria-label="Edit with Claude" data-tip={`Edit with Claude  ${mod}K`} onClick={() => onPrompting(true)}>
+        <button type="button" className="bubble-btn" aria-label="Edit with Claude" data-tip={`Edit with Claude  ${keys("⌘K")}`} onClick={() => onPrompting(true)}>
           <Pencil size={14} />
         </button>
       )}

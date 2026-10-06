@@ -1,59 +1,57 @@
 "use client";
 
+import { Shortcut } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 
-const mac = typeof navigator !== "undefined" && /Mac|iP(hone|[oa]d)/.test(navigator.platform);
-const mod = mac ? "⌘" : "Ctrl";
-const alt = mac ? "⌥" : "Alt";
-
+/** Written in Mac notation; Shortcut shows Ctrl, Alt and Shift elsewhere. */
 const GROUPS: Array<[string, Array<[string, string]>]> = [
   [
     "Claude",
     [
-      ["Ask Claude about the selection", `${mod} L`],
-      ["Edit with Claude inline", `${mod} K`],
-      ["Check spelling & grammar here", `${mod} ⌥ X`],
-      ["Show or hide Claude", `${mod} J`],
-      ["Keep the change at the cursor", `${mod} ⇧ ⏎`],
-      ["Undo the change at the cursor", `${mod} ⇧ ⌫`],
-      ["Next / previous change", `${alt} ] / ${alt} [`],
+      ["Ask Claude about the selection", "⌘ L"],
+      ["Edit with Claude inline", "⌘ K"],
+      ["Check spelling & grammar here", "⌘ ⌥ X"],
+      ["Show or hide Claude", "⌘ J"],
+      ["Keep the change at the cursor", "⌘ ⇧ ⏎"],
+      ["Undo the change at the cursor", "⌘ ⇧ ⌫"],
+      ["Next / previous change", "⌥ ] / ⌥ ["],
       ["Stop Claude (in the chat box)", "Esc"],
     ],
   ],
   [
     "Text",
     [
-      ["Bold / italic / underline", `${mod} B / I / U`],
-      ["Strikethrough", `${mod} ⇧ X`],
-      ["Inline code", `${mod} E`],
-      ["Superscript / subscript", `${mod} . / ,`],
-      ["Link", `${mod} K`],
-      ["Open link", `${mod} click`],
-      ["Paste without formatting", `${mod} ⇧ V`],
-      ["Clear formatting", `${mod} \\`],
+      ["Bold / italic / underline", "⌘ B / I / U"],
+      ["Strikethrough", "⌘ ⇧ X"],
+      ["Inline code", "⌘ E"],
+      ["Superscript / subscript", "⌘ . / ,"],
+      ["Link", "⌘ K"],
+      ["Open link", "⌘ click"],
+      ["Paste without formatting", "⌘ ⇧ V"],
+      ["Clear formatting", `⌘ \\`],
     ],
   ],
   [
     "Paragraphs",
     [
-      ["Normal text", `${mod} ${alt} 0`],
-      ["Heading 1–4", `${mod} ${alt} 1–4`],
-      ["Align left / center / right / justify", `${mod} ⇧ L / E / R / J`],
-      ["Numbered / bulleted / checklist", `${mod} ⇧ 7 / 8 / 9`],
-      ["Indent / outdent", `Tab / ⇧ Tab`],
-      ["Line break / page break", `⇧ ⏎ / ${mod} ⏎`],
+      ["Normal text", "⌘ ⌥ 0"],
+      ["Heading 1–4", "⌘ ⌥ 1–4"],
+      ["Align left / center / right / justify", "⌘ ⇧ L / E / R / J"],
+      ["Numbered / bulleted / checklist", "⌘ ⇧ 7 / 8 / 9"],
+      ["Indent / outdent", "Tab / ⇧ Tab"],
+      ["Line break / page break", "⇧ ⏎ / ⌘ ⏎"],
     ],
   ],
   [
     "Document",
     [
-      ["Find / replace", `${mod} F / ${mod} H`],
-      ["Comment", `${mod} ${alt} M`],
-      ["Undo / redo", `${mod} Z / ${mod} ⇧ Z`],
-      ["Editing / suggesting / viewing", `${mod} ${alt} ⇧ Z / X / C`],
-      ["Show non-printing characters", `${mod} ⇧ P`],
-      ["Print", `${mod} P`],
-      ["Shortcuts", `${mod} /`],
+      ["Find / replace", "⌘ F / ⌘ H"],
+      ["Comment", "⌘ ⌥ M"],
+      ["Undo / redo", "⌘ Z / ⌘ ⇧ Z"],
+      ["Editing / suggesting / viewing", "⌘ ⌥ ⇧ Z / X / C"],
+      ["Show non-printing characters", "⌘ ⇧ P"],
+      ["Print", "⌘ P"],
+      ["Shortcuts", "⌘ /"],
     ],
   ],
   [
@@ -80,7 +78,9 @@ export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () 
             {rows.map(([label, keys]) => (
               <div key={label} className="shortcut-row">
                 <span>{label}</span>
-                <kbd>{keys}</kbd>
+                <kbd>
+                  <Shortcut keys={keys} />
+                </kbd>
               </div>
             ))}
           </section>

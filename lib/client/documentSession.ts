@@ -19,6 +19,7 @@ import { editorPlugins } from "@/lib/editor/setup";
 import { setInvisibles } from "@/lib/editor/invisibles";
 import { rebaseLocalEdits, unconfirmedEdits } from "@/lib/editor/resync";
 import { loadPreferences, preferences, setPreference } from "@/lib/client/preferences";
+import { formatShortcut, isApple } from "@/lib/client/platform";
 
 /**
  * The browser side of a live document. The server is the authority
@@ -681,7 +682,7 @@ export class DocumentSession {
       const text = await navigator.clipboard.readText();
       if (text) view.pasteText(text);
     } catch {
-      throw new Error(`Your browser blocked access to the clipboard. Use ${/Mac|iP(hone|[oa]d)/.test(navigator.platform) ? "⌘" : "Ctrl+"}${plain ? "Shift+" : ""}V instead.`);
+      throw new Error(`Your browser blocked access to the clipboard. Use ${formatShortcut(plain ? "⌘⇧V" : "⌘V", isApple())} instead.`);
     }
   }
 

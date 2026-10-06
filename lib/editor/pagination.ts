@@ -94,8 +94,29 @@ export function paginationPlugin(geometry: () => PageGeometry, onLayout?: (pages
           onLayout?.(result.pages);
         });
       };
+      // Watch every top-level block, not only the editor: the editor's min-height
+      // fills the pages, so it keeps its size when content shrinks without a doc
+      // change (accepting a change removes its struck-out text, which is a widget).
       const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => schedule()) : null;
+      const watched = new Set<Element>();
+      const watchBlocks = () => {
+        if (!observer) return;
+        for (const element of watched) {
+          if (element.parentNode !== view.dom) {
+            observer.unobserve(element);
+            watched.delete(element);
+          }
+        }
+        for (const element of Array.from(view.dom.children)) {
+          if (watched.has(element) || element.classList.contains("page-gap")) continue;
+          observer.observe(element);
+          watched.add(element);
+        }
+      };
+      const children = typeof MutationObserver !== "undefined" ? new MutationObserver(watchBlocks) : null;
       observer?.observe(view.dom);
+      children?.observe(view.dom, { childList: true });
+      watchBlocks();
       document.fonts?.ready.then(() => schedule()).catch(() => undefined);
       schedule();
       return {
@@ -108,6 +129,7 @@ export function paginationPlugin(geometry: () => PageGeometry, onLayout?: (pages
         destroy() {
           if (frame) cancelAnimationFrame(frame);
           observer?.disconnect();
+          children?.disconnect();
         },
       };
     },

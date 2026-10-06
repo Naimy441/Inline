@@ -21,8 +21,6 @@ import {
 import { addColumnAfter, addColumnBefore, addRowAfter, addRowBefore, deleteColumn, deleteRow, deleteTable, isInTable, toggleHeaderRow } from "prosemirror-tables";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
 
-const mod = typeof navigator !== "undefined" && /Mac|iP(hone|[oa]d)/.test(navigator.platform) ? "⌘" : "Ctrl+";
-
 export type MenuActions = {
   newDocument: () => void;
   goHome: () => void;
@@ -67,6 +65,16 @@ export type MenuActions = {
   toggleSubstitutions: () => void;
 };
 
+const MENU_TIPS: Record<string, string> = {
+  File: "New, copy, download, print and history",
+  Edit: "Undo, clipboard and find",
+  View: "Zoom, mode, panels and theme",
+  Insert: "Links, images, tables and breaks",
+  Format: "Text, paragraph and list styles",
+  Tools: "Spelling, word count and Claude",
+  Help: "Shortcuts and connecting Claude Code",
+};
+
 export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSession; actions: MenuActions; zoom: number; hunks: number }) {
   const [open, setOpen] = useState<string | null>(null);
   const anchors = useRef<Record<string, RefObject<HTMLButtonElement | null>>>({});
@@ -81,6 +89,9 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
             ref={anchor(name)}
             type="button"
             className={`menubar-item${open === name ? " is-open" : ""}`}
+            aria-haspopup="menu"
+            aria-expanded={open === name}
+            data-tip={open ? undefined : MENU_TIPS[name]}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => setOpen((value) => (value === name ? null : name))}
             onMouseEnter={() => open && open !== name && setOpen(name)}
@@ -115,7 +126,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
           { label: "Plain text (.txt)", onSelect: () => actions.download("txt") },
         ],
       },
-      { label: "Print", shortcut: `${mod}P`, onSelect: actions.print },
+      { label: "Print", shortcut: `⌘P`, onSelect: actions.print },
       { kind: "separator" },
       { label: "Version history", onSelect: actions.history },
       { label: "Page setup", onSelect: () => actions.pageSetup("page") },
@@ -123,16 +134,16 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       { label: "Move to trash", danger: true, onSelect: actions.trash },
     ],
     Edit: [
-      { label: "Undo", shortcut: `${mod}Z`, onSelect: () => run(undo) },
-      { label: "Redo", shortcut: `${mod}⇧Z`, onSelect: () => run(redo) },
+      { label: "Undo", shortcut: `⌘Z`, onSelect: () => run(undo) },
+      { label: "Redo", shortcut: `⌘⇧Z`, onSelect: () => run(redo) },
       { kind: "separator" },
-      { label: "Cut", shortcut: `${mod}X`, onSelect: () => actions.clipboard("cut") },
-      { label: "Copy", shortcut: `${mod}C`, onSelect: () => actions.clipboard("copy") },
-      { label: "Paste", shortcut: `${mod}V`, onSelect: () => actions.paste(false) },
-      { label: "Paste without formatting", shortcut: `${mod}⇧V`, onSelect: () => actions.paste(true) },
+      { label: "Cut", shortcut: `⌘X`, onSelect: () => actions.clipboard("cut") },
+      { label: "Copy", shortcut: `⌘C`, onSelect: () => actions.clipboard("copy") },
+      { label: "Paste", shortcut: `⌘V`, onSelect: () => actions.paste(false) },
+      { label: "Paste without formatting", shortcut: `⌘⇧V`, onSelect: () => actions.paste(true) },
       {
         label: "Select all",
-        shortcut: `${mod}A`,
+        shortcut: `⌘A`,
         onSelect: () => {
           const view = session.view;
           if (!view) return;
@@ -141,8 +152,8 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
         },
       },
       { kind: "separator" },
-      { label: "Find", shortcut: `${mod}F`, onSelect: () => actions.find(false) },
-      { label: "Find and replace", shortcut: `${mod}H`, onSelect: () => actions.find(true) },
+      { label: "Find", shortcut: `⌘F`, onSelect: () => actions.find(false) },
+      { label: "Find and replace", shortcut: `⌘H`, onSelect: () => actions.find(true) },
       { kind: "separator" },
       { label: "Keep all pending changes", hint: "Claude's edits and suggestions", disabled: !hunks, onSelect: () => void session.review("accept", "all") },
       { label: "Undo all pending changes", disabled: !hunks, onSelect: () => void session.review("reject", "all") },
@@ -162,9 +173,9 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
             { label: "Outline", onSelect: actions.toggleOutline },
           ] as MenuItem[])),
       { kind: "separator" },
-      ...(actions.focusMode ? [] : [{ label: "Claude panel", shortcut: `${mod}J`, onSelect: actions.toggleAgent }]),
+      ...(actions.focusMode ? [] : [{ label: "Claude panel", shortcut: `⌘J`, onSelect: actions.toggleAgent }]),
       { label: "Focus mode", hint: "Hide Claude while you write", checked: actions.focusMode, onSelect: actions.toggleFocusMode },
-      { label: "Show non-printing characters", shortcut: `${mod}⇧P`, checked: actions.showInvisibles, onSelect: actions.toggleInvisibles },
+      { label: "Show non-printing characters", shortcut: `⌘⇧P`, checked: actions.showInvisibles, onSelect: actions.toggleInvisibles },
       { label: "Dark theme", checked: actions.dark, onSelect: actions.toggleTheme },
       { label: "Full screen", onSelect: actions.fullScreen },
     ],
@@ -174,14 +185,14 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
         label: "Table",
         submenu: [2, 3, 4, 5].map((size) => ({ label: `${size} × ${size}`, onSelect: () => run(insertTable(size, size)) })),
       },
-      { label: "Link", shortcut: `${mod}K`, onSelect: actions.link },
-      { label: "Comment", shortcut: `${mod}⌥M`, onSelect: actions.comment },
+      { label: "Link", shortcut: `⌘K`, onSelect: actions.link },
+      { label: "Comment", shortcut: `⌘⌥M`, onSelect: actions.comment },
       { kind: "separator" },
       { label: "Special characters…", onSelect: actions.specialCharacters },
       { label: "Table of contents", onSelect: () => !run(insertTableOfContents) && actions.notice("Add some headings first; the table of contents lists them.") },
       { kind: "separator" },
       { label: "Horizontal line", onSelect: () => run(insertHorizontalRule) },
-      { label: "Page break", shortcut: `${mod}⏎`, onSelect: () => run(insertPageBreak) },
+      { label: "Page break", shortcut: `⌘⏎`, onSelect: () => run(insertPageBreak) },
       {
         label: "Date",
         onSelect: () => {
@@ -197,13 +208,13 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       {
         label: "Text",
         submenu: [
-          { label: "Bold", shortcut: `${mod}B`, onSelect: () => run(toggle("bold")) },
-          { label: "Italic", shortcut: `${mod}I`, onSelect: () => run(toggle("italic")) },
-          { label: "Underline", shortcut: `${mod}U`, onSelect: () => run(toggle("underline")) },
-          { label: "Strikethrough", shortcut: `${mod}⇧X`, onSelect: () => run(toggle("strike")) },
-          { label: "Superscript", shortcut: `${mod}.`, onSelect: () => run(toggle("superscript")) },
-          { label: "Subscript", shortcut: `${mod},`, onSelect: () => run(toggle("subscript")) },
-          { label: "Code", shortcut: `${mod}E`, onSelect: () => run(toggle("code")) },
+          { label: "Bold", shortcut: `⌘B`, onSelect: () => run(toggle("bold")) },
+          { label: "Italic", shortcut: `⌘I`, onSelect: () => run(toggle("italic")) },
+          { label: "Underline", shortcut: `⌘U`, onSelect: () => run(toggle("underline")) },
+          { label: "Strikethrough", shortcut: `⌘⇧X`, onSelect: () => run(toggle("strike")) },
+          { label: "Superscript", shortcut: `⌘.`, onSelect: () => run(toggle("superscript")) },
+          { label: "Subscript", shortcut: `⌘,`, onSelect: () => run(toggle("subscript")) },
+          { label: "Code", shortcut: `⌘E`, onSelect: () => run(toggle("code")) },
           { kind: "separator" },
           {
             label: "Capitalization",
@@ -232,18 +243,18 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       {
         label: "Align",
         submenu: [
-          { label: "Left", shortcut: `${mod}⇧L`, onSelect: () => run(setAlign("left")) },
-          { label: "Center", shortcut: `${mod}⇧E`, onSelect: () => run(setAlign("center")) },
-          { label: "Right", shortcut: `${mod}⇧R`, onSelect: () => run(setAlign("right")) },
-          { label: "Justified", shortcut: `${mod}⇧J`, onSelect: () => run(setAlign("justify")) },
+          { label: "Left", shortcut: `⌘⇧L`, onSelect: () => run(setAlign("left")) },
+          { label: "Center", shortcut: `⌘⇧E`, onSelect: () => run(setAlign("center")) },
+          { label: "Right", shortcut: `⌘⇧R`, onSelect: () => run(setAlign("right")) },
+          { label: "Justified", shortcut: `⌘⇧J`, onSelect: () => run(setAlign("justify")) },
         ],
       },
       {
         label: "Lists",
         submenu: [
-          { label: "Bulleted list", shortcut: `${mod}⇧8`, onSelect: () => run(toggleList("bullet")) },
-          { label: "Numbered list", shortcut: `${mod}⇧7`, onSelect: () => run(toggleList("ordered")) },
-          { label: "Checklist", shortcut: `${mod}⇧9`, onSelect: () => run(toggleList("task")) },
+          { label: "Bulleted list", shortcut: `⌘⇧8`, onSelect: () => run(toggleList("bullet")) },
+          { label: "Numbered list", shortcut: `⌘⇧7`, onSelect: () => run(toggleList("ordered")) },
+          { label: "Checklist", shortcut: `⌘⇧9`, onSelect: () => run(toggleList("task")) },
         ],
       },
       {
@@ -267,7 +278,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       { label: "Page numbers…", onSelect: () => actions.pageSetup("header") },
       { label: "Document text defaults…", onSelect: () => actions.pageSetup("text") },
       { kind: "separator" },
-      { label: "Clear formatting", shortcut: `${mod}\\`, onSelect: () => run(clearFormatting) },
+      { label: "Clear formatting", shortcut: `⌘\\`, onSelect: () => run(clearFormatting) },
     ],
     Tools: [
       { label: "Word count", onSelect: actions.wordCount },
@@ -276,7 +287,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
         ? []
         : ([
             { kind: "separator" },
-            { label: "Check spelling & grammar here", shortcut: `${mod}⌥X`, onSelect: actions.checkSpelling },
+            { label: "Check spelling & grammar here", shortcut: `⌘⌥X`, onSelect: actions.checkSpelling },
             { label: "Ask Claude to proofread", onSelect: () => actions.ask("Proofread the document and fix spelling, grammar and punctuation. Don't change the meaning or voice.") },
             { label: "Ask Claude for feedback", onSelect: () => actions.ask("Read the document and give me your three most important suggestions to improve it. Don't edit yet.") },
             {
@@ -290,7 +301,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
           ] as MenuItem[])),
     ],
     Help: [
-      { label: "Keyboard shortcuts", shortcut: `${mod}/`, onSelect: actions.shortcuts },
+      { label: "Keyboard shortcuts", shortcut: `⌘/`, onSelect: actions.shortcuts },
       { label: "Connect Claude Code…", hint: "Copy the command to use Inline from your terminal", onSelect: actions.connectClaudeCode },
     ],
   };

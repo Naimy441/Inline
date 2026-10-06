@@ -11,8 +11,6 @@ import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { toast } from "@/components/ui/Toast";
 import { isTouch } from "@/lib/client/viewport";
 
-const mod = typeof navigator !== "undefined" && /Mac|iP(hone|[oa]d)/.test(navigator.platform) ? "⌘" : "Ctrl+";
-
 /**
  * The editor's right-click menu. Shift+right-click still opens the browser's own
  * menu (spelling suggestions live there).
@@ -70,15 +68,15 @@ export function ContextMenu({
   const paste = (plain: boolean) => void session.paste(plain).catch((error: Error) => toast(error.message, { tone: "error" }));
 
   const items: MenuItem[] = [
-    { label: "Cut", icon: <Scissors size={14} />, shortcut: `${mod}X`, disabled: !hasSelection || readOnly, onSelect: () => session.clipboard("cut") },
-    { label: "Copy", icon: <Copy size={14} />, shortcut: `${mod}C`, disabled: !hasSelection, onSelect: () => session.clipboard("copy") },
-    { label: "Paste", icon: <ClipboardPaste size={14} />, shortcut: `${mod}V`, disabled: readOnly, onSelect: () => paste(false) },
-    { label: "Paste without formatting", shortcut: `${mod}⇧V`, disabled: readOnly, onSelect: () => paste(true) },
+    { label: "Cut", icon: <Scissors size={14} />, shortcut: `⌘X`, disabled: !hasSelection || readOnly, onSelect: () => session.clipboard("cut") },
+    { label: "Copy", icon: <Copy size={14} />, shortcut: `⌘C`, disabled: !hasSelection, onSelect: () => session.clipboard("copy") },
+    { label: "Paste", icon: <ClipboardPaste size={14} />, shortcut: `⌘V`, disabled: readOnly, onSelect: () => paste(false) },
+    { label: "Paste without formatting", shortcut: `⌘⇧V`, disabled: readOnly, onSelect: () => paste(true) },
     { label: "Delete", icon: <Trash2 size={14} />, disabled: !hasSelection || readOnly, onSelect: () => run(deleteSelection) },
     { kind: "separator" },
-    ...(hideClaude ? [] : [{ label: hasSelection ? "Ask Claude about this" : "Ask Claude", icon: <Sparkles size={14} />, shortcut: `${mod}L`, onSelect: onAsk }]),
-    { label: "Comment", icon: <MessageSquarePlus size={14} />, shortcut: `${mod}⌥M`, disabled: !hasSelection, onSelect: onComment },
-    { label: "Link", icon: <Link2 size={14} />, shortcut: `${mod}K`, disabled: readOnly, onSelect: onLink },
+    ...(hideClaude ? [] : [{ label: hasSelection ? "Ask Claude about this" : "Ask Claude", icon: <Sparkles size={14} />, shortcut: `⌘L`, onSelect: onAsk }]),
+    { label: "Comment", icon: <MessageSquarePlus size={14} />, shortcut: `⌘⌥M`, disabled: !hasSelection, onSelect: onComment },
+    { label: "Link", icon: <Link2 size={14} />, shortcut: `⌘K`, disabled: readOnly, onSelect: onLink },
     ...(hideClaude
       ? []
       : [
@@ -105,7 +103,7 @@ export function ContextMenu({
         ] as MenuItem[])
       : []),
     { kind: "separator" },
-    { label: "Clear formatting", icon: <RemoveFormatting size={14} />, shortcut: `${mod}\\`, disabled: !hasSelection || readOnly, onSelect: () => run(clearFormatting) },
+    { label: "Clear formatting", icon: <RemoveFormatting size={14} />, shortcut: `⌘\\`, disabled: !hasSelection || readOnly, onSelect: () => run(clearFormatting) },
     { kind: "label", label: "Shift+right-click for spelling suggestions" },
   ];
 

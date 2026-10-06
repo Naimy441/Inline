@@ -3,6 +3,7 @@
 import { Check, ChevronLeft, ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
+import { useShortcut } from "@/lib/client/platform";
 import { useIsPhone } from "@/lib/client/viewport";
 import { useAnchoredPosition, type Placement } from "./floating";
 
@@ -49,6 +50,7 @@ function MenuPopup({
   className,
 }: MenuProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const keys = useShortcut();
   const style = useAnchoredPosition(open, anchor, ref, placement, 4);
   const [active, setActive] = useState(-1);
   const [sub, setSub] = useState<{ index: number; rect: DOMRect } | null>(null);
@@ -153,7 +155,7 @@ function MenuPopup({
                 {item.label}
                 {item.hint && <span className="menu-hint">{item.hint}</span>}
               </span>
-              {item.shortcut && <span className="menu-shortcut">{item.shortcut}</span>}
+              {item.shortcut && <span className="menu-shortcut">{keys(item.shortcut)}</span>}
               {item.submenu && <ChevronRight size={14} className="menu-chevron" />}
             </button>
           );

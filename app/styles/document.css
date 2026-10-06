@@ -512,21 +512,6 @@ img.ProseMirror-separator {
   background: color-mix(in srgb, #8250df 24%, transparent);
 }
 
-.doc-content .review-block {
-  position: relative;
-}
-
-.doc-content .review-block::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: -14px;
-  width: 3px;
-  border-radius: 2px;
-  background: var(--insert-line);
-}
-
 .doc-content .review-delete {
   background: var(--delete-bg);
   color: var(--delete-text);
@@ -549,10 +534,6 @@ img.ProseMirror-separator {
 
 .doc-content .review-insert.is-suggestion.is-focused {
   background: color-mix(in srgb, var(--suggest-line) 24%, transparent);
-}
-
-.doc-content .review-block.is-suggestion::after {
-  background: var(--suggest-line);
 }
 
 .doc-content .review-delete.is-suggestion {
@@ -592,15 +573,39 @@ img.ProseMirror-separator {
   background-size: 100% 100%;
 }
 
-.doc-content .review-controls {
-  position: relative;
-  display: inline-flex;
-  gap: 2px;
-  margin-left: 4px;
+/*
+ * The review margin (lib/editor/review.ts MarginLayer): bars beside inserted
+ * blocks in the left margin, Keep / Undo for the focused change in the right
+ * one. Outside the text, so showing them never moves a word.
+ */
+.review-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.review-gutter {
+  position: absolute;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--insert-line);
+}
+
+.review-gutter.is-suggestion {
+  background: var(--suggest-line);
+}
+
+.review-controls {
+  position: absolute;
+  top: calc(var(--line-top) + var(--line-height) / 2);
+  left: calc(100% + 16px);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
   padding: 2px;
-  vertical-align: 1px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 7px;
   background: var(--surface);
   box-shadow: var(--shadow-md);
   font-family: var(--font-ui);
@@ -608,31 +613,48 @@ img.ProseMirror-separator {
   font-weight: 500;
   font-style: normal;
   line-height: 1;
-  text-decoration: none;
   white-space: nowrap;
   user-select: none;
-  animation: bubble-in 0.12s var(--ease);
+  pointer-events: auto;
+  transform: translateY(-50%);
+  animation: review-controls-in 0.12s var(--ease);
 }
 
-.doc-content .review-btn {
-  padding: 3px 7px;
+@keyframes review-controls-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Phones have no margin: float the buttons just above the change's first line. */
+.is-flow .review-controls {
+  top: var(--line-top);
+  left: auto;
+  right: 0;
+  flex-direction: row;
+  transform: translateY(calc(-100% - 4px));
+}
+
+.review-btn {
+  padding: 4px 8px;
   border: 0;
-  border-radius: 4px;
+  border-radius: 5px;
   background: transparent;
   color: var(--text-2);
   font: inherit;
+  text-align: left;
 }
 
-.doc-content .review-btn:hover {
+.review-btn:hover {
   background: var(--surface-hover);
   color: var(--text);
 }
 
-.doc-content .review-keep {
+.review-keep {
   color: var(--success);
 }
 
-.doc-content .review-keep:hover {
+.review-keep:hover {
   background: var(--success-soft);
   color: var(--success);
 }
