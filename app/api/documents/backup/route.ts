@@ -18,7 +18,9 @@ export const GET = route(async () => {
     const file = await readDocumentFile(id).catch(() => null);
     if (!file) continue;
     entries.push({ name: `inline-data/documents/${id}.json`, data: JSON.stringify(file) });
-    const base = (file.meta.title || "Untitled document").replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "-").trim().slice(0, 100) || "Untitled document";
+    // Tabs after the first are saved beside it, named for their tab.
+    const title = file.meta.parentId ? `${file.meta.title || "Untitled document"} - ${file.meta.tabTitle || "Tab"}` : file.meta.title || "Untitled document";
+    const base = title.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "-").trim().slice(0, 100) || "Untitled document";
     const folder = file.meta.trashedAt ? "trash/" : "";
     let name = `${folder}${base}.md`;
     for (let n = 2; used.has(name.toLowerCase()); n += 1) name = `${folder}${base} (${n}).md`;

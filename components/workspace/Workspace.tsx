@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Check, CloudOff, Download, History, Loader2, MessageSquare, Moon, MoreHorizontal, PanelRight, Sparkles, Sun } from "lucide-react";
+import { ArrowLeft, Check, CloudOff, Download, History, ListTree, Loader2, MessageSquare, Moon, MoreHorizontal, PanelRight, Sparkles, Sun } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { EditorState } from "prosemirror-state";
@@ -25,6 +25,7 @@ import { CommentMargin, marginFits } from "@/components/workspace/CommentMargin"
 import { FindBar } from "@/components/workspace/FindBar";
 import { HistoryPanel, VersionPreview, type VersionSummary } from "@/components/workspace/HistoryPanel";
 import { prefetchVersions } from "@/lib/client/versions";
+import { addTab, rememberedRoot, useTabs } from "@/lib/client/tabs";
 import { documentMenus, MenuBar, type MenuActions } from "@/components/workspace/MenuBar";
 import { OutlinePanel } from "@/components/workspace/OutlinePanel";
 import { PageCanvas } from "@/components/workspace/PageCanvas";
@@ -110,7 +111,7 @@ export function Workspace({ documentId }: { documentId: string }) {
     else setPanelState(readStored<Panel>(PANEL_KEY, "agent", (raw) => (raw === "none" ? null : (["agent", "comments", "history"].includes(raw) ? (raw as Panel) : null))));
     setPanelWidth(readStored(PANEL_WIDTH_KEY, 420, (raw) => (Number(raw) >= 320 ? Math.min(760, Number(raw)) : null)));
     setZoomState(readStored<Zoom>(ZOOM_KEY, "fit", (raw) => (raw === "fit" ? "fit" : Number(raw) >= 0.5 && Number(raw) <= 2 ? Number(raw) : null)));
-    setOutline(readStored(OUTLINE_KEY, false, (raw) => raw === "1"));
+    setOutline(!isCompact() && readStored(OUTLINE_KEY, false, (raw) => raw === "1"));
     setFocusMode(readStored(FOCUS_KEY, false, (raw) => raw === "1"));
   }, []);
 
@@ -122,6 +123,15 @@ export function Workspace({ documentId }: { documentId: string }) {
       return value;
     });
   }, []);
+
+  const toggleOutline = useCallback(
+    () =>
+      setOutline((value) => {
+        store(OUTLINE_KEY, value ? "0" : "1");
+        return !value;
+      }),
+    [],
+  );
 
   const setZoom = (value: Zoom) => {
     setZoomState(value);
@@ -160,6 +170,9 @@ export function Workspace({ documentId }: { documentId: string }) {
   }, [ready, documentId]);
   const prefs = useSyncExternalStore(preferences.subscribe, preferences.get, () => DEFAULT_PREFERENCES);
   const meta = ui.meta;
+  // A document's tabs share one Claude chat, kept under the first tab's id.
+  const [rememberedChatKey] = useState(() => (typeof window === "undefined" ? documentId : rememberedRoot(documentId)));
+  const chatKey = meta ? (meta.parentId ?? meta.id) : rememberedChatKey;
 
   useEffect(() => session.setFlow(phone), [session, phone]);
   const flow = ui.flow && !ui.printing && !ui.exporting;
@@ -402,11 +415,11 @@ export function Workspace({ documentId }: { documentId: string }) {
     flow,
     toggleTheme,
     dark,
-    toggleOutline: () =>
-      setOutline((value) => {
-        store(OUTLINE_KEY, value ? "0" : "1");
-        return !value;
-      }),
+    toggleOutline,
+    addTab: () =>
+      void addTab(documentId)
+        .then((id) => router.push(`/d/${id}`))
+        .catch((error: Error) => toast(error.message, { tone: "error" })),
     toggleAgent: () => setPanel((current) => (current === "agent" ? null : "agent")),
     shortcuts: () => setShortcuts(true),
     connectClaudeCode: async () => {
@@ -577,7 +590,14 @@ export function Workspace({ documentId }: { documentId: string }) {
       />
 
       <div className="workspace-body">
-        {outline && <WithEditorState session={session}>{(state) => <OutlinePanel session={session} state={state} />}</WithEditorState>}
+        {outline ? (
+          <>
+            <div className="tabs-backdrop" onClick={toggleOutline} aria-hidden />
+            <WithEditorState session={session}>{(state) => <OutlinePanel session={session} state={state} meta={meta} readOnly={ui.mode === "viewing"} onClose={toggleOutline} />}</WithEditorState>
+          </>
+        ) : (
+          <TabsToggle documentId={documentId} onOpen={toggleOutline} />
+        )}
         <main
           ref={canvasRef}
           className={`canvas${versionShown && panel === "history" ? " is-previewing" : ""}${!panel && !phone && (draftComment || ui.comments.some((comment) => !comment.resolved)) && marginFits(canvasRef.current) ? " with-comments" : ""}`}
@@ -638,8 +658,10 @@ export function Workspace({ documentId }: { documentId: string }) {
             />
             {panel === "agent" && (
               <AgentPanel
+                key={chatKey}
                 ref={agentRef}
                 documentId={documentId}
+                chatKey={chatKey}
                 hunks={ui.hunks}
                 initialPrompt={initialAsk}
                 onClose={() => setPanel(null)}
@@ -907,3 +929,15 @@ function WordCountTable({ session }: { session: DocumentSession }) {
   );
 }
 
+
+/** Opens the tabs pane; names the open tab when the document has more than one. */
+function TabsToggle({ documentId, onOpen }: { documentId: string; onOpen: () => void }) {
+  const tabs = useTabs(documentId);
+  const current = tabs && tabs.length > 1 ? tabs.find((tab) => tab.id === documentId) : null;
+  return (
+    <button type="button" className={`tabs-toggle${current ? " has-tabs" : ""}`} aria-label="Show tabs & outline" data-tip="Show tabs & outline" onClick={onOpen}>
+      <ListTree size={16} />
+      {current && <span>{current.title}</span>}
+    </button>
+  );
+}

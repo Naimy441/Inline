@@ -38,6 +38,7 @@ export type MenuActions = {
   toggleTheme: () => void;
   dark: boolean;
   toggleOutline: () => void;
+  addTab: () => void;
   toggleAgent: () => void;
   shortcuts: () => void;
   connectClaudeCode: () => void;
@@ -173,7 +174,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
             { label: "Actual size", checked: !actions.zoomFit && zoom === 1, onSelect: () => actions.zoom(1) },
             { label: "Fit to window", hint: "Shrink pages that don't fit", checked: actions.zoomFit, onSelect: actions.fitWidth },
             { kind: "separator" },
-            { label: "Outline", onSelect: actions.toggleOutline },
+            { label: "Tabs & outline", onSelect: actions.toggleOutline },
           ] as MenuItem[])),
       { kind: "separator" },
       ...(actions.focusMode ? [] : [{ label: "Claude panel", shortcut: `⌘J`, onSelect: actions.toggleAgent }]),
@@ -185,6 +186,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
     ],
     Insert: [
       { label: "Image…", onSelect: actions.image },
+      { label: "Tab", onSelect: actions.addTab },
       {
         label: "Table",
         submenu: [2, 3, 4, 5].map((size) => ({ label: `${size} × ${size}`, onSelect: () => run(insertTable(size, size)) })),

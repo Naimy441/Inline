@@ -14,6 +14,7 @@ import {
   type CommentAuthor,
   type DocComment,
   type DocumentMeta,
+  type DocumentTab,
   type DocumentSettings,
 } from "@/lib/doc/settings";
 import { log } from "@/lib/server/log";
@@ -69,6 +70,7 @@ export type HubEvent =
   | { type: "reset"; epoch: string; version: number; doc: unknown; hunks: HunkJSON[] }
   | { type: "activity"; activity: AgentActivity | null }
   | { type: "command"; command: ClientCommand }
+  | { type: "tabs"; tabs: DocumentTab[] }
   | { type: "deleted" };
 
 export type DocumentSnapshot = {
@@ -297,6 +299,9 @@ export class LiveDocument {
 
   // --- meta -----------------------------------------------------------------
 
+  /** Called when the title changes, so the document's other tabs can follow. Set by the hub. */
+  onRetitle: ((title: string) => void) | null = null;
+
   updateMeta(patch: { title?: string; settings?: unknown }) {
     const next = { ...this.meta };
     if (patch.title !== undefined) {
@@ -305,10 +310,23 @@ export class LiveDocument {
     }
     if (patch.settings !== undefined) next.settings = patchSettings(this.meta.settings, patch.settings);
     next.updatedAt = Date.now();
+    const retitled = next.title !== this.meta.title;
     this.meta = next;
     this.emit({ type: "meta", meta: this.meta });
     this.schedulePersist();
+    if (retitled) this.onRetitle?.(next.title);
     return this.meta;
+  }
+
+  /** Changes to the tab fields (and a title taken from another tab), without the side effects of updateMeta. */
+  setTabMeta(patch: Partial<Pick<DocumentMeta, "tabs" | "tabTitle" | "parentId" | "title">>) {
+    this.meta = { ...this.meta, ...patch };
+    this.emit({ type: "meta", meta: this.meta });
+    this.schedulePersist();
+  }
+
+  emitTabs(tabs: DocumentTab[]) {
+    this.emit({ type: "tabs", tabs });
   }
 
   touch() {
@@ -533,6 +551,7 @@ export class LiveDocument {
       if (title && title !== this.meta.title) {
         this.meta = { ...this.meta, title };
         this.emit({ type: "meta", meta: this.meta });
+        this.onRetitle?.(title);
       }
     }
     await writeDocumentFile(this.toFile());
@@ -611,6 +630,9 @@ export type CreateDocumentInput = {
   doc?: unknown;
   settings?: Partial<DocumentSettings> | unknown;
   comments?: DocComment[];
+  /** Creates a tab of this document (the first tab's id) instead of a document of its own. */
+  parentId?: string;
+  tabTitle?: string;
 };
 
 class DocumentHub {
@@ -632,7 +654,7 @@ class DocumentHub {
     const load = (async () => {
       const file = await readDocumentFile(id).catch(() => null);
       if (!file) return null;
-      const live = new LiveDocument(normalizeFile(file));
+      const live = this.adopt(new LiveDocument(normalizeFile(file)));
       this.open.set(id, live);
       return live;
     })();
@@ -660,7 +682,7 @@ class DocumentHub {
     const meta: DocumentMeta = {
       id: newId(12),
       title: cleanTitle(input.title),
-      autoTitle: !input.title || /^untitled\b/i.test(input.title.trim()),
+      autoTitle: !input.parentId && (!input.title || /^untitled\b/i.test(input.title.trim())),
       createdAt: now,
       updatedAt: now,
       lastOpenedAt: now,
@@ -668,11 +690,89 @@ class DocumentHub {
       settings: normalizeSettings(input.settings ?? DEFAULT_SETTINGS),
       wordCount: wordCount(text),
       preview: text.replace(/\s+/g, " ").trim().slice(0, 240),
+      ...(input.parentId ? { parentId: input.parentId } : {}),
+      ...(input.tabTitle ? { tabTitle: cleanTabTitle(input.tabTitle) } : {}),
     };
     const live = new LiveDocument({ format: 3, meta, doc: doc.toJSON(), comments: input.comments ?? [], hunks: [] });
+    this.adopt(live);
     this.open.set(meta.id, live);
     await writeDocumentFile(live.toFile());
     return live;
+  }
+
+  private adopt(live: LiveDocument) {
+    live.onRetitle = (title) => void this.shareTitle(live, title).catch((error) => log("error", "a title couldn't be copied to the other tabs", { documentId: live.id, error }));
+    return live;
+  }
+
+  // --- tabs -------------------------------------------------------------------
+
+  /** A document's tabs, the first tab (which holds the title and tab order) first. */
+  async family(id: string): Promise<{ root: LiveDocument; tabs: LiveDocument[] }> {
+    const doc = await this.require(id);
+    const root = (doc.meta.parentId && (await this.get(doc.meta.parentId))) || doc;
+    const children = await Promise.all((root.meta.tabs ?? []).map((child) => this.get(child)));
+    const tabs = children.filter((child): child is LiveDocument => Boolean(child && !child.meta.trashedAt && child.meta.parentId === root.id));
+    return { root, tabs: [root, ...tabs] };
+  }
+
+  async tabs(id: string): Promise<DocumentTab[]> {
+    const { tabs } = await this.family(id);
+    return tabs.map((tab, index) => ({ id: tab.id, title: tabTitle(tab.meta, index) }));
+  }
+
+  async createTab(id: string, input: { title?: string; markdown?: string } = {}) {
+    const { root, tabs } = await this.family(id);
+    const tab = await this.create({
+      title: root.meta.title,
+      markdown: input.markdown,
+      settings: root.meta.settings,
+      parentId: root.id,
+      tabTitle: input.title?.trim() || `Tab ${tabs.length + 1}`,
+    });
+    root.setTabMeta({ tabs: [...tabs.slice(1).map((item) => item.id), tab.id] });
+    await this.announceTabs(root.id);
+    return tab;
+  }
+
+  async renameTab(id: string, title: string) {
+    const doc = await this.require(id);
+    doc.setTabMeta({ tabTitle: cleanTabTitle(title) });
+    await this.announceTabs(id);
+  }
+
+  /** Deletes a tab for good. The first tab holds the document, so it can't be deleted. */
+  async deleteTab(id: string) {
+    const doc = await this.require(id);
+    if (!doc.meta.parentId) throw new Error("The first tab can't be deleted.");
+    const { root } = await this.family(id);
+    root.setTabMeta({ tabs: (root.meta.tabs ?? []).filter((item) => item !== id) });
+    await this.remove(id);
+    await this.announceTabs(root.id);
+  }
+
+  /** Moves a tab to a new position (0 is the first tab, which can't move). */
+  async moveTab(id: string, index: number) {
+    const { root, tabs } = await this.family(id);
+    if (id === root.id) throw new Error("The first tab can't be moved.");
+    const order = tabs.slice(1).map((item) => item.id).filter((item) => item !== id);
+    order.splice(Math.max(0, Math.min(order.length, index - 1)), 0, id);
+    root.setTabMeta({ tabs: order });
+    await this.announceTabs(root.id);
+  }
+
+  private async announceTabs(id: string) {
+    const { tabs } = await this.family(id);
+    const list = tabs.map((tab, index) => ({ id: tab.id, title: tabTitle(tab.meta, index) }));
+    for (const tab of tabs) tab.emitTabs(list);
+  }
+
+  /** Every tab shows the document's one title. */
+  private async shareTitle(source: LiveDocument, title: string) {
+    if (!source.meta.parentId && !source.meta.tabs?.length) return;
+    const { root, tabs } = await this.family(source.id);
+    if (source !== root && root.meta.title !== title) root.updateMeta({ title });
+    for (const tab of tabs) if (tab !== source && tab !== root && tab.meta.title !== title) tab.setTabMeta({ title });
   }
 
   /** Delete every document in the trash, or only those trashed before `olderThan` (ms since epoch). */
@@ -708,21 +808,31 @@ class DocumentHub {
     );
     const metas = listed.filter((meta): meta is DocumentMeta => Boolean(meta));
     return metas
-      .filter((meta) => (options.trashed ? Boolean(meta.trashedAt) : !meta.trashedAt))
+      .filter((meta) => !meta.parentId && (options.trashed ? Boolean(meta.trashedAt) : !meta.trashedAt))
       .sort((a, b) => Math.max(b.lastOpenedAt, b.updatedAt) - Math.max(a.lastOpenedAt, a.updatedAt));
   }
 
   async duplicate(id: string): Promise<LiveDocument> {
-    const source = await this.require(id);
-    return this.create({
+    const { root: source, tabs } = await this.family(id);
+    const copy = await this.create({
       title: `${source.meta.title} (copy)`,
       doc: source.doc.toJSON(),
       settings: source.meta.settings,
     });
+    if (source.meta.tabTitle) copy.setTabMeta({ tabTitle: source.meta.tabTitle });
+    const copies: string[] = [];
+    for (const tab of tabs.slice(1)) {
+      const child = await this.create({ title: copy.meta.title, doc: tab.doc.toJSON(), settings: tab.meta.settings, parentId: copy.id, tabTitle: tab.meta.tabTitle });
+      copies.push(child.id);
+    }
+    if (copies.length) copy.setTabMeta({ tabs: copies });
+    return copy;
   }
 
   async remove(id: string) {
     const live = await this.get(id);
+    // Deleting a document deletes its other tabs too.
+    for (const child of live?.meta.tabs ?? []) await this.remove(child);
     live?.markDeleted();
     this.open.delete(id);
     await deleteDocumentFile(id);
@@ -789,11 +899,22 @@ function normalizeFile(file: StoredDocumentFile): StoredDocumentFile {
       wordCount: meta.wordCount ?? 0,
       preview: meta.preview ?? "",
       autoTitle: meta.autoTitle ?? false,
+      ...(typeof meta.parentId === "string" ? { parentId: meta.parentId } : {}),
+      ...(Array.isArray(meta.tabs) && meta.tabs.length ? { tabs: meta.tabs.filter((item): item is string => typeof item === "string") } : {}),
+      ...(typeof meta.tabTitle === "string" && meta.tabTitle.trim() ? { tabTitle: meta.tabTitle } : {}),
     },
     doc: file.doc,
     comments: Array.isArray(file.comments) ? file.comments : [],
     hunks: Array.isArray(file.hunks) ? file.hunks : [],
   };
+}
+
+export function tabTitle(meta: DocumentMeta, index: number) {
+  return meta.tabTitle || `Tab ${index + 1}`;
+}
+
+function cleanTabTitle(value: string) {
+  return value.replace(/\s+/g, " ").trim().slice(0, 100) || "Untitled tab";
 }
 
 const globalForHub = globalThis as unknown as { __inlineHub?: DocumentHub; __inlineHubExitHook?: boolean };

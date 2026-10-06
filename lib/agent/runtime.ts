@@ -512,7 +512,14 @@ class ChatRuntime {
     );
     const doc = this.state.documentId ? await documentHub().get(this.state.documentId) : null;
     if (doc && !doc.meta.trashedAt) {
-      context.push(`Open document: "${doc.meta.title}" (id ${doc.id}).`);
+      const tabs = doc.meta.parentId || doc.meta.tabs?.length ? await documentHub().tabs(doc.id).catch(() => []) : [];
+      if (tabs.length > 1) {
+        const open = tabs.find((tab) => tab.id === doc.id);
+        context.push(`Open document: "${doc.meta.title}", tab "${open?.title ?? ""}" (id ${doc.id}).`);
+        context.push(`The document has ${tabs.length} tabs, each with its own content: ${tabs.map((tab) => `"${tab.title}" (id ${tab.id})`).join(", ")}. Document tools default to the open tab; pass another tab's id as document_id to read or edit it.`);
+      } else {
+        context.push(`Open document: "${doc.meta.title}" (id ${doc.id}).`);
+      }
       const suggestions = doc.hunks.filter(isUserSuggestion).length;
       const pending = doc.hunks.length - suggestions;
       if (pending) context.push(`${pending} earlier change${pending === 1 ? "" : "s"} by Claude ${pending === 1 ? "is" : "are"} still awaiting the user's review.`);
@@ -1332,6 +1339,8 @@ class AgentRuntime {
     await this.init();
     this.scheduleSweep();
     const ids = await listChatIds();
+    // A document's chats include those last used in any of its tabs.
+    const family = options.documentId ? new Set(await documentHub().tabs(options.documentId).then((tabs) => tabs.map((tab) => tab.id)).catch(() => [options.documentId!])) : null;
     // Chats not already in memory are summarized from their files without being kept loaded, and only read again once they change.
     const summaries = await Promise.all(
       ids.map(async (id) => {
@@ -1345,7 +1354,7 @@ class AgentRuntime {
     );
     return summaries
       .filter((summary): summary is ChatSummary => Boolean(summary))
-      .filter((summary) => summary.messageCount > 0 && (!options.documentId || summary.documentId === options.documentId))
+      .filter((summary) => summary.messageCount > 0 && (!family || (summary.documentId !== null && family.has(summary.documentId))))
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }
 

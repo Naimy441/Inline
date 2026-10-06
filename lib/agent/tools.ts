@@ -1091,6 +1091,56 @@ export const TOOLS = [
   }),
 
   defineTool({
+    name: "list_tabs",
+    title: "List tabs",
+    description: "List a document's tabs with their ids. Each tab is its own page of content: pass a tab's id as document_id to read or edit that tab.",
+    shape: { document_id: documentId },
+    write: false,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      const tabs = await documentHub().tabs(doc.id);
+      return ok(
+        `"${doc.meta.title}" has ${tabs.length} tab${tabs.length === 1 ? "" : "s"}:\n${tabs.map((tab) => `- ${tab.id}${tab.id === doc.id ? " (this one)" : ""}: "${tab.title}"`).join("\n")}`,
+      );
+    },
+  }),
+
+  defineTool({
+    name: "create_tab",
+    title: "Create tab",
+    description: "Add a tab to a document, optionally with initial Markdown content. Returns the new tab's id, to pass as document_id when editing it.",
+    shape: {
+      document_id: documentId,
+      title: z.string().optional().describe("The tab's name."),
+      content: z.string().optional().describe("Initial content as Markdown."),
+    },
+    write: true,
+    async handler(args, ctx) {
+      if (ctx.readOnly) return fail("You are in Ask mode, so tabs can't be added.");
+      const doc = await resolveDocument(ctx, args.document_id);
+      const hub = documentHub();
+      const tab = await hub.createTab(doc.id, { title: args.title, markdown: args.content });
+      const title = (await hub.tabs(tab.id)).find((item) => item.id === tab.id)?.title ?? "New tab";
+      ctx.onChange?.({ documentId: tab.id, title: `${tab.meta.title} · ${title}`, tool: "create_tab", added: tab.meta.wordCount, removed: 0 });
+      return ok(`Added the tab "${title}" (id ${tab.id}) to "${doc.meta.title}". Pass document_id: "${tab.id}" to edit it.`);
+    },
+  }),
+
+  defineTool({
+    name: "rename_tab",
+    title: "Rename tab",
+    description: "Rename one of a document's tabs. The tab to rename is the one passed as document_id.",
+    shape: { document_id: documentId, title: z.string().min(1).describe("The tab's new name.") },
+    write: true,
+    async handler(args, ctx) {
+      if (ctx.readOnly) return fail("You are in Ask mode, so tabs can't be renamed.");
+      const doc = await resolveDocument(ctx, args.document_id);
+      await documentHub().renameTab(doc.id, args.title);
+      return ok(`Renamed the tab to "${doc.meta.tabTitle}".`);
+    },
+  }),
+
+  defineTool({
     name: "open_document",
     title: "Open document",
     description: "Show a document in the user's editor, switching the editor to it. Use it after create_document, or when the user asks to see another document.",

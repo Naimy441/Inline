@@ -82,6 +82,32 @@ test("spelling underlines can be hidden, and a word added to the dictionary", as
   await expect(doc).toHaveAttribute("spellcheck", "false");
 });
 
+test("document tabs can be added, renamed, switched and deleted", async ({ page }) => {
+  await newBlankDocument(page);
+  const firstUrl = page.url();
+  await page.locator(".doc-content").click();
+  await page.keyboard.type("First tab text.");
+  await page.getByRole("button", { name: "Show tabs & outline" }).click();
+  const pane = page.getByRole("navigation", { name: "Document tabs" });
+  await pane.getByRole("button", { name: "Add tab" }).click();
+  await page.waitForURL((url) => url.href !== firstUrl);
+  const name = pane.getByRole("textbox", { name: "Tab name" });
+  await name.fill("Notes");
+  await name.press("Enter");
+  await expect(pane.locator(".tab-row.is-open")).toHaveText("Notes");
+  await page.locator(".doc-content").click();
+  await page.keyboard.type("Second tab text.");
+  await expect(page.locator(".sync-status")).toHaveText(/Saved/);
+  await pane.getByRole("button", { name: "Tab 1", exact: true }).click();
+  await expect(page.locator(".doc-content")).toContainText("First tab text.");
+  await expect(page.locator(".doc-content")).not.toContainText("Second tab text.");
+  await pane.locator(".tab-row", { hasText: "Notes" }).hover();
+  await pane.getByRole("button", { name: "Notes options" }).click();
+  await page.getByRole("menuitem", { name: /^Delete/ }).click();
+  await page.getByRole("button", { name: "Delete tab" }).click();
+  await expect(pane.locator(".tab-row")).toHaveCount(1);
+});
+
 test("find highlights every match", async ({ page }) => {
   await newBlankDocument(page);
   await page.locator(".doc-content").click();

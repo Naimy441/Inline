@@ -66,7 +66,16 @@ export type DocumentMeta = {
   preview: string;
   /** True until someone names the document; meanwhile the title follows its first line, like Google Docs. */
   autoTitle?: boolean;
+  /** Document tabs: set on every tab after the first, naming the first tab, which holds the title and the tab order. */
+  parentId?: string;
+  /** On the first tab: the ids of the other tabs, in order. */
+  tabs?: string[];
+  /** The tab's own name ("Tab 1" when unnamed). */
+  tabTitle?: string;
 };
+
+/** One tab of a document, as the tabs list shows it. */
+export type DocumentTab = { id: string; title: string };
 
 export type CommentReply = { id: string; author: CommentAuthor; body: string; createdAt: number };
 export type CommentAuthor = "user" | "claude";

@@ -878,3 +878,50 @@ describe("unloading idle documents", () => {
     assert.equal(await hub.get(doc.id), doc);
   });
 });
+
+describe("DocumentHub tabs", () => {
+  it("tabs share one title, stay out of the document list, and follow renames, moves and deletes", async () => {
+    const hub = freshHub();
+    const root = await hub.create({ title: "Report", markdown: "First tab." });
+    const second = await hub.createTab(root.id, { title: "Notes", markdown: "Second tab." });
+    const third = await hub.createTab(second.id);
+    assert.deepEqual(await hub.tabs(third.id), [
+      { id: root.id, title: "Tab 1" },
+      { id: second.id, title: "Notes" },
+      { id: third.id, title: "Tab 3" },
+    ]);
+    assert.equal(second.meta.parentId, root.id);
+    assert.equal(second.meta.title, "Report");
+    const listed = (await hub.list()).map((meta) => meta.id);
+    assert.ok(listed.includes(root.id));
+    assert.ok(!listed.includes(second.id) && !listed.includes(third.id));
+
+    // Renaming any tab's document title renames them all.
+    second.updateMeta({ title: "Annual report" });
+    await sleep(10);
+    assert.equal(root.meta.title, "Annual report");
+    assert.equal(third.meta.title, "Annual report");
+
+    const events: HubEvent[] = [];
+    const stop = root.subscribe((event) => events.push(event));
+    await hub.renameTab(third.id, "Appendix");
+    await hub.moveTab(third.id, 1);
+    assert.deepEqual(
+      (await hub.tabs(root.id)).map((tab) => tab.title),
+      ["Tab 1", "Appendix", "Notes"],
+    );
+    assert.ok(events.some((event) => event.type === "tabs"));
+    stop();
+
+    await assert.rejects(hub.deleteTab(root.id), /first tab/);
+    await hub.deleteTab(second.id);
+    assert.deepEqual((await hub.tabs(root.id)).map((tab) => tab.id), [root.id, third.id]);
+    assert.equal(await hub.get(second.id), null);
+
+    // Duplicating copies every tab; deleting the document deletes its tabs.
+    const copy = await hub.duplicate(third.id);
+    assert.deepEqual((await hub.tabs(copy.id)).map((tab) => tab.title), ["Tab 1", "Appendix"]);
+    await hub.remove(root.id);
+    assert.equal(await hub.get(third.id), null);
+  });
+});

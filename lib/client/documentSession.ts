@@ -8,7 +8,8 @@ import { dataUrlToBlob, ImageView } from "@/lib/editor/imageView";
 import { EditorView } from "prosemirror-view";
 import type { HunkJSON } from "@/lib/doc/review";
 import { schema } from "@/lib/doc/schema";
-import { pageSize, type DocComment, type DocumentMeta } from "@/lib/doc/settings";
+import { pageSize, type DocComment, type DocumentMeta, type DocumentTab } from "@/lib/doc/settings";
+import { setTabs } from "@/lib/client/tabs";
 import { api, ApiError, del, patch, post, Store, uploadFile } from "@/lib/client/api";
 import { setCommentState } from "@/lib/editor/comments";
 import { syncDomSelection } from "@/lib/editor/domSync";
@@ -56,6 +57,7 @@ type ServerEvent =
   | { type: "comments"; comments: DocComment[] }
   | { type: "activity"; activity: AgentActivity | null }
   | { type: "command"; command: ClientCommand }
+  | { type: "tabs"; tabs: DocumentTab[] }
   | { type: "deleted" };
 
 export type DocumentUiState = {
@@ -318,6 +320,21 @@ export class DocumentSession {
   };
 
   destroy() {
+    const view = this.view;
+    if (view && !this.destroyed && sendableSteps(view.state)) {
+      // Edits are still on their way (say, the user switched tabs mid-sentence): finish saving them first.
+      const generation = this.generation;
+      const finish = () => {
+        if (generation === this.generation) this.teardown();
+      };
+      void Promise.race([this.whenSaved(), new Promise((resolve) => setTimeout(resolve, 15_000))]).then(finish);
+      this.flushSteps();
+      return;
+    }
+    this.teardown();
+  }
+
+  private teardown() {
     this.destroyed = true;
     window.removeEventListener("beforeunload", this.onBeforeUnload);
     this.source?.close();
@@ -577,6 +594,9 @@ export class DocumentSession {
         return;
       case "command":
         this.callbacks.onCommand?.(event.command);
+        return;
+      case "tabs":
+        setTabs(event.tabs);
         return;
       case "deleted":
         this.ui.set((ui) => ({ ...ui, status: "deleted" }));
