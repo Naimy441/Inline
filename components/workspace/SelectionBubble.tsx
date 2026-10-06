@@ -2,7 +2,7 @@
 
 import { Bold, ExternalLink, Italic, Link2, MessageSquarePlus, Pencil, Sparkles, Unlink } from "lucide-react";
 import { NodeSelection, type EditorState } from "prosemirror-state";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { DocumentSession } from "@/lib/client/documentSession";
 import { schema } from "@/lib/doc/schema";
 import { followLink, linkAt, markActive, setLink, toggle } from "@/lib/editor/commands";
@@ -44,6 +44,18 @@ export function SelectionBubble({
   const [instruction, setInstruction] = useState("");
   const input = useRef<HTMLInputElement>(null);
   const promptInput = useRef<HTMLInputElement>(null);
+  const bubble = useRef<HTMLDivElement>(null);
+
+  // Keep the whole bubble on screen: it's centred on the selection, so nudge it in from either edge.
+  useLayoutEffect(() => {
+    const element = bubble.current;
+    if (!element) return;
+    element.style.marginLeft = "";
+    const box = element.getBoundingClientRect();
+    const edge = 8;
+    const shift = box.left < edge ? edge - box.left : box.right > window.innerWidth - edge ? window.innerWidth - edge - box.right : 0;
+    if (shift) element.style.marginLeft = `${shift}px`;
+  });
   const view = session.view;
 
   useEffect(() => {
@@ -104,9 +116,8 @@ export function SelectionBubble({
   }
   // On touch screens the system's copy/paste callout sits above the selection, so go below it.
   const above = coords.top > 120 && !isTouch();
-  // The bubble is centred on `left`; keep all of it on narrow screens.
-  const inset = window.innerWidth < 640 ? 156 : 12;
-  const style = { left: Math.max(inset, Math.min(coords.left, window.innerWidth - inset)), top: above ? coords.top - 8 : coords.bottom + 10 };
+  // The bubble is centred on `left`; the layout effect above keeps all of it on screen.
+  const style = { left: coords.left, top: above ? coords.top - 8 : coords.bottom + 10 };
 
   const applyLink = () => {
     if (!href.trim()) {
@@ -130,7 +141,7 @@ export function SelectionBubble({
       view.focus();
     };
     return (
-      <div className={`bubble bubble-link bubble-prompt${above ? " is-above" : ""}`} style={style} onMouseDown={(event) => event.stopPropagation()}>
+      <div className={`bubble bubble-link bubble-prompt${above ? " is-above" : ""}`} ref={bubble} style={style} onMouseDown={(event) => event.stopPropagation()}>
         <Sparkles size={14} className="bubble-prompt-icon" />
         <input
           ref={promptInput}
@@ -161,7 +172,7 @@ export function SelectionBubble({
 
   if (linkEditing) {
     return (
-      <div className={`bubble bubble-link${above ? " is-above" : ""}`} style={style} onMouseDown={(event) => event.stopPropagation()}>
+      <div className={`bubble bubble-link${above ? " is-above" : ""}`} ref={bubble} style={style} onMouseDown={(event) => event.stopPropagation()}>
         {empty && !link && (
           <input className="input input-sm" placeholder="Text" value={text} onChange={(event) => setText(event.target.value)} />
         )}
@@ -191,7 +202,7 @@ export function SelectionBubble({
 
   if (showLink && link) {
     return (
-      <div className={`bubble${above ? " is-above" : ""}`} style={style} onMouseDown={(event) => event.preventDefault()}>
+      <div className={`bubble${above ? " is-above" : ""}`} ref={bubble} style={style} onMouseDown={(event) => event.preventDefault()}>
         <a
           className="bubble-url"
           href={link.href}
@@ -217,7 +228,7 @@ export function SelectionBubble({
   }
 
   return (
-    <div className={`bubble${above ? " is-above" : ""}`} style={style} onMouseDown={(event) => event.preventDefault()}>
+    <div className={`bubble${above ? " is-above" : ""}`} ref={bubble} style={style} onMouseDown={(event) => event.preventDefault()}>
       <button type="button" className="bubble-btn bubble-ask" onClick={onAsk}>
         <Sparkles size={14} /> Ask Claude <kbd>{mod}L</kbd>
       </button>

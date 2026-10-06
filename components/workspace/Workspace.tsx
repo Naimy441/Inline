@@ -436,7 +436,7 @@ export function Workspace({ documentId }: { documentId: string }) {
   const working = Boolean(ui.activity && ui.activity.status !== "idle");
   const downloads: MenuItem[] = [
     { label: "Word (.docx)", onSelect: () => void download("docx") },
-    { label: "PDF", onSelect: () => void download("pdf") },
+    { label: "PDF (.pdf)", onSelect: () => void download("pdf") },
     { label: "Markdown (.md)", onSelect: () => void download("md") },
     { label: "Web page (.html)", onSelect: () => void download("html") },
     { label: "Plain text (.txt)", onSelect: () => void download("txt") },
