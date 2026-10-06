@@ -504,12 +504,13 @@ export function Workspace({ documentId }: { documentId: string }) {
             </MenuButton>
             <button
               type="button"
-              className={`btn btn-md claude-toggle${panel === "agent" ? " is-active" : ""}`}
+              className={`btn btn-md claude-toggle claude-toggle-text${panel === "agent" ? " is-active" : ""}`}
               onClick={() => setPanel((current) => (current === "agent" ? null : "agent"))}
-              data-tip={`Claude  ${keys("⌘J")}`}
+              aria-pressed={panel === "agent"}
+              data-tip={`${panel === "agent" ? "Close" : "Open"} Claude  ${keys("⌘J")}`}
             >
               {/* With the panel closed, the button is where Claude shows it is working. */}
-              {working && panel !== "agent" ? <Spark size={15} /> : <Sparkles size={15} />}
+              {working && panel !== "agent" ? <Spark size={15} /> : <PanelRight size={15} />}
               <span className="btn-label">Claude</span>
             </button>
           </div>
@@ -650,9 +651,6 @@ export function Workspace({ documentId }: { documentId: string }) {
           Shortcuts
         </button>
         <span className="status-item">{Math.round(effectiveZoom * 100)}%</span>
-        <button type="button" className={`status-item status-claude${panel === "agent" ? " is-active" : ""}`} onClick={() => setPanel((current) => (current === "agent" ? null : "agent"))}>
-          <PanelRight size={13} /> Claude
-        </button>
       </footer>
 
       <PageSetupDialog open={Boolean(setup)} initialTab={setup?.tab} session={session} settings={meta?.settings} onClose={() => setSetup(null)} />

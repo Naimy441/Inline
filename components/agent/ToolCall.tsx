@@ -24,7 +24,7 @@ import {
   TextCursorInput,
   Undo2,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { ToolPart } from "@/lib/agent/types";
 import { shortToolName } from "@/lib/agent/types";
 
@@ -44,16 +44,28 @@ function host(url: unknown) {
   }
 }
 
+function unescapeJson(raw: string) {
+  try {
+    return JSON.parse(`"${raw}"`) as string;
+  } catch {
+    // Cut mid-escape while streaming: drop the partial escape and decode the rest.
+    try {
+      return JSON.parse(`"${raw.replace(/\\(u[0-9a-fA-F]{0,3})?$/, "")}"`) as string;
+    } catch {
+      return raw;
+    }
+  }
+}
+
+/** Partial JSON while the input streams: every value of a string field that has started to arrive, in order. */
+function previewFields(preview: string | undefined, field: string) {
+  if (!preview) return [];
+  return [...preview.matchAll(new RegExp(`"${field}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)`, "g"))].map((match) => unescapeJson(match[1]!));
+}
+
 /** Partial JSON while the input streams: pull out a string field if it has arrived. */
 function previewField(preview: string | undefined, field: string) {
-  if (!preview) return undefined;
-  const match = new RegExp(`"${field}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)`).exec(preview);
-  if (!match) return undefined;
-  try {
-    return JSON.parse(`"${match[1]}"`) as string;
-  } catch {
-    return match[1];
-  }
+  return previewFields(preview, field)[0];
 }
 
 export function describeTool(part: ToolPart): Described {
@@ -135,30 +147,70 @@ export function describeTool(part: ToolPart): Described {
   }
 }
 
-function DiffBlock({ before, after }: { before?: string; after?: string }) {
+/**
+ * Long content trimmed to a few lines with a fade and a "Show all" toggle,
+ * instead of a box that scrolls inside the chat. While `live` (the text is
+ * still streaming) it shows the newest lines.
+ */
+export function Clamp({ children, live = false, max = 150 }: { children: ReactNode; live?: boolean; max?: number }) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const inner = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const height = inner.current?.offsetHeight ?? 0;
+    setOverflows(height > max + 24);
+  });
+  const clamped = overflows && !expanded;
   return (
-    <div className="tool-diff">
-      {before ? <div className="tool-diff-del">{before}</div> : null}
-      {after ? <div className="tool-diff-add">{after}</div> : null}
+    <div className={`clamp${clamped ? " is-clamped" : ""}${live ? " is-live" : ""}`}>
+      <div className="clamp-body" style={clamped ? { maxHeight: max } : undefined}>
+        <div ref={inner}>{children}</div>
+      </div>
+      {overflows && !live && (
+        <button type="button" className="clamp-toggle" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
+          {expanded ? "Show less" : "Show all"}
+        </button>
+      )}
     </div>
   );
 }
 
-function details(part: ToolPart) {
+type Diff = { before?: string; after?: string };
+
+const WRITE_TOOLS = new Set(["edit_document", "multi_edit_document", "write_document", "insert_content"]);
+
+/** What a writing tool puts in the document, from its input, or from the partial input while it streams. */
+function writeDiffs(part: ToolPart): Diff[] {
   const name = shortToolName(part.name);
-  const input = part.input ?? {};
-  if (name === "edit_document") return <DiffBlock before={String(input.old_string ?? "")} after={String(input.new_string ?? "")} />;
-  if (name === "multi_edit_document" && Array.isArray(input.edits)) {
-    return (
-      <>
-        {(input.edits as Array<{ old_string?: string; new_string?: string }>).map((edit, index) => (
-          <DiffBlock key={index} before={edit.old_string} after={edit.new_string} />
-        ))}
-      </>
-    );
+  const input = part.input;
+  const preview = part.inputPreview;
+  if (name === "edit_document") return [{ before: str2(input?.old_string) ?? previewField(preview, "old_string"), after: str2(input?.new_string) ?? previewField(preview, "new_string") }];
+  if (name === "multi_edit_document") {
+    if (input && Array.isArray(input.edits)) return (input.edits as Array<{ old_string?: string; new_string?: string }>).map((edit) => ({ before: edit.old_string, after: edit.new_string }));
+    const before = previewFields(preview, "old_string");
+    const after = previewFields(preview, "new_string");
+    return before.map((text, index) => ({ before: text, after: after[index] }));
   }
-  if (name === "write_document" || name === "insert_content") return <DiffBlock after={String(input.content ?? "")} />;
-  return null;
+  if (name === "write_document" || name === "insert_content") return [{ after: str2(input?.content) ?? previewField(preview, "content") }];
+  return [];
+}
+
+function str2(value: unknown) {
+  return typeof value === "string" ? value : undefined;
+}
+
+function DiffBlock({ before, after, caret }: Diff & { caret?: boolean }) {
+  return (
+    <div className="tool-diff">
+      {before ? <div className="tool-diff-del">{before}</div> : null}
+      {after || caret ? (
+        <div className="tool-diff-add">
+          {after}
+          {caret && <span className="tool-caret" aria-hidden />}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export function ToolCall({ part }: { part: ToolPart }) {
@@ -166,10 +218,11 @@ export function ToolCall({ part }: { part: ToolPart }) {
   const described = describeTool(part);
   const running = part.status === "pending" || part.status === "running";
   const failed = part.status === "error";
-  const detail = part.input ? details(part) : null;
+  const writes = WRITE_TOOLS.has(shortToolName(part.name));
+  const diffs = writes ? writeDiffs(part).filter((diff) => diff.before || diff.after) : [];
   const result = part.result?.trim();
   return (
-    <div className={`tool${running ? " is-running" : ""}${failed ? " is-error" : ""}${open ? " is-open" : ""}`}>
+    <div className={`tool${running ? " is-running" : ""}${failed ? " is-error" : ""}${open ? " is-open" : ""}${writes ? " is-write" : ""}`}>
       <button type="button" className="tool-head" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
         <span className="tool-icon">{described.icon}</span>
         <span className="tool-label">
@@ -179,13 +232,32 @@ export function ToolCall({ part }: { part: ToolPart }) {
         {failed && <CircleAlert size={13} className="tool-status-error" />}
         <ChevronRight size={13} className="tool-chevron" />
       </button>
+      {/* What Claude writes is shown as it arrives, trimmed until expanded. A failed write is only in the details. */}
+      {diffs.length > 0 && !failed && (
+        <div className={`tool-write${running ? " is-live" : ""}`}>
+          <Clamp live={running}>
+            {diffs.map((diff, index) => (
+              <DiffBlock key={index} before={diff.before} after={diff.after} caret={running && part.status === "pending" && index === diffs.length - 1} />
+            ))}
+          </Clamp>
+        </div>
+      )}
       {open && (
         <div className="tool-body">
-          {detail}
-          {result && (
-            <pre className={`tool-result${failed ? " is-error" : ""}`}>{result.length > 4000 ? `${result.slice(0, 4000)}\n…` : result}</pre>
+          {failed && diffs.length > 0 && (
+            <Clamp>
+              {diffs.map((diff, index) => (
+                <DiffBlock key={index} before={diff.before} after={diff.after} />
+              ))}
+            </Clamp>
           )}
-          {!detail && !result && <pre className="tool-result">{JSON.stringify(part.input ?? {}, null, 2)}</pre>}
+          {result ? (
+            <Clamp>
+              <pre className={`tool-result${failed ? " is-error" : ""}`}>{result.length > 4000 ? `${result.slice(0, 4000)}\n…` : result}</pre>
+            </Clamp>
+          ) : !diffs.length ? (
+            <pre className="tool-result">{JSON.stringify(part.input ?? {}, null, 2)}</pre>
+          ) : null}
         </div>
       )}
     </div>

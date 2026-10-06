@@ -24,6 +24,7 @@ type Routes = {
   retry: typeof import("@/app/api/agent/chats/[id]/retry/route");
   queue: typeof import("@/app/api/agent/chats/[id]/queue/[queueId]/route");
   status: typeof import("@/app/api/agent/status/route");
+  rewind: typeof import("@/app/api/agent/chats/[id]/rewind/route");
 };
 let routes: Routes;
 let hub: ReturnType<typeof import("@/lib/server/hub").documentHub>;
@@ -40,6 +41,7 @@ before(async () => {
     retry: await import("@/app/api/agent/chats/[id]/retry/route"),
     queue: await import("@/app/api/agent/chats/[id]/queue/[queueId]/route"),
     status: await import("@/app/api/agent/status/route"),
+    rewind: await import("@/app/api/agent/chats/[id]/rewind/route"),
   };
   hub = (await import("@/lib/server/hub")).documentHub();
   runtime = (await import("@/lib/agent/runtime")).agentRuntime();
@@ -206,6 +208,27 @@ describe("chat lifecycle over HTTP", () => {
     const finished = await waitIdle(chat.id);
     assert.equal(finished.messages.length, 2);
     assert.equal(finished.messages[1]!.role === "assistant" && finished.messages[1]!.status, "done");
+  });
+
+  test("restore to before a reply puts the document back and rewinds the chat", async () => {
+    const doc = await hub.create({ title: "Essay", markdown: "Draft one." });
+    const chat = await createChat({ documentId: doc.id });
+    claude.script(async (turn) => {
+      await turn.tool("mcp__inline__edit_document", { old_string: "Draft one.", new_string: "Draft two." });
+      turn.say("Updated the draft.");
+    });
+    await routes.messages.POST(post(`/api/agent/chats/${chat.id}/messages`, { text: "Bump the draft number" }), params({ id: chat.id }));
+    const edited = await waitIdle(chat.id);
+    const reply = edited.messages[1]!;
+    const checkpoint = reply.role === "assistant" ? reply.changes?.[0]?.checkpoint : undefined;
+    assert.ok(checkpoint);
+
+    const response = await routes.rewind.POST(post(`/api/agent/chats/${chat.id}/rewind`, { messageId: reply.id, documentId: doc.id, versionId: checkpoint }), params({ id: chat.id }));
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { text: "Bump the draft number" });
+    assert.equal((await getChat(chat.id)).body.chat.messages.length, 0);
+    assert.match(doc.doc.textContent, /Draft one\./);
+    assert.match(doc.userEvents.at(-1)!.text, /restored the document/);
   });
 
   test("settings changes become the defaults for new chats", async () => {

@@ -11,6 +11,8 @@ import { Composer, type ComposerHandle } from "@/components/agent/Composer";
 import { MessageList, type TurnHunk } from "@/components/agent/MessageView";
 import { Button, IconButton } from "@/components/ui/Button";
 import { ChatHistory } from "@/components/agent/ChatHistory";
+import { UsageMeter } from "@/components/agent/UsageMeter";
+import { Dialog } from "@/components/ui/Dialog";
 import { toast } from "@/components/ui/Toast";
 import { post } from "@/lib/client/api";
 import { loadDraftSelection, saveDraftSelection } from "@/lib/client/drafts";
@@ -196,18 +198,22 @@ export const AgentPanel = forwardRef<
   const retry = useCallback(() => void sessionRef.current?.retry(), []);
   const review = useCallback((action: "next" | "accept" | "reject", ids: string[]) => reviewRef.current(action, ids), []);
 
-  const restoreTo = useCallback(
-    async (versionId: string) => {
-      if (!window.confirm("Put the document back as it was before this reply's edits? The current text is saved to history first.")) return;
-      try {
-        await post(`/api/documents/${documentId}/versions/${versionId}/restore`);
-        toast("Restored. The text before restoring is in version history.");
-      } catch (error) {
-        toast(error instanceof Error ? error.message : "Couldn't restore that version.");
-      }
-    },
-    [documentId],
-  );
+  const [rewinding, setRewinding] = useState<{ versionId: string; messageId: string } | null>(null);
+  const [restoring, setRestoring] = useState(false);
+  const restore = async () => {
+    if (!rewinding || !chatId) return;
+    setRestoring(true);
+    try {
+      const result = await post<{ text: string }>(`/api/agent/chats/${chatId}/rewind`, { messageId: rewinding.messageId, documentId, versionId: rewinding.versionId });
+      setRewinding(null);
+      if (result.text) composer.current?.setText(result.text);
+      toast(result.text ? "Restored. Your message is back in the box to change or send again." : "Restored. The text before restoring is in version history.");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Couldn't restore that version.", { tone: "error" });
+    } finally {
+      setRestoring(false);
+    }
+  };
 
   const todos = chat?.todos ?? [];
   const showTodos = todos.length > 0 && (chat?.running || todos.some((todo) => todo.status !== "completed"));
@@ -268,7 +274,7 @@ export const AgentPanel = forwardRef<
           <Onboarding state={status.state} message={"message" in status ? status.message : ""} />
         ) : chat?.messages.length ? (
           <div className="messages">
-            <MessageList messages={chat.messages} hunks={hunks} onRetry={retry} onReview={review} documentId={documentId} onRestore={restoreTo} />
+            <MessageList messages={chat.messages} hunks={hunks} onRetry={retry} onReview={review} documentId={documentId} onRestore={(versionId, messageId) => setRewinding({ versionId, messageId })} />
             {chat.running && isWaiting(chat.status, lastAssistant(chat.messages)) && <ActivityLine status={chat.status} message={lastAssistant(chat.messages)} since={lastSent(chat.messages)} />}
           </div>
         ) : (
@@ -305,7 +311,7 @@ export const AgentPanel = forwardRef<
           disabledReason={status && !ready ? "Connect Claude Code to start" : undefined}
           settings={settings}
           models={models}
-          context={chat?.context}
+          meter={<UsageMeter chat={chat} running={Boolean(chat?.running)} usageLimit={settings.usageLimit ?? null} onUsageLimit={(usageLimit) => updateSettings({ usageLimit })} />}
           selection={selection}
           documentId={documentId}
           onClearSelection={() => setSelection(null)}
@@ -315,6 +321,23 @@ export const AgentPanel = forwardRef<
           onWarm={warm}
         />
       </div>
+      <Dialog
+        open={rewinding !== null}
+        onClose={() => setRewinding(null)}
+        title="Restore to before this reply?"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setRewinding(null)}>
+              Cancel
+            </Button>
+            <Button variant="primary" loading={restoring} onClick={() => void restore()}>
+              Restore
+            </Button>
+          </>
+        }
+      >
+        <p>The document goes back to how it was before this reply&apos;s edits, and the chat rewinds to before your message, so Claude forgets it too. The current text is saved in version history.</p>
+      </Dialog>
     </aside>
   );
 });

@@ -66,6 +66,9 @@ export class FakeSession {
   private finished = false;
   private onInterrupt: Array<() => void> = [];
   usage = { input_tokens: 120, output_tokens: 40, cache_read_input_tokens: 10, cache_creation_input_tokens: 5 };
+  /** What each reply costs; the result reports the session's running total, as Claude Code does. */
+  turnCost = 0.0123;
+  totalCost = 0;
 
   constructor(
     readonly options: Options,
@@ -161,6 +164,7 @@ export class FakeSession {
   finish(options: ResultOptions = {}) {
     if (this.finished) return;
     this.finished = true;
+    this.totalCost += this.turnCost;
     const subtype = options.subtype ?? "success";
     this.raw({
       type: "result",
@@ -171,7 +175,7 @@ export class FakeSession {
       duration_ms: 1234,
       duration_api_ms: 1000,
       num_turns: 2,
-      total_cost_usd: 0.0123,
+      total_cost_usd: this.totalCost,
       usage: this.usage,
       modelUsage: {},
       permission_denials: [],
@@ -198,11 +202,13 @@ export type FakeClaude = {
   turns: FakeTurn[];
   modelChanges: Array<string | undefined>;
   effortChanges: string[];
+  /** What /usage reports for the plan limits (percent used, 0-100); null when the sign-in has none. */
+  planLimits: { five_hour?: number; seven_day?: number } | null;
 };
 
 /** Builds a `query` replacement that answers every user message with `model`. */
 export function fakeClaude(model: FakeModel): FakeClaude {
-  const fake: FakeClaude = { query: null as never, sessions: [], turns: [], modelChanges: [], effortChanges: [] };
+  const fake: FakeClaude = { query: null as never, sessions: [], turns: [], modelChanges: [], effortChanges: [], planLimits: { five_hour: 34, seven_day: 61 } };
 
   fake.query = ((params: { prompt: AsyncIterable<SDKUserMessage> | string; options?: Options }) => {
     const options = params.options ?? {};
@@ -268,6 +274,17 @@ export function fakeClaude(model: FakeModel): FakeClaude {
       },
       async getContextUsage() {
         return { totalTokens: 24_000, maxTokens: 200_000, rawMaxTokens: 200_000, percentage: 12 };
+      },
+      async usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET() {
+        const limits = fake.planLimits;
+        const window = (utilization: number | undefined, hours: number) => (utilization == null ? null : { utilization, resets_at: new Date(Date.now() + hours * 3_600_000).toISOString() });
+        return {
+          session: { total_cost_usd: session.totalCost, total_api_duration_ms: 0, total_duration_ms: 0, total_lines_added: 0, total_lines_removed: 0, model_usage: {} },
+          subscription_type: limits ? "max" : null,
+          rate_limits_available: Boolean(limits),
+          rate_limits: limits ? { five_hour: window(limits.five_hour, 3), seven_day: window(limits.seven_day, 72) } : null,
+          behaviors: null,
+        };
       },
       async initializationResult() {
         return { account: { email: "writer@example.com", subscriptionType: "max" }, models: [{ value: "default", displayName: "Default", description: "", supportedEffortLevels: ["low", "medium", "high"] }] };

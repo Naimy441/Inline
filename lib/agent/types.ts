@@ -81,6 +81,8 @@ export type AssistantMessage = {
   error?: string;
   usage?: TurnUsage;
   changes?: DocumentChange[];
+  /** Last Claude Code transcript entry of this turn, where "Restore to before" rewinds the session to. */
+  sessionPoint?: string;
 };
 
 export type ChatMessage = UserMessage | AssistantMessage;
@@ -91,12 +93,20 @@ export type ChatSettings = {
   mode: AgentMode;
   /** Most tool-use rounds Claude may take for one message (default DEFAULT_MAX_TURNS). */
   maxTurns?: number | null;
-  /** Most a single message may spend, in US dollars; null for no limit. */
-  maxBudgetUsd?: number | null;
+  /** Stop Claude when the 5-hour or weekly plan usage reaches this percent; null for no limit. */
+  usageLimit?: number | null;
 };
 
 export const DEFAULT_MAX_TURNS = 100;
-export const BUDGET_OPTIONS = [null, 0.5, 2, 10] as const;
+export const USAGE_LIMIT_OPTIONS = [null, 50, 75, 90] as const;
+
+/** One plan usage window (the 5-hour session, the week, a model's week). */
+export type UsageWindow = { id: string; label: string; utilization: number; resetsAt: number | null };
+
+/** The account's Claude plan usage, as Claude Code's /usage reports it. */
+export type PlanUsage =
+  | { available: true; plan: string | null; windows: UsageWindow[]; checkedAt: number }
+  | { available: false; plan: string | null; checkedAt: number };
 
 export type ChatSummary = {
   id: string;
@@ -127,6 +137,8 @@ export type ChatState = {
   queue: QueuedMessage[];
   context?: ContextUsage;
   status?: RunStatus;
+  /** Spent on replies that were later rewound away, so the chat's total still counts them. */
+  rewoundUsd?: number;
 };
 
 export type RunStatus =
