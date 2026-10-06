@@ -28,11 +28,11 @@ function balance(text: string) {
   return fences % 2 ? `${text}\n\`\`\`` : text;
 }
 
-export const Markdown = memo(function Markdown({ text, streaming }: { text: string; streaming?: boolean }) {
+export const Markdown = memo(function Markdown({ text, streaming, caret }: { text: string; streaming?: boolean; caret?: boolean }) {
   const html = useMemo(() => md.render(streaming ? balance(text) : text), [text, streaming]);
   return (
     <div
-      className="md"
+      className={caret ? "md is-writing" : "md"}
       dangerouslySetInnerHTML={{ __html: html }}
       onClick={(event) => {
         const button = (event.target as HTMLElement).closest("[data-copy]");

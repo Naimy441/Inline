@@ -84,6 +84,10 @@ export function Workspace({ documentId }: { documentId: string }) {
   const [find, setFind] = useState<{ replace: boolean } | null>(null);
   const [linkEditing, setLinkEditing] = useState(false);
   const [prompting, setPrompting] = useState(false);
+  // The inline ⌘K prompt is open: start Claude Code while the user types.
+  useEffect(() => {
+    if (prompting) agentRef.current?.warm();
+  }, [prompting]);
   const [draftComment, setDraftComment] = useState(false);
   const [setup, setSetup] = useState<{ tab: "page" | "text" | "header" } | null>(null);
   const [shortcuts, setShortcuts] = useState(false);

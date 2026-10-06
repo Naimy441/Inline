@@ -109,6 +109,19 @@ function header(doc: LiveDocument, lines: number) {
   return `Document "${doc.meta.title}" (id ${doc.id}) · ${words.toLocaleString()} words · ~${estimatePages(doc)} page${estimatePages(doc) === 1 ? "" : "s"} · ${lines} lines${pending}`;
 }
 
+/**
+ * A whole document as read_document returns it, or null when it is too long to
+ * hand over unasked. The in-app chat sends this with a message so Claude can
+ * start editing without first spending a round trip on read_document.
+ */
+export function documentListing(doc: LiveDocument, maxLines = 400, maxChars = 40_000) {
+  const lines = markdownLines(serializeDoc(doc.doc));
+  if (lines.length > maxLines) return null;
+  const body = numberLines(lines, 1, lines.length);
+  if (body.length > maxChars) return null;
+  return `${header(doc, lines.length)}\n${body}`;
+}
+
 /** Numbered lines around the ranges a transform changed, like Claude Code's edit feedback. */
 function changedSnippet(before: PMNode, tr: Transform, context = 2) {
   const ranges = changedRanges(before, tr);

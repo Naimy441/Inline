@@ -47,8 +47,10 @@ export const Composer = forwardRef<
     onSend: (input: { text: string; attachments: Attachment[]; mentions: DocumentMention[] }) => Promise<void> | void;
     onStop: () => void;
     onSettings: (patch: Partial<ChatSettings>) => void;
+    /** The user is writing a message: a chance to start Claude Code before it's sent. */
+    onWarm?: () => void;
   }
->(function Composer({ running, disabled, disabledReason, settings, models, context, selection, documentId, onClearSelection, onSend, onStop, onSettings }, ref) {
+>(function Composer({ running, disabled, disabledReason, settings, models, context, selection, documentId, onClearSelection, onSend, onStop, onSettings, onWarm }, ref) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(0);
@@ -231,7 +233,9 @@ export const Composer = forwardRef<
                 : "Ask Claude to write, edit or review…"
         }
         disabled={disabled}
+        onFocus={() => onWarm?.()}
         onChange={(event) => {
+          if (event.target.value.trim()) onWarm?.();
           setText(event.target.value);
           setCaret(event.target.selectionStart ?? event.target.value.length);
           setCommandIndex(0);

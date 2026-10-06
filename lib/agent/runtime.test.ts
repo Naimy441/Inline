@@ -157,6 +157,32 @@ describe("a turn", () => {
     assert.deepEqual(user && "mentions" in user ? user.mentions : null, [{ id: "doc-123", title: "Budget" }]);
   });
 
+  it("sends a small document with the message, and only again once it changed", async () => {
+    const fake = useModel(() => undefined);
+    const { doc, chat } = await newChat();
+    await turn(chat, "One");
+    assert.match(fake.turns[0]!.context, /<document>\n.*\n +1\t# Field notes \{\.title\}/s);
+    await turn(chat, "Two");
+    assert.doesNotMatch(fake.turns[1]!.context, /<document>/);
+    assert.match(fake.turns[1]!.context, /hasn't changed since you last saw it/);
+    const from = doc.doc.content.size - 2;
+    const { Transform } = await import("prosemirror-transform");
+    const { schema } = await import("@/lib/doc/schema");
+    doc.applyTransform(new Transform(doc.doc).insert(from, schema.text("!")), { kind: "system", label: "test" });
+    await turn(chat, "Three");
+    assert.match(fake.turns[2]!.context, /<document>/);
+  });
+
+  it("keeps the ids the panel gave the message and the reply", async () => {
+    useModel((_turn, claude) => claude.say("hi"));
+    const { chat } = await newChat();
+    await turn(chat, "Hello", { ids: { user: "user-id-1234", assistant: "reply-id-1234" } });
+    assert.deepEqual(
+      chat.state.messages.map((message) => message.id),
+      ["user-id-1234", "reply-id-1234"],
+    );
+  });
+
   it("says when no document is open", async () => {
     const fake = useModel(() => undefined);
     const chat = await agentRuntime().create();
@@ -388,6 +414,30 @@ describe("sessions and settings", () => {
     assert.equal(fake.sessions.length, 2);
     assert.equal(fake.sessions[0]!.options.sessionId, chat.state.id);
     assert.equal(fake.sessions[1]!.options.resume, chat.state.id);
+  });
+
+  it("warms up Claude Code before the first message and uses that session for it", async () => {
+    const fake = useModel((_turn, claude) => claude.say("hi"));
+    const { chat } = await newChat();
+    assert.equal(chat.warm(), true);
+    assert.equal(chat.warm(), false, "already running");
+    assert.equal(fake.sessions.length, 1);
+    const events = record(chat);
+    await turn(chat, "One");
+    assert.equal(fake.sessions.length, 1, "the message went to the warmed-up session");
+    const statuses = events.filter((event) => event.type === "status").map((event) => (event as { status: { kind: string } | null }).status?.kind ?? null);
+    assert.equal(statuses[0], "starting");
+    assert.equal(statuses[1], "thinking", "a running session goes straight to thinking");
+    chat.close();
+    await turn(chat, "Two");
+    assert.equal(fake.sessions[1]!.options.resume, chat.state.id, "the warmed session became resumable");
+  });
+
+  it("creating a chat with the panel's id twice gives the same chat", async () => {
+    const runtime = agentRuntime();
+    const [a, b] = await Promise.all([runtime.create({ id: "panel-chat-1234" }), runtime.create({ id: "panel-chat-1234" })]);
+    assert.equal(a, b);
+    assert.equal(a.state.id, "panel-chat-1234");
   });
 
   it("switches model and effort on the live session", async () => {

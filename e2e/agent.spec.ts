@@ -171,6 +171,27 @@ test("follow-ups queue while Claude works, and Stop ends the turn", async ({ pag
   await expect(page.locator(".msg-user")).toHaveCount(1);
 });
 
+test("a message shows at once, with a live line saying what Claude is doing", async ({ page, request }) => {
+  await openWithClaude(page, request, "A long document.");
+  // Hold the request back: the message and Claude's activity must show before the server answers.
+  let release = () => undefined as void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/api/agent/chats", async (route) => {
+    if (route.request().method() === "POST" && route.request().postDataJSON()?.message) await held;
+    await route.continue();
+  });
+  await ask(page, "Review everything, take your time");
+  await expect(page.locator(".msg-user-text")).toHaveText("Review everything, take your time");
+  await expect(page.locator(".activity")).toBeVisible();
+  await expect(page.locator(".activity .spark")).toBeVisible();
+  release();
+  await expect(lastReply(page)).toContainText("Starting a long review.");
+  await expect(page.locator(".activity")).toBeVisible();
+  await page.getByRole("button", { name: "Stop" }).click();
+  await expect(page.locator(".activity")).toHaveCount(0);
+  await expect(page.locator(".msg-user")).toHaveCount(1);
+});
+
 test("an error explains itself and Retry runs the message again", async ({ page, request }) => {
   await openWithClaude(page, request, "Text.");
   await ask(page, `Please fail once ${Date.now()}`);
