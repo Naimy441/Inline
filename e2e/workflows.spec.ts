@@ -237,6 +237,28 @@ test.describe("editing", () => {
     await expect(doc).toContainText("The original wording.");
     await expect(doc).not.toContainText("Rewritten entirely.");
   });
+
+  test("a saved version can be compared with the current text", async ({ page, request }) => {
+    await openDocument(page, await createDocument(request, "Compare", "The meeting is on Tuesday.\n\nSecond paragraph."));
+    await menu(page, "File", "Version history");
+    await page.getByPlaceholder("Name this version (optional)").fill("Before");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.locator(".version-row", { hasText: "Before" })).toHaveCount(1);
+
+    await page.locator(".ProseMirror").click();
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.type("The meeting is on Thursday.");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("Second paragraph.");
+    await expect(page.locator(".sync-status")).toHaveText(/Saved/);
+
+    await page.locator(".version-row", { hasText: "Before" }).click();
+    await page.getByRole("tab", { name: "Compare with now" }).click();
+    const diff = page.getByLabel("Changes since this version");
+    await expect(diff.locator("del")).toHaveText("Tuesday");
+    await expect(diff.locator("ins")).toHaveText("Thursday");
+    await expect(page.locator(".version-stats")).toContainText("+1 −1 words");
+  });
 });
 
 test.describe("page layout", () => {
