@@ -1,10 +1,11 @@
 "use client";
 
-import { Download, FilePlus2, FileText, FileUp, FolderInput, FolderOpen, FolderPlus, LayoutGrid, List, Moon, Plus, Search, Sparkles, Sun, Trash2, X } from "lucide-react";
+import { Download, FilePlus2, FolderSync, FileText, FileUp, FolderInput, FolderOpen, FolderPlus, LayoutGrid, List, Moon, Plus, Search, Sparkles, Sun, Trash2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { api, del, patch, post } from "@/lib/client/api";
 import { dismissLegacyDocuments, hasLegacyDocuments, htmlToDocJSON, importLegacyDocuments } from "@/lib/client/legacyImport";
+import { currentRevealLabel, loadServerPlatform, revealOnDisk } from "@/lib/client/fileManager";
 import { useShortcut } from "@/lib/client/platform";
 import { useTheme } from "@/lib/client/theme";
 import { canMoveFolder, documentFolder, folderPath, summarizeFolders, type Folder, type FolderColor } from "@/lib/doc/folders";
@@ -21,6 +22,7 @@ import { TextCover, ThemedCover } from "./covers";
 import type { DragItem } from "./dnd";
 import type { Selection } from "./selection";
 import { AddDocumentsDialog, FolderDialog, MoveDialog, type MoveTarget } from "./FolderDialogs";
+import { MirrorDialog } from "./MirrorDialog";
 import { dismissGoogleImport, GoogleImportBanner, shouldShowGoogleImport, TakeoutGuide } from "./GoogleImport";
 import { ThumbnailQueue, type ThumbnailProgress } from "./thumbnails";
 import { Breadcrumbs, FolderCard, FolderGlyph, type FolderActions } from "./folders";
@@ -84,6 +86,7 @@ export function HomePage() {
   const [adding, setAdding] = useState<Folder | null>(null);
   const [importing, setImporting] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
+  const [mirrorOpen, setMirrorOpen] = useState(false);
   const [selected, setSelected] = useState<DragItem[]>([]);
   const [agentWidth, setAgentWidth] = useState(420);
   const [googleTip, setGoogleTip] = useState(false);
@@ -93,6 +96,7 @@ export function HomePage() {
   const fileInput = useRef<HTMLInputElement>(null);
   const { dark, toggle } = useTheme();
   const keys = useShortcut();
+  const revealLabel = currentRevealLabel();
   const templates = useMemo(() => documentTemplates(), []);
 
   const load = useCallback(async () => {
@@ -123,6 +127,7 @@ export function HomePage() {
 
   useEffect(() => {
     void shouldShowGoogleImport().then(setGoogleTip);
+    void loadServerPlatform();
   }, []);
 
   const closeGoogleTip = () => {
@@ -366,7 +371,7 @@ export function HomePage() {
     const folderCount = tops.length + tops.reduce((total, folder) => total + (summaries.get(folder.id)?.folders ?? 0), 0);
     if (!docCount && !folderCount) return;
     const single = tops.length === 1 && !looseDocs.length ? tops[0]! : null;
-    const trashText = docCount ? `${plural(docCount, "document")} ${single ? "inside " : ""}move${docCount === 1 ? "s" : ""} to the trash, where ${docCount === 1 ? "it's" : "they're"} kept for 30 days` : "";
+    const trashText = docCount ? `${plural(docCount, "document")} ${single ? "inside " : ""}move${docCount === 1 ? "s" : ""} to the trash, where ${docCount === 1 ? "it stays" : "they stay"} until you delete ${docCount === 1 ? "it" : "them"}` : "";
     const inner = single ? folderCount - 1 : folderCount;
     const folderText = inner ? `${plural(inner, "folder")} ${single ? "inside " : ""}${inner === 1 ? "is" : "are"} deleted` : "";
     const body = [trashText, folderText].filter(Boolean).join(", and ");
@@ -406,6 +411,8 @@ export function HomePage() {
   };
 
   const folderActions: FolderActions = {
+    revealLabel,
+    reveal: (folder) => void revealOnDisk({ folderId: folder.id }),
     open: openFolder,
     rename: (folder) => setFolderDialog({ mode: "edit", folder }),
     recolor: (folder, color) => void updateFolder(folder, { color }),
@@ -435,6 +442,8 @@ export function HomePage() {
   };
 
   const documentActions: DocumentActions = {
+    revealLabel,
+    reveal: (doc) => void revealOnDisk({ documentId: doc.id }),
     open: (doc) => open(doc.id),
     rename: (doc) => setRenaming(doc),
     duplicate: async (doc) => {
@@ -543,6 +552,7 @@ export function HomePage() {
   const closeMove = useCallback(() => setMoving(null), []);
   const closeAdd = useCallback(() => setAdding(null), []);
   const closeRename = useCallback(() => setRenaming(null), []);
+  const closeMirror = useCallback(() => setMirrorOpen(false), []);
   const folderDialogInitial = useMemo(
     () => (folderDialog?.mode === "edit" ? { name: folderDialog.folder.name, color: folderDialog.folder.color } : { name: "", color: (folderDialog?.parentId && folders.get(folderDialog.parentId)?.color) || ("gray" as FolderColor) }),
     [folderDialog, folders],
@@ -620,6 +630,9 @@ export function HomePage() {
             </Button>
             <Button size="sm" variant="ghost" icon={<Download size={15} />} onClick={() => window.location.assign("/api/documents/backup")}>
               Download all
+            </Button>
+            <Button size="sm" variant="ghost" icon={<FolderSync size={15} />} onClick={() => setMirrorOpen(true)} title="A Word copy of every document, kept up to date in a folder on this computer">
+              On this computer
             </Button>
             <input
               ref={fileInput}
@@ -736,7 +749,7 @@ export function HomePage() {
               {view === "trash" ? " in the trash" : ""}
             </p>
           )}
-          {view === "trash" && !searching && <p className="home-note">Documents in the trash are deleted forever after 30 days.</p>}
+          {view === "trash" && !searching && <p className="home-note">Documents stay in the trash until you delete them forever or empty the trash.</p>}
 
           {documents === null ? (
             <div className="doc-grid">
@@ -826,6 +839,8 @@ export function HomePage() {
           <AgentPanel documentId={null} home={{ folderId: currentId }} onClose={() => setAgentOpen(false)} onLibraryChange={() => void load()} />
         </div>
       )}
+
+      <MirrorDialog open={mirrorOpen} onClose={closeMirror} />
 
       <TakeoutGuide open={guideOpen} importing={importing} onClose={() => setGuideOpen(false)} onImport={() => fileInput.current?.click()} />
 

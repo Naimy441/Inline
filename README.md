@@ -33,6 +33,16 @@ The tools are `list_documents`, `open_document`, `create_document`, `read_docume
 
 On the home page, **Organize with Claude** (or <kbd>Ctrl/⌘</kbd>+<kbd>J</kbd>) opens Claude to sort your documents into folders. It works from titles and the first few words of each document rather than reading every document, so sorting a large library uses little of your Claude usage.
 
+### Your documents on your computer
+
+Inline keeps a Word (.docx) copy of every document in a folder on your computer, `~/Documents/Inline` by default, arranged in the same folders as on the home page. Each copy is updated a couple of seconds after you stop typing and keeps everything the page shows: fonts, margins, page size, headers and footers, page numbers, images and tables. Renaming or moving a document moves its file, trashed documents go to an `Inline Trash` folder, and deleting one for good removes its file. Inline never overwrites a Word file it didn't write. Choose the folder, or turn copies off, with **On this computer** on the home page.
+
+### Your documents on your computer
+
+Inline keeps a Word (.docx) copy of every document in a folder on your computer, `~/Documents/Inline` by default, arranged in the same folders as on the home page. Each copy is updated a couple of seconds after you stop typing and keeps everything the page shows: fonts, margins, page size, headers and footers, page numbers, images and tables. Renaming or moving a document moves its file, trashed documents go to an `Inline Trash` folder, and deleting one for good removes its file. Inline never overwrites a Word file it didn't write.
+
+Choose the folder, or turn copies off, with **On this computer** on the home page. **Show in Finder** (File Explorer on Windows) on any document or folder opens it there, and **Download all** gives you the same folder as a ZIP.
+
 ### Moving from Google Docs
 
 Export your Google Drive with [Google Takeout](https://takeout.google.com/) (Drive only, Documents as DOCX) and choose **Import files** on the home page with the .zip. Every Google Doc becomes an Inline document in the same folders it had in Drive, and page previews are drawn in the background.
@@ -42,6 +52,8 @@ Export your Google Drive with [Google Takeout](https://takeout.google.com/) (Dri
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `INLINE_DATA_DIR` | `.inline` in the project folder | Where documents, versions, chats and uploads are stored. |
+| `INLINE_MIRROR_DIR` | `~/Documents/Inline` (or the folder chosen on the home page) | Where the Word copy of every document is kept. Set it to `off` to turn copies off. When set, it overrides the choice on the home page. |
+| `INLINE_MIRROR_DIR` | `~/Documents/Inline` (or the folder chosen on the home page) | Where the Word copy of every document is kept. Set it to `off` to turn copies off. When set, it overrides the choice on the home page. |
 | `INLINE_ALLOWED_HOSTS` | local hostnames only | Comma-separated extra hostnames to accept, for serving Inline on a network. Requests for other hosts are refused, which blocks DNS-rebinding attacks. |
 | `INLINE_ACCESS_TOKEN` | unset | When set, every request must carry this secret, either as a `Bearer` token or as the `inline_token` cookie. Visit any page with `?token=<secret>` once to set the cookie. Set this whenever Inline is reachable by anyone but you, because the agent acts with your Claude account. |
 | `INLINE_MCP_TOKEN` | generated | The token MCP clients must send to `/api/mcp`. Set it to choose your own, or to `off` to accept any local client. |

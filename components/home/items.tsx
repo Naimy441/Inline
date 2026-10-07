@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, ArrowUp, Copy, FileText, FolderInput, MoreVertical, Pencil, RotateCcw, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Copy, FileText, FolderInput, FolderSearch, MoreVertical, Pencil, RotateCcw, Trash2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { folderPath, type Folder, type FolderSummary } from "@/lib/doc/folders";
 import type { DocumentMeta } from "@/lib/doc/settings";
@@ -11,6 +11,9 @@ import { itemHandlers, SelectCheck, type Selection } from "./selection";
 import { countLabel, folderMenuItems, FolderGlyph, type FolderActions } from "./folders";
 
 export type DocumentActions = {
+  /** "Show in Finder" (or File Explorer): its label, and what it does. */
+  revealLabel: string;
+  reveal: (doc: DocumentMeta) => void;
   open: (doc: DocumentMeta) => void;
   rename: (doc: DocumentMeta) => void;
   duplicate: (doc: DocumentMeta) => void;
@@ -40,6 +43,7 @@ function documentMenuItems(doc: DocumentMeta, trashed: boolean, actions: Documen
   return trashed
     ? [
         { label: "Restore", icon: <RotateCcw size={14} />, onSelect: () => actions.restore(doc) },
+        { label: actions.revealLabel, icon: <FolderSearch size={14} />, onSelect: () => actions.reveal(doc) },
         { kind: "separator" },
         { label: "Delete forever", icon: <Trash2 size={14} />, danger: true, onSelect: () => actions.deleteForever(doc) },
       ]
@@ -48,6 +52,7 @@ function documentMenuItems(doc: DocumentMeta, trashed: boolean, actions: Documen
         { label: "Rename", icon: <Pencil size={14} />, onSelect: () => actions.rename(doc) },
         { label: "Make a copy", icon: <Copy size={14} />, onSelect: () => actions.duplicate(doc) },
         { label: "Move to…", icon: <FolderInput size={14} />, onSelect: () => actions.move(doc) },
+        { label: actions.revealLabel, icon: <FolderSearch size={14} />, onSelect: () => actions.reveal(doc) },
         { kind: "separator" },
         { label: "Move to trash", icon: <Trash2 size={14} />, danger: true, onSelect: () => actions.trash(doc) },
       ];

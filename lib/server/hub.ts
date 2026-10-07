@@ -19,6 +19,7 @@ import {
   type TabHeading,
   type DocumentSettings,
 } from "@/lib/doc/settings";
+import { libraryChanged } from "@/lib/server/changes";
 import { log } from "@/lib/server/log";
 import {
   deleteDocumentFile,
@@ -99,7 +100,6 @@ const PERSIST_DELAY_MS = 400;
 const AUTO_VERSION_INTERVAL_MS = 10 * 60 * 1000;
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 const UNLOAD_AFTER_MS = 15 * 60 * 1000;
-export const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 export class StepConflictError extends Error {
   constructor(readonly version: number) {
@@ -587,6 +587,7 @@ export class LiveDocument {
       }
     }
     await writeDocumentFile(this.toFile());
+    libraryChanged();
     if (this.dirtySinceVersion && Date.now() - this.lastAutoVersion > AUTO_VERSION_INTERVAL_MS) {
       await this.saveVersion("Autosave", "auto");
     }
@@ -732,6 +733,7 @@ class DocumentHub {
     this.adopt(live);
     this.open.set(meta.id, live);
     await writeDocumentFile(live.toFile());
+    libraryChanged();
     return live;
   }
 
@@ -829,24 +831,16 @@ class DocumentHub {
     for (const tab of tabs) if (tab !== source && tab !== root && tab.meta.title !== title) tab.setTabMeta({ title });
   }
 
-  /** Delete every document in the trash, or only those trashed before `olderThan` (ms since epoch). */
-  async emptyTrash(olderThan?: number) {
-    const trashed = await this.list({ trashed: true, purge: false });
-    const targets = trashed.filter((meta) => olderThan === undefined || (meta.trashedAt ?? 0) < olderThan);
-    for (const meta of targets) await this.remove(meta.id);
-    return targets.length;
+  /** Delete every document in the trash. Nothing leaves the trash any other way: it's kept until the user empties it or deletes it. */
+  async emptyTrash() {
+    const trashed = await this.list({ trashed: true });
+    for (const meta of trashed) await this.remove(meta.id);
+    return trashed.length;
   }
 
-  private lastPurge = 0;
-
-  async list(options: { trashed?: boolean; purge?: boolean } = {}): Promise<DocumentMeta[]> {
-    // Trashed documents are deleted forever after TRASH_RETENTION_MS; checked at most hourly, when documents are listed.
-    if (options.purge !== false && Date.now() - this.lastPurge > 60 * 60 * 1000) {
-      this.lastPurge = Date.now();
-      await this.emptyTrash(Date.now() - TRASH_RETENTION_MS).catch((error) => log("error", "purging the trash failed", { error }));
-    }
+  /** Every document's meta, tabs and trashed ones included. Documents that aren't open are read only when their file changed since last time. */
+  async allMetas(): Promise<DocumentMeta[]> {
     const ids = await listDocumentIds();
-    // Documents that aren't open are read only when their file changed since the last list.
     const listed = await Promise.all(
       ids.map(async (id) => {
         const live = this.open.get(id);
@@ -860,7 +854,11 @@ class DocumentHub {
         });
       }),
     );
-    const metas = listed.filter((meta): meta is DocumentMeta => Boolean(meta));
+    return listed.filter((meta): meta is DocumentMeta => Boolean(meta));
+  }
+
+  async list(options: { trashed?: boolean } = {}): Promise<DocumentMeta[]> {
+    const metas = await this.allMetas();
     return metas
       .filter((meta) => !meta.parentId && (options.trashed ? Boolean(meta.trashedAt) : !meta.trashedAt))
       .sort((a, b) => Math.max(b.lastOpenedAt, b.updatedAt) - Math.max(a.lastOpenedAt, a.updatedAt));
@@ -893,6 +891,7 @@ class DocumentHub {
     live?.markDeleted();
     this.open.delete(id);
     await deleteDocumentFile(id);
+    libraryChanged();
     if (this.activeDocumentId === id) this.activeDocumentId = null;
   }
 

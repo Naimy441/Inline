@@ -13,7 +13,7 @@ import { markdownToDoc } from "@/lib/doc/markdown";
 import { hunkToJSON, type Hunk } from "@/lib/doc/review";
 import { schema } from "@/lib/doc/schema";
 import { DEFAULT_SETTINGS, type DocumentMeta } from "@/lib/doc/settings";
-import { LiveDocument, StaleEpochError, StepConflictError, TRASH_RETENTION_MS, documentHub, loadDoc, type HubEvent } from "@/lib/server/hub";
+import { LiveDocument, StaleEpochError, StepConflictError, documentHub, loadDoc, type HubEvent } from "@/lib/server/hub";
 import { dataDir, readDocumentFile, type StoredDocumentFile } from "@/lib/server/store";
 
 // The store resolves its directory on every call, so this applies before any write.
@@ -826,22 +826,22 @@ describe("document epochs", () => {
 });
 
 describe("trash", () => {
-  it("emptyTrash deletes trashed documents only, and list() purges ones trashed over 30 days ago", async () => {
+  it("trashed documents stay however old they are, until emptyTrash deletes them (and only them)", async () => {
     const hub = freshHub();
     const keep = await hub.create({ title: "Keep", markdown: "a" });
     const recent = await hub.create({ title: "Recent", markdown: "b" });
     const old = await hub.create({ title: "Old", markdown: "c" });
     recent.setTrashed(true);
     old.setTrashed(true);
-    old.meta = { ...old.meta, trashedAt: Date.now() - TRASH_RETENTION_MS - 1000 };
+    old.meta = { ...old.meta, trashedAt: Date.now() - 400 * 24 * 60 * 60 * 1000 };
     await old.flush();
     await recent.flush();
 
     const listed = await hub.list({ trashed: true });
     const ids = listed.map((meta) => meta.id);
     assert.ok(ids.includes(recent.id));
-    assert.ok(!ids.includes(old.id), "the old one is purged on listing");
-    assert.equal(await hub.get(old.id), null);
+    assert.ok(ids.includes(old.id), "a document trashed over a year ago is still there");
+    assert.ok(await hub.get(old.id));
 
     assert.ok((await hub.emptyTrash()) >= 1);
     assert.equal(await hub.get(recent.id), null);

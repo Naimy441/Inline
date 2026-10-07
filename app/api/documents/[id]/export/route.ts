@@ -1,10 +1,9 @@
-import type { Node as PMNode } from "prosemirror-model";
 import { documentToDocx } from "@/lib/doc/docx";
 import { docPlainText } from "@/lib/doc/editing";
 import { documentHtmlFile } from "@/lib/doc/html";
 import { docToMarkdown } from "@/lib/doc/markdown";
 import { rejectHunks } from "@/lib/doc/review";
-import { schema } from "@/lib/doc/schema";
+import { joinTabs } from "@/lib/doc/tabs";
 import { HttpError, route, routeDocument } from "@/lib/server/http";
 import { documentHub, type LiveDocument } from "@/lib/server/hub";
 import { loadImage } from "@/lib/server/images";
@@ -23,15 +22,6 @@ function filename(title: string, extension: string) {
   return `${base}.${extension}`;
 }
 
-function joinTabs(docs: PMNode[]) {
-  const blocks: PMNode[] = [];
-  docs.forEach((doc, index) => {
-    if (index) blocks.push(schema.nodes.page_break.create());
-    doc.forEach((block) => blocks.push(block));
-  });
-  return schema.nodes.doc.create(null, blocks);
-}
-
 export const GET = route(async (request, context: Context) => {
   const doc = await routeDocument(context);
   const format = new URL(request.url).searchParams.get("format") ?? "docx";
@@ -43,7 +33,7 @@ export const GET = route(async (request, context: Context) => {
   // ?tabs=all exports every tab of the document in order, each starting on a new page.
   const all = new URL(request.url).searchParams.get("tabs") === "all";
   const tabs = all ? (await documentHub().family(doc.id)).tabs : [doc];
-  const content = tabs.length === 1 ? textOf(tabs[0]!) : joinTabs(tabs.map(textOf));
+  const content = joinTabs(tabs.map(textOf));
   let body: BodyInit;
   if (format === "docx") body = (await documentToDocx(content, doc.meta, loadImage)) as Uint8Array<ArrayBuffer>;
   else if (format === "html") body = documentHtmlFile(content, doc.meta);

@@ -121,14 +121,12 @@ describe("folders", () => {
     assert.equal((await listDocuments()).find((doc) => doc.id === deep!.id)!.folderId, nested.id);
   });
 
-  test("the backup ZIP files Markdown copies in matching folders and keeps the folder list", async () => {
+  test("Download all files the Word copies in matching folders", async () => {
     const trips = await makeFolder({ name: "Trips: 2026" });
     const lisbon = await makeFolder({ name: "Lisbon", parentId: trips.id });
     await makeDocument({ title: "Itinerary", markdown: "Day one.", folderId: lisbon.id });
     const { readZip } = await import("@/lib/server/unzip");
     const files = readZip(new Uint8Array(await (await backup.GET(new Request(url), {} as never)).arrayBuffer()));
-    assert.ok(files.has("Trips- 2026/Lisbon/Itinerary.md"), [...files.keys()].join(", "));
-    const stored = JSON.parse(new TextDecoder().decode(files.get("inline-data/folders.json"))) as { folders: FolderJSON[] };
-    assert.ok(stored.folders.some((item) => item.name === "Lisbon"));
+    assert.ok(files.has("Trips- 2026/Lisbon/Itinerary.docx"), [...files.keys()].join(", "));
   });
 });

@@ -1225,7 +1225,7 @@ export const TOOLS = [
     name: "delete_folder",
     title: "Delete folder",
     description:
-      "Delete a folder and everything in it: the folders inside are deleted and its documents move to the trash, where the user can restore them for 30 days. To keep the documents, move them out first with move_documents. Only delete when the user asks.",
+      "Delete a folder and everything in it: the folders inside are deleted and its documents move to the trash, where the user can restore them until they empty it. To keep the documents, move them out first with move_documents. Only delete when the user asks.",
     shape: { folder: z.string().describe("Folder id or path.") },
     write: true,
     destructive: true,
@@ -1237,7 +1237,7 @@ export const TOOLS = [
       const result = await deleteFolder(id);
       const inner = result.folders.length - 1;
       return ok(
-        `Deleted the folder "${name}"${inner ? ` and ${inner} folder${inner === 1 ? "" : "s"} inside it` : ""}. ${result.trashed.length} document${result.trashed.length === 1 ? "" : "s"} moved to the trash (restorable for 30 days).`,
+        `Deleted the folder "${name}"${inner ? ` and ${inner} folder${inner === 1 ? "" : "s"} inside it` : ""}. ${result.trashed.length} document${result.trashed.length === 1 ? "" : "s"} moved to the trash, where the user can restore them.`,
       );
     },
   }),

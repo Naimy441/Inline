@@ -15,24 +15,23 @@ before(async () => {
 });
 
 describe("backup", () => {
-  test("downloads every document as Markdown plus the full Inline files, trash in its own folder", async () => {
-    const a = await hub.create({ title: "Plan", markdown: "# Plan\n\nShip it." });
-    const b = await hub.create({ title: "Plan", markdown: "Second plan." });
+  test("downloads every document as a Word file, namesakes numbered and trash in its own folder", async () => {
+    await hub.create({ title: "Plan", markdown: "# Plan\n\nShip it." });
+    await hub.create({ title: "Plan", markdown: "Second plan." });
     const c = await hub.create({ title: "Old/notes", markdown: "Gone soon." });
     c.setTrashed(true);
     const route = await import("@/app/api/documents/backup/route");
     const response = await route.GET(new Request("http://localhost:3000/api/documents/backup"), {} as never);
     assert.equal(response.headers.get("content-type"), "application/zip");
-    assert.match(response.headers.get("content-disposition")!, /inline-backup-\d{4}-\d{2}-\d{2}\.zip/);
+    assert.match(response.headers.get("content-disposition")!, /Inline documents \d{4}-\d{2}-\d{2}\.zip/);
     const { readZip } = await import("@/lib/server/unzip");
     const files = readZip(new Uint8Array(await response.arrayBuffer()));
     const names = [...files.keys()];
-    assert.ok(names.includes("Plan.md") && names.includes("Plan (2).md"), names.join(", "));
-    assert.ok(names.includes("trash/Old-notes.md"));
-    for (const doc of [a, b, c]) assert.ok(names.includes(`inline-data/documents/${doc.id}.json`));
-    const texts = [new TextDecoder().decode(files.get("Plan.md")), new TextDecoder().decode(files.get("Plan (2).md"))].join("\n");
-    assert.match(texts, /Ship it\./);
-    assert.match(texts, /Second plan\./);
+    assert.ok(names.includes("Plan.docx") && names.includes("Plan (2).docx"), names.join(", "));
+    assert.ok(names.includes("Inline Trash/Old-notes.docx"));
+    const text = (name: string) => new TextDecoder().decode(readZip(files.get(name)!).get("word/document.xml"));
+    assert.match(text("Plan.docx"), /Ship it\./);
+    assert.match(text("Plan (2).docx"), /Second plan\./);
   });
 });
 
