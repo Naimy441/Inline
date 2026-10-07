@@ -57,8 +57,6 @@ export type MenuActions = {
   fitWidth: () => void;
   /** Zoom follows the window ("Fit"), shrinking pages that don't fit. */
   zoomFit: boolean;
-  /** Phones: text reflows to the screen, so zoom and the outline don't apply. */
-  flow: boolean;
   fullScreen: () => void;
   focusMode: boolean;
   toggleFocusMode: () => void;
@@ -172,17 +170,13 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
     ],
     View: [
       { label: "Mode", submenu: modeMenuItems(actions.mode, actions.setMode) },
-      ...(actions.flow
-        ? []
-        : ([
-            { kind: "separator" },
-            { label: "Zoom in", onSelect: () => actions.zoom(Math.min(2, Math.round((zoom + 0.1) * 10) / 10)) },
-            { label: "Zoom out", onSelect: () => actions.zoom(Math.max(0.5, Math.round((zoom - 0.1) * 10) / 10)) },
-            { label: "Actual size", checked: !actions.zoomFit && zoom === 1, onSelect: () => actions.zoom(1) },
-            { label: "Fit to window", hint: "Shrink pages that don't fit", checked: actions.zoomFit, onSelect: actions.fitWidth },
-            { kind: "separator" },
-            { label: "Tabs & outline", onSelect: actions.toggleOutline },
-          ] as MenuItem[])),
+      { kind: "separator" },
+      { label: "Zoom in", onSelect: () => actions.zoom(Math.min(2, Math.round((zoom + 0.1) * 10) / 10)) },
+      { label: "Zoom out", onSelect: () => actions.zoom(Math.max(0.5, Math.round((zoom - 0.1) * 10) / 10)) },
+      { label: "Actual size", checked: !actions.zoomFit && zoom === 1, onSelect: () => actions.zoom(1) },
+      { label: "Fit to window", hint: "Shrink pages that don't fit", checked: actions.zoomFit, onSelect: actions.fitWidth },
+      { kind: "separator" },
+      { label: "Tabs & outline", onSelect: actions.toggleOutline },
       { kind: "separator" },
       ...(actions.focusMode ? [] : [{ label: "Claude panel", shortcut: `⌘J`, onSelect: actions.toggleAgent }]),
       { label: "Focus mode", hint: "Hide Claude while you write", checked: actions.focusMode, onSelect: actions.toggleFocusMode },

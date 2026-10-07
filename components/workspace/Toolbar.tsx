@@ -19,6 +19,7 @@ import {
   ListOrdered,
   MessageSquarePlus,
   Minus,
+  MoreVertical,
   Plus,
   Redo2,
   RemoveFormatting,
@@ -28,7 +29,7 @@ import {
 } from "lucide-react";
 import { redo, redoDepth, undo, undoDepth } from "prosemirror-history";
 import type { EditorState } from "prosemirror-state";
-import { memo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { DocumentSession, EditorMode } from "@/lib/client/documentSession";
 import { EDITOR_MODES, modeMenuItems } from "@/components/workspace/modes";
 import { FONT_FAMILIES, type DocumentMeta } from "@/lib/doc/settings";
@@ -176,19 +177,24 @@ const ToolbarView = memo(function ToolbarView({
     run(setMark(schema.marks.font_size!, value === defaultSize ? null : { size: `${value}pt` }));
   };
 
+  const rowRef = useRef<HTMLDivElement>(null);
+  const fit = useFittingGroups(rowRef, TOOLBAR_GROUPS);
+  const moreRef = useRef<HTMLButtonElement>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const closeMore = useCallback(() => setMoreOpen(false), []);
+
   const alignIcon = { left: <AlignLeft size={16} />, center: <AlignCenter size={16} />, right: <AlignRight size={16} />, justify: <AlignJustify size={16} /> }[align];
 
-  return (
-    <div className={`toolbar${viewing ? " is-viewing" : ""}`} role="toolbar" aria-label="Formatting">
-      <Group>
+  const groups = [
+      <Group key="history">
         <IconButton label="Undo" shortcut={`⌘Z`} disabled={disabled || !format.canUndo} onClick={() => run(undo)}>
           <Undo2 size={16} />
         </IconButton>
         <IconButton label="Redo" shortcut={`⌘⇧Z`} disabled={disabled || !format.canRedo} onClick={() => run(redo)}>
           <Redo2 size={16} />
         </IconButton>
-      </Group>
-      <Group edit={false} className="tb-zoom-group">
+      </Group>,
+      <Group key="zoom" edit={false} className="tb-zoom-group">
         <MenuButton
           className="tb-select tb-zoom"
           label="Zoom"
@@ -200,8 +206,8 @@ const ToolbarView = memo(function ToolbarView({
         >
           {Math.round(zoom * 100)}% <ChevronDown size={13} />
         </MenuButton>
-      </Group>
-      <Group>
+      </Group>,
+      <Group key="style">
         <MenuButton
           className="tb-select tb-style"
           label="Paragraph style"
@@ -225,8 +231,8 @@ const ToolbarView = memo(function ToolbarView({
         >
           <span className="tb-select-text">{fontLabel(family, meta?.settings.fontFamily ?? "Arial")}</span> <ChevronDown size={13} />
         </MenuButton>
-      </Group>
-      <Group>
+      </Group>,
+      <Group key="size">
         <IconButton label="Decrease font size" size="sm" disabled={disabled} onClick={() => setSize(size - 1)}>
           <Minus size={14} />
         </IconButton>
@@ -234,8 +240,8 @@ const ToolbarView = memo(function ToolbarView({
         <IconButton label="Increase font size" size="sm" disabled={disabled} onClick={() => setSize(size + 1)}>
           <Plus size={14} />
         </IconButton>
-      </Group>
-      <Group>
+      </Group>,
+      <Group key="marks">
         <IconButton label="Bold" shortcut={`⌘B`} active={active("bold")} disabled={disabled} onClick={() => run(toggle("bold"))}>
           <Bold size={16} />
         </IconButton>
@@ -262,8 +268,8 @@ const ToolbarView = memo(function ToolbarView({
           current={format.highlight}
           onPick={(color) => run(setMark(schema.marks.highlight!, color ? { color } : null))}
         />
-      </Group>
-      <Group>
+      </Group>,
+      <Group key="insert">
         <IconButton label="Insert link" shortcut={`⌘K`} disabled={disabled} active={active("link")} onClick={onLink}>
           <Link2 size={16} />
         </IconButton>
@@ -273,8 +279,8 @@ const ToolbarView = memo(function ToolbarView({
         <IconButton label="Insert image" disabled={disabled} onClick={onImage}>
           <ImagePlus size={16} />
         </IconButton>
-      </Group>
-      <Group className="tb-align-group">
+      </Group>,
+      <Group key="align" className="tb-align-group">
         <MenuButton
           className="icon-btn icon-btn-md tb-menu-icon"
           label="Align"
@@ -303,8 +309,8 @@ const ToolbarView = memo(function ToolbarView({
         >
           <span className="tb-select-text">{lineHeight ?? meta?.settings.lineSpacing ?? 1.15}</span> <ChevronDown size={13} />
         </MenuButton>
-      </Group>
-      <Group>
+      </Group>,
+      <Group key="lists">
         <IconButton label="Checklist" shortcut={`⌘⇧9`} active={list === "task"} disabled={disabled} onClick={() => run(toggleList("task"))}>
           <ListChecks size={16} />
         </IconButton>
@@ -320,20 +326,77 @@ const ToolbarView = memo(function ToolbarView({
         <IconButton label="Increase indent" className="tb-indent" shortcut={`⌘]`} disabled={disabled} onClick={() => run(indent)}>
           <IndentIncrease size={16} />
         </IconButton>
-      </Group>
-      <Group className="tb-clear-group">
+      </Group>,
+      <Group key="clear" className="tb-clear-group">
         <IconButton label="Clear formatting" shortcut={`⌘\\`} disabled={disabled} onClick={() => run(clearFormatting)}>
           <RemoveFormatting size={16} />
         </IconButton>
-      </Group>
+      </Group>,
+  ];
+
+  return (
+    <div ref={rowRef} className={`toolbar${viewing ? " is-viewing" : ""}`} role="toolbar" aria-label="Formatting">
+      {groups.slice(0, fit)}
+      {fit < groups.length && (
+        <Group edit={false} className="tb-more-group">
+          <IconButton ref={moreRef} label="More tools" active={moreOpen} onMouseDown={(event) => event.preventDefault()} onClick={() => setMoreOpen((value) => !value)}>
+            <MoreVertical size={16} />
+          </IconButton>
+        </Group>
+      )}
       <div className="tb-spacer" />
       <MenuButton className={`tb-select tb-mode is-${mode}`} label="Mode" placement="bottom-end" items={() => modeMenuItems(mode, (next) => void session.setMode(next))}>
         {EDITOR_MODES[mode].icon(15)}
         <span className="tb-select-text">{EDITOR_MODES[mode].label}</span> <ChevronDown size={13} />
       </MenuButton>
+      <Popover open={moreOpen && fit < groups.length} onClose={closeMore} anchor={moreRef} placement="bottom-end" role="toolbar" className={`tb-overflow${viewing ? " is-viewing" : ""}`}>
+        {groups.slice(fit)}
+      </Popover>
     </div>
   );
 });
+
+const TOOLBAR_GROUPS = 9;
+/** Room kept for the "More tools" button when some groups don't fit. */
+const MORE_WIDTH = 42;
+/** The spacer before the mode menu never shrinks below this. */
+const SPACER_WIDTH = 8;
+
+/**
+ * How many of the toolbar's groups fit in its row; the rest move into "More tools". Widths are
+ * remembered from when each group was last in the row, since the overflowed ones aren't there to measure.
+ */
+function useFittingGroups(row: RefObject<HTMLDivElement | null>, count: number) {
+  const [fit, setFit] = useState(count);
+  const widths = useRef<number[]>([]);
+  useLayoutEffect(() => {
+    const bar = row.current;
+    if (!bar) return;
+    const groups = () => Array.from(bar.children).filter((child): child is HTMLElement => child.classList.contains("tb-group") && !child.classList.contains("tb-more-group"));
+    const measure = () => {
+      groups().forEach((group, index) => {
+        widths.current[index] = group.offsetWidth + (Number.parseFloat(getComputedStyle(group).marginLeft) || 0);
+      });
+      const style = getComputedStyle(bar);
+      const mode = bar.querySelector<HTMLElement>(".tb-mode")?.offsetWidth ?? 0;
+      const room = bar.clientWidth - (Number.parseFloat(style.paddingLeft) || 0) - (Number.parseFloat(style.paddingRight) || 0) - mode - SPACER_WIDTH;
+      const total = widths.current.slice(0, count).reduce((sum, width) => sum + (width ?? 0), 0);
+      let next = count;
+      if (total > room) {
+        let used = 0;
+        next = 0;
+        while (next < count && used + (widths.current[next] ?? 0) <= room - MORE_WIDTH) used += widths.current[next++] ?? 0;
+      }
+      if (next !== fit) setFit(next);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(bar);
+    for (const group of groups()) observer.observe(group);
+    return () => observer.disconnect();
+  }, [row, count, fit]);
+  return fit;
+}
 
 /** A group of controls; editing groups are disabled in viewing mode. */
 function Group({ children, edit = true, className }: { children: ReactNode; edit?: boolean; className?: string }) {
@@ -346,6 +409,7 @@ function FontSizeInput({ value, onCommit }: { value: number; onCommit: (value: n
     <input
       className="tb-size"
       aria-label="Font size"
+      autoComplete="off"
       value={draft ?? String(value)}
       onFocus={(event) => {
         setDraft(String(value));

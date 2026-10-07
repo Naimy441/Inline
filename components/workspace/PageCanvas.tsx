@@ -54,28 +54,41 @@ export const PageCanvas = memo(function PageCanvas({
       }
     : undefined;
   const lineModel = settings?.lineModel === "font" ? " font-lines" : "";
+  // Zoom scales the laid-out pages rather than laying them out again (CSS zoom would): text
+  // shaped at another size wraps differently, so the page count would change with the window.
+  const scale = printing || flow ? 1 : zoom;
 
   // The tree stays the same in both layouts so the editor's DOM is never remounted.
   return (
-    <div className={`page-stack-wrap${flow ? " is-flow" : ""}`} style={{ zoom: printing || flow ? 1 : zoom }}>
-      <div className="page-stack" style={{ width: flow ? undefined : geometry.pageWidth, height: flow ? undefined : totalHeight, ["--doc-font" as string]: settings?.fontFamily }}>
-        {!flow &&
-          Array.from({ length: pages }, (_, index) => <Sheet key={index} index={index} pages={pages} meta={meta} top={index * pitch} geometry={geometry} />)}
+    <div className={`page-stack-wrap${flow ? " is-flow" : ""}`}>
+      <div className="page-stack-frame" style={flow ? undefined : { width: geometry.pageWidth * scale, height: totalHeight * scale }}>
         <div
-          className={`page-content${lineModel}`}
-          style={
-            flow
-              ? contentStyle
-              : {
-                  top: geometry.marginTop,
-                  left: geometry.marginLeft,
-                  width: geometry.pageWidth - geometry.marginLeft - geometry.marginRight,
-                  minHeight: totalHeight - geometry.marginTop - geometry.marginBottom,
-                  ...contentStyle,
-                }
-          }
+          className="page-stack"
+          style={{
+            width: flow ? undefined : geometry.pageWidth,
+            height: flow ? undefined : totalHeight,
+            transform: scale === 1 ? undefined : `scale(${scale})`,
+            ["--doc-font" as string]: settings?.fontFamily,
+          }}
         >
-          <div ref={mount} className="editor-mount" />
+          {!flow &&
+            Array.from({ length: pages }, (_, index) => <Sheet key={index} index={index} pages={pages} meta={meta} top={index * pitch} geometry={geometry} />)}
+          <div
+            className={`page-content${lineModel}`}
+            style={
+              flow
+                ? contentStyle
+                : {
+                    top: geometry.marginTop,
+                    left: geometry.marginLeft,
+                    width: geometry.pageWidth - geometry.marginLeft - geometry.marginRight,
+                    minHeight: totalHeight - geometry.marginTop - geometry.marginBottom,
+                    ...contentStyle,
+                  }
+            }
+          >
+            <div ref={mount} className="editor-mount" />
+          </div>
         </div>
       </div>
     </div>

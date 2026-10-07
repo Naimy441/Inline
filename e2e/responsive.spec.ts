@@ -2,10 +2,9 @@ import { readFile } from "node:fs/promises";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
 /**
- * Layouts by screen size. Phones reflow the text to the screen, put the
- * formatting toolbar at the bottom and open menus, panels and dialogs as
- * sheets; tablets keep pages but fold the menu bar into a "More" menu; narrow
- * desktop windows shrink pages to fit instead of scrolling sideways.
+ * Layouts by screen size. Every size keeps the desktop layout's pages, shrunk
+ * to fit instead of scrolling sideways. Phones and tablets fold the menu bar
+ * into a "More" menu, and phones open menus and dialogs as sheets.
  */
 
 const PHONE = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true };
@@ -56,34 +55,27 @@ async function more(page: Page, ...path: string[]) {
 test.describe("phone", () => {
   test.use(PHONE);
 
-  test("text reflows to the screen with the toolbar at the bottom", async ({ page, request }) => {
+  test("keeps the desktop layout, with the page shrunk to fit", async ({ page, request }) => {
     await openDocument(page, await createDocument(request, "Phone memo", MEMO));
 
-    // No paper sheets: the text runs the width of the screen, less a small gutter.
-    await expect(page.locator(".page-stack-wrap")).toHaveClass(/is-flow/);
-    await expect(page.locator(".sheet")).toHaveCount(0);
-    const text = await page.locator(".doc-content").boundingBox();
-    expect(text!.x).toBeGreaterThanOrEqual(12);
-    expect(text!.width).toBeGreaterThan(390 - 2 * 28);
+    // A whole page, as on a desktop, scaled down to the screen's width.
+    await expect(page.locator(".page-stack-wrap")).not.toHaveClass(/is-flow/);
+    const sheet = await page.locator(".sheet").first().boundingBox();
+    expect(sheet!.x).toBeGreaterThanOrEqual(0);
+    expect(sheet!.x + sheet!.width).toBeLessThanOrEqual(390);
     await expectNoSidewaysScroll(page);
 
-    // Toolbar below the document, title bar above it; no status bar or menu bar.
+    // Toolbar above the document, under the title bar; the menus fold into More.
     const toolbar = await page.locator(".toolbar").boundingBox();
     const canvas = await page.locator(".canvas").boundingBox();
-    expect(toolbar!.y).toBeGreaterThanOrEqual(canvas!.y + canvas!.height - 1);
-    expect(toolbar!.y + toolbar!.height).toBeLessThanOrEqual(844 + 1);
-    await expect(page.locator(".statusbar")).toBeHidden();
+    expect(toolbar!.y + toolbar!.height).toBeLessThanOrEqual(canvas!.y + 1);
     await expect(page.locator(".menubar")).toBeHidden();
 
     // Claude's panel waits to be asked for instead of covering the document.
     await expect(page.locator(".agent-panel")).toHaveCount(0);
-
-    // Touch-sized controls.
-    const bold = await page.getByRole("toolbar", { name: "Formatting" }).getByRole("button", { name: "Bold", exact: true }).boundingBox();
-    expect(bold!.height).toBeGreaterThanOrEqual(40);
   });
 
-  test("typing and formatting work in the reflowed layout", async ({ page, request }) => {
+  test("typing and formatting work", async ({ page, request }) => {
     await openDocument(page, await createDocument(request, "Phone typing", "Hello"));
     await page.locator(".doc-content p").first().click();
     await expect(page.locator(".doc-content")).toBeFocused();
@@ -91,7 +83,9 @@ test.describe("phone", () => {
     await page.keyboard.type(" world");
     await expect(page.locator(".doc-content")).toHaveText("Hello world");
     await page.keyboard.press("Shift+Home");
-    await page.getByRole("toolbar", { name: "Formatting" }).getByRole("button", { name: "Bold", exact: true }).click();
+    // Tools that don't fit the narrow toolbar are under "More tools".
+    await page.getByRole("button", { name: "More tools" }).click();
+    await page.locator(".tb-overflow").getByRole("button", { name: "Bold", exact: true }).click();
     await expect(page.locator(".doc-content strong")).toHaveText("Hello world");
   });
 
@@ -136,13 +130,13 @@ test.describe("phone", () => {
     await openDocument(page, await createDocument(request, "Phone modes", "Read only please."));
     await more(page, "Mode", "Viewing");
     await expect(page.locator(".doc-content")).toHaveAttribute("contenteditable", "false");
-    await expect(page.locator(".toolbar")).toBeHidden();
+    await expect(page.locator(".toolbar")).toHaveClass(/is-viewing/);
     await more(page, "Mode", "Editing");
     await expect(page.locator(".doc-content")).toHaveAttribute("contenteditable", "true");
-    await expect(page.locator(".toolbar")).toBeVisible();
+    await expect(page.locator(".toolbar")).not.toHaveClass(/is-viewing/);
   });
 
-  test("Claude opens as a sheet, edits, and the change is kept from the review bar", async ({ page, request }) => {
+  test("Claude opens over the document, edits, and the change is kept from the review bar", async ({ page, request }) => {
     await openDocument(page, await createDocument(request, "Phone Claude", "The meeting is on Tuesday."));
     await page.getByRole("button", { name: "Claude", exact: true }).click();
     const panel = page.locator(".panel-shell");
@@ -158,8 +152,8 @@ test.describe("phone", () => {
     await composer.press("Enter");
     await expect(page.locator(".msg-assistant").last()).toContainText("Replaced Tuesday with Thursday.");
 
-    // Close the sheet by tapping the dimmed document, then review in place.
-    await page.locator(".panel-backdrop").click({ position: { x: 195, y: 10 } });
+    // Close the panel, then review in place.
+    await page.getByRole("button", { name: "Claude", exact: true }).click();
     await expect(panel).toHaveCount(0);
     const bar = page.locator(".review-bar");
     await expect(bar).toBeVisible();
@@ -182,7 +176,7 @@ test.describe("phone", () => {
     expect(Math.round(box!.y + box!.height)).toBe(844);
   });
 
-  test("a PDF is still laid out on pages", async ({ page, request }) => {
+  test("a PDF is laid out on pages", async ({ page, request }) => {
     await openDocument(page, await createDocument(request, "Phone export", MEMO));
     const pending = page.waitForEvent("download");
     await more(page, "Download", "PDF");
@@ -190,11 +184,8 @@ test.describe("phone", () => {
     const pdf = (await readFile((await file.path())!)).toString("latin1");
     expect(pdf.startsWith("%PDF-")).toBe(true);
     expect(pdf).toContain("/MediaBox [0 0 612 792]");
-    // Drawn at the page's one-inch margin (72pt), not at the phone's gutter.
+    // Drawn at the page's one-inch margin (72pt).
     expect(pdf).toMatch(/1 0 0 1 72 [\d.]+ Tm \(Quarterly\) Tj/);
-    // Back to the reflowed layout afterwards.
-    await expect(page.locator(".page-stack-wrap")).toHaveClass(/is-flow/);
-    await expect(page.locator(".sheet")).toHaveCount(0);
   });
 
   test("the home page fits the screen and the new button creates a document", async ({ page }) => {

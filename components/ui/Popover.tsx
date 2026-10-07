@@ -30,6 +30,8 @@ export function Popover({
       const target = event.target as Node;
       if (ref.current?.contains(target)) return;
       if (anchor && "current" in anchor && anchor.current?.contains(target)) return;
+      // A menu or popover opened from inside this one is rendered elsewhere in the page.
+      if ((target as Element).closest?.(".menu, .popover")) return;
       onClose();
     };
     const onKey = (event: KeyboardEvent) => {

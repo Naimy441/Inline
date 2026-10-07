@@ -178,6 +178,18 @@ export const indent: Command = (state, dispatch) => {
   return updateBlocks((node) => ({ indent: Math.min(MAX_INDENT, (node.attrs.indent as number) + 1) }))(state, dispatch);
 };
 
+/**
+ * Tab types a tab, as in Google Docs and Word, except at the start of a list
+ * item that can nest (which nests it) and over several blocks (which indents them).
+ */
+export const insertTab: Command = (state, dispatch) => {
+  const { $from, $to } = state.selection;
+  if (!$from.sameParent($to) || !$from.parent.isTextblock) return false;
+  if (inList(state) && $from.parentOffset === 0 && sinkListItem(nodes.list_item!)(state)) return false;
+  if (dispatch) dispatch(state.tr.insertText("\t").scrollIntoView());
+  return true;
+};
+
 export const outdent: Command = (state, dispatch) => {
   if (inList(state)) return liftListItem(nodes.list_item!)(state, dispatch);
   return updateBlocks((node) => ((node.attrs.indent as number) > 0 ? { indent: (node.attrs.indent as number) - 1 } : null))(state, dispatch);

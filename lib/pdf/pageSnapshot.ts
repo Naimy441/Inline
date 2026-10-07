@@ -241,7 +241,8 @@ export function snapshotPages(
       }
       if (pieceBox) emitText(data.slice(pieceStart, end), pieceBox, style);
     }
-    if (decoration.underline || decoration.strike) {
+    // A tab is a box of its own (document.css .doc-tab), which the page doesn't underline.
+    if ((decoration.underline || decoration.strike) && !node.parentElement?.classList.contains("doc-tab")) {
       // Spaces between underlined words are underlined too, even in a text of their own; spaces ending a block aren't.
       const ending = !node.nextSibling && !node.parentElement?.nextSibling;
       const last = ending ? data.length - (data.match(/\s*$/)?.[0].length ?? 0) : data.length;

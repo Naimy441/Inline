@@ -78,6 +78,15 @@ export function justifyPlugin(enabled: () => boolean) {
         schedule();
       };
       fonts?.addEventListener?.("loadingdone", onFonts);
+      // A new text width (page size, margins) rewraps the lines without any edit.
+      let width = 0;
+      const resized = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => {
+        const next = (view.dom as HTMLElement).offsetWidth;
+        if (next === width) return;
+        width = next;
+        onFonts();
+      }) : null;
+      resized?.observe(view.dom);
       schedule();
       return {
         update(updated, previous) {
@@ -87,6 +96,7 @@ export function justifyPlugin(enabled: () => boolean) {
         destroy() {
           if (frame) cancelAnimationFrame(frame);
           fonts?.removeEventListener?.("loadingdone", onFonts);
+          resized?.disconnect();
         },
       };
     },

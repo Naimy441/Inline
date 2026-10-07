@@ -38,12 +38,24 @@ function tabPositions(doc: PMNode) {
   return positions;
 }
 
+/**
+ * The tab character itself spans its box (tab-size, which inside the box counts from the box's start),
+ * so the cursor before and after it is drawn at either end. Browsers move a tab with less than half a
+ * space to go on to the next stop, so a narrow tab keeps a zero-width character at the box's end.
+ */
+const MIN_TAB_SIZE = 8;
+
+function tabStyle(width: number) {
+  const px = width.toFixed(2);
+  return width >= MIN_TAB_SIZE ? `width: ${px}px; tab-size: ${px}px` : `width: ${px}px`;
+}
+
 function decorate(doc: PMNode, widths: Map<number, number>) {
   const positions = tabPositions(doc);
   if (!positions.length) return DecorationSet.empty;
   return DecorationSet.create(
     doc,
-    positions.map((pos) => Decoration.inline(pos, pos + 1, { class: "doc-tab", style: `width: ${(widths.get(pos) ?? 0).toFixed(2)}px` }, { inclusiveStart: false, inclusiveEnd: false })),
+    positions.map((pos) => Decoration.inline(pos, pos + 1, { class: "doc-tab", style: tabStyle(widths.get(pos) ?? 0) }, { inclusiveStart: false, inclusiveEnd: false })),
   );
 }
 
@@ -95,6 +107,15 @@ export function tabsPlugin(defaultStop: () => number) {
         schedule();
       };
       fonts?.addEventListener?.("loadingdone", onFonts);
+      // A new text width (page size, margins) moves right-aligned text without any edit.
+      let width = 0;
+      const resized = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => {
+        const next = (view.dom as HTMLElement).offsetWidth;
+        if (next === width) return;
+        width = next;
+        onFonts();
+      }) : null;
+      resized?.observe(view.dom);
       schedule();
       return {
         update(updated, previous) {
@@ -104,6 +125,7 @@ export function tabsPlugin(defaultStop: () => number) {
         destroy() {
           if (frame) cancelAnimationFrame(frame);
           fonts?.removeEventListener?.("loadingdone", onFonts);
+          resized?.disconnect();
         },
       };
     },
@@ -111,11 +133,28 @@ export function tabsPlugin(defaultStop: () => number) {
 }
 
 const PX_PER_PT = 96 / 72;
+/**
+ * Right-aligned text ends this far short of its stop. Text that exactly fills the line can wrap its last
+ * word when the page is scaled (Firefox rounds scaled text a little wider), as at the right margin.
+ */
+const RIGHT_SLACK = 1;
 
 /** The width each tab should be, by position, from the layout on screen; null when it can't be read. */
 function measure(view: EditorView, defaultStopPt: number): Map<number, number> | null {
   const root = view.dom as HTMLElement;
   if (!root.isConnected || !root.offsetWidth) return null;
+  // Tabs are placed on the line as if it were left-aligned (document.css drops the alignment for an
+  // instant, before anything is painted), and the line is centered or right-aligned after, as in Word.
+  // Otherwise a tab's width would move where it starts, and so its width, in every line not set left.
+  root.classList.add("measuring-tabs");
+  try {
+    return measureLeft(view, root, defaultStopPt);
+  } finally {
+    root.classList.remove("measuring-tabs");
+  }
+}
+
+function measureLeft(view: EditorView, root: HTMLElement, defaultStopPt: number): Map<number, number> {
   const rootRect = root.getBoundingClientRect();
   const scale = rootRect.width / root.offsetWidth || 1;
   const local = (x: number) => (x - rootRect.left) / scale;
@@ -160,7 +199,7 @@ function measure(view: EditorView, defaultStopPt: number): Map<number, number> |
       else {
         const target = Math.min(stop.at, right);
         const text = segmentWidth(span, spans[index + 1] ?? null, dom, rect, scale);
-        width = stop.align === "center" ? target - start - text / 2 : target - start - text;
+        width = stop.align === "center" ? target - start - text / 2 : target - start - text - RIGHT_SLACK;
       }
       width = Math.max(0, Number(width.toFixed(2)));
       const before = current.get(positions[index]!) ?? rect.width / scale;
@@ -176,22 +215,27 @@ function measure(view: EditorView, defaultStopPt: number): Map<number, number> |
 /** How wide the text after a tab is on its line, up to the next tab, not counting spaces at its end. */
 function segmentWidth(span: HTMLElement, next: HTMLElement | null, block: HTMLElement, line: DOMRect, scale: number) {
   const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
-  let last: { node: Text; offset: number } | null = null;
+  const texts: Text[] = [];
   for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null) {
     if (span.contains(node) || !(span.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
     if (next && (next.contains(node) || next.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)) break;
-    const end = node.data.replace(/\s+$/, "").length;
-    if (end) last = { node, offset: end };
+    if (node.parentElement?.closest(".page-gap")) continue;
+    texts.push(node);
   }
-  if (!last) return 0;
-  const range = document.createRange();
-  range.setStartAfter(span);
-  range.setEnd(last.node, last.offset);
-  // A range's boxes cover both its elements and their text, so take how far they reach on each line rather
-  // than adding them. Text that has wrapped below (its tab was too wide a moment ago) counts all the same,
-  // or the tab would keep it there.
+  while (texts.length && !texts[texts.length - 1]!.data.replace(/\s+$/, "")) texts.pop();
+  if (!texts.length) return 0;
+  // Only the text's own boxes: a range over elements also returns the boxes of elements that contain the
+  // tab itself in some browsers, which would count the tab as part of the text after it. Text that has
+  // wrapped below (its tab was too wide a moment ago) counts all the same, or the tab would keep it there.
+  const rects: DOMRect[] = [];
+  texts.forEach((node, index) => {
+    const range = document.createRange();
+    range.setStart(node, 0);
+    range.setEnd(node, index === texts.length - 1 ? node.data.replace(/\s+$/, "").length : node.data.length);
+    rects.push(...Array.from(range.getClientRects()));
+  });
   const lines: Array<{ middle: number; from: number; to: number }> = [];
-  for (const rect of Array.from(range.getClientRects())) {
+  for (const rect of rects) {
     if (!rect.width) continue;
     const middle = (rect.top + rect.bottom) / 2;
     const row = lines.find((item) => Math.abs(item.middle - middle) < Math.max(line.height, rect.height) / 2);

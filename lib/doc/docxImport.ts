@@ -315,7 +315,17 @@ type Context = {
   activeComments: Set<string>;
   /** The text each Inline comment covers. */
   commentQuotes: Map<string, string>;
-  /** Written by Google Docs, which draws bullets in the text's own font and size whatever the file says. */
+  /**
+   * Written by Google Docs (its Normal style is named "normal"). Google's
+   * export doesn't always describe what Google draws, so for these files two
+   * details follow Google's own rendering rather than the file, to match a
+   * Google PDF:
+   * - Bullets take their item's font and size, not the list level's (Google
+   *   writes Noto Sans Symbols 11pt but draws the text's font).
+   * - Pictures in a line of text get 2px of space round them, not the file's
+   *   distT/R/B/L (often an eighth of an inch).
+   * Other files are read literally, as Word reads them.
+   */
   google: boolean;
   /** Written by Inline. */
   inline: boolean;

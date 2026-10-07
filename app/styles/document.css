@@ -270,12 +270,19 @@ img.ProseMirror-separator {
   letter-spacing: 0 !important;
 }
 
-/* Tabs (lib/editor/tabs.ts): each is a box as wide as the way to its tab stop. */
+/* Tabs (lib/editor/tabs.ts): each is a box as wide as the way to its tab stop, and the tab
+   character spans it (an inline tab-size). A narrow tab's character has no width; it sits at the
+   box's end, so a cursor after the tab is drawn there, not at its start. */
 .doc-content .doc-tab {
   display: inline-block;
   tab-size: 0;
   text-indent: 0;
+  text-align: end;
   white-space: pre;
+}
+
+.doc-content.measuring-tabs :not(.doc-tab) {
+  text-align: start !important;
 }
 
 /* Paragraphs with the same borders share one box, as in Word and Google Docs (lib/editor/borders.ts). */
