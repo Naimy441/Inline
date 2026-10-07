@@ -38,6 +38,7 @@ export function HomePage() {
   const [creating, setCreating] = useState<string | null>(null);
   const [legacy, setLegacy] = useState(false);
   const [renaming, setRenaming] = useState<DocumentMeta | null>(null);
+  const [importing, setImporting] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const { dark, toggle } = useTheme();
   const templates = useMemo(() => documentTemplates(), []);
@@ -80,23 +81,64 @@ export function HomePage() {
     }
   };
 
-  const importFile = async (file: File) => {
-    try {
-      if (/\.docx$/i.test(file.name)) {
-        const form = new FormData();
-        form.append("file", file);
-        const { document } = await api<{ document: Snapshot }>("/api/documents/import", { method: "POST", body: form });
-        open(document.meta.id);
-        return;
-      }
-      const text = await file.text();
-      const title = file.name.replace(/\.[^.]+$/, "") || "Imported document";
-      const body = /\.html?$/i.test(file.name) ? { title, doc: htmlToDocJSON(text) } : { title, markdown: text };
-      const { document } = await post<{ document: Snapshot }>("/api/documents", body);
-      open(document.meta.id);
-    } catch (error) {
-      toast(error instanceof Error ? error.message : "Couldn't import that file.", { tone: "error" });
+  /** Create one document from a file without opening it. Returns its id. */
+  const importOne = async (file: File) => {
+    if (/\.docx$/i.test(file.name)) {
+      const form = new FormData();
+      form.append("file", file);
+      const { document } = await api<{ document: Snapshot }>("/api/documents/import", { method: "POST", body: form });
+      return document.meta.id;
     }
+    const text = await file.text();
+    const title = file.name.replace(/\.[^.]+$/, "") || "Imported document";
+    const body = /\.html?$/i.test(file.name) ? { title, doc: htmlToDocJSON(text) } : { title, markdown: text };
+    const { document } = await post<{ document: Snapshot }>("/api/documents", body);
+    return document.meta.id;
+  };
+
+  /**
+   * Import the chosen files. A single document opens straight away; several
+   * files, or a ZIP of Word files (such as a Google Takeout export of Google
+   * Drive), are all imported and listed.
+   */
+  const importFiles = async (files: File[]) => {
+    if (files.length === 1 && !/\.zip$/i.test(files[0]!.name)) {
+      try {
+        open(await importOne(files[0]!));
+      } catch (error) {
+        toast(error instanceof Error ? error.message : "Couldn't import that file.", { tone: "error" });
+      }
+      return;
+    }
+    setImporting(true);
+    let imported = 0;
+    const failed: string[] = [];
+    for (const file of files) {
+      try {
+        if (/\.zip$/i.test(file.name)) {
+          const form = new FormData();
+          form.append("file", file);
+          const result = await api<{ documents: DocumentMeta[]; failed: { name: string }[] }>("/api/documents/import", { method: "POST", body: form });
+          imported += result.documents.length;
+          failed.push(...result.failed.map((item) => item.name.slice(item.name.lastIndexOf("/") + 1)));
+        } else {
+          await importOne(file);
+          imported += 1;
+        }
+      } catch (error) {
+        if (files.length === 1) {
+          toast(error instanceof Error ? error.message : "Couldn't import that file.", { tone: "error" });
+          setImporting(false);
+          return;
+        }
+        failed.push(file.name);
+      }
+    }
+    setImporting(false);
+    void load();
+    const summary = `Imported ${imported} document${imported === 1 ? "" : "s"}.`;
+    if (!failed.length) toast(summary, { tone: "success" });
+    else toast(`${summary} Couldn't read ${failed.length === 1 ? failed[0] : `${failed.length} files`}.`, { tone: imported ? "info" : "error", duration: 8000 });
   };
 
   const runLegacyImport = async () => {
@@ -171,8 +213,8 @@ export function HomePage() {
         <section className="home-section">
           <div className="home-section-head">
             <h2>Start something new</h2>
-            <Button size="sm" variant="ghost" icon={<FileUp size={15} />} onClick={() => fileInput.current?.click()}>
-              Import file
+            <Button size="sm" variant="ghost" icon={<FileUp size={15} />} loading={importing} onClick={() => fileInput.current?.click()} title="Word, Markdown, HTML or text files, or a ZIP of Word files such as a Google Takeout export">
+              {importing ? "Importing…" : "Import files"}
             </Button>
             <Button size="sm" variant="ghost" icon={<Download size={15} />} onClick={() => window.location.assign("/api/documents/backup")}>
               Download all
@@ -180,11 +222,12 @@ export function HomePage() {
             <input
               ref={fileInput}
               type="file"
-              accept=".docx,.md,.markdown,.txt,.html,.htm"
+              accept=".docx,.zip,.md,.markdown,.txt,.html,.htm"
+              multiple
               hidden
               onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) void importFile(file);
+                const files = [...(event.target.files ?? [])];
+                if (files.length) void importFiles(files);
                 event.target.value = "";
               }}
             />
