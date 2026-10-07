@@ -581,10 +581,6 @@ export function Workspace({ documentId }: { documentId: string }) {
               <MessageSquare size={16} />
               {openComments > 0 && <span className="badge">{openComments}</span>}
             </IconButton>
-            <MenuButton className="btn btn-secondary btn-md export-btn" label="Download" placement="bottom-end" items={downloads}>
-              <Download size={15} />
-              <span className="btn-label">Export</span>
-            </MenuButton>
             <button
               type="button"
               className={`btn btn-md claude-toggle claude-toggle-text${panel === "agent" ? " is-active" : ""}`}
@@ -596,6 +592,10 @@ export function Workspace({ documentId }: { documentId: string }) {
               {working && panel !== "agent" ? <Spark size={15} /> : <PanelRight size={15} />}
               <span className="btn-label">Claude</span>
             </button>
+            <MenuButton className="btn btn-secondary btn-md export-btn" label="Download" placement="bottom-end" items={downloads}>
+              <Download size={15} />
+              <span className="btn-label">Export</span>
+            </MenuButton>
           </div>
         )}
       </header>
@@ -724,13 +724,7 @@ export function Workspace({ documentId }: { documentId: string }) {
       </div>
 
       <footer className="statusbar">
-        <button type="button" className="status-item" onClick={() => setCounting(true)}>
-          <WithEditorState session={session}>{(state) => <>{(state ? docWordCount(state.doc) : (meta?.wordCount ?? 0)).toLocaleString()} words</>}</WithEditorState>
-        </button>
-        <span className="status-item">
-          {ui.pages} page{ui.pages === 1 ? "" : "s"}
-        </span>
-        <TabStatus documentId={documentId} onOpen={() => !outline && toggleOutline()} />
+        <TabStatus documentId={documentId} open={outline} onToggle={toggleOutline} />
         {ui.hunks.length > 0 && <span className="status-item is-accent">{ui.hunks.length} pending</span>}
         {ui.mode !== "editing" && (
           <button type="button" className={`status-item status-mode is-${ui.mode}`} onClick={() => void session.setMode("editing")} data-tip="Back to editing">
@@ -738,10 +732,12 @@ export function Workspace({ documentId }: { documentId: string }) {
           </button>
         )}
         <span className="status-spacer" />
-        <button type="button" className="status-item" onClick={() => setShortcuts(true)}>
-          Shortcuts
+        <button type="button" className="status-item" onClick={() => setCounting(true)}>
+          <WithEditorState session={session}>{(state) => <>{(state ? docWordCount(state.doc) : (meta?.wordCount ?? 0)).toLocaleString()} words</>}</WithEditorState>
         </button>
-        <span className="status-item">{Math.round(effectiveZoom * 100)}%</span>
+        <span className="status-item">
+          {ui.pages} page{ui.pages === 1 ? "" : "s"}
+        </span>
       </footer>
 
       <PageSetupDialog open={Boolean(setup)} initialTab={setup?.tab} session={session} settings={meta?.settings} onClose={() => setSetup(null)} />
@@ -985,12 +981,12 @@ function WordCountTable({ session }: { session: DocumentSession }) {
 
 
 /** The open tab's name in the status bar, when the document has more than one tab. */
-function TabStatus({ documentId, onOpen }: { documentId: string; onOpen: () => void }) {
+function TabStatus({ documentId, open, onToggle }: { documentId: string; open: boolean; onToggle: () => void }) {
   const tabs = useTabs(documentId);
   const current = tabs && tabs.length > 1 ? tabs.find((tab) => tab.id === documentId) : null;
   if (!current) return null;
   return (
-    <button type="button" className="status-item status-tab" onClick={onOpen} data-tip="Tabs & outline">
+    <button type="button" className={`status-item status-tab${open ? " is-active" : ""}`} onClick={onToggle} aria-pressed={open} data-tip={`${open ? "Hide" : "Show"} tabs & outline`}>
       <ListTree size={12} />
       <span>{current.title}</span>
     </button>
