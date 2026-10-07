@@ -6,7 +6,8 @@ import { folderPath, type Folder, type FolderSummary } from "@/lib/doc/folders";
 import type { DocumentMeta } from "@/lib/doc/settings";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { DocCover } from "./covers";
-import { dragSource, useDropTarget } from "./dnd";
+import { dragSource, useDropTarget, type DragItem } from "./dnd";
+import { itemHandlers, SelectCheck, type Selection } from "./selection";
 import { countLabel, folderMenuItems, FolderGlyph, type FolderActions } from "./folders";
 
 export type DocumentActions = {
@@ -79,18 +80,34 @@ function MenuButton({ label, title, items }: { label: string; title: string; ite
   );
 }
 
-export function DocumentCard({ doc, trashed, folders, showLocation, actions }: { doc: DocumentMeta; trashed: boolean; folders: Map<string, Folder>; showLocation: boolean; actions: DocumentActions }) {
+export function DocumentCard({
+  doc,
+  trashed,
+  folders,
+  showLocation,
+  actions,
+  selection,
+}: {
+  doc: DocumentMeta;
+  trashed: boolean;
+  folders: Map<string, Folder>;
+  showLocation: boolean;
+  actions: DocumentActions;
+  selection?: Selection;
+}) {
   const folder = showLocation && doc.folderId ? folders.get(doc.folderId) : undefined;
+  const item: DragItem = { kind: "document", id: doc.id, title: doc.title };
+  const selected = selection?.has("document", doc.id) ?? false;
   return (
     <div
-      className="doc-card"
+      className={`doc-card${selected ? " is-selected" : ""}`}
       role="button"
       tabIndex={0}
-      aria-label={doc.title}
-      onClick={() => !trashed && actions.open(doc)}
-      onKeyDown={(event) => event.key === "Enter" && !trashed && actions.open(doc)}
-      {...dragSource({ kind: "document", id: doc.id, title: doc.title }, !trashed)}
+      aria-label={`${doc.title}${selected ? ", selected" : ""}`}
+      {...itemHandlers(selection, item, () => !trashed && actions.open(doc))}
+      {...dragSource(item, !trashed, selection?.items)}
     >
+      <SelectCheck selection={selection} item={item} />
       <div className="doc-card-cover">
         <DocCover doc={doc} />
       </div>
@@ -142,6 +159,7 @@ export function DocumentList({
   onSort,
   folderActions,
   documentActions,
+  selection,
 }: {
   folderRows: Folder[];
   docs: DocumentMeta[];
@@ -153,6 +171,7 @@ export function DocumentList({
   onSort: (sort: Sort) => void;
   folderActions: FolderActions;
   documentActions: DocumentActions;
+  selection?: Selection;
 }) {
   return (
     <div className={`doc-list${showLocation ? " has-location" : ""}`}>
@@ -164,20 +183,29 @@ export function DocumentList({
         <span />
       </div>
       {folderRows.map((folder) => (
-        <FolderRow key={folder.id} folder={folder} summary={summaries.get(folder.id)} folders={folders} showLocation={showLocation} actions={folderActions} />
+        <FolderRow key={folder.id} folder={folder} summary={summaries.get(folder.id)} folders={folders} showLocation={showLocation} actions={folderActions} selection={selection} />
       ))}
       {docs.map((doc) => (
+        <DocumentRow key={doc.id} doc={doc} folders={folders} trashed={trashed} showLocation={showLocation} actions={documentActions} selection={selection} />
+      ))}
+    </div>
+  );
+}
+
+function DocumentRow({ doc, folders, trashed, showLocation, actions, selection }: { doc: DocumentMeta; folders: Map<string, Folder>; trashed: boolean; showLocation: boolean; actions: DocumentActions; selection?: Selection }) {
+  const item: DragItem = { kind: "document", id: doc.id, title: doc.title };
+  const selected = selection?.has("document", doc.id) ?? false;
+  return (
         <div
-          key={doc.id}
-          className="doc-row"
+          className={`doc-row${selected ? " is-selected" : ""}`}
           role="button"
           tabIndex={0}
-          aria-label={doc.title}
-          onClick={() => !trashed && documentActions.open(doc)}
-          onKeyDown={(event) => event.key === "Enter" && !trashed && documentActions.open(doc)}
-          {...dragSource({ kind: "document", id: doc.id, title: doc.title }, !trashed)}
+          aria-label={`${doc.title}${selected ? ", selected" : ""}`}
+          {...itemHandlers(selection, item, () => !trashed && actions.open(doc))}
+          {...dragSource(item, !trashed, selection?.items)}
         >
           <span className="doc-row-name">
+            <SelectCheck selection={selection} item={item} inline />
             <span className="doc-row-thumb">
               <DocCover doc={doc} />
             </span>
@@ -189,28 +217,42 @@ export function DocumentList({
           {showLocation && <span className="doc-list-location">{locationLabel(folders, doc) || "All documents"}</span>}
           <span className="doc-list-modified">{relativeTime(documentTime(doc, trashed))}</span>
           <span className="doc-list-words">{doc.wordCount.toLocaleString()}</span>
-          <MenuButton label="Document actions" title={doc.title} items={documentMenuItems(doc, trashed, documentActions)} />
+          <MenuButton label="Document actions" title={doc.title} items={documentMenuItems(doc, trashed, actions)} />
         </div>
-      ))}
-    </div>
   );
 }
 
-function FolderRow({ folder, summary, folders, showLocation, actions }: { folder: Folder; summary: FolderSummary | undefined; folders: Map<string, Folder>; showLocation: boolean; actions: FolderActions }) {
-  const drop = useDropTarget((item) => actions.canDrop(folder.id, item), (item) => actions.drop(folder.id, item));
+function FolderRow({
+  folder,
+  summary,
+  folders,
+  showLocation,
+  actions,
+  selection,
+}: {
+  folder: Folder;
+  summary: FolderSummary | undefined;
+  folders: Map<string, Folder>;
+  showLocation: boolean;
+  actions: FolderActions;
+  selection?: Selection;
+}) {
+  const drop = useDropTarget((item) => actions.canDrop(folder.id, item), (items) => actions.drop(folder.id, items));
+  const item: DragItem = { kind: "folder", id: folder.id, title: folder.name };
+  const selected = selection?.has("folder", folder.id) ?? false;
   const words = summary?.documents.reduce((total, doc) => total + doc.wordCount, 0) ?? 0;
   return (
     <div
-      className={`doc-row is-folder folder-${folder.color}${drop.over ? " is-drop" : ""}`}
+      className={`doc-row is-folder folder-${folder.color}${drop.over ? " is-drop" : ""}${selected ? " is-selected" : ""}`}
       role="button"
       tabIndex={0}
-      aria-label={`${folder.name}, folder, ${countLabel(summary)}`}
-      onClick={() => actions.open(folder.id)}
-      onKeyDown={(event) => event.key === "Enter" && actions.open(folder.id)}
-      {...dragSource({ kind: "folder", id: folder.id, title: folder.name })}
+      aria-label={`${folder.name}, folder, ${countLabel(summary)}${selected ? ", selected" : ""}`}
+      {...itemHandlers(selection, item, () => actions.open(folder.id))}
+      {...dragSource(item, true, selection?.items)}
       {...drop.props}
     >
       <span className="doc-row-name">
+        <SelectCheck selection={selection} item={item} inline />
         <span className="doc-row-thumb is-folder">
           <FolderGlyph color={folder.color} size={20} open={drop.over} />
         </span>

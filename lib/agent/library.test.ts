@@ -89,7 +89,7 @@ describe("organizing the library", () => {
     assert.match(missing.text, /nope: not found/);
   });
 
-  test("folders can be created, renamed, recolored, nested and deleted without losing documents", async () => {
+  test("folders can be created, renamed, recolored, nested and deleted, which trashes their documents", async () => {
     assert.match((await runTool("create_folder", { name: "Archive", color: "teal" }, ctx)).text, /Created the folder "Archive"/);
     assert.match((await runTool("create_folder", { name: "2025", parent: "Archive" }, ctx)).text, /"Archive\/2025"/);
     const old = await make("Old report", "Numbers.");
@@ -98,9 +98,11 @@ describe("organizing the library", () => {
     assert.match((await runTool("update_folder", { folder: "Archive/Last year", parent: "" }, ctx)).text, /now "Last year"/);
     const loop = await runTool("update_folder", { folder: "Archive", parent: "Archive" }, ctx);
     assert.equal(loop.isError, true);
-    const deleted = await runTool("delete_folder", { folder: "Last year" }, ctx);
-    assert.match(deleted.text, /Deleted the folder "Last year"\. 1 document and any folders inside moved to the top level/);
-    assert.equal(old.meta.folderId, undefined);
+    const deleted = await runTool("delete_folder", { folder: "Archive" }, ctx);
+    assert.match(deleted.text, /Deleted the folder "Archive"\. 0 documents moved to the trash/);
+    const lastYear = await runTool("delete_folder", { folder: "Last year" }, ctx);
+    assert.match(lastYear.text, /Deleted the folder "Last year"\. 1 document moved to the trash \(restorable for 30 days\)/);
+    assert.ok(old.meta.trashedAt);
     assert.equal((await runTool("delete_folder", { folder: "Gone" }, ctx)).isError, true);
   });
 

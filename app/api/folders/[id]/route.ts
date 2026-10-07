@@ -24,7 +24,7 @@ export const PATCH = route(async (request, context: Context) => {
   return json({ folder: await folderErrors(() => updateFolder(id, body)) });
 });
 
-/** Deletes the folder; what was inside moves up to its parent folder. */
+/** Deletes the folder and the folders inside; their documents move to the trash. */
 export const DELETE = route(async (_request, context: Context) => {
   const { id } = await context.params;
   return json(await folderErrors(() => deleteFolder(id)));

@@ -1,23 +1,25 @@
 "use client";
 
-import { Download, FilePlus2, FileText, FileUp, FolderOpen, FolderPlus, LayoutGrid, List, Moon, Plus, Search, Sparkles, Sun, Trash2, X } from "lucide-react";
+import { Download, FilePlus2, FileText, FileUp, FolderInput, FolderOpen, FolderPlus, LayoutGrid, List, Moon, Plus, Search, Sparkles, Sun, Trash2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { api, del, patch, post } from "@/lib/client/api";
 import { dismissLegacyDocuments, hasLegacyDocuments, htmlToDocJSON, importLegacyDocuments } from "@/lib/client/legacyImport";
+import { useShortcut } from "@/lib/client/platform";
 import { useTheme } from "@/lib/client/theme";
 import { canMoveFolder, documentFolder, folderPath, summarizeFolders, type Folder, type FolderColor } from "@/lib/doc/folders";
 import type { DocumentMeta } from "@/lib/doc/settings";
 import { documentTemplates, type DocumentTemplate } from "@/lib/doc/templates";
 import { AgentPanel } from "@/components/agent/AgentPanel";
-import { AgentStatusBadge } from "@/components/agent/AgentStatusBadge";
 import { Button, IconButton } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { toast } from "@/components/ui/Toast";
 import { confirmDialog } from "@/components/ui/Confirm";
 import { InlineLogo } from "@/components/ui/Logo";
+import { PanelResizer } from "@/components/ui/PanelResizer";
 import { TextCover, ThemedCover } from "./covers";
 import type { DragItem } from "./dnd";
+import type { Selection } from "./selection";
 import { AddDocumentsDialog, FolderDialog, MoveDialog, type MoveTarget } from "./FolderDialogs";
 import { dismissGoogleImport, GoogleImportBanner, shouldShowGoogleImport, TakeoutGuide } from "./GoogleImport";
 import { ThumbnailQueue, type ThumbnailProgress } from "./thumbnails";
@@ -27,9 +29,11 @@ import { DocumentCard, DocumentList, documentTime, type DocumentActions, type So
 type Snapshot = { meta: DocumentMeta };
 type View = "documents" | "recent" | "trash";
 type Layout = "grid" | "list";
+type ItemRef = { kind: DragItem["kind"]; id: string };
 type FolderDialogState = { mode: "create"; parentId: string | null } | { mode: "edit"; folder: Folder } | null;
 
 const LAYOUT_KEY = "inline-home-layout";
+const AGENT_WIDTH_KEY = "inline-home-agent-width";
 const SORT_KEY = "inline-home-sort";
 
 function readStored<T>(key: string, valid: (value: unknown) => value is T): T | null {
@@ -80,12 +84,15 @@ export function HomePage() {
   const [adding, setAdding] = useState<Folder | null>(null);
   const [importing, setImporting] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
+  const [selected, setSelected] = useState<DragItem[]>([]);
+  const [agentWidth, setAgentWidth] = useState(420);
   const [googleTip, setGoogleTip] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
   const [previews, setPreviews] = useState<ThumbnailProgress | null>(null);
   const thumbnails = useRef<ThumbnailQueue | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const { dark, toggle } = useTheme();
+  const keys = useShortcut();
   const templates = useMemo(() => documentTemplates(), []);
 
   const load = useCallback(async () => {
@@ -130,6 +137,7 @@ export function HomePage() {
     setLegacy(hasLegacyDocuments());
     setFolderId(folderFromAddress());
     setLayout(readStored(LAYOUT_KEY, isLayout) ?? "grid");
+    setAgentWidth(readStored(AGENT_WIDTH_KEY, (value): value is number => typeof value === "number" && value >= 320 && value <= 760) ?? 420);
     setSort(readStored(SORT_KEY, isSort) ?? { key: "modified", descending: true });
     const onPop = () => {
       setFolderId(folderFromAddress());
@@ -287,37 +295,38 @@ export function HomePage() {
 
   const folderName = useCallback((id: string | null) => (id ? (folders.get(id)?.name ?? "folder") : "All documents"), [folders]);
 
-  const moveDocuments = async (ids: string[], target: string | null, options: { undo?: boolean } = {}) => {
-    const docs = (documents ?? []).filter((doc) => ids.includes(doc.id));
-    const previous = new Map(docs.map((doc) => [doc.id, documentFolder(folders, doc)]));
+  /**
+   * Move documents and folders into a folder (null: the top level), with one
+   * Undo for the lot. Folders that can't go there (into themselves) stay put.
+   */
+  const moveItems = async (items: ItemRef[], target: string | null) => {
+    const docs = (documents ?? []).filter((doc) => items.some((item) => item.kind === "document" && item.id === doc.id) && documentFolder(folders, doc) !== target);
+    const movedFolders = items
+      .map((item) => (item.kind === "folder" ? folders.get(item.id) : undefined))
+      .filter((folder): folder is Folder => Boolean(folder) && folder!.parentId !== target && canMoveFolder(folders, folder!.id, target));
+    const count = docs.length + movedFolders.length;
+    if (!count) return;
+    const previousDocs = new Map(docs.map((doc) => [doc.id, documentFolder(folders, doc)]));
+    const previousFolders = new Map(movedFolders.map((folder) => [folder.id, folder.parentId]));
     // Show the move at once; the list reloads from the server after.
-    setDocuments((list) => list?.map((doc) => (ids.includes(doc.id) ? { ...doc, folderId: target ?? undefined } : doc)) ?? list);
+    setDocuments((list) => list?.map((doc) => (previousDocs.has(doc.id) ? { ...doc, folderId: target ?? undefined } : doc)) ?? list);
+    setFolderList((list) => list.map((folder) => (previousFolders.has(folder.id) ? { ...folder, parentId: target } : folder)));
     try {
-      await Promise.all(ids.map((id) => patch(`/api/documents/${id}`, { folderId: target })));
-      if (options.undo !== false) {
-        toast(docs.length === 1 ? `Moved "${docs[0]!.title}" to ${folderName(target)}.` : `Moved ${plural(docs.length, "document")} to ${folderName(target)}.`, {
-          tone: "success",
-          action: {
-            label: "Undo",
-            run: () => void Promise.all([...previous].map(([id, folder]) => patch(`/api/documents/${id}`, { folderId: folder }))).then(load),
-          },
-        });
-      }
-    } catch (error) {
-      toast(error instanceof Error ? error.message : "Couldn't move that.", { tone: "error" });
-    }
-    void load();
-  };
-
-  const moveFolder = async (folder: Folder, target: string | null) => {
-    try {
-      await patch(`/api/folders/${folder.id}`, { parentId: target });
-      toast(`Moved "${folder.name}" to ${folderName(target)}.`, {
+      await Promise.all([...docs.map((doc) => patch(`/api/documents/${doc.id}`, { folderId: target })), ...movedFolders.map((folder) => patch(`/api/folders/${folder.id}`, { parentId: target }))]);
+      const what = count === 1 ? `"${docs[0]?.title ?? movedFolders[0]!.name}"` : movedFolders.length ? plural(count, "item") : plural(count, "document");
+      toast(`Moved ${what} to ${folderName(target)}.`, {
         tone: "success",
-        action: { label: "Undo", run: () => void patch(`/api/folders/${folder.id}`, { parentId: folder.parentId }).then(load) },
+        action: {
+          label: "Undo",
+          run: () =>
+            void Promise.all([
+              ...[...previousDocs].map(([id, folder]) => patch(`/api/documents/${id}`, { folderId: folder })),
+              ...[...previousFolders].map(([id, parent]) => patch(`/api/folders/${id}`, { parentId: parent })),
+            ]).then(load),
+        },
       });
     } catch (error) {
-      toast(error instanceof Error ? error.message : "Couldn't move that folder.", { tone: "error" });
+      toast(error instanceof Error ? error.message : "Couldn't move that.", { tone: "error" });
     }
     void load();
   };
@@ -343,23 +352,56 @@ export function HomePage() {
     void load();
   };
 
-  const deleteFolder = async (folder: Folder) => {
-    const summary = summaries.get(folder.id);
-    const inside = [summary?.documents.length ? plural(summary.documents.length, "document") : "", summary?.folders ? plural(summary.folders, "folder") : ""].filter(Boolean).join(" and ");
+  /**
+   * Delete folders (with everything in them) and documents. Documents go to
+   * the trash; folders are removed. One Undo puts it all back.
+   */
+  const deleteItems = async (items: ItemRef[]) => {
+    const picked = items.map((item) => (item.kind === "folder" ? folders.get(item.id) : undefined)).filter((folder): folder is Folder => Boolean(folder));
+    // A folder inside another picked folder goes with it.
+    const tops = picked.filter((folder) => !picked.some((other) => other.id !== folder.id && folderPath(folders, folder.parentId).some((step) => step.id === other.id)));
+    const within = (doc: DocumentMeta) => tops.some((folder) => folderPath(folders, documentFolder(folders, doc)).some((step) => step.id === folder.id));
+    const looseDocs = (documents ?? []).filter((doc) => items.some((item) => item.kind === "document" && item.id === doc.id) && !within(doc));
+    const docCount = looseDocs.length + tops.reduce((total, folder) => total + (summaries.get(folder.id)?.documents.length ?? 0), 0);
+    const folderCount = tops.length + tops.reduce((total, folder) => total + (summaries.get(folder.id)?.folders ?? 0), 0);
+    if (!docCount && !folderCount) return;
+    const single = tops.length === 1 && !looseDocs.length ? tops[0]! : null;
+    const trashText = docCount ? `${plural(docCount, "document")} ${single ? "inside " : ""}move${docCount === 1 ? "s" : ""} to the trash, where ${docCount === 1 ? "it's" : "they're"} kept for 30 days` : "";
+    const inner = single ? folderCount - 1 : folderCount;
+    const folderText = inner ? `${plural(inner, "folder")} ${single ? "inside " : ""}${inner === 1 ? "is" : "are"} deleted` : "";
+    const body = [trashText, folderText].filter(Boolean).join(", and ");
     const ok = await confirmDialog({
-      title: `Delete "${folder.name}"?`,
-      body: inside ? `The ${inside} inside move to ${folderName(folder.parentId)}. No documents are deleted.` : "The folder is empty.",
-      confirmLabel: "Delete folder",
+      title: single ? `Delete "${single.name}"?` : `Delete ${plural(tops.length + looseDocs.length, "item")}?`,
+      body: body ? `${body.charAt(0).toUpperCase()}${body.slice(1)}.` : "The folder is empty.",
+      confirmLabel: single ? "Delete folder" : "Delete",
       danger: true,
     });
     if (!ok) return;
+    const trashed: string[] = [];
+    const removed: Folder[] = [];
     try {
-      await del(`/api/folders/${folder.id}`);
-      toast(`Deleted the folder "${folder.name}".`);
-      if (currentId && folderPath(folders, currentId).some((item) => item.id === folder.id)) openFolder(folder.parentId);
+      for (const folder of tops) {
+        const result = await del<{ trashed: string[]; folders: Folder[] }>(`/api/folders/${folder.id}`);
+        trashed.push(...result.trashed);
+        removed.push(...result.folders);
+      }
+      await Promise.all(looseDocs.map((doc) => patch(`/api/documents/${doc.id}`, { trashed: true })));
+      trashed.push(...looseDocs.map((doc) => doc.id));
+      toast(single ? `Deleted the folder "${single.name}".` : `Deleted ${plural(tops.length + looseDocs.length, "item")}.`, {
+        action: {
+          label: "Undo",
+          run: () =>
+            void (removed.length ? post("/api/folders/restore", { folders: removed }) : Promise.resolve())
+              .then(() => Promise.all(trashed.map((id) => patch(`/api/documents/${id}`, { trashed: false }))))
+              .then(load),
+        },
+      });
+      const gone = currentId ? folderPath(folders, currentId).find((step) => tops.some((folder) => folder.id === step.id)) : undefined;
+      if (gone) openFolder(gone.parentId);
     } catch (error) {
-      toast(error instanceof Error ? error.message : "Couldn't delete the folder.", { tone: "error" });
+      toast(error instanceof Error ? error.message : "Couldn't delete that.", { tone: "error" });
     }
+    setSelected([]);
     void load();
   };
 
@@ -368,19 +410,16 @@ export function HomePage() {
     rename: (folder) => setFolderDialog({ mode: "edit", folder }),
     recolor: (folder, color) => void updateFolder(folder, { color }),
     newFolder: (parentId) => setFolderDialog({ mode: "create", parentId }),
-    move: (folder) => setMoving({ kind: "folder", id: folder.id, title: folder.name, from: folder.parentId }),
-    remove: (folder) => void deleteFolder(folder),
+    move: (folder) => setMoving({ title: folder.name, from: folder.parentId, items: [{ kind: "folder", id: folder.id }] }),
+    remove: (folder) => void deleteItems([{ kind: "folder", id: folder.id }]),
     canDrop: (target: string | null, item: DragItem) => {
       if (item.kind === "folder") return item.id !== target && folders.get(item.id)?.parentId !== target && canMoveFolder(folders, item.id, target);
       const doc = documents?.find((entry) => entry.id === item.id);
       return Boolean(doc) && documentFolder(folders, doc!) !== target;
     },
-    drop: (target, item) => {
-      if (item.kind === "document") void moveDocuments([item.id], target);
-      else {
-        const folder = folders.get(item.id);
-        if (folder) void moveFolder(folder, target);
-      }
+    drop: (target, items) => {
+      setSelected([]);
+      void moveItems(items, target);
     },
   };
 
@@ -403,7 +442,7 @@ export function HomePage() {
       toast(`Created "${document.meta.title}".`);
       void load();
     },
-    move: (doc) => setMoving({ kind: "document", id: doc.id, title: doc.title, from: documentFolder(folders, doc) }),
+    move: (doc) => setMoving({ title: doc.title, from: documentFolder(folders, doc), items: [{ kind: "document", id: doc.id }] }),
     trash: (doc) => void moveToTrash(doc),
     restore: async (doc) => {
       await patch(`/api/documents/${doc.id}`, { trashed: false });
@@ -449,6 +488,57 @@ export function HomePage() {
   }, [documents, trashed, folderList, folders, summaries, view, query, sort, currentId]);
 
   const showLocation = searching || view === "recent";
+
+  // --- selecting ------------------------------------------------------------
+
+  const selection = useMemo<Selection | undefined>(() => {
+    if (view === "trash") return undefined;
+    const picked = new Set(selected.map((item) => `${item.kind}:${item.id}`));
+    return {
+      active: selected.length > 0,
+      has: (kind, id) => picked.has(`${kind}:${id}`),
+      toggle: (item) => setSelected((list) => (list.some((entry) => entry.kind === item.kind && entry.id === item.id) ? list.filter((entry) => !(entry.kind === item.kind && entry.id === item.id)) : [...list, item])),
+      items: selected,
+    };
+  }, [selected, view]);
+
+  // A selection belongs to what's on screen: going elsewhere clears it.
+  useEffect(() => setSelected([]), [view, currentId, query]);
+  // Items that went away (moved by Claude, deleted elsewhere) drop out of it.
+  useEffect(() => {
+    setSelected((list) => {
+      const next = list.filter((item) => (item.kind === "folder" ? folders.has(item.id) : documents?.some((doc) => doc.id === item.id)));
+      return next.length === list.length ? list : next;
+    });
+  }, [folders, documents]);
+
+  const shownRef = useRef({ shownFolders, shownDocs });
+  shownRef.current = { shownFolders, shownDocs };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, [contenteditable=true], .agent-panel, [role=dialog]")) return;
+      if (event.key === "Escape" && selected.length) {
+        event.preventDefault();
+        setSelected([]);
+      } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a" && view !== "trash") {
+        event.preventDefault();
+        const { shownFolders: visibleFolders, shownDocs: visibleDocs } = shownRef.current;
+        setSelected([
+          ...visibleFolders.map((folder): DragItem => ({ kind: "folder", id: folder.id, title: folder.name })),
+          ...visibleDocs.map((doc): DragItem => ({ kind: "document", id: doc.id, title: doc.title })),
+        ]);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selected.length, view]);
+
+  const moveSelection = () => {
+    if (!selected.length) return;
+    const places = new Set(selected.map((item) => (item.kind === "folder" ? (folders.get(item.id)?.parentId ?? null) : documentFolder(folders, documents?.find((doc) => doc.id === item.id) ?? {}))));
+    setMoving({ title: selected[0]!.title, from: places.size === 1 ? [...places][0]! : undefined, items: selected.map(({ kind, id }) => ({ kind, id })) });
+  };
   const closeFolderDialog = useCallback(() => setFolderDialog(null), []);
   const closeMove = useCallback(() => setMoving(null), []);
   const closeAdd = useCallback(() => setAdding(null), []);
@@ -461,16 +551,16 @@ export function HomePage() {
   const grid = (
     <div className="doc-grid">
       {shownFolders.map((folder) => (
-        <FolderCard key={folder.id} folder={folder} summary={summaries.get(folder.id)} actions={folderActions} />
+        <FolderCard key={folder.id} folder={folder} summary={summaries.get(folder.id)} actions={folderActions} selection={selection} />
       ))}
       {shownDocs.map((doc) => (
-        <DocumentCard key={doc.id} doc={doc} trashed={view === "trash"} folders={folders} showLocation={showLocation} actions={documentActions} />
+        <DocumentCard key={doc.id} doc={doc} trashed={view === "trash"} folders={folders} showLocation={showLocation} actions={documentActions} selection={selection} />
       ))}
     </div>
   );
 
   return (
-    <div className={`home${agentOpen ? " has-agent" : ""}`}>
+    <div className={`home${agentOpen ? " has-agent" : ""}`} style={{ "--home-agent-width": `${agentWidth}px` } as CSSProperties}>
       <header className="home-header">
         <div className="home-brand">
           <InlineLogo />
@@ -486,10 +576,6 @@ export function HomePage() {
           )}
         </div>
         <div className="home-header-actions">
-          <AgentStatusBadge />
-          <IconButton label="Claude" shortcut="⌘J" active={agentOpen} onClick={() => setAgentOpen((open) => !open)}>
-            <Sparkles size={16} />
-          </IconButton>
           <IconButton label={dark ? "Light theme" : "Dark theme"} onClick={toggle}>
             {dark ? <Sun size={16} /> : <Moon size={16} />}
           </IconButton>
@@ -581,8 +667,16 @@ export function HomePage() {
                 Drawing previews {Math.min(previews.done + 1, previews.total)} of {previews.total}
               </span>
             )}
-            {view !== "trash" && (documents?.length ?? 0) > 0 && (
-              <Button size="sm" variant="ghost" icon={<Sparkles size={15} />} className="organize-button" onClick={() => setAgentOpen(true)} title="Ask Claude to sort your documents into folders">
+            {((view !== "trash" && (documents?.length ?? 0) > 0) || agentOpen) && (
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={<Sparkles size={15} />}
+                className={`organize-button${agentOpen ? " is-open" : ""}`}
+                aria-pressed={agentOpen}
+                onClick={() => setAgentOpen((open) => !open)}
+                title={`${agentOpen ? "Close Claude" : "Ask Claude to sort your documents into folders"} (${keys("⌘J")})`}
+              >
                 Organize with Claude
               </Button>
             )}
@@ -676,19 +770,19 @@ export function HomePage() {
               )}
             </div>
           ) : layout === "list" ? (
-            <DocumentList folderRows={shownFolders} docs={shownDocs} folders={folders} summaries={summaries} trashed={view === "trash"} showLocation={showLocation} sort={sort} onSort={changeSort} folderActions={folderActions} documentActions={documentActions} />
+            <DocumentList folderRows={shownFolders} docs={shownDocs} folders={folders} summaries={summaries} trashed={view === "trash"} showLocation={showLocation} sort={sort} onSort={changeSort} folderActions={folderActions} documentActions={documentActions} selection={selection} />
           ) : shownFolders.length && shownDocs.length ? (
             <>
               <h3 className="home-subhead">Folders</h3>
               <div className="doc-grid">
                 {shownFolders.map((folder) => (
-                  <FolderCard key={folder.id} folder={folder} summary={summaries.get(folder.id)} actions={folderActions} />
+                  <FolderCard key={folder.id} folder={folder} summary={summaries.get(folder.id)} actions={folderActions} selection={selection} />
                 ))}
               </div>
               <h3 className="home-subhead">Documents</h3>
               <div className="doc-grid">
                 {shownDocs.map((doc) => (
-                  <DocumentCard key={doc.id} doc={doc} trashed={view === "trash"} folders={folders} showLocation={showLocation} actions={documentActions} />
+                  <DocumentCard key={doc.id} doc={doc} trashed={view === "trash"} folders={folders} showLocation={showLocation} actions={documentActions} selection={selection} />
                 ))}
               </div>
             </>
@@ -698,7 +792,22 @@ export function HomePage() {
         </section>
       </main>
 
-      {view !== "trash" && (
+      {selection?.active && (
+        <div className="selection-bar" role="toolbar" aria-label="Selected items">
+          <IconButton label="Clear selection" size="sm" onClick={() => setSelected([])}>
+            <X size={16} />
+          </IconButton>
+          <span className="selection-count">{selected.length} selected</span>
+          <Button size="sm" variant="ghost" icon={<FolderInput size={15} />} onClick={moveSelection}>
+            Move to…
+          </Button>
+          <Button size="sm" variant="ghost" icon={<Trash2 size={15} />} className="selection-delete" onClick={() => void deleteItems(selected)}>
+            Delete
+          </Button>
+        </div>
+      )}
+
+      {view !== "trash" && !selected.length && (
         <button type="button" className="home-fab" aria-label="New document" onClick={() => void create(templates[0]!)} disabled={creating !== null}>
           <Plus size={24} />
         </button>
@@ -706,6 +815,14 @@ export function HomePage() {
 
       {agentOpen && (
         <div className="home-agent">
+          <PanelResizer
+            width={agentWidth}
+            max={Math.min(760, Math.max(320, (typeof window === "undefined" ? 1440 : window.innerWidth) - 420))}
+            onResize={(width) => {
+              setAgentWidth(width);
+              store(AGENT_WIDTH_KEY, width);
+            }}
+          />
           <AgentPanel documentId={null} home={{ folderId: currentId }} onClose={() => setAgentOpen(false)} onLibraryChange={() => void load()} />
         </div>
       )}
@@ -747,11 +864,8 @@ export function HomePage() {
           const item = moving;
           setMoving(null);
           if (!item) return;
-          if (item.kind === "document") void moveDocuments([item.id], target);
-          else {
-            const folder = folders.get(item.id);
-            if (folder) void moveFolder(folder, target);
-          }
+          if (item.items.length > 1) setSelected([]);
+          void moveItems(item.items, target);
         }}
       />
       <AddDocumentsDialog
@@ -762,7 +876,7 @@ export function HomePage() {
         onAdd={(ids) => {
           const folder = adding;
           setAdding(null);
-          if (folder) void moveDocuments(ids, folder.id);
+          if (folder) void moveItems(ids.map((id) => ({ kind: "document", id })), folder.id);
         }}
       />
     </div>

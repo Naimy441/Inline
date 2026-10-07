@@ -83,7 +83,8 @@ function folderTree(folders: Folder[]): TreeEntry[] {
   return entries;
 }
 
-export type MoveTarget = { kind: "document" | "folder"; id: string; title: string; from: string | null };
+/** What's being moved: one item or several. `from` is where they all are now, or undefined when they're in different folders. */
+export type MoveTarget = { title: string; from: string | null | undefined; items: Array<{ kind: "document" | "folder"; id: string }> };
 
 /** Pick where a document or folder goes, with a way to make a new folder on the spot. */
 export function MoveDialog({
@@ -107,8 +108,8 @@ export function MoveDialog({
     setSelected(item?.from ?? null);
     setNaming(null);
   }, [item]);
-  const allowed = (target: string | null) => !item || item.kind === "document" || canMoveFolder(byId, item.id, target);
-  const unchanged = selected === (item?.from ?? null);
+  const allowed = (target: string | null) => !item || item.items.every((entry) => entry.kind === "document" || canMoveFolder(byId, entry.id, target));
+  const unchanged = item?.from !== undefined && selected === item.from;
   const createHere = async () => {
     if (!naming?.trim()) return;
     const folder = await onCreateFolder(naming.trim(), selected);
@@ -120,8 +121,8 @@ export function MoveDialog({
     <Dialog
       open={Boolean(item)}
       onClose={onClose}
-      title={item ? `Move "${item.title}"` : "Move"}
-      description={item ? <>Currently in {item.from ? folderPath(byId, item.from).map((folder) => folder.name).join(" › ") : "All documents"}.</> : null}
+      title={item ? (item.items.length > 1 ? `Move ${item.items.length} items` : `Move "${item.title}"`) : "Move"}
+      description={item && item.from !== undefined ? <>Currently in {item.from ? folderPath(byId, item.from).map((folder) => folder.name).join(" › ") : "All documents"}.</> : null}
       width={460}
       footer={
         <>
@@ -156,7 +157,7 @@ export function MoveDialog({
               className={`folder-pick${selected === folder.id ? " is-selected" : ""}`}
               style={{ paddingLeft: 10 + Math.min(depth + 1, 8) * 16 }}
               onClick={() => setSelected(folder.id)}
-              onDoubleClick={() => ok && folder.id !== (item?.from ?? null) && onMove(folder.id)}
+              onDoubleClick={() => ok && folder.id !== item?.from && onMove(folder.id)}
             >
               <FolderGlyph color={folder.color} size={16} open={selected === folder.id} />
               <span>{folder.name}</span>

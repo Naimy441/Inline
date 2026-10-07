@@ -1224,16 +1224,21 @@ export const TOOLS = [
   defineTool({
     name: "delete_folder",
     title: "Delete folder",
-    description: "Delete a folder. No documents are deleted: everything inside (documents and folders) moves up into its parent.",
+    description:
+      "Delete a folder and everything in it: the folders inside are deleted and its documents move to the trash, where the user can restore them for 30 days. To keep the documents, move them out first with move_documents. Only delete when the user asks.",
     shape: { folder: z.string().describe("Folder id or path.") },
     write: true,
+    destructive: true,
     async handler(args) {
       const id = (await resolveFolder(args.folder, { create: false })).id;
       if (!id) return fail("Name a folder to delete.");
       const { folders } = await library();
       const name = folderPathName(folders, id);
       const result = await deleteFolder(id);
-      return ok(`Deleted the folder "${name}". ${result.moved} document${result.moved === 1 ? "" : "s"} and any folders inside moved to ${result.parentId ? `"${folderPathName(folders, result.parentId)}"` : "the top level"}.`);
+      const inner = result.folders.length - 1;
+      return ok(
+        `Deleted the folder "${name}"${inner ? ` and ${inner} folder${inner === 1 ? "" : "s"} inside it` : ""}. ${result.trashed.length} document${result.trashed.length === 1 ? "" : "s"} moved to the trash (restorable for 30 days).`,
+      );
     },
   }),
 

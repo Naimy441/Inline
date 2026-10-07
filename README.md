@@ -107,7 +107,7 @@ Template gallery
 Recent documents
 - Documents (Last opened, Rename, Remove, Open in new tab)
 - Grid view, List view
-- Folders (nested, colored, with a breadcrumb; drag documents in or use Move to…)
+- Folders (nested, colored, with a breadcrumb; drag documents in or use Move to…; shift-click to pick several)
 
 DOCUMENT EDITOR
 Logo

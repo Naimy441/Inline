@@ -89,21 +89,36 @@ describe("folders", () => {
     assert.equal((await folders.POST(send("POST", { name: "Bad", color: "plaid" }), {} as never)).status, 400);
   });
 
-  test("deleting a folder moves what was inside, trashed documents too, up to its parent", async () => {
+  test("deleting a folder deletes the folders inside and trashes their documents; restoring undoes it", async () => {
     const outer = await makeFolder({ name: "Outer" });
     const inner = await makeFolder({ name: "Inner", parentId: outer.id });
     const nested = await makeFolder({ name: "Nested", parentId: inner.id });
-    const { meta: kept } = await makeDocument({ title: "Kept", folderId: inner.id });
-    const { meta: binned } = await makeDocument({ title: "Binned", folderId: inner.id });
-    await documentRoute.PATCH(send("PATCH", { trashed: true }), params(binned!.id));
+    const { meta: top } = await makeDocument({ title: "Top", folderId: inner.id });
+    const { meta: deep } = await makeDocument({ title: "Deep", folderId: nested.id });
+    const { meta: outside } = await makeDocument({ title: "Outside", folderId: outer.id });
 
     const response = await folder.DELETE(send("DELETE"), params(inner.id));
-    assert.deepEqual(await response.json(), { moved: 2, parentId: outer.id });
-    assert.equal((await listDocuments()).find((doc) => doc.id === kept!.id)!.folderId, outer.id);
-    assert.equal((await listDocuments(true)).find((doc) => doc.id === binned!.id)!.folderId, outer.id);
-    const listed = ((await (await folders.GET(new Request(url), {} as never)).json()) as { folders: FolderJSON[] }).folders;
-    assert.equal(listed.some((item) => item.id === inner.id), false);
-    assert.equal(listed.find((item) => item.id === nested.id)!.parentId, outer.id);
+    const result = (await response.json()) as { trashed: string[]; folders: FolderJSON[]; parentId: string | null };
+    assert.deepEqual(result.trashed.sort(), [top!.id, deep!.id].sort());
+    assert.deepEqual(result.folders.map((item) => item.name).sort(), ["Inner", "Nested"]);
+    assert.equal(result.parentId, outer.id);
+    const live = await listDocuments();
+    assert.equal(live.some((doc) => doc.id === top!.id || doc.id === deep!.id), false);
+    assert.ok(live.some((doc) => doc.id === outside!.id), "documents outside the folder stay");
+    const trashed = await listDocuments(true);
+    assert.equal(trashed.find((doc) => doc.id === deep!.id)!.folderId, nested.id, "trashed documents remember their folder");
+    let listed = ((await (await folders.GET(new Request(url), {} as never)).json()) as { folders: FolderJSON[] }).folders;
+    assert.equal(listed.some((item) => item.id === inner.id || item.id === nested.id), false);
+
+    // Undo: the folders come back with their ids, and restored documents land in them again.
+    const restore = await import("@/app/api/folders/restore/route");
+    const restored = await restore.POST(send("POST", { folders: result.folders }), {} as never);
+    assert.equal(((await restored.json()) as { folders: FolderJSON[] }).folders.length, 2);
+    for (const id of result.trashed) await documentRoute.PATCH(send("PATCH", { trashed: false }), params(id));
+    listed = ((await (await folders.GET(new Request(url), {} as never)).json()) as { folders: FolderJSON[] }).folders;
+    assert.equal(listed.find((item) => item.id === inner.id)!.parentId, outer.id);
+    assert.equal(listed.find((item) => item.id === nested.id)!.parentId, inner.id);
+    assert.equal((await listDocuments()).find((doc) => doc.id === deep!.id)!.folderId, nested.id);
   });
 
   test("the backup ZIP files Markdown copies in matching folders and keeps the folder list", async () => {

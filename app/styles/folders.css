@@ -252,7 +252,7 @@ button.crumb:hover {
 }
 
 .folder-tile img {
-  background: #fff;
+  background: var(--paper);
 }
 
 .folder-tile .template-thumb {
@@ -440,7 +440,7 @@ button.crumb:hover {
 
 .doc-row-thumb img {
   padding: 0;
-  background: #fff;
+  background: var(--paper);
 }
 
 .doc-row-thumb .thumb-line {
@@ -823,7 +823,7 @@ button.crumb:hover {
   bottom: 0;
   z-index: 30;
   display: flex;
-  width: min(var(--panel-width), 100vw);
+  width: min(var(--home-agent-width, var(--panel-width)), 100vw);
   border-left: 1px solid var(--border);
   background: var(--surface);
   box-shadow: var(--shadow-lg);
@@ -840,18 +840,153 @@ button.crumb:hover {
 /* Wide windows make room for the panel instead of covering the documents. */
 @media (min-width: 1100px) {
   .home.has-agent {
-    padding-right: var(--panel-width);
+    padding-right: var(--home-agent-width, var(--panel-width));
   }
   .home.has-agent .home-agent {
     box-shadow: none;
   }
   .home.has-agent .home-fab {
-    right: calc(var(--panel-width) + 20px);
+    right: calc(var(--home-agent-width, var(--panel-width)) + 20px);
+  }
+  .home.has-agent .selection-bar {
+    left: calc((100% - var(--home-agent-width, var(--panel-width))) / 2);
   }
 }
 
 .organize-button .btn-label {
   white-space: nowrap;
+}
+
+.organize-button.is-open {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+/* The panel's own resize handle sits on its left edge. */
+.home-agent .panel-resizer {
+  left: -3px;
+}
+
+/* --- selecting several items -------------------------------------------------- */
+
+.doc-card,
+.folder-card,
+.doc-row {
+  position: relative;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.select-check {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1.5px solid color-mix(in srgb, var(--text) 35%, transparent);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--surface) 85%, transparent);
+  color: transparent;
+  box-shadow: var(--shadow-sm);
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, border-color 0.12s, transform 0.12s var(--ease);
+}
+
+.select-check.is-inline {
+  position: static;
+  flex: none;
+  margin-right: -2px;
+  box-shadow: none;
+}
+
+.doc-card:hover .select-check,
+.folder-card:hover .select-check,
+.doc-row:hover .select-check,
+.select-check:focus-visible,
+.select-check.is-visible {
+  opacity: 1;
+}
+
+.select-check:hover {
+  border-color: var(--accent);
+  transform: scale(1.08);
+}
+
+.select-check.is-checked {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+/* The inline check takes no room in a row until it's needed. */
+.doc-row .select-check.is-inline:not(.is-visible) {
+  width: 0;
+  border-width: 0;
+  margin-right: -12px;
+}
+
+.doc-row:hover .select-check.is-inline:not(.is-visible) {
+  width: 22px;
+  border-width: 1.5px;
+  margin-right: -2px;
+}
+
+.doc-card.is-selected,
+.folder-card.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.doc-card.is-selected .doc-card-cover,
+.folder-card.is-selected .folder-card-cover {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
+}
+
+.doc-row.is-selected,
+.doc-row.is-selected:hover {
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+.selection-bar {
+  position: fixed;
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  left: 50%;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px 6px 6px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  transform: translateX(-50%);
+  animation: selection-bar-in 0.18s var(--ease);
+}
+
+@keyframes selection-bar-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 12px);
+  }
+}
+
+.selection-count {
+  min-width: 84px;
+  padding: 0 8px 0 2px;
+  font-weight: 600;
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.selection-delete {
+  color: var(--danger);
 }
 
 @media (max-width: 720px) {

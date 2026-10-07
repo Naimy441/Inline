@@ -43,6 +43,11 @@ const SUGGESTIONS = [
 
 /** Starting points on the home page, where Claude organizes rather than edits. */
 const HOME_SUGGESTIONS = [
+  {
+    label: "Organize my Google Docs import",
+    prompt:
+      'Review all my documents and organize them into clear, well-named folders based on their content. Add two separate folders: "To Delete" for documents I probably don\'t need and "Misc" for ones that don\'t fit anywhere else.',
+  },
   { label: "Sort everything into folders", prompt: "Sort my documents into folders. Use a few clear folders with plain names, and keep any folders I already have." },
   { label: "File what's unfiled", prompt: "File the documents that aren't in a folder yet into my existing folders, making a new folder only where nothing fits." },
   { label: "Suggest folders first", prompt: "Look through my documents and suggest a folder structure. Don't move anything yet; show me the plan first." },

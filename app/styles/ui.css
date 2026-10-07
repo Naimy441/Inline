@@ -806,48 +806,6 @@ select.input {
   }
 }
 
-.status-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: 13px;
-  background: var(--surface);
-  color: var(--text-2);
-  font-size: 12px;
-  font-weight: 500;
-  white-space: nowrap;
-  flex: none;
-}
-
-/* On phones the badge is just its status dot. */
-@media (max-width: 520px) {
-  .status-badge {
-    width: 26px;
-    padding: 0;
-    justify-content: center;
-    font-size: 0;
-  }
-}
-
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--faint);
-}
-
-.status-badge.is-ready .status-dot {
-  background: var(--success);
-  box-shadow: 0 0 0 3px var(--success-soft);
-}
-
-.status-badge.is-off .status-dot {
-  background: var(--warning);
-}
-
 .logo {
   flex: none;
 }

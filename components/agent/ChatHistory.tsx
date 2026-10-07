@@ -1,6 +1,6 @@
 "use client";
 
-import { FileText, Search, Trash2 } from "lucide-react";
+import { FileText, House, Search, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import type { ChatSummary } from "@/lib/agent/types";
@@ -133,9 +133,9 @@ export function ChatHistory({
                   {chat.preview && <span className="chat-row-preview">{chat.preview}</span>}
                   <span className="chat-row-meta">
                     {scope === "all" && (
-                      <span className={`chat-row-doc${elsewhere ? "" : " is-here"}`}>
-                        <FileText size={11} />
-                        {elsewhere ? docTitle : "This document"}
+                      <span className={`chat-row-doc${elsewhere || !chat.documentId ? "" : " is-here"}`}>
+                        {chat.documentId ? <FileText size={11} /> : <House size={11} />}
+                        {!chat.documentId ? "Home" : elsewhere ? docTitle : "This document"}
                       </span>
                     )}
                     <span>{relativeTime(chat.updatedAt)}</span>
