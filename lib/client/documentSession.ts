@@ -890,6 +890,9 @@ export class DocumentSession {
   run(command: Command) {
     const view = this.view;
     if (!view) return false;
+    // The browser reports a selection made from the keyboard (Shift+Home) a moment later; a toolbar
+    // click right after it would act on the old one. Read what the page shows first.
+    (view as unknown as { domObserver?: { flush(): void } }).domObserver?.flush();
     const result = command(view.state, (tr) => this.dispatch(tr), view);
     view.focus();
     return result;
