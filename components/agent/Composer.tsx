@@ -112,15 +112,30 @@ export const Composer = forwardRef<
   const textarea = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
+  // Text set from outside (a suggestion) puts the caret at its end as soon as it's on screen,
+  // not a frame later, when it could undo a selection the user (or a test) has just made.
+  const caretToEnd = useRef(false);
+  const placeCaretAtEnd = () => {
+    const element = textarea.current;
+    if (!element) return;
+    element.focus();
+    element.setSelectionRange(element.value.length, element.value.length);
+  };
+  useLayoutEffect(() => {
+    if (!caretToEnd.current) return;
+    caretToEnd.current = false;
+    placeCaretAtEnd();
+  }, [text]);
+
   useImperativeHandle(ref, () => ({
     focus: () => textarea.current?.focus(),
     setText: (value) => {
+      if (value === text) {
+        placeCaretAtEnd();
+        return;
+      }
+      caretToEnd.current = true;
       setText(value);
-      requestAnimationFrame(() => {
-        textarea.current?.focus();
-        const length = textarea.current?.value.length ?? 0;
-        textarea.current?.setSelectionRange(length, length);
-      });
     },
   }));
 
