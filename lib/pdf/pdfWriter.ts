@@ -21,7 +21,18 @@ export type RGB = [number, number, number];
 export type PdfText = { kind: "text"; x: number; y: number; text: string; font: StandardFont; size: number; color: RGB };
 export type PdfRect = { kind: "rect"; x: number; y: number; width: number; height: number; fill: RGB };
 export type PdfLine = { kind: "line"; x1: number; y1: number; x2: number; y2: number; width: number; color: RGB };
-export type PdfImage = { kind: "image"; x: number; y: number; width: number; height: number; jpeg: Uint8Array; pixelWidth: number; pixelHeight: number };
+export type PdfImage = {
+  kind: "image";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  jpeg: Uint8Array;
+  pixelWidth: number;
+  pixelHeight: number;
+  /** Black-on-white ink rendered as a picture (an equation), not a photo. */
+  ink?: boolean;
+};
 export type PdfLink = { kind: "link"; x: number; y: number; width: number; height: number; uri: string };
 export type PdfItem = PdfText | PdfRect | PdfLine | PdfImage | PdfLink;
 

@@ -722,15 +722,20 @@ export class DocumentSession {
     const ui = this.ui.get();
     if (!view || !meta || this.destroyed || ui.flow || ui.printing || ui.exporting || document.visibilityState !== "visible") return;
     const end = Math.min(layout.starts[0] ?? view.state.doc.content.size, view.state.doc.content.size);
-    const key = hashText(`${meta.title}\n${JSON.stringify(meta.settings)}\n${JSON.stringify(view.state.doc.slice(0, end).content.toJSON())}`);
+    // "2": thumbnails since there is a dark version as well, so older ones are redrawn once.
+    const key = hashText(`2\n${meta.title}\n${JSON.stringify(meta.settings)}\n${JSON.stringify(view.state.doc.slice(0, end).content.toJSON())}`);
     if (key === (this.thumbnailKey ?? meta.thumbnailKey)) return;
     const root = view.dom.closest<HTMLElement>(".page-stack");
     if (!root) return;
     const [{ snapshotPages }, { renderThumbnail }] = await Promise.all([import("@/lib/pdf/pageSnapshot"), import("@/lib/pdf/thumbnail")]);
     const page = snapshotPages(root, meta.title, undefined, undefined, 1).pages[0];
-    const image = page ? await renderThumbnail(page) : null;
-    if (!image || this.destroyed) return;
-    const response = await fetch(`/api/documents/${this.id}/thumbnail?key=${key}`, { method: "PUT", body: image, headers: { "Content-Type": image.type } });
+    if (!page) return;
+    // A light and a dark picture, so the home page matches the theme. The dark one goes first:
+    // saving the light one is what tells the home page there is a new picture.
+    const [light, dark] = await Promise.all([renderThumbnail(page), renderThumbnail(page, undefined, "dark")]);
+    if (!light || this.destroyed) return;
+    if (dark) await fetch(`/api/documents/${this.id}/thumbnail?theme=dark`, { method: "PUT", body: dark, headers: { "Content-Type": dark.type } });
+    const response = await fetch(`/api/documents/${this.id}/thumbnail?key=${key}`, { method: "PUT", body: light, headers: { "Content-Type": light.type } });
     if (response.ok) this.thumbnailKey = key;
   }
 

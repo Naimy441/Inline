@@ -139,21 +139,28 @@ export async function writeDocumentFile(file: StoredDocumentFile) {
 export async function deleteDocumentFile(id: string) {
   await removeFile(dir("documents", `${assertSafeId(id)}.json`));
   await removeFile(dir("thumbnails", `${id}.img`));
+  await removeFile(dir("thumbnails", `${id}.dark.img`));
   await fs.rm(dir("versions", assertSafeId(id)), { recursive: true, force: true });
 }
 
-/** The small first-page image shown on the home page (WebP or JPEG). */
-export async function writeThumbnail(id: string, data: Uint8Array) {
-  const file = dir("thumbnails", `${assertSafeId(id)}.img`);
+export type ThumbnailTheme = "light" | "dark";
+
+function thumbnailFile(id: string, theme: ThumbnailTheme) {
+  return dir("thumbnails", `${assertSafeId(id)}${theme === "dark" ? ".dark" : ""}.img`);
+}
+
+/** The small first-page image shown on the home page (WebP or JPEG), drawn for the light or the dark theme. */
+export async function writeThumbnail(id: string, data: Uint8Array, theme: ThumbnailTheme = "light") {
+  const file = thumbnailFile(id, theme);
   await fs.mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.tmp`;
   await fs.writeFile(temp, data);
   await fs.rename(temp, file);
 }
 
-export async function readThumbnail(id: string): Promise<Uint8Array | null> {
+export async function readThumbnail(id: string, theme: ThumbnailTheme = "light"): Promise<Uint8Array | null> {
   try {
-    return new Uint8Array(await fs.readFile(dir("thumbnails", `${assertSafeId(id)}.img`)));
+    return new Uint8Array(await fs.readFile(thumbnailFile(id, theme)));
   } catch {
     return null;
   }

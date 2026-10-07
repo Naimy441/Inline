@@ -322,12 +322,28 @@ function TemplateThumb({ template }: { template: DocumentTemplate }) {
   if (!failed) {
     return (
       <span className="template-thumb is-image" aria-hidden>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={`/templates/${template.id}.webp`} alt="" loading="lazy" onError={() => setFailed(true)} />
+        <ThemedCover light={`/templates/${template.id}.webp`} dark={`/templates/${template.id}.dark.webp`} onError={() => setFailed(true)} />
       </span>
     );
   }
   return <TextCover lines={template.markdown.split("\n")} />;
+}
+
+/**
+ * A first-page picture for each theme. CSS shows the one for the current
+ * theme; the hidden one isn't fetched (lazy images that aren't displayed
+ * don't load), and switching theme swaps them at once.
+ */
+function ThemedCover({ light, dark, onError }: { light: string; dark: string; onError: () => void }) {
+  const [darkFailed, setDarkFailed] = useState(false);
+  return (
+    <>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img className={darkFailed ? undefined : "cover-light"} src={light} alt="" loading="lazy" onError={onError} />
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      {!darkFailed && <img className="cover-dark" src={dark} alt="" loading="lazy" onError={() => setDarkFailed(true)} />}
+    </>
+  );
 }
 
 /** A cover drawn from text, for documents (and templates) without a saved picture of their first page. */
@@ -382,7 +398,7 @@ function DocumentCard({
       <div className="doc-card-cover">
         {doc.thumbnailAt && !broken ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={`/api/documents/${doc.id}/thumbnail?v=${doc.thumbnailAt}`} alt="" loading="lazy" onError={() => setBroken(true)} />
+          <ThemedCover light={`/api/documents/${doc.id}/thumbnail?v=${doc.thumbnailAt}`} dark={`/api/documents/${doc.id}/thumbnail?v=${doc.thumbnailAt}&theme=dark`} onError={() => setBroken(true)} />
         ) : doc.preview ? (
           <TextCover lines={sentences} />
         ) : (
