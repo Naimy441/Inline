@@ -20,6 +20,7 @@ import { gotoHunk, mapHunksThrough, reviewHunkAtCursor, setHunks } from "@/lib/e
 import { editorPlugins } from "@/lib/editor/setup";
 import { setInvisibles } from "@/lib/editor/invisibles";
 import { normalizeWord, setDictionary } from "@/lib/editor/spelling";
+import { codeBlockView } from "@/lib/editor/math";
 import { rebaseLocalEdits, unconfirmedEdits } from "@/lib/editor/resync";
 import { loadPreferences, preferences, setPreference } from "@/lib/client/preferences";
 import { formatShortcut, isApple } from "@/lib/client/platform";
@@ -295,7 +296,7 @@ export class DocumentSession {
     if (!root) throw new Error("The page layout isn't ready yet.");
     const title = this.meta?.title ?? "Untitled document";
     // The PDF code loads on first use, keeping it out of the editor's start-up code.
-    const { snapshotPages } = await import("@/lib/pdf/pageSnapshot");
+    const [{ snapshotPages, domMeasurer }, { rasterizeMath }] = await Promise.all([import("@/lib/pdf/pageSnapshot"), import("@/lib/pdf/mathRaster")]);
     // Lay the pages out without review marks (as printing does) while they're read.
     root.classList.add("is-clean");
     try {
@@ -306,7 +307,8 @@ export class DocumentSession {
       relayout(view);
       await settleLayout(() => pageCount(view.state));
       await imagesLoaded(root);
-      return snapshotPages(root, title);
+      const rasters = await rasterizeMath(root);
+      return snapshotPages(root, title, domMeasurer(rasters));
     } finally {
       root.classList.remove("is-clean");
       if (this.ui.get().exporting) {
@@ -333,7 +335,7 @@ export class DocumentSession {
         editable: () => !this.callbacks.offline && this.ui.get().mode !== "viewing",
         state: this.createState(document),
         dispatchTransaction: (tr) => this.dispatch(tr),
-        nodeViews: { image: (node, view, getPos) => new ImageView(node, view, getPos) },
+        nodeViews: { image: (node, view, getPos) => new ImageView(node, view, getPos), code_block: codeBlockView },
         attributes: () => ({ class: "doc-content", spellcheck: preferences.get().spellcheck ? "true" : "false", "aria-label": "Document", role: "textbox", "aria-multiline": "true" }),
         handleDOMEvents: {
           focus: () => {
@@ -731,8 +733,11 @@ export class DocumentSession {
     if (key === (this.thumbnailKey ?? meta.thumbnailKey)) return;
     const root = view.dom.closest<HTMLElement>(".page-stack");
     if (!root) return;
-    const [{ snapshotPages }, { renderThumbnail }] = await Promise.all([import("@/lib/pdf/pageSnapshot"), import("@/lib/pdf/thumbnail")]);
-    const page = snapshotPages(root, meta.title, undefined, undefined, 1).pages[0];
+    const [{ snapshotPages, domMeasurer }, { renderThumbnail }, { rasterizeMath }] = await Promise.all([import("@/lib/pdf/pageSnapshot"), import("@/lib/pdf/thumbnail"), import("@/lib/pdf/mathRaster")]);
+    const firstPage = root.querySelector<HTMLElement>(".sheet");
+    const rasters = firstPage ? await rasterizeMath(firstPage) : new Map();
+    if (this.destroyed) return;
+    const page = snapshotPages(root, meta.title, domMeasurer(rasters), undefined, 1).pages[0];
     if (!page) return;
     // A light and a dark picture, so the home page matches the theme. The dark one goes first:
     // saving the light one is what tells the home page there is a new picture.

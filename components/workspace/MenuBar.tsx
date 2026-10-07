@@ -20,6 +20,7 @@ import {
 } from "@/lib/editor/commands";
 import { addColumnAfter, addColumnBefore, addRowAfter, addRowBefore, deleteColumn, deleteRow, deleteTable, isInTable, toggleHeaderRow } from "prosemirror-tables";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
+import { insertEquation } from "@/lib/editor/math";
 
 export type MenuActions = {
   newDocument: () => void;
@@ -194,6 +195,13 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       { label: "Link", shortcut: `⌘K`, onSelect: actions.link },
       { label: "Comment", shortcut: `⌘⌥M`, onSelect: actions.comment },
       { kind: "separator" },
+      {
+        label: "Equation",
+        submenu: [
+          { label: "Inline equation", hint: "Type $…$", onSelect: () => !run(insertEquation(false)) && actions.notice("Put the cursor in a paragraph to add an equation.") },
+          { label: "Display equation", hint: "Type $$ and a space", onSelect: () => !run(insertEquation(true)) && actions.notice("Put the cursor in a paragraph to add an equation.") },
+        ],
+      },
       { label: "Special characters…", onSelect: actions.specialCharacters },
       { label: "Table of contents", onSelect: () => !run(insertTableOfContents) && actions.notice("Add some headings first; the table of contents lists them.") },
       { kind: "separator" },

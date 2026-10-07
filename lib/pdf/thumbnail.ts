@@ -73,10 +73,14 @@ export async function renderThumbnail(page: PdfPage, width = THUMBNAIL_WIDTH, th
     } else if (item.kind === "image") {
       const bitmap = await createImageBitmap(new Blob([item.jpeg as Uint8Array<ArrayBuffer>], { type: "image/jpeg" })).catch(() => null);
       if (bitmap) {
-        // Ink drawn as a picture (equations) turns light on the dark page; photos stay as they are.
-        if (theme === "dark" && item.ink) ctx.filter = "invert(0.9) hue-rotate(180deg)";
+        // Ink drawn as a picture (equations) blends into the page, and turns light on the dark one; photos stay as they are.
+        if (item.ink) {
+          ctx.filter = theme === "dark" ? "invert(1)" : "none";
+          ctx.globalCompositeOperation = theme === "dark" ? "screen" : "multiply";
+        }
         ctx.drawImage(bitmap, item.x * scale, item.y * scale, item.width * scale, item.height * scale);
         ctx.filter = "none";
+        ctx.globalCompositeOperation = "source-over";
       }
     }
   }

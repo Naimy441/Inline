@@ -66,7 +66,8 @@ export function findMisspellings(doc: PMNode, check: Speller, dictionary: Readon
         const at = offset;
         offset += part.length + 1;
         if (word.length < 2 || /\d/.test(word) || word === word.toUpperCase()) continue;
-        if (dictionary.has(normalizeWord(word)) || isCorrect(word, check)) continue;
+        const normalized = normalizeWord(word);
+        if (dictionary.has(normalized) || dictionary.has(normalized.replace(/'s$/, "")) || isCorrect(word, check)) continue;
         const from = entry.pos + 1 + at;
         const contextStart = Math.max(0, at - 30);
         const contextEnd = Math.min(text.length, at + word.length + 30);

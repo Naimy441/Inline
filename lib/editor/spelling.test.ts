@@ -16,10 +16,11 @@ describe("the user's dictionary", () => {
     let state = EditorState.create({ doc: markdownToDoc("Zorblat met Zorblat’s friend.\n\nNo zorblat here? zorblat!"), plugins: [spellingPlugin([])] });
     assert.deepEqual(quieted(state), []);
     state = state.apply(setDictionary(state.tr, [normalizeWord("Zorblat")]));
-    assert.deepEqual(quieted(state), ["Zorblat", "zorblat", "zorblat"]);
+    // The possessive too: a name in the dictionary is spelled as intended either way.
+    assert.deepEqual(quieted(state), ["Zorblat", "Zorblat’s", "zorblat", "zorblat"]);
     // New text is covered as it's typed.
     state = state.apply(state.tr.insertText("Zorblat ", 1));
-    assert.equal(quieted(state).length, 4);
+    assert.equal(quieted(state).length, 5);
   });
 
   it("finds the word at a position", () => {

@@ -32,7 +32,7 @@ import { memo, useRef, useState, type ReactNode } from "react";
 import type { DocumentSession, EditorMode } from "@/lib/client/documentSession";
 import { EDITOR_MODES, modeMenuItems } from "@/components/workspace/modes";
 import { FONT_FAMILIES, type DocumentMeta } from "@/lib/doc/settings";
-import { schema, type Align } from "@/lib/doc/schema";
+import { MATH_LANGUAGE, schema, type Align } from "@/lib/doc/schema";
 import {
   blockKind,
   clearFormatting,
@@ -100,6 +100,8 @@ type Format = {
   underline: boolean;
   strike: boolean;
   link: boolean;
+  /** In a displayed equation (a "math" code block). */
+  equation: boolean;
 };
 
 function formatOf(state: EditorState | null): Format {
@@ -110,6 +112,7 @@ function formatOf(state: EditorState | null): Format {
     canRedo: Boolean(state && redoDepth(state)),
     empty: !state || state.selection.empty,
     kind: state ? blockKind(state) : null,
+    equation: Boolean(state && state.selection.$from.parent.attrs.language === MATH_LANGUAGE),
     align: state ? currentAlign(state) : "left",
     list: state ? listKind(state) : null,
     sizeAttr: state ? markAttr(state, schema.marks.font_size!, "size") : null,
@@ -209,7 +212,7 @@ const ToolbarView = memo(function ToolbarView({
             onSelect: () => run(setBlock(key)),
           }))}
         >
-          <span className="tb-select-text">{kind ? BLOCK_LABELS[kind] : "Mixed"}</span> <ChevronDown size={13} />
+          <span className="tb-select-text">{format.equation ? "Equation" : kind ? BLOCK_LABELS[kind] : "Mixed"}</span> <ChevronDown size={13} />
         </MenuButton>
         <MenuButton
           className="tb-select tb-font"

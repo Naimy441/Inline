@@ -1,5 +1,6 @@
 import type { Mark, Node as PMNode } from "prosemirror-model";
-import { cssSizeToPt } from "@/lib/doc/schema";
+import { cssSizeToPt, MATH_LANGUAGE } from "@/lib/doc/schema";
+import { latexToOmml, OMML_NAMESPACE } from "@/lib/doc/omml";
 import { pageSize, type DocumentMeta } from "@/lib/doc/settings";
 import { createZip, type ZipEntry } from "@/lib/doc/zip";
 
@@ -128,7 +129,9 @@ async function inlineContent(node: PMNode, ctx: Context, prefix = "") {
     const href = linkMark ? String(linkMark.attrs.href) : null;
     if (link && link.href !== href) flush();
     let run = "";
-    if (child.isText) run = textRun(child.text ?? "", child.marks);
+    // An inline equation becomes a Word equation among the runs.
+    if (child.isText && child.marks.some((mark) => mark.type.name === "math")) run = latexToOmml(child.text ?? "", false);
+    else if (child.isText) run = textRun(child.text ?? "", child.marks);
     else if (child.type.name === "hard_break") run = "<w:r><w:br/></w:r>";
     if (href && /^(https?:|mailto:)/i.test(href)) {
       if (!link) link = { href, runs: "" };
@@ -210,6 +213,7 @@ async function blockXml(node: PMNode, ctx: Context, list?: { numId: number; leve
       return out;
     }
     case "code_block":
+      if (node.attrs.language === MATH_LANGUAGE) return `<w:p><w:pPr><w:jc w:val="center"/></w:pPr>${latexToOmml(node.textContent, true)}</w:p>`;
       return node.textContent
         .split("\n")
         .map((line) => `<w:p><w:pPr><w:pStyle w:val="Code"/></w:pPr>${textRun(line, [])}</w:p>`)
@@ -351,7 +355,7 @@ export async function documentToDocx(doc: PMNode, meta: DocumentMeta, loadImage:
 
   const sectPr = `<w:sectPr><w:headerReference w:type="default" r:id="${headerRel}"/><w:footerReference w:type="default" r:id="${footerRel}"/>${firstHeaderRel ? `<w:headerReference w:type="first" r:id="${firstHeaderRel}"/>` : ""}${firstFooterRel ? `<w:footerReference w:type="first" r:id="${firstFooterRel}"/>` : ""}<w:pgSz w:w="${Math.round(size.width * TWIP)}" w:h="${Math.round(size.height * TWIP)}"${settings.pageSetup.orientation === "landscape" ? ' w:orient="landscape"' : ""}/><w:pgMar w:top="${Math.round(m.top * TWIP)}" w:right="${Math.round(m.right * TWIP)}" w:bottom="${Math.round(m.bottom * TWIP)}" w:left="${Math.round(m.left * TWIP)}" w:header="708" w:footer="708" w:gutter="0"/>${firstPage ? "<w:titlePg/>" : ""}</w:sectPr>`;
 
-  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:body>${body}${sectPr}</w:body></w:document>`;
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:m="${OMML_NAMESPACE}"><w:body>${body}${sectPr}</w:body></w:document>`;
 
   const rels = [
     '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>',

@@ -20,7 +20,9 @@ function build(doc: PMNode, words: ReadonlySet<string>) {
   doc.descendants((node, pos) => {
     if (!node.isText || !node.text) return true;
     for (const match of node.text.matchAll(WORD)) {
-      if (words.has(normalizeWord(match[0]))) decorations.push(Decoration.inline(pos + match.index, pos + match.index + match[0].length, { spellcheck: "false" }));
+      const word = normalizeWord(match[0]);
+      // A dictionary name covers its possessive too ("Quillith's").
+      if (words.has(word) || words.has(word.replace(/'s$/, ""))) decorations.push(Decoration.inline(pos + match.index, pos + match.index + match[0].length, { spellcheck: "false" }));
     }
     return false;
   });

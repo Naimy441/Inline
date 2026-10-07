@@ -1,4 +1,6 @@
+import katex from "katex";
 import type { DOMOutputSpec, Mark, Node as PMNode } from "prosemirror-model";
+import { MATH_LANGUAGE } from "@/lib/doc/schema";
 import { fillHeaderTokens, pageSize, type DocumentMeta } from "@/lib/doc/settings";
 
 /**
@@ -43,8 +45,18 @@ function renderMarks(marks: readonly Mark[], html: string) {
   return out;
 }
 
+/** LaTeX as MathML, which browsers typeset on their own (no scripts or fonts to ship). */
+function mathHtml(tex: string, displayMode: boolean) {
+  const math = katex.renderToString(tex, { output: "mathml", displayMode, throwOnError: false });
+  return displayMode ? `<div class="math-display">${math}</div>` : math;
+}
+
 export function nodeToHtml(node: PMNode): string {
-  if (node.isText) return renderMarks(node.marks, escapeHtml(node.text ?? ""));
+  if (node.isText) {
+    if (node.marks.some((mark) => mark.type.name === "math")) return renderMarks(node.marks.filter((mark) => mark.type.name !== "math"), mathHtml(node.text ?? "", false));
+    return renderMarks(node.marks, escapeHtml(node.text ?? ""));
+  }
+  if (node.type.name === "code_block" && node.attrs.language === MATH_LANGUAGE) return mathHtml(node.textContent, true);
   const toDOM = node.type.spec.toDOM;
   let inner = "";
   node.forEach((child) => {
@@ -97,6 +109,8 @@ li.task-item { list-style: none; }
 li.task-item[data-checked="true"]::before { content: "☑ "; } li.task-item[data-checked="false"]::before { content: "☐ "; }
 .page-break { break-after: page; }
 mark { padding: 0 1px; }
+.math-display { margin: 0 0 ${settings.paragraphSpacing}pt; text-align: center; }
+math { font-size: 1.1em; }
 .doc-header, .doc-footer { color: #5f6368; font-size: 9pt; }
 .doc-header { text-align: ${settings.headerFooter.headerAlign}; margin-bottom: 18pt; }
 .doc-footer { text-align: ${settings.headerFooter.footerAlign}; margin-top: 18pt; }

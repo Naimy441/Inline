@@ -2,7 +2,7 @@ import MarkdownIt from "markdown-it";
 type Token = ReturnType<InstanceType<typeof MarkdownIt>["parse"]>[number];
 import markPlugin from "markdown-it-mark";
 import { Fragment, type Mark, type Node as PMNode } from "prosemirror-model";
-import { ALIGNMENTS, MARKDOWN_MARKS, MAX_INDENT, safeHref, schema, type Align } from "@/lib/doc/schema";
+import { ALIGNMENTS, MARKDOWN_MARKS, MATH_LANGUAGE, MAX_INDENT, safeHref, schema, type Align } from "@/lib/doc/schema";
 
 /**
  * Markdown is the agent's view of a document. Each top-level block becomes one
@@ -16,6 +16,7 @@ import { ALIGNMENTS, MARKDOWN_MARKS, MAX_INDENT, safeHref, schema, type Align } 
  *   &nbsp;                           an intentionally empty paragraph
  *   \pagebreak                       a page break
  *   ![alt](src){width=50%}           image size and alignment
+ *   $x^2$   $$ … $$                  LaTeX equations, inline and displayed
  *
  * Styling that Markdown can't express at all (colors, fonts, comments, locks)
  * is not shown; edits made through Markdown preserve it (see merge.ts).
@@ -92,6 +93,8 @@ export function serializeBlock(node: PMNode, context: BlockContext = {}): string
     }
     case "code_block": {
       const text = node.textContent;
+      // A displayed equation, unless its LaTeX would end the block early.
+      if (node.attrs.language === MATH_LANGUAGE && !/^\s*\$\$\s*$/m.test(text)) return `$$\n${text}\n$$`;
       const fence = longestRun(text, "`") >= 3 ? "`".repeat(longestRun(text, "`") + 1) : "```";
       return `${fence}${node.attrs.language || ""}\n${text}\n${fence}`;
     }
@@ -297,7 +300,7 @@ export function serializeInline(node: PMNode, options: InlineOptions): string {
   const active: Mark[] = [];
   pieces.forEach((piece, index) => {
     const marks = piece.marks;
-    const codeMark = marks.find((mark) => mark.type.name === "code");
+    const codeMark = marks.find((mark) => mark.type.name === "code" || mark.type.name === "math");
     let keep = 0;
     while (keep < active.length && marks.some((mark) => mark.eq(active[keep]!))) keep += 1;
 
@@ -317,7 +320,7 @@ export function serializeInline(node: PMNode, options: InlineOptions): string {
     out += leading;
 
     const opening = marks
-      .filter((mark) => mark.type.name !== "code" && !active.some((m) => m.eq(mark)))
+      .filter((mark) => mark.type.name !== "code" && mark.type.name !== "math" && !active.some((m) => m.eq(mark)))
       .sort((a, b) => runLength(b, index) - runLength(a, index) || markRank(a) - markRank(b));
     for (const mark of opening) {
       out += openDelimiter(mark);
@@ -340,7 +343,10 @@ export function serializeInline(node: PMNode, options: InlineOptions): string {
       }
     }
 
-    if (codeMark) {
+    if (codeMark?.type.name === "math") {
+      // LaTeX goes between dollar signs as it is (a literal dollar sign in LaTeX is already \$).
+      out += `$${text}$`;
+    } else if (codeMark) {
       const fence = "`".repeat(longestRun(text, "`") + 1);
       const pad = text.startsWith("`") || text.endsWith("`") ? " " : "";
       out += `${fence}${pad}${text}${pad}${fence}`;
@@ -365,6 +371,8 @@ export function serializeInline(node: PMNode, options: InlineOptions): string {
 
 function escapeText(text: string, options: { atLineStart: boolean; inTable?: boolean }) {
   let out = "";
+  // Two dollar signs could pair up as an equation; one alone ("$5") can't.
+  const dollars = (text.match(/\$/g) ?? []).length > 1;
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i]!;
     const prev = text[i - 1] ?? "";
@@ -396,6 +404,9 @@ function escapeText(text: string, options: { atLineStart: boolean; inTable?: boo
         break;
       case "|":
         out += options.inTable ? "\\|" : ch;
+        break;
+      case "$":
+        out += dollars ? "\\$" : ch;
         break;
       case "\n":
         out += " ";
@@ -435,8 +446,76 @@ function markdownParser() {
     parser = new MarkdownIt("commonmark", { html: true, linkify: false, typographer: false });
     parser.enable(["table", "strikethrough"]);
     parser.use(markPlugin);
+    parser.use(mathPlugin);
   }
   return parser;
+}
+
+/**
+ * LaTeX math: $inline$ and $$display$$, with pandoc's rules so prices don't
+ * turn into equations: the opening $ is followed by a non-space, the closing
+ * one follows a non-space and isn't followed by a digit. A $$ line, the LaTeX
+ * and a closing $$ line (or $$…$$ alone on a line) is a displayed equation.
+ */
+function mathPlugin(md: InstanceType<typeof MarkdownIt>) {
+  md.inline.ruler.after("escape", "math_inline", (state, silent) => {
+    const src = state.src;
+    const start = state.pos;
+    if (src.charCodeAt(start) !== 0x24) return false;
+    const double = src.charCodeAt(start + 1) === 0x24;
+    const open = double ? 2 : 1;
+    const first = src[start + open];
+    if (!first || /\s/.test(first) || first === "$") return false;
+    let pos = start + open;
+    while (pos < src.length) {
+      const ch = src[pos];
+      if (ch === "\\") pos += 2;
+      else if (ch === "$" && (!double || src[pos + 1] === "$")) break;
+      else pos += 1;
+    }
+    if (pos >= src.length) return false;
+    const content = src.slice(start + open, pos);
+    if (/\s$/.test(content) || (!double && /\d/.test(src[pos + 1] ?? ""))) return false;
+    if (!silent) {
+      const token = state.push("math_inline", "math", 0);
+      token.content = content;
+      token.markup = double ? "$$" : "$";
+    }
+    state.pos = pos + open;
+    return true;
+  });
+  md.block.ruler.before(
+    "fence",
+    "math_block",
+    (state, startLine, endLine, silent) => {
+      if (state.sCount[startLine]! - state.blkIndent >= 4) return false;
+      const lineText = (line: number) => state.src.slice(state.bMarks[line]! + state.tShift[line]!, state.eMarks[line]).trim();
+      const first = lineText(startLine);
+      if (!first.startsWith("$$")) return false;
+      let content: string;
+      let next: number;
+      if (first !== "$$" && first.length > 4 && first.endsWith("$$") && !first.slice(2, -2).includes("$$")) {
+        content = first.slice(2, -2).trim();
+        next = startLine + 1;
+      } else if (first === "$$") {
+        let line = startLine + 1;
+        while (line < endLine && lineText(line) !== "$$") line += 1;
+        if (line >= endLine) return false;
+        const lines: string[] = [];
+        for (let i = startLine + 1; i < line; i += 1) lines.push(state.src.slice(state.bMarks[i]! + Math.min(state.tShift[i]!, state.blkIndent), state.eMarks[i]));
+        content = lines.join("\n");
+        next = line + 1;
+      } else return false;
+      if (silent) return true;
+      const token = state.push("math_block", "math", 0);
+      token.block = true;
+      token.content = content;
+      token.map = [startLine, next];
+      state.line = next;
+      return true;
+    },
+    { alt: ["paragraph", "reference", "blockquote", "list"] },
+  );
 }
 
 export class MarkdownParseError extends Error {}
@@ -517,6 +596,9 @@ class BlockBuilder {
           ? schema.node("ordered_list", { order: Number(token.attrGet("start") ?? 1) || 1 }, items)
           : schema.node("bullet_list", null, items);
       }
+      case "math_block":
+        this.index += 1;
+        return schema.node("code_block", { language: MATH_LANGUAGE }, token.content ? schema.text(token.content) : undefined);
       case "fence":
       case "code_block": {
         this.index += 1;
@@ -693,6 +775,9 @@ class BlockBuilder {
           break;
         case "code_inline":
           pushText(token.content, [schema.mark("code")]);
+          break;
+        case "math_inline":
+          pushText(token.content, [schema.mark("math")]);
           break;
         case "strong_open":
           add(schema.mark("bold"));

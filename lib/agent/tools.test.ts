@@ -90,6 +90,8 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   list_locked_text: {},
   insert_image: { url: "https://example.com/a.png", position: "end" },
   read_attachment: { attachment_id: "missing" },
+  check_spelling: {},
+  add_to_dictionary: { words: ["Zorblat"] },
 };
 
 describe("tool registry", () => {
@@ -971,6 +973,32 @@ describe("comments", () => {
     assert.match(reply.text, /No comment with id missing/);
     const resolve = await runTool("resolve_comment", { comment_id: "missing" }, ctx);
     assert.equal(resolve.isError, true);
+  });
+});
+
+describe("check_spelling and add_to_dictionary", () => {
+  test("lists misspelled words with their lines and suggestions, skipping code and equations", async () => {
+    const { ctx } = await setup({}, "# Teh report\n\nWe recieve letters from Zorblat in Paris. `codez` and $\\alpha + betta$ are not checked.");
+    const result = await runTool("check_spelling", {}, ctx);
+    assert.equal(result.isError, undefined, result.text);
+    assert.match(result.text, /"Teh", line 1/);
+    assert.match(result.text, /"recieve", line 3: .*→ .*"receive"/);
+    assert.match(result.text, /"Zorblat"/);
+    assert.doesNotMatch(result.text, /"(codez|betta|Paris)"/);
+  });
+
+  test("words added to the dictionary are no longer reported, and open editors are told", async () => {
+    const { doc, ctx } = await setup({}, "Zorblat met Quillith's brother at the gate.");
+    const commands: unknown[] = [];
+    const unsubscribe = doc.subscribe((event: HubEvent) => {
+      if (event.type === "command") commands.push(event.command);
+    });
+    const added = await runTool("add_to_dictionary", { words: ["Zorblat", "Quillith"] }, ctx);
+    unsubscribe();
+    assert.equal(added.isError, undefined, added.text);
+    assert.deepEqual(commands, [{ kind: "dictionary", words: ["zorblat", "quillith"] }]);
+    const result = await runTool("check_spelling", {}, ctx);
+    assert.match(result.text, /No misspelled words/);
   });
 });
 

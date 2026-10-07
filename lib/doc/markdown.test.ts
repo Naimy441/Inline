@@ -143,3 +143,36 @@ describe("templates", () => {
     assert.equal(mla.settings?.headerFooter?.header, "Lastname {page}");
   });
 });
+
+describe("equations", () => {
+  const roundTrip = (markdown: string) => docToMarkdown(markdownToDoc(markdown));
+
+  it("reads $…$ as an inline equation and writes it back", () => {
+    const doc = markdownToDoc("Energy is $E = mc^2$, roughly.");
+    const math = doc.firstChild!.child(1);
+    assert.equal(math.text, "E = mc^2");
+    assert.ok(math.marks.some((mark) => mark.type.name === "math"));
+    assert.equal(roundTrip("Energy is $E = mc^2$, roughly."), "Energy is $E = mc^2$, roughly.");
+  });
+
+  it("reads a $$ block as a displayed equation", () => {
+    const doc = markdownToDoc("$$\n\\int_0^1 x\\,dx = \\frac{1}{2}\n$$");
+    assert.equal(doc.firstChild!.type.name, "code_block");
+    assert.equal(doc.firstChild!.attrs.language, "math");
+    assert.equal(doc.firstChild!.textContent, "\\int_0^1 x\\,dx = \\frac{1}{2}");
+    assert.equal(roundTrip("$$x^2$$"), "$$\nx^2\n$$");
+  });
+
+  it("leaves prices alone and escapes dollar signs that could pair up", () => {
+    const doc = markdownToDoc("It costs $5 and $10.");
+    assert.equal(doc.textContent, "It costs $5 and $10.");
+    assert.equal(docToMarkdown(doc), "It costs \\$5 and \\$10.");
+    assert.equal(roundTrip(docToMarkdown(doc)), "It costs \\$5 and \\$10.");
+    assert.equal(roundTrip("Only $5 here."), "Only $5 here.");
+  });
+
+  it("drops other formatting from an equation and keeps backslashes", () => {
+    assert.equal(roundTrip("**bold $\\alpha$**"), "**bold** $\\alpha$");
+    assert.equal(roundTrip("a $\\$5$ b"), "a $\\$5$ b");
+  });
+});
