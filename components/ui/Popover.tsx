@@ -30,6 +30,10 @@ export function Popover({
       const target = event.target as Node;
       if (ref.current?.contains(target)) return;
       if (anchor && "current" in anchor && anchor.current?.contains(target)) return;
+      // A menu or popover opened from inside this one is rendered elsewhere in the page, after it. One
+      // opened before it (the toolbar's "More tools", holding this popover's button) is outside it.
+      const layer = (target as Element).closest?.(".menu, .popover");
+      if (layer && ref.current && ref.current.compareDocumentPosition(layer) & Node.DOCUMENT_POSITION_FOLLOWING) return;
       onClose();
     };
     const onKey = (event: KeyboardEvent) => {

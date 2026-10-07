@@ -13,10 +13,12 @@ import { columnResizing, goToNextCell, tableEditing } from "prosemirror-tables";
 import { blockIdFixes } from "@/lib/doc/ids";
 import { parseMarkdown } from "@/lib/doc/markdown";
 import { schema } from "@/lib/doc/schema";
+import { DEFAULT_TAB_STOP } from "@/lib/doc/settings";
 import {
   clearFormatting,
   followLink,
   indent,
+  insertTab,
   insertPageBreak,
   outdent,
   setAlign,
@@ -32,6 +34,9 @@ import { spellingPlugin } from "@/lib/editor/spelling";
 import { invisiblesPlugin } from "@/lib/editor/invisibles";
 import { inMath, mathInputRules, mathPlugin } from "@/lib/editor/math";
 import { paginationPlugin, type PageGeometry, type PageLayout } from "@/lib/editor/pagination";
+import { bordersPlugin } from "@/lib/editor/borders";
+import { tabsPlugin } from "@/lib/editor/tabs";
+import { justifyPlugin } from "@/lib/editor/justify";
 import { placeholderPlugin } from "@/lib/editor/placeholder";
 import { presencePlugin } from "@/lib/editor/presence";
 import { reviewPlugin, type ReviewHandlers } from "@/lib/editor/review";
@@ -186,8 +191,9 @@ function buildKeymap(extra: Record<string, Command>) {
     "Mod-Enter": insertPageBreak,
     "Shift-Enter": insertHardBreak,
     Enter: chainCommands(splitListItem(nodes.list_item!), liftEmptyBlock),
-    Tab: chainCommands(goToNextCell(1), indent),
-    "Shift-Tab": chainCommands(goToNextCell(-1), outdent),
+    // Tab and Shift-Tab never fall through to the browser, which would move focus out of the document.
+    Tab: chainCommands(goToNextCell(1), insertTab, indent, () => true),
+    "Shift-Tab": chainCommands(goToNextCell(-1), outdent, () => true),
     "Mod-]": indent,
     "Mod-[": outdent,
     "Alt-ArrowUp": joinUp,
@@ -241,6 +247,10 @@ export type EditorPluginOptions = {
   review: ReviewHandlers;
   onActivateComment: (id: string | null) => void;
   geometry: () => PageGeometry;
+  /** Points between the default tab stops. */
+  tabStop?: () => number;
+  /** Laid out as Google Docs lays documents out (settings lineModel "font"): justified text is spaced as Google spaces it. */
+  fontLines?: () => boolean;
   onPages?: (layout: PageLayout) => void;
   keys?: Record<string, Command>;
   placeholder?: string;
@@ -281,6 +291,10 @@ export function editorPlugins(options: EditorPluginOptions) {
     invisiblesPlugin(options.showInvisibles ?? false),
     spellingPlugin(options.dictionary ?? []),
     placeholderPlugin(options.placeholder ?? "Start writing, or ask Claude to draft something…"),
+    bordersPlugin(),
+    // Tabs are sized before pages are broken, since their widths can rewrap lines.
+    tabsPlugin(options.tabStop ?? (() => DEFAULT_TAB_STOP)),
+    justifyPlugin(options.fontLines ?? (() => false)),
     paginationPlugin(options.geometry, options.onPages),
   ];
 }

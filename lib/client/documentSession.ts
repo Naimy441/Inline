@@ -8,12 +8,14 @@ import { dataUrlToBlob, ImageView } from "@/lib/editor/imageView";
 import { EditorView } from "prosemirror-view";
 import type { HunkJSON } from "@/lib/doc/review";
 import { schema } from "@/lib/doc/schema";
-import { layoutKey, pageSize, type DocComment, type DocumentMeta, type DocumentTab } from "@/lib/doc/settings";
+import { DEFAULT_TAB_STOP, layoutKey, pageSize, type DocComment, type DocumentMeta, type DocumentTab } from "@/lib/doc/settings";
 import { setTabs } from "@/lib/client/tabs";
 import { api, ApiError, del, patch, post, Store, uploadFile } from "@/lib/client/api";
 import { setCommentState } from "@/lib/editor/comments";
 import { syncDomSelection } from "@/lib/editor/domSync";
 import type { PdfDocumentModel } from "@/lib/pdf/pdfWriter";
+import { documentFonts, ensureFonts, fontData, loadDocumentFonts, type DocumentFont } from "@/lib/client/fonts";
+import { lineMetrics, primaryFamily } from "@/lib/doc/fontMetrics";
 import { pageCount, relayout, type PageGeometry, type PageLayout } from "@/lib/editor/pagination";
 import { setPresence } from "@/lib/editor/presence";
 import { gotoHunk, mapHunksThrough, reviewHunkAtCursor, setHunks } from "@/lib/editor/review";
@@ -148,6 +150,19 @@ function imagesLoaded(root: HTMLElement) {
 }
 
 /** Resolve once pagination has produced the same page count for a few frames in a row. */
+/** The font families a document uses: its default font and every font_family mark, as CSS values. */
+export function fontFamiliesIn(doc: unknown, defaultFont?: string) {
+  const families = new Set<string>(defaultFont ? [defaultFont] : []);
+  const visit = (node: unknown) => {
+    if (!node || typeof node !== "object") return;
+    const { marks, content } = node as { marks?: Array<{ type?: string; attrs?: { family?: unknown } }>; content?: unknown[] };
+    for (const mark of marks ?? []) if (mark.type === "font_family" && typeof mark.attrs?.family === "string") families.add(mark.attrs.family);
+    for (const child of content ?? []) visit(child);
+  };
+  visit(doc);
+  return families;
+}
+
 function settleLayout(pages: () => number) {
   return new Promise<void>((resolve) => {
     let last = -1;
@@ -308,7 +323,23 @@ export class DocumentSession {
       await settleLayout(() => pageCount(view.state));
       await imagesLoaded(root);
       const rasters = await rasterizeMath(root);
-      return snapshotPages(root, title, domMeasurer(rasters));
+      // Text in a font the document brought (lib/client/fonts.ts) is drawn in that font, embedded in the PDF.
+      const fonts = await documentFonts();
+      const used = new Map<string, DocumentFont>();
+      const choose = (style: { fontFamily: string; fontWeight: string; fontStyle: string }) => {
+        const family = primaryFamily(style.fontFamily).toLowerCase();
+        const candidates = fonts.filter((font) => font.family.toLowerCase() === family);
+        if (!candidates.length) return null;
+        const bold = style.fontWeight === "bold" || Number(style.fontWeight) >= 600;
+        const italic = /italic|oblique/.test(style.fontStyle);
+        const font = candidates.find((item) => item.bold === bold && item.italic === italic) ?? candidates.find((item) => item.bold === bold) ?? candidates.find((item) => !item.bold && !item.italic) ?? candidates[0]!;
+        used.set(font.id, font);
+        const metrics = lineMetrics(font.family);
+        return { key: font.id, baseline: metrics.ascent / (metrics.ascent + metrics.descent) };
+      };
+      const model = snapshotPages(root, title, domMeasurer(rasters, choose));
+      const data = await Promise.all([...used.values()].map(async (font) => [font.id, await fontData(font)] as const));
+      return { ...model, fonts: Object.fromEntries(data.filter((entry): entry is readonly [string, Uint8Array] => Boolean(entry[1]))) };
     } finally {
       root.classList.remove("is-clean");
       if (this.ui.get().exporting) {
@@ -326,6 +357,11 @@ export class DocumentSession {
     this.destroyed = false;
     try {
       const { document } = await api<{ document: Snapshot }>(`/api/documents/${this.id}`);
+      if (this.destroyed || generation !== this.generation) return;
+      // Google Fonts the document uses, fetched the first time, and the fonts it brought with it (an
+      // imported Word or Google document), loaded before the first layout.
+      await Promise.race([ensureFonts(fontFamiliesIn(document.doc, document.meta.settings.fontFamily)), new Promise((resolve) => setTimeout(resolve, 4000))]);
+      await loadDocumentFonts(`${document.meta.settings.fontFamily} ${JSON.stringify(document.doc)}`, true);
       if (this.destroyed || generation !== this.generation) return;
       this.epoch = document.epoch ?? null;
       const mode = this.storedMode();
@@ -386,7 +422,7 @@ export class DocumentSession {
     this.view = null;
   }
 
-  private createState(snapshot: { doc: unknown; version: number; hunks: HunkJSON[] }) {
+  private createState(snapshot: { doc: unknown; version: number; hunks: HunkJSON[]; meta?: DocumentMeta }) {
     const doc = PMNode.fromJSON(schema, snapshot.doc as Parameters<typeof PMNode.fromJSON>[1]);
     const state = EditorState.create({
       doc,
@@ -396,6 +432,8 @@ export class DocumentSession {
         review: { review: (action, ids) => void this.review(action, ids) },
         onActivateComment: (id) => this.setActiveComment(id),
         geometry: () => this.geometry(),
+        tabStop: () => this.meta?.settings.tabStop ?? DEFAULT_TAB_STOP,
+        fontLines: () => (this.meta ?? snapshot.meta)?.settings.lineModel === "font",
         onPages: (layout) => {
           this.latestLayout = layout;
           this.ui.set((ui) => (ui.pages === layout.pages ? ui : { ...ui, pages: layout.pages }));
@@ -453,8 +491,22 @@ export class DocumentSession {
     if (tr.docChanged) {
       this.updateSync();
       this.flushSteps();
+      this.scheduleFontCheck();
     }
     if (tr.selectionSet || tr.docChanged) this.scheduleSelectionReport();
+  }
+
+  private fontTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** A font set since the document opened (by you or Claude) may be a Google font the page doesn't have yet. */
+  private scheduleFontCheck() {
+    if (this.fontTimer) clearTimeout(this.fontTimer);
+    this.fontTimer = setTimeout(() => {
+      this.fontTimer = null;
+      const view = this.view;
+      if (!view || this.destroyed) return;
+      void ensureFonts(fontFamiliesIn(view.state.doc.toJSON(), this.meta?.settings.fontFamily));
+    }, 600);
   }
 
   private updateSync() {
@@ -626,6 +678,7 @@ export class DocumentSession {
         const previous = this.meta;
         this.ui.set((ui) => ({ ...ui, meta: event.meta }));
         if (previous && layoutKey(previous.settings) !== layoutKey(event.meta.settings)) relayout(view);
+        if (previous?.settings.fontFamily !== event.meta.settings.fontFamily) void ensureFonts([event.meta.settings.fontFamily]);
         return;
       }
       case "comments":

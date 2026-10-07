@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { EditorState, TextSelection, type Command } from "prosemirror-state";
 import { ensureBlockIds } from "../doc/ids";
 import { docToMarkdown, markdownToDoc } from "../doc/markdown";
-import { blockPosById, changeCase, insertTableOfContents } from "./commands";
+import { blockPosById, changeCase, insertTab, insertTableOfContents } from "./commands";
 
 function stateFor(markdown: string) {
   return EditorState.create({ doc: ensureBlockIds(markdownToDoc(markdown)) });
@@ -62,5 +62,45 @@ describe("insertTableOfContents", () => {
 
   it("refuses when there are no headings", () => {
     assert.equal(run(stateFor("Just text"), insertTableOfContents).ok, false);
+  });
+});
+
+describe("insertTab", () => {
+  const at = (state: EditorState, text: string) => {
+    let found = -1;
+    state.doc.descendants((node, pos) => {
+      if (found < 0 && node.isText && node.text!.includes(text)) found = pos + node.text!.indexOf(text);
+    });
+    return state.apply(state.tr.setSelection(TextSelection.create(state.doc, found)));
+  };
+
+  it("types a tab in the middle of a line", () => {
+    const { ok, state } = run(at(stateFor("Duke University Durham"), "Durham"), insertTab);
+    assert.ok(ok);
+    assert.equal(state.doc.textContent, "Duke University \tDurham");
+  });
+
+  it("types a tab at the start of a paragraph", () => {
+    const { state } = run(at(stateFor("Indented"), "Indented"), insertTab);
+    assert.equal(state.doc.textContent, "\tIndented");
+  });
+
+  it("leaves a list item's start to nesting", () => {
+    assert.equal(run(at(stateFor("- one\n- two"), "two"), insertTab).ok, false);
+  });
+
+  it("types a tab at the start of a first list item, which can't nest", () => {
+    const { ok, state } = run(at(stateFor("- one\n- two"), "one"), insertTab);
+    assert.ok(ok);
+    assert.equal(state.doc.textContent, "\tonetwo");
+  });
+
+  it("types a tab inside a list item's text", () => {
+    const { state } = run(at(stateFor("- one\n- two words"), "words"), insertTab);
+    assert.equal(state.doc.textContent, "onetwo \twords");
+  });
+
+  it("leaves a selection over several paragraphs to indenting", () => {
+    assert.equal(run(selectAll(stateFor("First\n\nSecond")), insertTab).ok, false);
   });
 });

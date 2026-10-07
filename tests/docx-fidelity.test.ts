@@ -299,7 +299,8 @@ describe("right-to-left text, outline lists, borders and links", () => {
     const doc = (await readDocx(readZip(moreGoogle()), { saveImage })).tabs[0]!.doc;
     const types = Array.from({ length: doc.childCount }, (_, i) => doc.child(i).type.name);
     const heading = types.findIndex((_, i) => doc.child(i).textContent === "SECTION");
-    assert.equal(types[heading + 1], "horizontal_rule", "a line drawn under a paragraph is kept");
+    assert.deepEqual(doc.child(heading).attrs.borders, { bottom: { style: "solid", width: 1, space: 1, color: null } }, "a line drawn under a paragraph is kept, as the paragraph's border");
+    assert.equal(types[heading + 1], "paragraph");
     const box = doc.child(types.indexOf("table"));
     assert.equal(box.childCount, 1);
     assert.equal(box.firstChild!.childCount, 1, "one cell holds both boxed paragraphs");
@@ -318,7 +319,7 @@ describe("right-to-left text, outline lists, borders and links", () => {
     assert.equal(letters.attrs.numbering, null, "a. is what a second level shows anyway");
     assert.equal(letters.firstChild!.child(1).attrs.numbering, null, "and i. a third");
     const dom = schema.nodes.ordered_list!.spec.toDOM!(outline) as [string, Record<string, string>];
-    assert.equal(dom[1].style, "list-style-type: upper-roman");
+    assert.equal(dom[1].style, "list-style-type: upper-roman; padding-left: 36pt", "indented as Google indents it");
   });
 
   test("a heading that's a list item keeps its bullet and its look; phone links are links", async () => {

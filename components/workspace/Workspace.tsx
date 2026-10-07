@@ -2,7 +2,7 @@
 
 import { Check, CloudOff, Download, History, ListTree, Loader2, MessageSquare, Moon, MoreHorizontal, PanelRight, Sparkles, Sun } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { EditorState } from "prosemirror-state";
 import type { SelectionContext } from "@/lib/agent/types";
 import { api, patch, post, uploadFile } from "@/lib/client/api";
@@ -35,7 +35,7 @@ import { PageCanvas } from "@/components/workspace/PageCanvas";
 import { PageSetupDialog } from "@/components/workspace/PageSetupDialog";
 import { ReviewBar } from "@/components/workspace/ReviewBar";
 import { EDITOR_MODES, modeMenuItems } from "@/components/workspace/modes";
-import { COMPACT_QUERY, isCompact, useIsPhone, useMediaQuery, useVisualViewportVars } from "@/lib/client/viewport";
+import { COMPACT_QUERY, isCompact, useMediaQuery, useVisualViewportVars } from "@/lib/client/viewport";
 import { DEFAULT_PREFERENCES, preferences, setPreference } from "@/lib/client/preferences";
 import { SelectionBubble } from "@/components/workspace/SelectionBubble";
 import { ShortcutsDialog } from "@/components/workspace/ShortcutsDialog";
@@ -86,9 +86,11 @@ export function Workspace({ documentId }: { documentId: string }) {
   const [zoom, setZoomState] = useState<Zoom>("fit");
   const [canvasWidth, setCanvasWidth] = useState(0);
   const canvasRef = useRef<HTMLElement>(null);
-  const phone = useIsPhone();
-  // Below this width the menu bar and labelled buttons fold into a "More" menu.
-  const compact = useMediaQuery(COMPACT_QUERY);
+  // Below this width, or when they don't fit beside the title, the menu bar and labelled buttons fold into a "More" menu.
+  const titlebarRef = useRef<HTMLElement>(null);
+  const narrow = useMediaQuery(COMPACT_QUERY);
+  const crowded = useCrowdedTitlebar(titlebarRef, narrow);
+  const compact = narrow || crowded;
   useVisualViewportVars();
   const [outline, setOutline] = useState(false);
   const [find, setFind] = useState<{ replace: boolean } | null>(null);
@@ -108,10 +110,15 @@ export function Workspace({ documentId }: { documentId: string }) {
   const [charmap, setCharmap] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
 
-  useEffect(() => {
+  // Before the first paint, so a panel kept closed doesn't flash open.
+  useLayoutEffect(() => {
     // On phones and tablets a panel covers the document, so it only opens when asked for.
     if (isCompact()) setPanelState(initialAsk ? "agent" : null);
-    else setPanelState(readStored<Panel>(PANEL_KEY, "agent", (raw) => (raw === "none" ? null : (["agent", "comments", "history"].includes(raw) ? (raw as Panel) : null))));
+    else {
+      // "none" is the choice to keep panels closed, so it can't parse to null (which means "not stored").
+      const stored = readStored<Panel | "none">(PANEL_KEY, "agent", (raw) => (["none", "agent", "comments", "history"].includes(raw) ? (raw as Panel | "none") : null));
+      setPanelState(stored === "none" ? null : stored);
+    }
     setPanelWidth(readStored(PANEL_WIDTH_KEY, 420, (raw) => (Number(raw) >= 320 ? Math.min(760, Number(raw)) : null)));
     setZoomState(readStored<Zoom>(ZOOM_KEY, "fit", (raw) => (raw === "fit" ? "fit" : Number(raw) >= 0.5 && Number(raw) <= 2 ? Number(raw) : null)));
     setOutline(!isCompact() && readStored(OUTLINE_KEY, false, (raw) => raw === "1"));
@@ -121,8 +128,7 @@ export function Workspace({ documentId }: { documentId: string }) {
   const setPanel = useCallback((next: Panel | ((current: Panel) => Panel)) => {
     setPanelState((current) => {
       const value = typeof next === "function" ? next(current) : next;
-      // Small screens always start without a panel, so don't overwrite the desktop choice.
-      if (!isCompact()) store(PANEL_KEY, value ?? "none");
+      store(PANEL_KEY, value ?? "none");
       return value;
     });
   }, []);
@@ -193,12 +199,10 @@ export function Workspace({ documentId }: { documentId: string }) {
     return () => releaseChat(chat);
   }, [chatKey]);
 
-  useEffect(() => session.setFlow(phone), [session, phone]);
-  const flow = ui.flow && !ui.printing && !ui.exporting;
   const canvasPad = canvasWidth && canvasWidth < 900 ? 16 : 40;
   const pageWidth = geometryFor(meta).pageWidth;
-  const fitZoom = canvasWidth ? Math.max(0.5, Math.min(1, Math.floor(((canvasWidth - canvasPad * 2) / pageWidth) * 100) / 100)) : 1;
-  const effectiveZoom = flow ? 1 : zoom === "fit" ? fitZoom : zoom;
+  const fitZoom = canvasWidth ? Math.max(0.25, Math.min(1, Math.floor(((canvasWidth - canvasPad * 2) / pageWidth) * 100) / 100)) : 1;
+  const effectiveZoom = zoom === "fit" ? fitZoom : zoom;
 
   useEffect(() => {
     if (meta) document.title = `${meta.title} · Inline`;
@@ -281,10 +285,10 @@ export function Workspace({ documentId }: { documentId: string }) {
     }
     const { from, to } = session.view.state.selection;
     // With no side panel open and room beside the page, the comment is written in the margin next to its text.
-    if (panel !== null || phone || !marginFits(canvasRef.current)) setPanel("comments");
+    if (panel !== null || !marginFits(canvasRef.current)) setPanel("comments");
     setDraftComment({ from, to });
     session.setCommentDraft({ from, to });
-  }, [session, setPanel, panel, phone]);
+  }, [session, setPanel, panel]);
   const endDraft = useCallback(() => {
     setDraftComment(null);
     session.setCommentDraft(null);
@@ -439,7 +443,6 @@ export function Workspace({ documentId }: { documentId: string }) {
     image: () => imageInput.current?.click(),
     zoom: setZoom,
     zoomFit: zoom === "fit",
-    flow,
     toggleTheme,
     dark,
     toggleOutline,
@@ -534,7 +537,7 @@ export function Workspace({ documentId }: { documentId: string }) {
 
   return (
     <div className={`workspace${panel ? " has-panel" : ""}${focusMode ? " is-focus" : ""} is-${ui.mode}`} style={{ ["--panel-width" as string]: `${panelWidth}px` }}>
-      <header className="titlebar">
+      <header ref={titlebarRef} className={`titlebar${compact ? " is-compact" : ""}`}>
         <button type="button" className="home-btn" aria-label="All documents" data-tip="All documents" onClick={() => router.push("/")}>
           <InlineLogo />
         </button>
@@ -547,20 +550,20 @@ export function Workspace({ documentId }: { documentId: string }) {
         </div>
         {compact ? (
           <div className="titlebar-actions">
-            <IconButton label="Tabs & outline" size="lg" active={outline} onClick={toggleOutline}>
-              <ListTree size={19} />
+            <IconButton label="Tabs & outline" active={outline} onClick={toggleOutline}>
+              <ListTree size={16} />
             </IconButton>
-            <IconButton label="Comments" size="lg" active={panel === "comments"} onClick={() => setPanel((current) => (current === "comments" ? null : "comments"))}>
-              <MessageSquare size={19} />
+            <IconButton label="Comments" active={panel === "comments"} onClick={() => setPanel((current) => (current === "comments" ? null : "comments"))}>
+              <MessageSquare size={16} />
               {openComments > 0 && <span className="badge">{openComments}</span>}
             </IconButton>
             {!focusMode && (
-              <IconButton label="Claude" size="lg" className={`claude-toggle${panel === "agent" ? " is-active" : ""}${working ? " is-working" : ""}`} onClick={() => setPanel((current) => (current === "agent" ? null : "agent"))}>
-                <Sparkles size={19} />
+              <IconButton label="Claude" className={`claude-toggle${panel === "agent" ? " is-active" : ""}${working ? " is-working" : ""}`} onClick={() => setPanel((current) => (current === "agent" ? null : "agent"))}>
+                <Sparkles size={16} />
               </IconButton>
             )}
-            <MenuButton className="icon-btn icon-btn-lg" label="More options" title={meta?.title ?? "Document"} placement="bottom-end" items={moreItems}>
-              <MoreHorizontal size={20} />
+            <MenuButton className="icon-btn icon-btn-md" label="More options" title={meta?.title ?? "Document"} placement="bottom-end" items={moreItems}>
+              <MoreHorizontal size={16} />
             </MenuButton>
           </div>
         ) : (
@@ -634,7 +637,7 @@ export function Workspace({ documentId }: { documentId: string }) {
         )}
         <main
           ref={canvasRef}
-          className={`canvas${versionShown && panel === "history" ? " is-previewing" : ""}${!panel && !phone && (draftComment || ui.comments.some((comment) => !comment.resolved)) && marginFits(canvasRef.current) ? " with-comments" : ""}`}
+          className={`canvas${versionShown && panel === "history" ? " is-previewing" : ""}${!panel && (draftComment || ui.comments.some((comment) => !comment.resolved)) && marginFits(canvasRef.current) ? " with-comments" : ""}`}
           style={{ ["--canvas-pad" as string]: `${canvasPad}px` }}
           onDragOver={(event) => {
             if (event.dataTransfer.types.includes("Files")) event.preventDefault();
@@ -670,8 +673,8 @@ export function Workspace({ documentId }: { documentId: string }) {
             </div>
           )}
           {versionShown && panel === "history" && <VersionPreview key={versionShown.id} session={session} version={versionShown} onClose={() => setVersionShown(null)} />}
-          <PageCanvas session={session} meta={meta} pages={ui.pages} zoom={effectiveZoom} printing={ui.printing} flow={flow} />
-          {!panel && !phone && (
+          <PageCanvas session={session} meta={meta} pages={ui.pages} zoom={effectiveZoom} printing={ui.printing} flow={false} />
+          {!panel && (
             <WithEditorState session={session}>
               {(state) => <CommentMargin session={session} state={state} canvas={canvasRef} comments={ui.comments} active={ui.activeComment} draft={draftComment} onDraftDone={endDraft} onAskClaude={askAboutComment} />}
             </WithEditorState>
@@ -680,7 +683,6 @@ export function Workspace({ documentId }: { documentId: string }) {
           <WithEditorState session={session}>{(state) => <SelectionBubble session={session} state={state} linkEditing={linkEditing} onLinkEditing={setLinkEditing} onAsk={() => askClaude()} onComment={startComment} prompting={prompting} onPrompting={setPrompting} onInlineAsk={inlineAsk} />}</WithEditorState>
         </main>
 
-        {panel && phone && <div className="panel-backdrop" onClick={() => setPanel(null)} aria-hidden />}
         {panel && (
           <div className="panel-shell">
             <PanelResizer
@@ -810,6 +812,7 @@ function TitleInput({ meta, onRename }: { meta: DocumentMeta | null; onRename: (
     <input
       className="title-input"
       aria-label="Document title"
+      autoComplete="off"
       value={value}
       size={Math.max(8, Math.min(60, value.length + 1))}
       onFocus={(event) => {
@@ -861,6 +864,46 @@ function sameButSaving(a: DocumentUiState, b: DocumentUiState) {
     }
   }
   return true;
+}
+
+/** Narrowest the title gets before the title bar folds into its compact layout. */
+const MIN_TITLE_WIDTH = 120;
+/** Extra room needed to unfold again, so a width near the edge doesn't flip back and forth. */
+const UNFOLD_SLACK = 24;
+
+/**
+ * Whether the title bar's full layout (title, menus, buttons) is wider than the bar. The full
+ * layout's width is measured while it's shown and remembered while the compact one is.
+ */
+function useCrowdedTitlebar(ref: RefObject<HTMLElement | null>, narrow: boolean) {
+  const [crowded, setCrowded] = useState(false);
+  const fullWidth = useRef(0);
+  useLayoutEffect(() => {
+    const bar = ref.current;
+    if (!bar || narrow) return;
+    const check = () => {
+      const stack = bar.querySelector<HTMLElement>(".title-stack");
+      const menubar = bar.querySelector<HTMLElement>(".menubar");
+      const status = bar.querySelector<HTMLElement>(".titlebar-status");
+      const sync = status?.firstElementChild as HTMLElement | null | undefined;
+      const actions = bar.querySelector<HTMLElement>(".titlebar-actions");
+      if (!crowded && stack && menubar && status && sync && actions) {
+        // The title and the status's spare room give way; the menus and buttons can't.
+        const padRight = Number.parseFloat(getComputedStyle(bar).paddingRight) || 0;
+        const used = actions.getBoundingClientRect().right + padRight - bar.getBoundingClientRect().left;
+        const stackGap = Number.parseFloat(getComputedStyle(stack).columnGap) || 0;
+        fullWidth.current = used - stack.offsetWidth + MIN_TITLE_WIDTH + stackGap + menubar.offsetWidth - (status.clientWidth - sync.offsetWidth);
+      }
+      const width = bar.clientWidth;
+      const next = crowded ? width < fullWidth.current + UNFOLD_SLACK : width < fullWidth.current;
+      if (next !== crowded) setCrowded(next);
+    };
+    check();
+    const observer = new ResizeObserver(check);
+    observer.observe(bar);
+    return () => observer.disconnect();
+  }, [ref, narrow, crowded]);
+  return crowded && !narrow;
 }
 
 function LiveSyncStatus({ session, compact }: { session: DocumentSession; compact?: boolean }) {

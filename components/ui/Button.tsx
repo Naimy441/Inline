@@ -3,6 +3,12 @@
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { useShortcut } from "@/lib/client/platform";
 
+/**
+ * Firefox restores a button's enabled state from before a reload, which the server's HTML (and
+ * so hydration) doesn't expect. React's types leave out autocomplete on buttons; browsers honour it.
+ */
+const NO_RESTORE = { autoComplete: "off" } as ButtonHTMLAttributes<HTMLButtonElement>;
+
 type Variant = "primary" | "secondary" | "ghost" | "danger" | "accent";
 
 export const Button = forwardRef<
@@ -13,6 +19,7 @@ export const Button = forwardRef<
     <button
       ref={ref}
       type="button"
+      {...NO_RESTORE}
       className={`btn btn-${variant} btn-${size}${className ? ` ${className}` : ""}`}
       disabled={disabled || loading}
       {...rest}
@@ -32,6 +39,7 @@ export const IconButton = forwardRef<
     <button
       ref={ref}
       type="button"
+      {...NO_RESTORE}
       aria-label={label}
       aria-pressed={active === undefined ? undefined : active}
       data-tip={shortcut ? `${label}  ${keys(shortcut)}` : label}

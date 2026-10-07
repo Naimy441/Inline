@@ -14,7 +14,6 @@
   font-feature-settings: "liga" 0;
   caret-color: var(--paper-text);
   outline: none;
-  --para-space: 8pt;
 }
 
 .doc-content[contenteditable="false"] {
@@ -101,7 +100,7 @@ img.ProseMirror-separator {
 }
 
 .doc-content p {
-  margin: 0 0 var(--para-space);
+  margin: 0 0 var(--para-space, 8pt);
 }
 
 .doc-content .doc-title {
@@ -169,7 +168,7 @@ img.ProseMirror-separator {
 }
 
 .doc-content blockquote {
-  margin: 0 0 var(--para-space);
+  margin: 0 0 var(--para-space, 8pt);
   padding: 2pt 0 2pt 14pt;
   border-left: 3px solid #dadce0;
   color: #555;
@@ -185,7 +184,7 @@ img.ProseMirror-separator {
 }
 
 .doc-content pre {
-  margin: 0 0 var(--para-space);
+  margin: 0 0 var(--para-space, 8pt);
   padding: 10px 12px;
   border-radius: 4px;
   background: #f6f8fa;
@@ -238,11 +237,77 @@ img.ProseMirror-separator {
   border-radius: 1px;
 }
 
+/*
+ * Documents laid out as Word and Google Docs lay them out (settings
+ * lineModel "font"; imported documents): a line is as tall as the largest
+ * text on it, at that font's own line height (lib/doc/fontMetrics.ts) times
+ * the line spacing, rounded as Google rounds it. Every element sizes its own
+ * line from its own font, so a line takes the tallest. Headings take the
+ * document's spacing too. Equations keep KaTeX's own lines.
+ */
+/*
+ * Google Docs and Word set ligatures (fl, fi), which make words narrower and
+ * so decide where lines wrap, and let the spaces at the end of a line hang
+ * past the margin, so justified text reaches the margin itself.
+ */
+.font-lines .doc-content {
+  font-variant-ligatures: common-ligatures;
+  font-feature-settings: normal;
+  white-space: pre-wrap;
+}
+
+.font-lines .doc-content :is(p, h1, h2, h3, h4, h5, h6, li, td, th),
+.font-lines .doc-content :is(p, h1, h2, h3, h4, h5, h6) :not(.math-render, .math-render *, .katex, .katex *) {
+  line-height: round(nearest, calc(1em * var(--font-lh, 1.15) * var(--ls, 1)), var(--font-lh-step, 0.01px)) !important;
+}
+
+/* Justified text spaced as Google Docs spaces it (lib/editor/justify.ts), which widens each space itself. */
+.font-lines .doc-content .g-justify {
+  text-align: left !important;
+}
+
+.font-lines .doc-content.measuring-natural .g-space {
+  letter-spacing: 0 !important;
+}
+
+/* Tabs (lib/editor/tabs.ts): each is a box as wide as the way to its tab stop, and the tab
+   character spans it (an inline tab-size). A narrow tab's character has no width; it sits at the
+   box's end, so a cursor after the tab is drawn there, not at its start. */
+.doc-content .doc-tab {
+  display: inline-block;
+  tab-size: 0;
+  text-indent: 0;
+  text-align: end;
+  white-space: pre;
+}
+
+.doc-content.measuring-tabs :not(.doc-tab) {
+  text-align: start !important;
+}
+
+/* Paragraphs with the same borders share one box, as in Word and Google Docs (lib/editor/borders.ts). */
+.doc-content .border-join-next {
+  border-bottom: var(--border-between, none) !important;
+  padding-bottom: var(--border-between-space, 0px) !important;
+}
+
+.doc-content .border-join-prev {
+  border-top: none !important;
+  padding-top: 0 !important;
+}
+
+/* Pictures in a line of text sit on its baseline, like a character. */
+.doc-content img.doc-inline-image {
+  display: inline;
+  vertical-align: baseline;
+  max-width: none;
+}
+
 /* Lists */
 
 .doc-content ul,
 .doc-content ol {
-  margin: 0 0 var(--para-space);
+  margin: 0 0 var(--para-space, 8pt);
   padding-left: 0.375in;
 }
 
@@ -279,6 +344,26 @@ img.ProseMirror-separator {
   list-style: lower-roman;
 }
 
+/* A list's own bullet (an imported list's), hanging its own distance before the text. */
+.doc-content ul[data-marker] {
+  list-style: none;
+}
+
+.doc-content ul[data-marker] > li > :first-child::before {
+  content: var(--marker-text);
+  display: inline-block;
+  width: var(--marker-hanging);
+  margin-left: calc(-1 * var(--marker-hanging));
+  text-indent: 0;
+  font-family: var(--marker-font, inherit);
+  font-size: var(--marker-size, inherit);
+  font-weight: var(--marker-weight, inherit);
+  font-style: var(--marker-style, inherit);
+  color: var(--marker-color, inherit);
+  text-decoration: none;
+  white-space: pre;
+}
+
 .doc-content li.task-item {
   list-style: none;
 }
@@ -312,7 +397,7 @@ img.ProseMirror-separator {
 
 .doc-content table {
   width: 100%;
-  margin: 0 0 var(--para-space);
+  margin: 0 0 var(--para-space, 8pt);
   border-collapse: collapse;
   table-layout: fixed;
   overflow: hidden;
@@ -375,7 +460,7 @@ img.ProseMirror-separator {
 /* Images */
 
 .doc-content .doc-image {
-  margin: 0 0 var(--para-space);
+  margin: 0 0 var(--para-space, 8pt);
   line-height: 0;
 }
 
@@ -857,7 +942,7 @@ img.ProseMirror-separator {
 }
 
 .doc-content .math-block {
-  margin: 0 0 var(--para-space);
+  margin: 0 0 var(--para-space, 8pt);
 }
 
 .doc-content .math-block > .math-display {

@@ -73,6 +73,10 @@ export type ParaOptions = {
   rtl?: boolean;
   /** A line under the paragraph, or a box round it. */
   border?: "bottom" | "box";
+  /** Raw w:tabs content, e.g. `<w:tab w:val="right" w:pos="9360"/>`. */
+  tabs?: string;
+  /** Raw rPr content of the paragraph mark (how tall the paragraph is when empty). */
+  mark?: string;
 };
 
 /** A paragraph of runs (plain strings become plain runs), with Google's repeated properties. */
@@ -83,6 +87,7 @@ export function para(content: string | string[], options: ParaOptions = {}) {
     options.list ? `<w:numPr><w:ilvl w:val="${options.list.level ?? 0}"/><w:numId w:val="${options.list.id}"/></w:numPr>` : "",
     options.style || options.list ? PARA_NOISE : "",
     options.border ? `<w:pBdr>${(options.border === "box" ? ["top", "left", "bottom", "right"] : ["bottom"]).map((side) => `<w:${side} w:color="000000" w:space="1" w:sz="8" w:val="single"/>`).join("")}</w:pBdr>` : "",
+    options.tabs ? `<w:tabs>${options.tabs}</w:tabs>` : "",
     options.rtl ? '<w:bidi w:val="1"/>' : "",
     options.spacing ? `<w:spacing ${options.spacing}/>` : "",
     options.ind ? `<w:ind ${options.ind}/>` : "",
@@ -90,7 +95,7 @@ export function para(content: string | string[], options: ParaOptions = {}) {
     options.extra ?? "",
   ].join("");
   paraId += 1;
-  return `<w:p w:rsidR="00000000" w:rsidDel="00000000" w:rsidP="00000000" w:rsidRDefault="00000000" w:rsidRPr="00000000" w14:paraId="${paraId.toString(16).padStart(8, "0")}"><w:pPr>${props}<w:rPr/></w:pPr>${runs}</w:p>`;
+  return `<w:p w:rsidR="00000000" w:rsidDel="00000000" w:rsidP="00000000" w:rsidRDefault="00000000" w:rsidRPr="00000000" w14:paraId="${paraId.toString(16).padStart(8, "0")}"><w:pPr>${props}<w:rPr>${options.mark ?? ""}</w:rPr></w:pPr>${runs}</w:p>`;
 }
 
 /** Google's horizontal line. */
@@ -145,6 +150,12 @@ export type GoogleDocOptions = {
   header?: { text: string; align?: "left" | "center" | "right" };
   /** Page margins in twips. */
   margins?: { top: number; right: number; bottom: number; left: number };
+  /** Fonts carried in the file (as Google carries any that isn't Windows'), obfuscated with `key` when given. */
+  fonts?: Array<{ family: string; data: Uint8Array; key?: string }>;
+  /** Raw settings.xml content, e.g. `<w:defaultTabStop w:val="720"/>`. */
+  settings?: string;
+  /** Raw numbering.xml, in place of Google's three list kinds. */
+  numbering?: string;
 };
 
 /** A Google Docs .docx (a zipped package) holding `body`, the paragraphs and tables above. */
@@ -178,13 +189,31 @@ export function googleDocx(body: string[], options: GoogleDocOptions = {}): Uint
       .join("");
     entries.push({ name: "word/header1.xml", data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr ${NS}><w:p><w:pPr><w:jc w:val="${options.header.align ?? "left"}"/></w:pPr>${runs}</w:p></w:hdr>` });
   }
+  if (options.fonts?.length) {
+    rels.push('<Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/>');
+    const fontRels: string[] = [];
+    const table = options.fonts
+      .map((font, index) => {
+        const data = font.data.slice();
+        const key = font.key ?? "00000000-0000-0000-0000-000000000000";
+        const bytes = key.replace(/-/g, "").match(/../g)!.map((pair) => parseInt(pair, 16)).reverse();
+        for (let i = 0; i < 32; i += 1) data[i]! ^= bytes[i % 16]!;
+        entries.push({ name: `word/fonts/font${index + 1}.ttf`, data });
+        fontRels.push(`<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/font" Target="fonts/font${index + 1}.ttf"/>`);
+        return `<w:font w:name="${esc(font.family)}"><w:embedRegular w:fontKey="{${key}}" r:id="rId${index + 1}" w:subsetted="0"/></w:font>`;
+      })
+      .join("");
+    entries.push({ name: "word/fontTable.xml", data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:fonts ${NS}>${table}</w:fonts>` });
+    entries.push({ name: "word/_rels/fontTable.xml.rels", data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${fontRels.join("")}</Relationships>` });
+  }
+  if (options.settings) entries.push({ name: "word/settings.xml", data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings ${NS}>${options.settings}</w:settings>` });
   const sectPr = `<w:sectPr>${headerRef}<w:pgSz w:h="15840" w:w="12240" w:orient="portrait"/><w:pgMar w:bottom="${m.bottom}" w:top="${m.top}" w:left="${m.left}" w:right="${m.right}" w:header="720" w:footer="720"/><w:pgNumType w:start="1"/></w:sectPr>`;
   return createZip([
     { name: "[Content_Types].xml", data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>' },
     { name: "_rels/.rels", data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>' },
     { name: "word/document.xml", data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${NS}><w:background w:color="FFFFFF"/><w:body>${body.join("")}${sectPr}</w:body></w:document>` },
     { name: "word/styles.xml", data: STYLES },
-    { name: "word/numbering.xml", data: numberingXml() },
+    { name: "word/numbering.xml", data: options.numbering ?? numberingXml() },
     { name: "word/_rels/document.xml.rels", data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.join("")}</Relationships>` },
     ...entries,
   ]);

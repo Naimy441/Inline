@@ -1,7 +1,7 @@
 import type { Mark, Node as PMNode } from "prosemirror-model";
-import { cssSizeToPt, defaultListNumbering, MATH_LANGUAGE, schema, type ListNumbering } from "@/lib/doc/schema";
+import { cssSizeToPt, defaultListNumbering, MATH_LANGUAGE, schema, type BorderLine, type Borders, type ListMarker, type ListNumbering, type TabStop } from "@/lib/doc/schema";
 import { latexToOmml, OMML_NAMESPACE } from "@/lib/doc/omml";
-import { pageSize, type DocComment, type DocumentMeta } from "@/lib/doc/settings";
+import { DEFAULT_TAB_STOP, pageSize, type DocComment, type DocumentMeta } from "@/lib/doc/settings";
 import { createZip, type ZipEntry } from "@/lib/doc/zip";
 
 /**
@@ -43,7 +43,8 @@ type Context = {
   rels: Array<{ id: string; type: string; target: string; external?: boolean }>;
   media: ZipEntry[];
   images: Map<string, { rel: string; width: number; height: number }>;
-  numbering: Array<{ numId: number; abstract: number; start: number; level: number; format?: ListNumbering }>;
+  /** `custom` is a list's own level: where its text starts and its marker hangs (twips from the margin), and its bullet. */
+  numbering: Array<{ numId: number; abstract: number; start: number; level: number; format?: ListNumbering; custom?: { left: number; hanging: number; marker: ListMarker | null } }>;
   nextDrawingId: number;
   contentWidthPx: number;
   loadImage: ImageLoader;
@@ -59,8 +60,10 @@ function addRel(ctx: Context, type: string, target: string, external = false) {
   return id;
 }
 
-function runProps(marks: readonly Mark[], extra = "") {
+/** `size` is the paragraph's own text size (points), which text without a size of its own takes. */
+function runProps(marks: readonly Mark[], extra = "", size?: number | null) {
   const props: string[] = [];
+  if (size && !marks.some((mark) => mark.type.name === "font_size")) props.push(`<w:sz w:val="${Math.round(size * 2)}"/>`, `<w:szCs w:val="${Math.round(size * 2)}"/>`);
   for (const mark of marks) {
     switch (mark.type.name) {
       // Word formats Arabic and other complex scripts from the *Cs twins, so each is set for both.
@@ -120,11 +123,11 @@ function runProps(marks: readonly Mark[], extra = "") {
 /** Hebrew, Arabic, Syriac, Thaana and their presentation forms. */
 const RTL_TEXT = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufeff]/;
 
-function textRun(text: string, marks: readonly Mark[]) {
+function textRun(text: string, marks: readonly Mark[], size?: number | null) {
   const parts = text.split("\t");
   const body = parts.map((part, i) => `${i > 0 ? "<w:tab/>" : ""}${part ? `<w:t xml:space="preserve">${xml(part)}</w:t>` : ""}`).join("");
   // Right-to-left script reads right to left in Word too.
-  return `<w:r>${runProps(marks, RTL_TEXT.test(text) ? "<w:rtl/>" : "")}${body}</w:r>`;
+  return `<w:r>${runProps(marks, RTL_TEXT.test(text) ? "<w:rtl/>" : "", size)}${body}</w:r>`;
 }
 
 /** Close the comment ranges that end before `marks` (all of them when it's null), and open the ones that start there. */
@@ -145,7 +148,9 @@ function commentMarkers(ctx: Context, marks: readonly Mark[] | null) {
 }
 
 async function inlineContent(node: PMNode, ctx: Context, prefix = "") {
-  let out = prefix ? `<w:r><w:t xml:space="preserve">${xml(prefix)}</w:t></w:r>` : "";
+  // A paragraph's own text size is its mark's, and the size of its text that has none of its own.
+  const size = (node.attrs.fontSize as number | null | undefined) ?? null;
+  let out = prefix ? `<w:r>${runProps([], "", size)}<w:t xml:space="preserve">${xml(prefix)}</w:t></w:r>` : "";
   let link: { href: string; runs: string } | null = null;
   const flush = () => {
     if (!link) return;
@@ -153,7 +158,8 @@ async function inlineContent(node: PMNode, ctx: Context, prefix = "") {
     out += `<w:hyperlink r:id="${rel}">${link.runs}</w:hyperlink>`;
     link = null;
   };
-  node.forEach((child) => {
+  for (let i = 0; i < node.childCount; i += 1) {
+    const child = node.child(i);
     const linkMark = child.marks.find((mark) => mark.type.name === "link");
     const href = linkMark ? String(linkMark.attrs.href) : null;
     if (link && link.href !== href) flush();
@@ -161,24 +167,75 @@ async function inlineContent(node: PMNode, ctx: Context, prefix = "") {
     let run = child.isText ? commentMarkers(ctx, child.marks) : "";
     // An inline equation becomes a Word equation among the runs.
     if (child.isText && child.marks.some((mark) => mark.type.name === "math")) run += latexToOmml(child.text ?? "", false);
-    else if (child.isText) run += textRun(child.text ?? "", child.marks);
+    else if (child.isText) run += textRun(child.text ?? "", child.marks, size);
     else if (child.type.name === "hard_break") run += "<w:r><w:br/></w:r>";
+    else if (child.type.name === "inline_image") run += await inlineImageRun(child, ctx, size);
     if (href && /^(https?:|mailto:|tel:)/i.test(href)) {
       if (!link) link = { href, runs: "" };
       link.runs += run;
     } else {
       out += run;
     }
-  });
+  }
   flush();
   return out;
 }
 
+/** The picture behind an image's address, added to the package once. */
+async function pictureEntry(src: string, ctx: Context) {
+  let entry = ctx.images.get(src);
+  if (entry) return entry;
+  const loaded = await ctx.loadImage(src).catch(() => null);
+  if (!loaded) return null;
+  const size = imageSize(loaded.data) ?? { width: 400, height: 300 };
+  const ext = loaded.mime.includes("png") ? "png" : loaded.mime.includes("gif") ? "gif" : "jpeg";
+  const name = `media/image${ctx.media.length + 1}.${ext}`;
+  ctx.media.push({ name: `word/${name}`, data: loaded.data });
+  const rel = addRel(ctx, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image", name);
+  entry = { rel, width: size.width, height: size.height };
+  ctx.images.set(src, entry);
+  return entry;
+}
+
+/** A picture set in a line of text: its size, its fade (transparency) and the space kept around it. */
+async function inlineImageRun(node: PMNode, ctx: Context, size: number | null) {
+  const entry = await pictureEntry(String(node.attrs.src || ""), ctx);
+  if (!entry) return "";
+  const width = Number(node.attrs.width) || entry.width;
+  const height = Number(node.attrs.height) || (entry.height / entry.width) * width;
+  const cx = Math.round(width * EMU_PER_PX);
+  const cy = Math.round(height * EMU_PER_PX);
+  const [top, right, bottom, left] = ((node.attrs.dist as number[] | null) ?? [0, 0, 0, 0]).map((px) => Math.round(px * EMU_PER_PX));
+  const alpha = node.attrs.opacity != null ? `<a:alphaModFix amt="${Math.round(Number(node.attrs.opacity) * 100000)}"/>` : "";
+  const id = ctx.nextDrawingId++;
+  return `<w:r>${runProps([], "", size)}<w:drawing><wp:inline distT="${top}" distB="${bottom}" distL="${left}" distR="${right}"><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${id}" name="Picture ${id}" descr="${xml(String(node.attrs.alt || ""))}"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="${id}" name="Picture ${id}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${entry.rel}">${alpha}</a:blip><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
+}
+
+const TAB_KINDS: Record<TabStop["align"], string> = { left: "left", right: "right", center: "center", decimal: "decimal" };
+const BORDER_KINDS: Record<BorderLine["style"], string> = { solid: "single", double: "double", dotted: "dotted", dashed: "dashed" };
+
+/** A paragraph's borders as Word's: width in eighths of a point, space in points. */
+function bordersXml(borders: Borders) {
+  const sides = (["top", "left", "bottom", "right", "between"] as const).filter((side) => borders[side]);
+  if (!sides.length) return "";
+  return `<w:pBdr>${sides
+    .map((side) => {
+      const line = borders[side]!;
+      const color = line.color && /^#[0-9a-f]{6}$/i.test(line.color) ? line.color.slice(1).toUpperCase() : "auto";
+      return `<w:${side} w:val="${BORDER_KINDS[line.style] ?? "single"}" w:sz="${Math.max(2, Math.round(line.width * 8))}" w:space="${Math.round(line.space)}" w:color="${color}"/>`;
+    })
+    .join("")}</w:pBdr>`;
+}
+
 function paragraphProps(node: PMNode, options: { style?: string; numbering?: { numId: number; level: number }; indentTwips?: number; extra?: string; spaceAfter?: number } = {}) {
   // As in Word, a right-to-left paragraph's "left" and "right" (alignment, indents) are its start and end.
+  // Word wants these in a fixed order: style, numbering, borders, tabs, direction, spacing, indent, alignment, mark.
   const props: string[] = [];
   if (options.style) props.push(`<w:pStyle w:val="${options.style}"/>`);
   if (options.numbering) props.push(`<w:numPr><w:ilvl w:val="${options.numbering.level}"/><w:numId w:val="${options.numbering.numId}"/></w:numPr>`);
+  if (node.attrs.borders) props.push(bordersXml(node.attrs.borders as Borders));
+  const tabs = node.attrs.tabs as TabStop[] | null | undefined;
+  if (tabs?.length) props.push(`<w:tabs>${tabs.map((tab) => `<w:tab w:val="${TAB_KINDS[tab.align] ?? "left"}"${tab.leader ? ` w:leader="${tab.leader}"` : ""} w:pos="${Math.round(tab.pos * 20)}"/>`).join("")}</w:tabs>`);
   if (node.attrs.dir === "rtl") props.push("<w:bidi/>");
   if (options.extra) props.push(options.extra);
   const spacing: string[] = [];
@@ -188,28 +245,21 @@ function paragraphProps(node: PMNode, options: { style?: string; numbering?: { n
   if (node.attrs.lineHeight) spacing.push(`w:line="${Math.round(Number(node.attrs.lineHeight) * 240)}" w:lineRule="auto"`);
   if (spacing.length) props.push(`<w:spacing ${spacing.join(" ")}/>`);
   const textIndent = Number(node.attrs.textIndent) || 0;
-  const indent = (Number(node.attrs.indent) || 0) * 720 + (options.indentTwips ?? 0) + (textIndent < 0 ? Math.round(-textIndent * 1440) : 0);
+  const indent = Math.round((Number(node.attrs.indent) || 0) * 720) + (options.indentTwips ?? 0) + (textIndent < 0 ? Math.round(-textIndent * 1440) : 0);
   const first = textIndent > 0 ? ` w:firstLine="${Math.round(textIndent * 1440)}"` : textIndent < 0 ? ` w:hanging="${Math.round(-textIndent * 1440)}"` : "";
   if (indent || first) props.push(`<w:ind w:left="${indent}"${first}/>`);
   const align = node.attrs.align as string | undefined;
   if (align && align !== "left") props.push(`<w:jc w:val="${align === "justify" ? "both" : align}"/>`);
+  // The paragraph mark's size: how tall the paragraph is when it's empty.
+  const size = node.attrs.fontSize as number | null | undefined;
+  if (size) props.push(`<w:rPr><w:sz w:val="${Math.round(size * 2)}"/><w:szCs w:val="${Math.round(size * 2)}"/></w:rPr>`);
   return props.length ? `<w:pPr>${props.join("")}</w:pPr>` : "";
 }
 
 async function imageParagraph(node: PMNode, ctx: Context) {
   const src = String(node.attrs.src || "");
-  let entry = ctx.images.get(src);
-  if (!entry) {
-    const loaded = await ctx.loadImage(src).catch(() => null);
-    if (!loaded) return `<w:p><w:r><w:t xml:space="preserve">${xml(`[Image: ${node.attrs.alt || src}]`)}</w:t></w:r></w:p>`;
-    const size = imageSize(loaded.data) ?? { width: 400, height: 300 };
-    const ext = loaded.mime.includes("png") ? "png" : loaded.mime.includes("gif") ? "gif" : "jpeg";
-    const name = `media/image${ctx.media.length + 1}.${ext}`;
-    ctx.media.push({ name: `word/${name}`, data: loaded.data });
-    const rel = addRel(ctx, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image", name);
-    entry = { rel, width: size.width, height: size.height };
-    ctx.images.set(src, entry);
-  }
+  const entry = await pictureEntry(src, ctx);
+  if (!entry) return `<w:p><w:r><w:t xml:space="preserve">${xml(`[Image: ${node.attrs.alt || src}]`)}</w:t></w:r></w:p>`;
   let width = entry.width;
   const requested = String(node.attrs.width ?? "");
   if (requested.endsWith("%")) width = (ctx.contentWidthPx * Number.parseFloat(requested)) / 100;
@@ -228,8 +278,11 @@ async function imageParagraph(node: PMNode, ctx: Context) {
  * last), so a table is followed by the empty paragraph Word needs only when
  * nothing else separates it from the next table or the end of a cell.
  */
-/** `list` is the list this block sits in; `depth` counts its numbered lists, which decides their marker style as on the page. */
-async function blockXml(node: PMNode, ctx: Context, list?: { numId: number; level: number; depth: number }, indentTwips = 0, next?: PMNode | null): Promise<string> {
+/**
+ * `list` is the list this block sits in; `depth` counts its numbered lists, which decides their marker style as on the page,
+ * and `left` is where its text starts (twips from the margin).
+ */
+async function blockXml(node: PMNode, ctx: Context, list?: { numId: number; level: number; depth: number; left: number }, indentTwips = 0, next?: PMNode | null): Promise<string> {
   switch (node.type.name) {
     case "paragraph":
       return `<w:p>${paragraphProps(node, { numbering: list, indentTwips })}${await inlineContent(node, ctx)}</w:p>`;
@@ -266,13 +319,18 @@ async function blockXml(node: PMNode, ctx: Context, list?: { numId: number; leve
     case "bullet_list":
     case "ordered_list": {
       const level = list ? Math.min(8, list.level + 1) : 0;
+      // A list with its own indents or bullet (an imported one) gets a level of its own; others use Inline's.
+      const own = node.attrs.indent != null || node.attrs.marker != null;
+      const left = node.attrs.indent != null ? (list?.left ?? 0) + Math.round(Number(node.attrs.indent) * 20) : 720 * (level + 1);
+      const custom = own ? { left, hanging: node.attrs.hanging != null ? Math.round(Number(node.attrs.hanging) * 20) : 360, marker: (node.attrs.marker as ListMarker | null) ?? null } : undefined;
       let numId: number;
-      if (list && level > 0 && node.type.name === "bullet_list" && ctx.numbering.find((n) => n.numId === list.numId)?.abstract === 1) {
+      const parent = list ? ctx.numbering.find((n) => n.numId === list.numId) : undefined;
+      if (list && level > 0 && !own && node.type.name === "bullet_list" && parent?.abstract === 1 && !parent.custom) {
         numId = list.numId;
       } else {
         numId = ctx.numbering.length + 1;
         const ordered = node.type.name === "ordered_list";
-        ctx.numbering.push({ numId, abstract: ordered ? 2 : 1, start: Number(node.attrs.order) || 1, level, ...(ordered ? { format: (node.attrs.numbering as ListNumbering | null) ?? defaultListNumbering(list?.depth ?? 0) } : {}) });
+        ctx.numbering.push({ numId, abstract: ordered ? 2 : 1, start: Number(node.attrs.order) || 1, level, ...(ordered ? { format: (node.attrs.numbering as ListNumbering | null) ?? defaultListNumbering(list?.depth ?? 0) } : {}), ...(custom ? { custom } : {}) });
       }
       let out = "";
       for (let i = 0; i < node.childCount; i += 1) {
@@ -284,7 +342,7 @@ async function blockXml(node: PMNode, ctx: Context, list?: { numId: number; leve
             // The page gives list items 2pt after them (li > p), whatever the document's paragraph spacing.
             out += `<w:p>${paragraphProps(child, { numbering: { numId, level }, spaceAfter: 2 })}${await inlineContent(child, ctx, checkbox)}</w:p>`;
           } else if (child.type.name === "bullet_list" || child.type.name === "ordered_list") {
-            out += await blockXml(child, ctx, { numId, level, depth: (list?.depth ?? 0) + (node.type.name === "ordered_list" ? 1 : 0) });
+            out += await blockXml(child, ctx, { numId, level, depth: (list?.depth ?? 0) + (node.type.name === "ordered_list" ? 1 : 0), left });
           } else {
             out += await blockXml(child, ctx, undefined, (level + 1) * 720);
           }
@@ -369,10 +427,13 @@ function stylesXml(meta: DocumentMeta) {
   const line = Math.round(s.lineSpacing * 240);
   const after = Math.round(s.paragraphSpacing * 20);
   // Headings look as they do on the page (app/styles/document.css): regular weight, Google Docs' sizes, spacing and greys.
+  // Laid out as Word lays documents out (lineModel "font"), they take the document's line spacing, as on the page.
+  const fontLines = s.lineModel === "font";
+  const headingLine = fontLines ? "" : ' w:line="288" w:lineRule="auto"';
   const heading = (level: number, pt: number, before: number, after: number, color?: string) =>
-    `<w:style w:type="paragraph" w:styleId="Heading${level}"><w:name w:val="heading ${level}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before="${before * 20}" w:after="${after * 20}" w:line="288" w:lineRule="auto"/><w:outlineLvl w:val="${level - 1}"/></w:pPr><w:rPr>${level === 6 ? "<w:i/>" : ""}${color ? `<w:color w:val="${color}"/>` : ""}<w:sz w:val="${pt * 2}"/></w:rPr></w:style>`;
+    `<w:style w:type="paragraph" w:styleId="Heading${level}"><w:name w:val="heading ${level}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before="${before * 20}" w:after="${after * 20}"${headingLine}/><w:outlineLvl w:val="${level - 1}"/></w:pPr><w:rPr>${level === 6 ? "<w:i/>" : ""}${color ? `<w:color w:val="${color}"/>` : ""}<w:sz w:val="${pt * 2}"/></w:rPr></w:style>`;
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${font}" w:hAnsi="${font}" w:cs="${font}" w:eastAsia="${font}"/><w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="${after}" w:line="${line}" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="0" w:after="60" w:line="276" w:lineRule="auto"/></w:pPr><w:rPr><w:sz w:val="52"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="0" w:after="320"/></w:pPr><w:rPr><w:color w:val="666666"/><w:sz w:val="30"/></w:rPr></w:style>${heading(1, 20, 20, 6)}${heading(2, 16, 18, 6)}${heading(3, 14, 16, 4, "434343")}${heading(4, 12, 14, 4, "666666")}${heading(5, 11, 12, 4, "666666")}${heading(6, 11, 12, 4, "666666")}<w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:pPr><w:pBdr><w:left w:val="single" w:sz="18" w:space="8" w:color="D0D7DE"/></w:pBdr><w:ind w:left="360"/></w:pPr><w:rPr><w:color w:val="555555"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/><w:pPr><w:shd w:val="clear" w:color="auto" w:fill="F6F8FA"/><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New" w:cs="Courier New"/><w:sz w:val="19"/></w:rPr></w:style><w:style w:type="character" w:styleId="InlineCode"><w:name w:val="HTML Code"/><w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New" w:cs="Courier New"/></w:rPr></w:style><w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/><w:rPr><w:color w:val="1A73E8"/><w:u w:val="single"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="TableHeading"><w:name w:val="Table Heading"/><w:basedOn w:val="Normal"/><w:rPr><w:b/></w:rPr></w:style><w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:pPr><w:spacing w:after="0"/></w:pPr></w:style></w:styles>`;
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${font}" w:hAnsi="${font}" w:cs="${font}" w:eastAsia="${font}"/><w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="${after}" w:line="${line}" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="0" w:after="60"${fontLines ? "" : ' w:line="276" w:lineRule="auto"'}/></w:pPr><w:rPr><w:sz w:val="52"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="0" w:after="320"/></w:pPr><w:rPr><w:color w:val="666666"/><w:sz w:val="30"/></w:rPr></w:style>${heading(1, 20, 20, 6)}${heading(2, 16, 18, 6)}${heading(3, 14, 16, 4, "434343")}${heading(4, 12, 14, 4, "666666")}${heading(5, 11, 12, 4, "666666")}${heading(6, 11, 12, 4, "666666")}<w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:pPr><w:pBdr><w:left w:val="single" w:sz="18" w:space="8" w:color="D0D7DE"/></w:pBdr><w:ind w:left="360"/></w:pPr><w:rPr><w:color w:val="555555"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/><w:pPr><w:shd w:val="clear" w:color="auto" w:fill="F6F8FA"/><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New" w:cs="Courier New"/><w:sz w:val="19"/></w:rPr></w:style><w:style w:type="character" w:styleId="InlineCode"><w:name w:val="HTML Code"/><w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New" w:cs="Courier New"/></w:rPr></w:style><w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/><w:rPr><w:color w:val="1155CC"/><w:u w:val="single"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="TableHeading"><w:name w:val="Table Heading"/><w:basedOn w:val="Normal"/><w:rPr><w:b/></w:rPr></w:style><w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:pPr><w:spacing w:after="0"/></w:pPr></w:style></w:styles>`;
 }
 
 function numberingXml(numbering: Context["numbering"]) {
@@ -385,18 +446,103 @@ function numberingXml(numbering: Context["numbering"]) {
     }).join("");
   // Each numbered list states its marker style at its level, so Word numbers it as the page does.
   const formats: Record<ListNumbering, string> = { decimal: "decimal", "lower-alpha": "lowerLetter", "upper-alpha": "upperLetter", "lower-roman": "lowerRoman", "upper-roman": "upperRoman" };
+  // A list's own bullet: its character and the formatting it adds to its item's (Word draws the rest as the item).
+  const markerProps = (marker: ListMarker | null) => {
+    if (!marker) return "";
+    const props: string[] = [];
+    const font = marker.font ? xml(firstFont(marker.font)) : null;
+    if (font) props.push(`<w:rFonts w:ascii="${font}" w:hAnsi="${font}" w:cs="${font}"/>`);
+    if (marker.bold != null) props.push(marker.bold ? "<w:b/><w:bCs/>" : '<w:b w:val="0"/><w:bCs w:val="0"/>');
+    if (marker.italic != null) props.push(marker.italic ? "<w:i/><w:iCs/>" : '<w:i w:val="0"/><w:iCs w:val="0"/>');
+    const hex = marker.color ? colorHex(marker.color) : null;
+    if (hex) props.push(`<w:color w:val="${hex}"/>`);
+    if (marker.size) props.push(`<w:sz w:val="${Math.round(marker.size * 2)}"/><w:szCs w:val="${Math.round(marker.size * 2)}"/>`);
+    return props.length ? `<w:rPr>${props.join("")}</w:rPr>` : "";
+  };
   const nums = numbering
     .map((n) => {
-      if (n.abstract !== 2) return `<w:num w:numId="${n.numId}"><w:abstractNumId w:val="${n.abstract}"/></w:num>`;
-      const lvl = `<w:lvl w:ilvl="${n.level}"><w:start w:val="${n.start}"/><w:numFmt w:val="${formats[n.format ?? "decimal"]}"/><w:lvlText w:val="%${n.level + 1}."/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="${720 * (n.level + 1)}" w:hanging="360"/></w:pPr></w:lvl>`;
-      return `<w:num w:numId="${n.numId}"><w:abstractNumId w:val="2"/><w:lvlOverride w:ilvl="${n.level}"><w:startOverride w:val="${n.start}"/>${lvl}</w:lvlOverride></w:num>`;
+      const custom = n.custom;
+      if (n.abstract !== 2 && !custom) return `<w:num w:numId="${n.numId}"><w:abstractNumId w:val="${n.abstract}"/></w:num>`;
+      const ind = `<w:pPr><w:ind w:left="${custom?.left ?? 720 * (n.level + 1)}" w:hanging="${custom?.hanging ?? 360}"/></w:pPr>`;
+      // Lists with their own levels use their own definitions (3 and 4), so they read back with their indents.
+      if (n.abstract !== 2) {
+        const lvl = `<w:lvl w:ilvl="${n.level}"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="${xml(custom!.marker?.text ?? ["•", "◦", "▪"][n.level % 3]!)}"/><w:lvlJc w:val="left"/>${ind}${markerProps(custom!.marker)}</w:lvl>`;
+        return `<w:num w:numId="${n.numId}"><w:abstractNumId w:val="3"/><w:lvlOverride w:ilvl="${n.level}">${lvl}</w:lvlOverride></w:num>`;
+      }
+      const lvl = `<w:lvl w:ilvl="${n.level}"><w:start w:val="${n.start}"/><w:numFmt w:val="${formats[n.format ?? "decimal"]}"/><w:lvlText w:val="%${n.level + 1}."/><w:lvlJc w:val="left"/>${ind}</w:lvl>`;
+      return `<w:num w:numId="${n.numId}"><w:abstractNumId w:val="${custom ? 4 : 2}"/><w:lvlOverride w:ilvl="${n.level}"><w:startOverride w:val="${n.start}"/>${lvl}</w:lvlOverride></w:num>`;
     })
     .join("");
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="1"><w:multiLevelType w:val="hybridMultilevel"/>${levels("bullet")}</w:abstractNum><w:abstractNum w:abstractNumId="2"><w:multiLevelType w:val="hybridMultilevel"/>${levels("decimal")}</w:abstractNum>${nums}</w:numbering>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="1"><w:multiLevelType w:val="hybridMultilevel"/>${levels("bullet")}</w:abstractNum><w:abstractNum w:abstractNumId="2"><w:multiLevelType w:val="hybridMultilevel"/>${levels("decimal")}</w:abstractNum><w:abstractNum w:abstractNumId="3"><w:multiLevelType w:val="hybridMultilevel"/>${levels("bullet")}</w:abstractNum><w:abstractNum w:abstractNumId="4"><w:multiLevelType w:val="hybridMultilevel"/>${levels("decimal")}</w:abstractNum>${nums}</w:numbering>`;
 }
 
 /** One tab of a document, for a file holding all of them. */
 export type DocxTab = { title: string; doc: PMNode; comments?: DocComment[] };
+
+/** A font for the file to carry (the fonts a document brought when it was imported), by family. */
+export type FontLoader = (families: string[]) => Promise<Array<{ family: string; bold: boolean; italic: boolean; data: Uint8Array }>>;
+
+/** The font families a document's text is set in (by their first names). */
+function fontFamilies(docs: PMNode[], bodyFont: string) {
+  const families = new Set<string>([firstFont(bodyFont)]);
+  for (const doc of docs) {
+    doc.descendants((node) => {
+      for (const mark of node.marks) if (mark.type.name === "font_family") families.add(firstFont(String(mark.attrs.family)));
+      const marker = node.attrs?.marker as ListMarker | null | undefined;
+      if (marker?.font) families.add(firstFont(marker.font));
+    });
+  }
+  return [...families].filter(Boolean);
+}
+
+/**
+ * Fonts carried in the file, as Word carries them: each obfuscated with a key
+ * (its first 32 bytes XORed with the key's bytes, last first), listed in the
+ * font table.
+ */
+function embeddedFonts(fonts: Awaited<ReturnType<FontLoader>>) {
+  const files: ZipEntry[] = [];
+  const rels: string[] = [];
+  const byFamily = new Map<string, string[]>();
+  fonts.forEach((font, index) => {
+    const guid = randomGuid();
+    const key = guid.replace(/[^0-9A-F]/g, "").match(/../g)!.map((pair) => parseInt(pair, 16)).reverse();
+    const data = font.data.slice();
+    for (let i = 0; i < 32 && i < data.length; i += 1) data[i]! ^= key[i % 16]!;
+    const name = `font${index + 1}.odttf`;
+    files.push({ name: `word/fonts/${name}`, data });
+    rels.push(`<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/font" Target="fonts/${name}"/>`);
+    const kind = font.bold ? (font.italic ? "embedBoldItalic" : "embedBold") : font.italic ? "embedItalic" : "embedRegular";
+    const list = byFamily.get(font.family) ?? [];
+    list.push(`<w:${kind} r:id="rId${index + 1}" w:fontKey="{${guid}}"/>`);
+    byFamily.set(font.family, list);
+  });
+  // Word lists a family's styles in this order.
+  const order = ["embedRegular", "embedBold", "embedItalic", "embedBoldItalic"];
+  const table = [...byFamily].map(([family, embeds]) => `<w:font w:name="${xml(family)}">${embeds.sort((a, b) => order.indexOf(a.slice(3, a.indexOf(" "))) - order.indexOf(b.slice(3, b.indexOf(" ")))).join("")}</w:font>`).join("");
+  return {
+    files,
+    fontTable: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">${table}</w:fonts>`,
+    rels: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.join("")}</Relationships>`,
+  };
+}
+
+function randomGuid() {
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("").toUpperCase();
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/**
+ * Word's settings: the default tab stops, fonts carried in the file, and how
+ * Inline lays the document out (a document variable, so Inline reads its own
+ * copies back the same).
+ */
+function settingsXml(meta: DocumentMeta, embedFonts: boolean) {
+  const s = meta.settings;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${embedFonts ? "<w:embedTrueTypeFonts/>" : ""}<w:defaultTabStop w:val="${Math.round((s.tabStop ?? DEFAULT_TAB_STOP) * 20)}"/><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat><w:docVars><w:docVar w:name="InlineLineModel" w:val="${s.lineModel ?? "css"}"/></w:docVars></w:settings>`;
+}
 
 const COMMENTS_EXTENDED = "http://schemas.microsoft.com/office/word/2012/wordml";
 
@@ -436,7 +582,7 @@ function commentsXml(threads: DocComment[], ids: Map<string, number[]>) {
  * A document as a Word file: one document (with its comments), or every tab
  * of one, each tab a section headed by its name.
  */
-export async function documentToDocx(content: PMNode | DocxTab[], meta: DocumentMeta, loadImage: ImageLoader, comments: DocComment[] = []): Promise<Uint8Array> {
+export async function documentToDocx(content: PMNode | DocxTab[], meta: DocumentMeta, loadImage: ImageLoader, comments: DocComment[] = [], loadFonts?: FontLoader): Promise<Uint8Array> {
   const settings = meta.settings;
   const size = pageSize(settings.pageSetup);
   const m = settings.pageSetup.margins;
@@ -494,7 +640,12 @@ export async function documentToDocx(content: PMNode | DocxTab[], meta: Document
   const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:m="${OMML_NAMESPACE}"><w:body>${body}${sectPr}</w:body></w:document>`;
 
   const commentParts = threads.length ? commentsXml(threads, ctx.commentIds) : null;
+  // The fonts the document's text is set in, where they came with it (an imported document's own).
+  const fonts = loadFonts ? embeddedFonts(await loadFonts(fontFamilies(tabs.map((tab) => tab.doc), settings.fontFamily)).catch(() => [])) : null;
+  const carried = fonts && fonts.files.length ? fonts : null;
   const rels = [
+    '<Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>',
+    ...(carried ? ['<Relationship Id="rId6" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/>'] : []),
     '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>',
     '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>',
     ...(commentParts
@@ -509,7 +660,7 @@ export async function documentToDocx(content: PMNode | DocxTab[], meta: Document
   const entries: ZipEntry[] = [
     {
       name: "[Content_Types].xml",
-      data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="jpeg" ContentType="image/jpeg"/><Default Extension="gif" ContentType="image/gif"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/><Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>${firstPage ? '<Override PartName="/word/header2.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/><Override PartName="/word/footer2.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>' : ""}${commentParts ? '<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/><Override PartName="/word/commentsExtended.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml"/>' : ""}<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>`,
+      data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="jpeg" ContentType="image/jpeg"/><Default Extension="gif" ContentType="image/gif"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/><Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>${firstPage ? '<Override PartName="/word/header2.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/><Override PartName="/word/footer2.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>' : ""}${commentParts ? '<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/><Override PartName="/word/commentsExtended.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml"/>' : ""}<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>${carried ? '<Default Extension="odttf" ContentType="application/vnd.openxmlformats-officedocument.obfuscatedFont"/><Override PartName="/word/fontTable.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"/>' : ""}<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>`,
     },
     {
       name: "_rels/.rels",
@@ -518,6 +669,8 @@ export async function documentToDocx(content: PMNode | DocxTab[], meta: Document
     { name: "word/_rels/document.xml.rels", data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}</Relationships>` },
     { name: "word/document.xml", data: documentXml },
     { name: "word/styles.xml", data: stylesXml(meta) },
+    { name: "word/settings.xml", data: settingsXml(meta, Boolean(carried)) },
+    ...(carried ? [{ name: "word/fontTable.xml", data: carried.fontTable }, { name: "word/_rels/fontTable.xml.rels", data: carried.rels }, ...carried.files] : []),
     { name: "word/numbering.xml", data: numberingXml(ctx.numbering) },
     ...(commentParts
       ? [

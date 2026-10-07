@@ -4,6 +4,7 @@ import type { DocumentMeta } from "@/lib/doc/settings";
 import { HttpError, json, route } from "@/lib/server/http";
 import { MAX_FOLDER_DEPTH } from "@/lib/doc/folders";
 import { ensureFolderPath, folderExists } from "@/lib/server/folders";
+import { saveFont } from "@/lib/server/fonts";
 import { documentHub } from "@/lib/server/hub";
 import { saveUpload, uploadExtension } from "@/lib/server/store";
 import { archiveFolders, openZip, readZip, ZipError } from "@/lib/server/unzip";
@@ -31,6 +32,10 @@ async function importDocx(data: Uint8Array, fileName: string, folderId: string |
         const id = randomUUID().replace(/-/g, "");
         await saveUpload(id, extension, image);
         return `/api/uploads/${id}.${extension}`;
+      },
+      // The fonts the file carries, so the page shows it in them.
+      saveFont: async (font) => {
+        await saveFont(font);
       },
     });
   } catch (error) {

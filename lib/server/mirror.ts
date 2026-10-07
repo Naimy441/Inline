@@ -9,6 +9,7 @@ import type { ZipEntry } from "@/lib/doc/zip";
 import { listFolders } from "@/lib/server/folders";
 import { documentHub, tabTitle } from "@/lib/server/hub";
 import { loadImage } from "@/lib/server/images";
+import { loadFontsForWord } from "@/lib/server/fonts";
 import { log } from "@/lib/server/log";
 import { readSettingsFile, writeSettingsFile } from "@/lib/server/store";
 
@@ -349,8 +350,8 @@ class Mirror {
     if (!live) return null;
     const tabs = live.meta.trashedAt ? [live] : (await hub.family(id)).tabs;
     // Each tab is a titled section, as Google Docs writes tabs, so the file reads back in with its tabs; comments come along.
-    if (tabs.length === 1) return documentToDocx(live.doc, live.meta, this.loadImage, live.snapshot().comments);
-    return documentToDocx(tabs.map((tab, index) => ({ title: tabTitle(tab.meta, index), doc: tab.doc, comments: tab.snapshot().comments })), live.meta, this.loadImage);
+    if (tabs.length === 1) return documentToDocx(live.doc, live.meta, this.loadImage, live.snapshot().comments, loadFontsForWord);
+    return documentToDocx(tabs.map((tab, index) => ({ title: tabTitle(tab.meta, index), doc: tab.doc, comments: tab.snapshot().comments })), live.meta, this.loadImage, [], loadFontsForWord);
   }
 
   /**

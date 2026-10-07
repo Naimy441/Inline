@@ -229,6 +229,33 @@ function markRank(mark: Mark) {
   return index < 0 ? MARK_ORDER.length : index;
 }
 
+const PUNCTUATION = /[\p{P}\p{S}]/u;
+const flanks = (before: string, after: string) => {
+  const space = (char: string) => !char || /\s/.test(char);
+  const punct = (char: string) => Boolean(char) && PUNCTUATION.test(char);
+  // CommonMark: * opens when left-flanking and closes when right-flanking.
+  return {
+    left: !space(after) && (!punct(after) || space(before) || punct(before)),
+    right: !space(before) && (!punct(before) || space(after) || punct(after)),
+  };
+};
+
+/**
+ * Whether a * delimiter can open a span starting at `pieces[index]` (whose
+ * text is `text`) after what's written so far, and close it after `length`
+ * pieces.
+ */
+function starFits(out: string, pieces: InlinePiece[], index: number, length: number, text: string) {
+  const first = text.charAt(0) || (pieces[index]?.kind === "text" ? "" : "a");
+  if (!flanks(out.slice(-1), first).left) return false;
+  const last = pieces[index + length - 1];
+  const lastText = last?.kind === "text" ? last.text.replace(/\s+$/, "") : "a";
+  const trailingSpace = last?.kind === "text" && /\s$/.test(last.text);
+  const after = pieces[index + length];
+  const next = trailingSpace ? " " : after?.kind === "text" ? after.text.charAt(0) : after ? "a" : "";
+  return flanks(lastText.slice(-1), next).right;
+}
+
 function openDelimiter(mark: Mark): string {
   switch (mark.type.name) {
     case "bold":
@@ -277,7 +304,7 @@ function closeDelimiter(mark: Mark): string {
   }
 }
 
-type InlinePiece = { kind: "text"; text: string; marks: Mark[] } | { kind: "break"; marks: Mark[] };
+type InlinePiece = { kind: "text"; text: string; marks: Mark[] } | { kind: "break"; marks: Mark[] } | { kind: "image"; markdown: string; marks: Mark[] };
 
 export function serializeInline(node: PMNode, options: InlineOptions): string {
   const pieces: InlinePiece[] = [];
@@ -285,6 +312,15 @@ export function serializeInline(node: PMNode, options: InlineOptions): string {
     const marks = child.marks.filter((mark) => MARKDOWN_MARKS.has(mark.type.name));
     if (child.isText) pieces.push({ kind: "text", text: child.text ?? "", marks });
     else if (child.type.name === "hard_break") pieces.push({ kind: "break", marks });
+    // A picture in a line of text (an icon) is written where it sits; its size and fade come back from the old one when Claude edits.
+    else if (child.type.name === "inline_image") pieces.push({ kind: "image", markdown: `![${escapeLinkText(String(child.attrs.alt || ""))}](${formatUrl(String(child.attrs.src || ""))})`, marks });
+  });
+  // Markdown can't open or close emphasis at spaces alone, so a space formatted unlike the text around it (as
+  // Google Docs often leaves one) keeps only the formatting it shares with the text on both sides.
+  pieces.forEach((piece, index) => {
+    if (piece.kind !== "text" || piece.text.trim() || piece.marks.some((mark) => mark.type.name === "code" || mark.type.name === "math")) return;
+    const shared = (other: InlinePiece | undefined, mark: Mark) => Boolean(other?.marks.some((item) => item.eq(mark)));
+    piece.marks = piece.marks.filter((mark) => shared(pieces[index - 1], mark) && shared(pieces[index + 1], mark));
   });
 
   // How far (in pieces) each mark keeps going from a given piece; longer-running marks open first.
@@ -299,6 +335,12 @@ export function serializeInline(node: PMNode, options: InlineOptions): string {
 
   let out = "";
   const active: Mark[] = [];
+  const tagged = new Set<Mark>();
+  const close = (mark: Mark) => {
+    if (!tagged.delete(mark)) return closeDelimiter(mark);
+    return mark.type.name === "bold" ? "</strong>" : "</em>";
+  };
+  const closeMark = close;
   pieces.forEach((piece, index) => {
     const marks = piece.marks;
     const codeMark = marks.find((mark) => mark.type.name === "code" || mark.type.name === "math");
@@ -316,7 +358,7 @@ export function serializeInline(node: PMNode, options: InlineOptions): string {
       }
     }
 
-    for (let i = active.length - 1; i >= keep; i -= 1) out += closeDelimiter(active[i]!);
+    for (let i = active.length - 1; i >= keep; i -= 1) out += close(active[i]!);
     active.length = keep;
     out += leading;
 
@@ -324,12 +366,21 @@ export function serializeInline(node: PMNode, options: InlineOptions): string {
       .filter((mark) => mark.type.name !== "code" && mark.type.name !== "math" && !active.some((m) => m.eq(mark)))
       .sort((a, b) => runLength(b, index) - runLength(a, index) || markRank(a) - markRank(b));
     for (const mark of opening) {
-      out += openDelimiter(mark);
+      // Bold or italic whose * couldn't open or close where it falls (between a letter and punctuation,
+      // as in "HackDuke*: 1st*") is written as its HTML tag, which Markdown reads anywhere.
+      if ((mark.type.name === "bold" || mark.type.name === "italic") && !starFits(out, pieces, index, runLength(mark, index), text)) {
+        tagged.add(mark);
+        out += mark.type.name === "bold" ? "<strong>" : "<em>";
+      } else out += openDelimiter(mark);
       active.push(mark);
     }
 
     if (piece.kind === "break") {
       out += "<br>";
+      return;
+    }
+    if (piece.kind === "image") {
+      out += piece.markdown;
       return;
     }
 
@@ -357,17 +408,23 @@ export function serializeInline(node: PMNode, options: InlineOptions): string {
     }
 
     if (trailing) {
+      // Close every mark from the outermost one that ends here: an inner mark that carries on is reopened after the spaces.
       const next = pieces[index + 1];
-      let close = active.length;
-      while (close > 0 && (!next || !next.marks.some((m) => m.eq(active[close - 1]!)))) close -= 1;
-      for (let i = active.length - 1; i >= close; i -= 1) out += closeDelimiter(active[i]!);
+      let close = active.findIndex((mark) => !next || !next.marks.some((m) => m.eq(mark)));
+      if (close < 0) close = active.length;
+      for (let i = active.length - 1; i >= close; i -= 1) out += closeMark(active[i]!);
       active.length = close;
       out += trailing;
     }
   });
-  for (let i = active.length - 1; i >= 0; i -= 1) out += closeDelimiter(active[i]!);
-  // A trailing "{...}" would be read back as block attributes.
-  return out.replace(/\{([^{}]*)\}$/, "\\{$1}");
+  for (let i = active.length - 1; i >= 0; i -= 1) out += close(active[i]!);
+  // Markdown drops spaces and tabs at either end of a paragraph (and a tab first makes it code), so those
+  // are written as character references; a trailing "{...}" would be read back as block attributes.
+  const ends = (text: string) => text.replace(/[ \t]/g, (char) => (char === "\t" ? "&#9;" : "&#32;"));
+  return out
+    .replace(/^[ \t]+/, (lead) => (options.atLineStart && lead.includes("\t") ? ends(lead) : lead))
+    .replace(/(?<=\S)[ \t]+$/, (tail) => (tail.includes("\t") ? ends(tail) : tail))
+    .replace(/\{([^{}]*)\}$/, "\\{$1}");
 }
 
 function escapeText(text: string, options: { atLineStart: boolean; inTable?: boolean }) {
@@ -698,7 +755,7 @@ class BlockBuilder {
   private paragraph(children: Token[]): PMNode {
     const nonEmpty = children.filter((token) => !(token.type === "text" && !token.content.trim()));
     // A paragraph that is only an image (plus optional {attrs}) is an image block.
-    if (nonEmpty[0]?.type === "image" && (nonEmpty.length === 1 || (nonEmpty.length === 2 && nonEmpty[1]!.type === "text" && ATTR_SUFFIX.test(nonEmpty[1]!.content)))) {
+    if (nonEmpty[0]?.type === "image" && (nonEmpty.length === 1 || (nonEmpty.length === 2 && nonEmpty[1]!.type === "text" && ATTR_SUFFIX.test(nonEmpty[1]!.content) && !nonEmpty[1]!.content.replace(ATTR_SUFFIX, "").trim()))) {
       const image = nonEmpty[0]!;
       const spec = nonEmpty[1] ? parseAttrSpec(nonEmpty[1].content.match(ATTR_SUFFIX)?.[1] ?? "") : { classes: [], values: {} };
       const align = spec.values.align as Align | undefined;
@@ -815,9 +872,11 @@ class BlockBuilder {
           remove("link");
           break;
         case "image": {
-          // Inline images are not supported inside text; keep the alt text.
+          // A picture in a line of text stays in the line.
           const alt = token.children?.map((child) => child.content).join("") || token.content;
-          pushText(alt);
+          const src = token.attrGet("src") ?? "";
+          if (src) nodes.push(schema.nodes.inline_image!.create({ src, alt }, null, marks.filter((mark) => mark.type.name === "link")));
+          else pushText(alt);
           break;
         }
         case "html_inline": {

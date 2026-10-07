@@ -128,9 +128,8 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  min-width: 0;
   margin-left: 8px;
-  flex: 1;
+  flex: 1 0 auto;
 }
 
 .sync-status {
@@ -260,12 +259,86 @@
   flex: 1 0 8px;
 }
 
+/* Font picker (FontPicker.tsx): a search box over the standard fonts and Google Fonts. Above dialogs, for Page setup's. */
+.popover.font-picker {
+  z-index: 95;
+  width: 280px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.font-picker-body {
+  display: flex;
+  flex-direction: column;
+  max-height: min(420px, 70vh);
+}
+
+.font-picker-search {
+  flex: none;
+  width: auto;
+  height: 32px;
+  margin: 6px;
+}
+
+.font-picker-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 5px 5px;
+}
+
+.font-picker-item {
+  font-size: 14px;
+}
+
+.font-picker-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.font-picker-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.font-picker-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* "More tools": the groups that don't fit in the toolbar's row. */
+.tb-overflow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  max-width: min(480px, calc(100vw - 16px));
+  padding: 4px 6px;
+}
+
+/* Spacing, not dividers, between the groups: a divider would start a wrapped row. */
+.tb-overflow .tb-group + .tb-group {
+  margin-left: 0;
+  padding-left: 0;
+  border-left: 0;
+}
+
 /* Viewing mode: the editing controls stay visible but inert. */
 .workspace.is-viewing .bubble-edit {
   display: none;
 }
 
-.toolbar.is-viewing .tb-edit {
+.toolbar.is-viewing .tb-edit,
+.tb-overflow.is-viewing .tb-edit {
   opacity: 0.4;
   pointer-events: none;
 }
@@ -458,10 +531,15 @@
   padding: 28px var(--canvas-pad, 40px) 120px;
 }
 
-.page-stack {
-  position: relative;
+.page-stack-frame {
   flex: none;
   margin: 0 auto;
+}
+
+.page-stack {
+  position: relative;
+  margin: 0 auto;
+  transform-origin: 0 0;
 }
 
 /* Floating comments: the page moves left to leave the right margin for them. */
@@ -1675,12 +1753,6 @@ button.status-item:hover {
   }
 }
 
-@media (max-width: 1220px) {
-  .tb-clear-group,
-  .tb-indent {
-    display: none;
-  }
-}
 
 /* Narrow screens: the panel overlays the canvas instead of squeezing it. */
 
@@ -1704,28 +1776,35 @@ button.status-item:hover {
 
 }
 
+/* Compact title bar (narrow windows, or a full one that doesn't fit): the menus fold into "More". */
+.titlebar.is-compact {
+  gap: 4px;
+}
+
+.titlebar.is-compact .titlebar-status {
+  flex: none;
+  margin-left: 0;
+}
+
+.titlebar.is-compact .menubar {
+  display: none;
+}
+
+.titlebar.is-compact .title-stack {
+  flex: 1;
+}
+
+.titlebar.is-compact .title-input {
+  width: 100%;
+  height: 30px;
+  font-size: 16px;
+}
+
+.titlebar.is-compact .titlebar-actions {
+  margin-left: auto;
+}
+
 @media (max-width: 860px) {
-  .titlebar {
-    gap: 4px;
-  }
-  .titlebar-status {
-    flex: none;
-    margin-left: 0;
-  }
-  .menubar {
-    display: none;
-  }
-  .title-stack {
-    flex: 1;
-  }
-  .title-input {
-    width: 100%;
-    height: 30px;
-    font-size: 16px;
-  }
-  .titlebar-actions {
-    margin-left: auto;
-  }
   .panel-shell {
     position: absolute;
     top: calc(var(--titlebar-h) + var(--toolbar-h));
@@ -1790,8 +1869,8 @@ button.status-item:hover {
 .claude-toggle.is-working::before {
   content: "";
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: 4px;
+  right: 4px;
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -1811,217 +1890,33 @@ button.status-item:hover {
   background: transparent;
 }
 
+.icon-btn.claude-toggle svg {
+  color: currentColor;
+}
+
 .icon-btn.claude-toggle.is-active {
-  background: var(--accent-soft);
-  color: var(--accent-text);
+  background: var(--surface-active);
+  color: var(--text);
 }
 
 .panel-backdrop {
   display: none;
 }
 
-/*
- * Phones: one column. Text reflows to the screen, the formatting toolbar sits
- * at the bottom within thumb reach (and above the keyboard), and panels and
- * menus rise as sheets. The workspace tracks the visual viewport so nothing
- * pinned to the bottom hides behind the iOS keyboard.
- */
+/* Phone-width windows: the review bar fits the screen, dropping its navigation and author. */
 @media (max-width: 640px) {
-  .workspace {
-    position: fixed;
-    left: 0;
-    right: 0;
-    top: var(--app-top, 0px);
-    height: var(--app-height, 100dvh);
-    grid-template-rows: auto minmax(0, 1fr) auto;
-    grid-template-areas: "title" "body" "tools";
-  }
-
-  .titlebar {
-    grid-area: title;
-    height: calc(52px + env(safe-area-inset-top));
-    padding: env(safe-area-inset-top) 4px 0 2px;
-    gap: 0;
-  }
-
-  .titlebar > .icon-btn {
-    min-width: 40px;
-    height: 40px;
-  }
-
-  .home-btn {
-    width: 40px;
-    height: 40px;
-  }
-
-  .title-input {
-    padding: 0 6px;
-    font-size: 16px;
-    font-weight: 600;
-  }
-
-  .titlebar-status {
-    margin: 0 2px;
-  }
-
-  .titlebar-actions {
-    gap: 0;
-  }
-
-  .workspace-body {
-    grid-area: body;
-  }
-
-  .toolbar {
-    grid-area: tools;
-    height: calc(50px + env(safe-area-inset-bottom));
-    padding: 0 6px env(safe-area-inset-bottom);
-    gap: 0;
-    border-top: 1px solid var(--border);
-    border-bottom: 0;
-    scroll-snap-type: x proximity;
-  }
-
-  .toolbar .icon-btn-md {
-    min-width: 40px;
-    height: 40px;
-  }
-
-  .toolbar .tb-select {
-    height: 38px;
-    font-size: 14px;
-  }
-
-  .tb-group {
-    scroll-snap-align: start;
-  }
-
-  .tb-group + .tb-group {
-    margin-left: 2px;
-    padding-left: 3px;
-  }
-
-  .tb-zoom-group,
-  .tb-spacing,
-  .tb-spacer,
-  .tb-mode {
-    display: none;
-  }
-
-  .tb-zoom-group + .tb-group {
-    margin-left: 0;
-    padding-left: 0;
-    border-left: 0;
-  }
-
-  .tb-size {
-    width: 40px;
-    height: 32px;
-  }
-
-  .toolbar.is-viewing {
-    display: none;
-  }
-
-  .statusbar {
-    display: none;
-  }
-
-  .canvas {
-    background: var(--paper);
-    -webkit-overflow-scrolling: touch;
-  }
-
-  /* Fill the screen so the review bar rests at the bottom even under a short document. */
-  .page-stack-wrap.is-flow {
-    display: block;
-    width: 100%;
-    min-height: 100%;
-    padding: 20px 20px 112px;
-  }
-
-  .page-stack-wrap.is-flow .page-stack {
-    max-width: 680px;
-  }
-
-  .page-stack-wrap.is-flow .page-content {
-    position: relative;
-  }
-
-  /* Panels: a sheet over the document, leaving a sliver of it in view. */
-  .panel-backdrop {
-    display: block;
-    position: fixed;
-    inset: 0;
-    z-index: 44;
-    background: rgba(20, 19, 17, 0.32);
-    animation: fade-in 0.2s;
-  }
-
-  .panel-shell {
-    position: fixed;
-    left: 0;
-    right: 0;
-    top: calc(var(--app-top, 0px) + 36px + env(safe-area-inset-top));
-    bottom: auto;
-    z-index: 45;
-    width: auto;
-    height: calc(var(--app-height, 100dvh) - 36px - env(safe-area-inset-top));
-    border: 0;
-    border-radius: 16px 16px 0 0;
-    overflow: hidden;
-    box-shadow: var(--shadow-lg);
-    animation: sheet-up 0.28s var(--ease);
-  }
-
-  .panel-resizer {
-    display: none;
-  }
-
-  .panel-header {
-    height: 52px;
-    padding: 0 6px 0 18px;
-  }
-
-  .panel-header .icon-btn-sm {
-    min-width: 40px;
-    height: 40px;
-  }
-
-  .panel-title-text {
-    font-size: 15px;
-  }
-
-  .panel-footer {
-    padding-bottom: calc(12px + env(safe-area-inset-bottom));
-  }
-
-  .find-bar {
-    top: calc(var(--app-top, 0px) + 58px + env(safe-area-inset-top));
-    left: 8px;
-    right: 8px;
-    width: auto;
-    max-width: none;
-  }
-
-  .workspace.has-panel .find-bar {
-    right: 8px;
-  }
-
-  .find-field {
-    height: 40px;
-  }
-
   .review-bar {
-    bottom: 12px;
     width: calc(100% - 24px);
     max-width: 440px;
-    margin: -64px auto 12px;
     padding: 5px 5px 5px 12px;
   }
 
   .review-bar-count {
     flex: 1;
+  }
+
+  .review-bar-count,
+  .review-bar-text {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -2032,33 +1927,8 @@ button.status-item:hover {
     display: none;
   }
 
-  .review-bar-text {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
   .review-bar-dot {
     flex: none;
-  }
-
-  .review-bar .btn-sm {
-    height: 34px;
-    padding: 0 12px;
-  }
-
-  .review-bar .icon-btn-sm {
-    min-width: 34px;
-    height: 34px;
-  }
-
-  .bubble-btn {
-    min-width: 40px;
-    height: 40px;
-  }
-
-  .bubble kbd {
-    display: none;
   }
 }
 

@@ -2,7 +2,8 @@
 
 import { memo, useEffect, useRef } from "react";
 import { geometryFor, type DocumentSession } from "@/lib/client/documentSession";
-import { fillHeaderTokens, type DocumentMeta } from "@/lib/doc/settings";
+import { lineFactor, lineMetrics } from "@/lib/doc/fontMetrics";
+import { DEFAULT_TAB_STOP, fillHeaderTokens, type DocumentMeta } from "@/lib/doc/settings";
 
 /**
  * The page stack: paper sheets with headers, footers and page numbers drawn
@@ -45,30 +46,49 @@ export const PageCanvas = memo(function PageCanvas({
         fontSize: `${settings.fontSize}pt`,
         lineHeight: String(settings.lineSpacing),
         ["--para-space" as string]: `${settings.paragraphSpacing}pt`,
+        // Line spacing in each font's own line height (document.css), and where default tab stops fall.
+        ["--ls" as string]: String(settings.lineSpacing),
+        ["--font-lh" as string]: String(lineFactor(settings.fontFamily)),
+        ["--font-lh-step" as string]: lineMetrics(settings.fontFamily).pixelRound ? "1px" : "0.01px",
+        ["--tab-stop" as string]: `${settings.tabStop ?? DEFAULT_TAB_STOP}pt`,
       }
     : undefined;
+  const lineModel = settings?.lineModel === "font" ? " font-lines" : "";
+  // Zoom scales the laid-out pages rather than laying them out again (CSS zoom would): text
+  // shaped at another size wraps differently, so the page count would change with the window.
+  const scale = printing || flow ? 1 : zoom;
 
   // The tree stays the same in both layouts so the editor's DOM is never remounted.
   return (
-    <div className={`page-stack-wrap${flow ? " is-flow" : ""}`} style={{ zoom: printing || flow ? 1 : zoom }}>
-      <div className="page-stack" style={{ width: flow ? undefined : geometry.pageWidth, height: flow ? undefined : totalHeight, ["--doc-font" as string]: settings?.fontFamily }}>
-        {!flow &&
-          Array.from({ length: pages }, (_, index) => <Sheet key={index} index={index} pages={pages} meta={meta} top={index * pitch} geometry={geometry} />)}
+    <div className={`page-stack-wrap${flow ? " is-flow" : ""}`}>
+      <div className="page-stack-frame" style={flow ? undefined : { width: geometry.pageWidth * scale, height: totalHeight * scale }}>
         <div
-          className="page-content"
-          style={
-            flow
-              ? contentStyle
-              : {
-                  top: geometry.marginTop,
-                  left: geometry.marginLeft,
-                  width: geometry.pageWidth - geometry.marginLeft - geometry.marginRight,
-                  minHeight: totalHeight - geometry.marginTop - geometry.marginBottom,
-                  ...contentStyle,
-                }
-          }
+          className="page-stack"
+          style={{
+            width: flow ? undefined : geometry.pageWidth,
+            height: flow ? undefined : totalHeight,
+            transform: scale === 1 ? undefined : `scale(${scale})`,
+            ["--doc-font" as string]: settings?.fontFamily,
+          }}
         >
-          <div ref={mount} className="editor-mount" />
+          {!flow &&
+            Array.from({ length: pages }, (_, index) => <Sheet key={index} index={index} pages={pages} meta={meta} top={index * pitch} geometry={geometry} />)}
+          <div
+            className={`page-content${lineModel}`}
+            style={
+              flow
+                ? contentStyle
+                : {
+                    top: geometry.marginTop,
+                    left: geometry.marginLeft,
+                    width: geometry.pageWidth - geometry.marginLeft - geometry.marginRight,
+                    minHeight: totalHeight - geometry.marginTop - geometry.marginBottom,
+                    ...contentStyle,
+                  }
+            }
+          >
+            <div ref={mount} className="editor-mount" />
+          </div>
         </div>
       </div>
     </div>

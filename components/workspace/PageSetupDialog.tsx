@@ -1,7 +1,10 @@
 "use client";
 
+import { ChevronDown } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { DocumentSession } from "@/lib/client/documentSession";
+import { primaryFamily } from "@/lib/doc/fontMetrics";
+import { FontPicker } from "@/components/workspace/FontPicker";
 import { DEFAULT_SETTINGS, FONT_FAMILIES, PAPER_SIZES, type DocumentSettings } from "@/lib/doc/settings";
 import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
@@ -122,16 +125,13 @@ export function PageSetupDialog({
 
       {tab === "text" && (
         <div className="form-grid">
-          <label className="field span-2">
+          <div className="field span-2">
             <span>Default font</span>
-            <select className="input" value={draft.fontFamily} onChange={(event) => set({ fontFamily: event.target.value })}>
-              {FONT_FAMILIES.map((font) => (
-                <option key={font.value} value={font.value}>
-                  {font.label}
-                </option>
-              ))}
-            </select>
-          </label>
+            <FontPicker className="input font-picker-field" label="Default font" value={draft.fontFamily} onPick={(fontFamily) => set({ fontFamily })}>
+              <span style={{ fontFamily: draft.fontFamily }}>{FONT_FAMILIES.find((font) => font.value === draft.fontFamily)?.label ?? primaryFamily(draft.fontFamily)}</span>
+              <ChevronDown size={14} />
+            </FontPicker>
+          </div>
           <label className="field">
             <span>Font size (pt)</span>
             <input className="input" type="number" min={6} max={96} step={0.5} value={draft.fontSize} onChange={(event) => set({ fontSize: Number(event.target.value) })} />

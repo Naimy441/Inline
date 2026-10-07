@@ -108,7 +108,7 @@ describe("reading Word documents", () => {
     assert.doesNotMatch(markdown.trimEnd(), /&nbsp;$/, "Word's trailing empty paragraph is dropped");
   });
 
-  it("hands embedded images to saveImage and places them after their paragraph", async () => {
+  it("hands embedded images to saveImage and keeps a picture set in a line of text in the line", async () => {
     const drawing = `<w:p><w:r><w:t>Logo:</w:t></w:r><w:r><w:drawing><wp:inline xmlns:wp="wp"><wp:extent cx="952500" cy="476250"/><wp:docPr id="1" name="Picture" descr="Company logo"/><a:graphic xmlns:a="a"><a:graphicData><pic:pic xmlns:pic="pic"><pic:blipFill><a:blip r:embed="rId5"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
     const parts = wordDocument(drawing, {
       "word/_rels/document.xml.rels": `<Relationships xmlns="x"><Relationship Id="rId5" Type="image" Target="media/image1.png"/></Relationships>`,
@@ -122,11 +122,24 @@ describe("reading Word documents", () => {
       },
     });
     assert.deepEqual(saved, [["PNGDATA", "image/png"]]);
-    const image = doc.child(1);
-    assert.equal(image.type.name, "image");
+    assert.equal(doc.childCount, 1);
+    const image = doc.child(0).child(1);
+    assert.equal(image.type.name, "inline_image", "it follows the text, as Word shows it");
     assert.equal(image.attrs.src, "/api/uploads/abc.png");
     assert.equal(image.attrs.alt, "Company logo");
-    assert.equal(image.attrs.width, "100px");
+    assert.deepEqual([image.attrs.width, image.attrs.height], [100, 50]);
+  });
+
+  it("places a picture that is all its paragraph holds as a picture of its own", async () => {
+    const drawing = `<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:drawing><wp:inline xmlns:wp="wp"><wp:extent cx="952500" cy="476250"/><wp:docPr id="1" name="Picture" descr="Company logo"/><a:graphic xmlns:a="a"><a:graphicData><pic:pic xmlns:pic="pic"><pic:blipFill><a:blip r:embed="rId5"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
+    const parts = wordDocument(drawing, {
+      "word/_rels/document.xml.rels": `<Relationships xmlns="x"><Relationship Id="rId5" Type="image" Target="media/image1.png"/></Relationships>`,
+      "word/media/image1.png": "PNGDATA",
+    });
+    const doc = await docxToDoc(parts, { saveImage: async () => "/api/uploads/abc.png" });
+    const image = doc.child(0);
+    assert.equal(image.type.name, "image");
+    assert.deepEqual([image.attrs.width, image.attrs.align], ["100px", "center"]);
   });
 
   it("reads Google Docs' page setup, body font, spacing and header into the settings", async () => {

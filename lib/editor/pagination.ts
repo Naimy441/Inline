@@ -266,9 +266,16 @@ function measure(view: EditorView, geometry: PageGeometry, keepCache = true): { 
       while (!forceNext && top > target * pitch + contentHeight) target += 1;
       const height = target * pitch - top;
       if (height > 0) {
-        const pos = unit.kind === "line" ? lineStart(view, unit.block, unit.blockPos, unit.top, toLocal, natural) : unit.pos;
+        let pos = unit.kind === "line" ? lineStart(view, unit.block, unit.blockPos, unit.top, toLocal, natural) : unit.pos;
+        let inline = unit.kind === "line";
+        // A block's first line moves the whole block: a spacer inside it would leave what comes before its
+        // text (a list marker, a first-line indent) as a line of its own above the spacer.
+        if (unit.kind === "line" && pos === unit.blockPos + 1) {
+          pos = blockStart(view.state.doc, unit.blockPos);
+          inline = false;
+        }
         if (pos != null) {
-          breaks.push({ pos, height, inline: unit.kind === "line" });
+          breaks.push({ pos, height, inline });
           shift += height;
         }
       }
@@ -308,6 +315,13 @@ function measureKept(view: EditorView, geometry: PageGeometry): PageLayout["kept
 function dedupe(breaks: Break[]) {
   const seen = new Set<number>();
   return breaks.filter((item) => (seen.has(item.pos) ? false : (seen.add(item.pos), true)));
+}
+
+/** Where the block at `pos` starts, before the list items and quotes it opens. */
+function blockStart(doc: PMNode, pos: number) {
+  let $pos = doc.resolve(pos);
+  while ($pos.depth > 0 && $pos.index() === 0 && CONTAINERS.has($pos.parent.type.name)) $pos = doc.resolve($pos.before());
+  return $pos.pos;
 }
 
 /**

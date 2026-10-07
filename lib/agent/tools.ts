@@ -24,7 +24,8 @@ import {
 } from "@/lib/doc/editing";
 import { markdownToDoc, serializeDoc } from "@/lib/doc/markdown";
 import { changedRanges, isUserSuggestion } from "@/lib/doc/review";
-import { FONT_FAMILIES, PAPER_SIZES, type DocumentSettings, type PaperSize } from "@/lib/doc/settings";
+import { FONT_FAMILIES, googleFontValue, PAPER_SIZES, type DocumentSettings, type PaperSize } from "@/lib/doc/settings";
+import { findGoogleFont, keepGoogleFont } from "@/lib/server/googleFonts";
 import { documentHub, type LiveDocument } from "@/lib/server/hub";
 import { lintWriting } from "@/lib/writing/lint";
 import { readFile } from "node:fs/promises";
@@ -262,7 +263,7 @@ const formatShape = {
   subscript: z.boolean().optional(),
   highlight: z.union([z.string(), z.boolean()]).optional().describe("true for yellow, a CSS color for another color, false to remove."),
   color: z.string().nullable().optional().describe("Text color as a CSS color (e.g. \"#c5221f\"), or null to reset."),
-  font_family: z.string().nullable().optional().describe(`Font family, or null to reset. Available: ${FONT_FAMILIES.map((font) => font.label).join(", ")}.`),
+  font_family: z.string().nullable().optional().describe(`Font family, or null to reset: ${FONT_FAMILIES.map((font) => font.label).join(", ")}, or any Google Fonts family by its name (e.g. "Lora", "Playfair Display").`),
   font_size: z.number().min(4).max(144).nullable().optional().describe("Font size in points, or null to reset."),
   link: z.string().nullable().optional().describe("Make the text a link to this URL, or null to remove the link."),
 };
@@ -662,7 +663,7 @@ export const TOOLS = [
     shape: {
       document_id: documentId,
       title: z.string().optional(),
-      font_family: z.string().optional().describe(`Default font. Available: ${FONT_FAMILIES.map((font) => font.label).join(", ")}.`),
+      font_family: z.string().optional().describe(`Default font: ${FONT_FAMILIES.map((font) => font.label).join(", ")}, or any Google Fonts family by its name (e.g. "Lora", "Playfair Display").`),
       font_size: z.number().min(6).max(96).optional().describe("Default size in points."),
       line_spacing: z.number().min(0.8).max(4).optional(),
       paragraph_spacing: z.number().min(0).max(72).optional().describe("Points after each paragraph."),
@@ -698,7 +699,9 @@ export const TOOLS = [
         // Any other installed font works too; keep only a plain family name and add a fallback.
         const name = args.font_family.replace(/[^\p{L}\p{N} -]/gu, "").trim();
         if (!known && !name) return fail(`"${args.font_family}" isn't a font name.`);
-        settings.fontFamily = known?.value ?? `"${name}", sans-serif`;
+        const google = known ? null : await findGoogleFont(name).catch(() => null);
+        settings.fontFamily = known?.value ?? (google ? googleFontValue(google) : `"${name}", sans-serif`);
+        if (google) void keepGoogleFont(google.family).catch(() => undefined);
       }
       if (args.font_size !== undefined) settings.fontSize = args.font_size;
       if (args.line_spacing !== undefined) settings.lineSpacing = args.line_spacing;

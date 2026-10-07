@@ -1,7 +1,8 @@
 import type { Mark, Node as PMNode } from "prosemirror-model";
 import { newId } from "@/lib/doc/ids";
-import { defaultListNumbering, safeHref, schema, type Align, type ListNumbering } from "@/lib/doc/schema";
-import { DEFAULT_SETTINGS, FONT_FAMILIES, PAPER_SIZES, type CommentAuthor, type DocComment, type DocumentSettings, type HorizontalAlign, type PaperSize } from "@/lib/doc/settings";
+import { defaultListNumbering, safeHref, sameBorders, schema, type Align, type BorderLine, type Borders, type ListMarker, type ListNumbering, type TabStop } from "@/lib/doc/schema";
+import { primaryFamily } from "@/lib/doc/fontMetrics";
+import { DEFAULT_SETTINGS, DEFAULT_TAB_STOP, FONT_FAMILIES, PAPER_SIZES, type CommentAuthor, type DocComment, type DocumentSettings, type HorizontalAlign, type PaperSize } from "@/lib/doc/settings";
 
 /**
  * Reads a Word document (.docx, already unzipped into its parts) into Inline
@@ -19,10 +20,20 @@ import { DEFAULT_SETTINGS, FONT_FAMILIES, PAPER_SIZES, type CommentAuthor, type 
  *
  * Anything Inline has no equivalent for (text boxes, footnotes) is read as
  * its plain text where it has any.
+ *
+ * Imported documents are laid out the way Word and Google Docs lay them out
+ * (settings `lineModel: "font"`): line spacing in each font's own line
+ * height, tab stops, paragraph borders, pictures set in lines of text, list
+ * indents and bullets, and the size of each paragraph's own mark (which is
+ * how tall an empty paragraph is). Fonts the file carries are handed to
+ * `saveFont`, so the page can show them.
  */
 
 export type DocxParts = Map<string, Uint8Array>;
 export type SaveImage = (data: Uint8Array, mime: string) => Promise<string | null>;
+/** A font the document carries, as TrueType or OpenType data. */
+export type EmbeddedFont = { family: string; bold: boolean; italic: boolean; data: Uint8Array };
+export type SaveFont = (font: EmbeddedFont) => Promise<void>;
 
 // --- a tiny XML reader ---------------------------------------------------------
 
@@ -132,6 +143,10 @@ type ParaProps = {
   lineRule?: string;
   /** Right-to-left. */
   bidi?: boolean;
+  /** Tab stops this layer sets (twips from the margin) or clears; layers add up rather than replace. */
+  tabs?: Array<{ pos: number; clear: boolean; align: TabStop["align"]; leader: TabStop["leader"] }>;
+  /** Border sides this layer sets, or removes (null); also layered side by side. */
+  borders?: Partial<Record<keyof Borders, BorderLine | null>>;
 };
 
 /** Word's highlight colors. */
@@ -211,17 +226,72 @@ function readParaProps(pPr: XmlElement | undefined): ParaProps {
     props.line = line;
     props.lineRule = spacing?.attrs["w:lineRule"] ?? "auto";
   }
+  const tabs = child(pPr, "w:tabs");
+  if (tabs) {
+    props.tabs = elements(tabs, "w:tab").flatMap((tab) => {
+      const pos = numAttr(tab, "w:pos");
+      const kind = val(tab) ?? "left";
+      if (pos === undefined || kind === "bar") return [];
+      const align: TabStop["align"] = kind === "right" || kind === "end" ? "right" : kind === "center" ? "center" : kind === "decimal" ? "decimal" : "left";
+      const leader = tab.attrs["w:leader"];
+      return [{ pos, clear: kind === "clear", align, leader: leader === "dot" || leader === "hyphen" || leader === "underscore" || leader === "middleDot" ? leader : null }];
+    });
+  }
+  const pBdr = child(pPr, "w:pBdr");
+  if (pBdr) {
+    props.borders = {};
+    for (const side of ["top", "bottom", "left", "right", "between"] as const) {
+      const line = child(pBdr, `w:${side}`);
+      if (line) props.borders[side] = borderLine(line);
+    }
+  }
   return props;
 }
 
+/** A Word border, or null for none. */
+function borderLine(line: XmlElement): BorderLine | null {
+  const kind = val(line) ?? "none";
+  if (kind === "nil" || kind === "none") return null;
+  const size = numAttr(line, "w:sz") ?? 4;
+  const color = hex(line.attrs["w:color"]);
+  const style: BorderLine["style"] = kind === "double" ? "double" : /dot/i.test(kind) ? "dotted" : /dash/i.test(kind) ? "dashed" : "solid";
+  return { style, width: Math.max(0.25, size / 8), space: numAttr(line, "w:space") ?? 0, color: color && color !== "000000" ? `#${color.toLowerCase()}` : null };
+}
+
 const merge = <T extends object>(...layers: T[]): T => Object.assign({}, ...layers.map((layer) => Object.fromEntries(Object.entries(layer).filter(([, value]) => value !== undefined))));
+
+/** Tab stops after every layer has added and cleared its own, in points from the margin. */
+function layeredTabs(layers: ParaProps[]): TabStop[] | null {
+  const stops = new Map<number, TabStop>();
+  for (const layer of layers) {
+    for (const tab of layer.tabs ?? []) {
+      if (tab.clear) stops.delete(Math.round(tab.pos));
+      else stops.set(Math.round(tab.pos), { pos: Number((tab.pos / 20).toFixed(2)), align: tab.align, ...(tab.leader ? { leader: tab.leader } : {}) });
+    }
+  }
+  const list = [...stops.values()].sort((a, b) => a.pos - b.pos);
+  return list.length ? list : null;
+}
+
+/** Borders after every layer has set or removed its sides. */
+function layeredBorders(layers: ParaProps[]): Borders | null {
+  const sides: Borders = {};
+  for (const layer of layers) {
+    for (const [side, line] of Object.entries(layer.borders ?? {}) as Array<[keyof Borders, BorderLine | null]>) {
+      if (line) sides[side] = line;
+      else delete sides[side];
+    }
+  }
+  return Object.keys(sides).length ? sides : null;
+}
 
 // --- styles, numbering, relationships ------------------------------------------------
 
 type Kind = "title" | "subtitle" | "heading" | "code" | "quote" | null;
 type StyleInfo = { kind: Kind; level?: number; basedOn?: string; numId?: string; run: RunProps; para: ParaProps; type: string; isDefault: boolean; code?: boolean };
 
-type NumberingLevel = { bullet: boolean; start: number; para: ParaProps; numbering: ListNumbering };
+/** `abstract` is the definition the level comes from. */
+type NumberingLevel = { bullet: boolean; start: number; para: ParaProps; numbering: ListNumbering; text: string; run: RunProps; abstract?: string };
 
 type CommentInfo = { id: string; author: string; date: number; text: string; paraId?: string; parentParaId?: string; done: boolean };
 
@@ -245,7 +315,78 @@ type Context = {
   activeComments: Set<string>;
   /** The text each Inline comment covers. */
   commentQuotes: Map<string, string>;
+  /**
+   * Written by Google Docs (its Normal style is named "normal"). Google's
+   * export doesn't always describe what Google draws, so for these files two
+   * details follow Google's own rendering rather than the file, to match a
+   * Google PDF:
+   * - Bullets take their item's font and size, not the list level's (Google
+   *   writes Noto Sans Symbols 11pt but draws the text's font).
+   * - Pictures in a line of text get 2px of space round them, not the file's
+   *   distT/R/B/L (often an eighth of an inch).
+   * Other files are read literally, as Word reads them.
+   */
+  google: boolean;
+  /** Written by Inline. */
+  inline: boolean;
 };
+
+/** Runs inside a paragraph (or part of one), wherever Word nests them. */
+function forEachRun(node: XmlElement, visit: (run: XmlElement) => void) {
+  for (const item of elements(node)) {
+    if (item.name === "w:r") visit(item);
+    else if (["w:hyperlink", "w:ins", "w:smartTag", "w:fldSimple", "w:sdt", "w:sdtContent"].includes(item.name)) forEachRun(item, visit);
+  }
+}
+
+/** A run's character formatting as Word works it out: the paragraph's styles, the run's style, then the run's own. */
+function runProps(run: XmlElement, ctx: Pick<Context, "styles">, base: RunProps) {
+  const rPr = child(run, "w:rPr");
+  return merge(base, ...styleChain(ctx, val(child(rPr, "w:rStyle"))).map((style) => style.run), readRunProps(rPr));
+}
+
+const runText = (run: XmlElement) => elements(run, "w:t").map(textOf).join("");
+
+/**
+ * The font, size and line spacing most of the body text is set in (weighed
+ * by characters). Google Docs writes its own formatting on every run and an
+ * unrelated default (Calibri 12) in the styles, so the document's own
+ * "normal text" is what its text actually uses.
+ */
+function bodyStatistics(body: XmlElement, ctx: Pick<Context, "styles" | "defaults" | "defaultParagraphStyle">) {
+  const fonts = new Map<string, number>();
+  const sizes = new Map<number, number>();
+  const lines = new Map<number, number>();
+  const add = <K>(map: Map<K, number>, key: K, count: number) => map.set(key, (map.get(key) ?? 0) + count);
+  const visit = (container: XmlElement) => {
+    for (const item of elements(container)) {
+      if (item.name === "w:tbl") for (const row of elements(item, "w:tr")) for (const cell of elements(row, "w:tc")) visit(cell);
+      else if (item.name === "w:sdt") visit(child(item, "w:sdtContent") ?? EMPTY);
+      else if (item.name === "w:p") {
+        const pPr = child(item, "w:pPr");
+        const styleId = val(child(pPr, "w:pStyle")) ?? ctx.defaultParagraphStyle;
+        const kind = styleKind(ctx as Context, styleId).kind;
+        if (kind && kind !== "quote") continue;
+        const chain = styleChain(ctx, styleId);
+        const para = merge(ctx.defaults.para, ...chain.map((style) => style.para), readParaProps(pPr));
+        const base = merge(ctx.defaults.run, ...chain.map((style) => style.run));
+        let chars = 0;
+        forEachRun(item, (run) => {
+          const length = runText(run).length;
+          if (!length) return;
+          const props = runProps(run, ctx, base);
+          if (props.font) add(fonts, props.font, length);
+          if (props.size) add(sizes, props.size, length);
+          chars += length;
+        });
+        if (chars) add(lines, para.line && (para.lineRule ?? "auto") === "auto" ? round(para.line / 240, 0.01) : 1, chars);
+      }
+    }
+  };
+  visit(body);
+  const top = <K>(map: Map<K, number>) => [...map].sort((a, b) => b[1] - a[1])[0]?.[0];
+  return { font: top(fonts), size: top(sizes), line: top(lines) };
+}
 
 function classifyStyle(id: string, name: string): Kind {
   const key = `${id} ${name}`.toLowerCase();
@@ -324,8 +465,14 @@ function readLevel(lvl: XmlElement): NumberingLevel {
     start: Number(val(child(lvl, "w:start")) ?? 1) || 1,
     para: readParaProps(child(lvl, "w:pPr")),
     numbering: NUMBER_FORMATS[format] ?? "decimal",
+    text: format === "none" ? "" : val(child(lvl, "w:lvlText")) ?? "",
+    run: readRunProps(child(lvl, "w:rPr")),
   };
 }
+
+/** Word's bullets in symbol fonts (Symbol, Wingdings) are private-use characters; these are what they draw. */
+const SYMBOL_BULLETS: Record<string, string> = { "": "•", "": "▪", "": "➢", "": "❖", "": "✓", "": "□", "": "o", "": "–" };
+const SYMBOL_FONTS = /^(symbol|wingdings( \d)?|webdings|noto sans symbols2?)$/i;
 
 function readNumbering(parts: DocxParts) {
   const result = new Map<string, Map<number, NumberingLevel>>();
@@ -340,14 +487,15 @@ function readNumbering(parts: DocxParts) {
     abstract.set(def.attrs["w:abstractNumId"] ?? "", levels);
   }
   for (const num of elements(root, "w:num")) {
-    const base = abstract.get(val(child(num, "w:abstractNumId")) ?? "");
+    const abstractId = val(child(num, "w:abstractNumId")) ?? "";
+    const base = abstract.get(abstractId);
     if (!base) continue;
-    const levels = new Map([...base].map(([level, info]) => [level, { ...info }]));
+    const levels = new Map([...base].map(([level, info]) => [level, { ...info, abstract: abstractId }]));
     for (const override of elements(num, "w:lvlOverride")) {
       const index = Number(override.attrs["w:ilvl"] ?? 0);
       // An override can redefine the level outright.
       const redefined = child(override, "w:lvl");
-      if (redefined) levels.set(index, readLevel(redefined));
+      if (redefined) levels.set(index, { ...readLevel(redefined), abstract: abstractId });
       const level = levels.get(index);
       const start = Number(val(child(override, "w:startOverride")));
       if (level && start) level.start = start;
@@ -457,18 +605,36 @@ function headerFooterText(parts: DocxParts, target: string | undefined): { text:
   return lines.length ? { text: lines.join(" "), align: align ?? "left" } : null;
 }
 
+/** Written by Inline (its Word copies and downloads), and how Inline laid it out then. */
+function inlineOrigin(parts: DocxParts) {
+  const core = readPart(parts, "docProps/core.xml") ?? "";
+  const ours = /<dc:creator>Inline<\/dc:creator>/.test(core);
+  const model = /<w:docVar w:name="InlineLineModel" w:val="(\w+)"\/>/.exec(readPart(parts, "word/settings.xml") ?? "")?.[1];
+  return { ours, lineModel: model === "font" || (!ours && model !== "css") ? ("font" as const) : null };
+}
+
 function readSettings(parts: DocxParts, body: XmlElement, styles: Map<string, StyleInfo>, defaults: Context["defaults"], defaultStyle: string | undefined): DocumentSettings {
   const sectPr = child(body, "w:sectPr");
   const normal = styleChain({ styles }, defaultStyle);
   const run = merge(defaults.run, ...normal.map((style) => style.run));
   const para = merge(defaults.para, ...normal.map((style) => style.para));
+  const origin = inlineOrigin(parts);
+  // Inline's own copies say their normal text outright; anyone else's is what the text uses.
+  const stats: Partial<ReturnType<typeof bodyStatistics>> = origin.ours ? {} : bodyStatistics(body, { styles, defaults, defaultParagraphStyle: defaultStyle });
   const settings: DocumentSettings = structuredClone(DEFAULT_SETTINGS);
   settings.pageSetup = { ...settings.pageSetup, ...pageSettings(sectPr) };
-  if (run.font) settings.fontFamily = cssFontFamily(run.font);
-  if (run.size) settings.fontSize = Math.max(6, Math.min(96, run.size));
+  const font = stats.font ?? run.font;
+  const size = stats.size ?? run.size;
+  if (font) settings.fontFamily = cssFontFamily(font);
+  if (size) settings.fontSize = Math.max(6, Math.min(96, size));
   // Word's own default is single spacing with no space after paragraphs.
-  settings.lineSpacing = para.line && (para.lineRule ?? "auto") === "auto" ? Math.max(0.8, Math.min(4, round(para.line / 240, 0.01))) : 1;
+  const normalLine = para.line && (para.lineRule ?? "auto") === "auto" ? round(para.line / 240, 0.01) : 1;
+  settings.lineSpacing = Math.max(0.8, Math.min(4, stats.line ?? normalLine));
   settings.paragraphSpacing = Math.max(0, Math.min(72, round((para.after ?? 0) / 20, 0.5)));
+  // Laid out as Word and Google Docs lay it out: lines as tall as their fonts make them (unless Inline wrote it otherwise).
+  if (origin.lineModel) settings.lineModel = origin.lineModel;
+  const tabStop = numAttr(child(child(parseXml(readPart(parts, "word/settings.xml") ?? ""), "w:settings"), "w:defaultTabStop"), "w:val");
+  if (tabStop && tabStop >= 20 && Math.abs(tabStop / 20 - DEFAULT_TAB_STOP) > 0.01) settings.tabStop = round(tabStop / 20, 0.01);
 
   const rels = readRels(parts);
   const reference = (kind: "header" | "footer", type: string) => {
@@ -499,9 +665,12 @@ function readSettings(parts: DocxParts, body: XmlElement, styles: Map<string, St
 /** "cell" and "header" are paragraphs in table cells and header cells. */
 type BlockKind = "paragraph" | "title" | "subtitle" | "heading" | "list" | "quote" | "code" | "cell" | "header";
 
-/** The formatting Inline's page gives each kind of block (app/styles/document.css), which marks only need to differ from. */
-function baseline(ctx: Context, kind: BlockKind, level = 1): Required<Omit<RunProps, "vertAlign" | "color" | "highlight">> & { color: string | null } {
-  const body = { bold: false, italic: false, underline: false, strike: false, color: null as string | null, size: ctx.settings.fontSize, font: ctx.bodyFont };
+/**
+ * The formatting Inline's page gives each kind of block (app/styles/document.css),
+ * which marks only need to differ from. `size` is the paragraph's own text size, when it has one.
+ */
+function baseline(ctx: Context, kind: BlockKind, level = 1, size?: number | null): Required<Omit<RunProps, "vertAlign" | "color" | "highlight">> & { color: string | null } {
+  const body = { bold: false, italic: false, underline: false, strike: false, color: null as string | null, size: size ?? ctx.settings.fontSize, font: ctx.bodyFont };
   if (kind === "title") return { ...body, size: 26 };
   if (kind === "subtitle") return { ...body, size: 15, color: "666666" };
   if (kind === "heading") {
@@ -515,22 +684,25 @@ function baseline(ctx: Context, kind: BlockKind, level = 1): Required<Omit<RunPr
 
 /** Space before and after (points) and line height that Inline gives each kind of block. */
 function spacingBaseline(ctx: Context, kind: BlockKind, level = 1) {
-  if (kind === "title") return { before: 0, after: 3, line: 1.15 };
-  if (kind === "subtitle") return { before: 0, after: 16, line: ctx.settings.lineSpacing };
+  // Laid out as Word and Google Docs do, every kind of block takes the document's line spacing.
+  const fontLines = ctx.settings.lineModel === "font";
+  const line = ctx.settings.lineSpacing;
+  if (kind === "title") return { before: 0, after: 3, line: fontLines ? line : 1.15 };
+  if (kind === "subtitle") return { before: 0, after: 16, line };
   if (kind === "heading") {
     const before = [20, 18, 16, 14, 12, 12][level - 1] ?? 12;
-    return { before, after: level <= 2 ? 6 : 4, line: 1.2 };
+    return { before, after: level <= 2 ? 6 : 4, line: fontLines ? line : 1.2 };
   }
-  if (kind === "list") return { before: 0, after: 2, line: ctx.settings.lineSpacing };
-  if (kind === "cell" || kind === "header") return { before: 0, after: 0, line: ctx.settings.lineSpacing };
-  return { before: 0, after: ctx.settings.paragraphSpacing, line: ctx.settings.lineSpacing };
+  if (kind === "list") return { before: 0, after: 2, line };
+  if (kind === "cell" || kind === "header") return { before: 0, after: 0, line };
+  return { before: 0, after: ctx.settings.paragraphSpacing, line };
 }
 
 /** Link text in Word's or Google's link blue is shown in Inline's own link style instead. */
 const LINK_BLUES = new Set(["1155CC", "0563C1", "0000FF", "1A73E8", "467886"]);
 
-function marksFor(props: RunProps, ctx: Context, kind: BlockKind, level: number, link: Mark | null): Mark[] {
-  const base = baseline(ctx, kind, level);
+function marksFor(props: RunProps, ctx: Context, kind: BlockKind, level: number, link: Mark | null, size?: number | null): Mark[] {
+  const base = baseline(ctx, kind, level, size);
   const marks: Mark[] = [];
   if (link) marks.push(link);
   if (props.bold && !base.bold) marks.push(schema.marks.bold!.create());
@@ -556,14 +728,29 @@ function marksFor(props: RunProps, ctx: Context, kind: BlockKind, level: number,
 
 const IMAGE_TYPES: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
 
-async function imageFromDrawing(drawing: XmlElement, ctx: Context): Promise<PMNode | null> {
+const EMU_PER_PX = 9525;
+
+/**
+ * A picture or horizontal line. A picture set in a line of text (`inText`,
+ * and placed inline rather than floating) stays in the line, at its size in
+ * whole pixels as Google Docs draws it; otherwise it is a block of its own.
+ */
+async function imageFromDrawing(drawing: XmlElement, ctx: Context, inText = false): Promise<PMNode | null> {
   let embed: string | undefined;
   let widthEmu: number | undefined;
+  let heightEmu: number | undefined;
   let widthPt: number | undefined;
   let alt = "";
   let rule = false;
+  let inline = false;
+  let opacity: number | null = null;
+  let dist: [number, number, number, number] | null = null;
   const walk = (node: XmlElement) => {
     if (node.name === "a:blip") embed ??= node.attrs["r:embed"];
+    if (node.name === "a:alphaModFix") {
+      const amount = Number(node.attrs.amt);
+      if (Number.isFinite(amount) && amount >= 0 && amount < 100000) opacity = Math.round(amount / 1000) / 100;
+    }
     if (node.name === "v:imagedata") {
       embed ??= node.attrs["r:id"];
       alt ||= node.attrs["o:title"] || "";
@@ -574,7 +761,14 @@ async function imageFromDrawing(drawing: XmlElement, ctx: Context): Promise<PMNo
     }
     // Google Docs and Word draw a horizontal line as a VML rule.
     if (node.attrs["o:hr"] === "t") rule = true;
-    if (node.name === "wp:extent" && !widthEmu) widthEmu = Number(node.attrs.cx);
+    if (node.name === "wp:inline") {
+      inline = true;
+      dist = (["distT", "distR", "distB", "distL"] as const).map((side) => Math.round((Number(node.attrs[side]) || 0) / EMU_PER_PX)) as [number, number, number, number];
+    }
+    if (node.name === "wp:extent" && !widthEmu) {
+      widthEmu = Number(node.attrs.cx);
+      heightEmu = Number(node.attrs.cy);
+    }
     if (node.name === "wp:docPr") alt ||= node.attrs.descr || "";
     for (const item of elements(node)) walk(item);
   };
@@ -588,14 +782,21 @@ async function imageFromDrawing(drawing: XmlElement, ctx: Context): Promise<PMNo
   if (!data || !mime) return null;
   const src = await ctx.saveImage(data, mime);
   if (!src) return null;
-  const width = widthEmu ? `${Math.round(widthEmu / 9525)}px` : widthPt ? `${Math.round((widthPt * 96) / 72)}px` : null;
+  if (inText && inline && widthEmu && heightEmu) {
+    const px = (emu: number) => Math.max(1, Math.round(emu / EMU_PER_PX));
+    // Google Docs keeps 2px clear around a picture in a line, whatever space its file records (often an eighth of an inch).
+    const space = ctx.google ? [2, 2, 2, 2] : dist;
+    return schema.nodes.inline_image!.create({ src, alt, width: px(widthEmu), height: px(heightEmu), opacity, dist: space && space.some(Boolean) ? space : null });
+  }
+  const width = widthEmu ? `${Math.round(widthEmu / EMU_PER_PX)}px` : widthPt ? `${Math.round((widthPt * 96) / 72)}px` : null;
   return schema.nodes.image!.create({ src, alt, width });
 }
 
 /** `breakOnly` while the paragraph has nothing but a page break in it. */
 type ParagraphContent = { inline: PMNode[]; blocks: PMNode[]; pageBreakBefore: boolean; breakOnly?: boolean };
 
-type RunContext = { base: RunProps; kind: BlockKind; level: number; link: Mark | null };
+/** `size` is the paragraph's own text size; `inText` when pictures sit in its lines of text. */
+type RunContext = { base: RunProps; kind: BlockKind; level: number; link: Mark | null; size: number | null; inText: boolean };
 
 function commentRangeStart(ctx: Context, id: string | undefined) {
   const mark = id ? ctx.commentMarks.get(id) : undefined;
@@ -625,7 +826,7 @@ async function readInline(node: XmlElement, ctx: Context, run: RunContext, out: 
         const props = merge(run.base, ...runStyles.map((style) => style.run), readRunProps(rPr));
         // Word's code character style (Inline writes inline code with it) is code, not just a font.
         const code = runStyles.some((style) => style.code);
-        const marks = () => (code ? [schema.marks.code!.create()] : marksFor(props, ctx, run.kind, run.level, run.link));
+        const marks = () => (code ? [schema.marks.code!.create()] : marksFor(props, ctx, run.kind, run.level, run.link, run.size));
         for (const part of elements(item)) {
           if (part.name === "w:t") {
             const text = textOf(part);
@@ -643,8 +844,9 @@ async function readInline(node: XmlElement, ctx: Context, run: RunContext, out: 
               out.inline.push(schema.nodes.hard_break!.create());
             }
           } else if (part.name === "w:drawing" || part.name === "w:pict" || part.name === "w:object") {
-            const block = await imageFromDrawing(part, ctx);
-            if (block) out.blocks.push(block);
+            const picture = await imageFromDrawing(part, ctx, run.inText);
+            if (picture?.isInline) out.inline.push(run.link ? picture.mark([run.link]) : picture);
+            else if (picture) out.blocks.push(picture);
           } else if (part.name === "w:sym") {
             const code = part.attrs["w:char"];
             if (code) pushText(out, ctx, String.fromCodePoint(parseInt(code, 16) & 0xffff || 0x20), marks());
@@ -683,10 +885,16 @@ async function readInline(node: XmlElement, ctx: Context, run: RunContext, out: 
   }
 }
 
-type ListEntry = { list: { numId: string; level: number; bullet: boolean; start: number; numbering: ListNumbering }; checked?: boolean | null; paragraph: PMNode };
+/** Where a list's text starts and its marker hangs (twips), and how its marker looks. */
+/** `plain` when it is how Inline itself writes a list, which then needs no indents or bullet of its own. */
+type ListLayout = { left: number; hanging: number; marker: ListMarker | null; plain: boolean };
+type ListEntry = { list: { numId: string; level: number; bullet: boolean; start: number; numbering: ListNumbering }; layout: ListLayout; checked?: boolean | null; paragraph: PMNode };
 /** A paragraph with a border all round; neighbours with one share a box. */
 type BoxEntry = { boxed: PMNode[] };
 type Block = PMNode | ListEntry | BoxEntry;
+
+/** Empty paragraphs with only a line under them, which are horizontal lines unless a neighbour shares the line. */
+const ruleCandidates = new WeakSet<PMNode>();
 
 const twipsToPt = (twips: number) => round(twips / 20, 0.5);
 
@@ -694,26 +902,44 @@ const twipsToPt = (twips: number) => round(twips / 20, 0.5);
 function blockLayout(ctx: Context, para: ParaProps, kind: BlockKind, level: number, skipIndent: boolean) {
   const attrs: Record<string, unknown> = {};
   const base = spacingBaseline(ctx, kind, level);
+  // Laid out as Word does, small differences show; otherwise near enough is Inline's own spacing.
+  const exact = ctx.settings.lineModel === "font";
   const before = twipsToPt(para.before ?? 0);
   const after = twipsToPt(para.after ?? 0);
-  if (Math.abs(before - base.before) > 1) attrs.spaceBefore = before;
-  if (Math.abs(after - base.after) > 1) attrs.spaceAfter = after;
+  if (Math.abs(before - base.before) > (exact ? 0.01 : 1)) attrs.spaceBefore = before;
+  if (Math.abs(after - base.after) > (exact ? 0.01 : 1)) attrs.spaceAfter = after;
   if (para.line && (para.lineRule ?? "auto") === "auto") {
     const line = round(para.line / 240, 0.01);
-    if (Math.abs(line - base.line) > 0.06) attrs.lineHeight = String(Math.max(0.8, Math.min(4, line)));
+    if (Math.abs(line - base.line) > (exact ? 0.001 : 0.06)) attrs.lineHeight = String(Math.max(0.8, Math.min(4, line)));
   }
   if (!skipIndent) {
     const hanging = para.hanging ?? 0;
     const firstLine = para.firstLine ?? 0;
     // Word's left indent is where the lines after the first start; Inline's is where the first line starts.
     const left = (para.left ?? 0) - hanging;
-    attrs.indent = Math.max(0, Math.min(8, Math.round(left / 720)));
+    attrs.indent = Math.max(0, Math.min(8, exact ? Math.round((left / 720) * 1000) / 1000 : Math.round(left / 720)));
     const textIndent = hanging ? -hanging / 1440 : firstLine / 1440;
     const rounded = Math.round(Math.max(-3, Math.min(3, textIndent)) * 100) / 100;
-    if (Math.abs(rounded) >= 0.05) attrs.textIndent = rounded;
+    if (Math.abs(rounded) >= (exact ? 0.005 : 0.05)) attrs.textIndent = rounded;
   }
   if (para.bidi) attrs.dir = "rtl";
   return attrs;
+}
+
+/** How a bullet list level's marker looks: its character, and the formatting its level gives it. */
+function listMarker(level: NumberingLevel, ctx: Context): ListMarker {
+  const symbolFont = Boolean(level.run.font && SYMBOL_FONTS.test(level.run.font));
+  const text = [...level.text].map((char) => SYMBOL_BULLETS[char] ?? char).join("").replace(/%\d/g, "") || "•";
+  const marker: ListMarker = { text };
+  // Google Docs draws a bullet in its item's font and size, whatever its file names (a symbol font, 11pt).
+  if (!ctx.google) {
+    if (level.run.font && !symbolFont) marker.font = cssFontFamily(level.run.font);
+    if (level.run.size) marker.size = level.run.size;
+  }
+  if (level.run.bold !== undefined) marker.bold = level.run.bold;
+  if (level.run.italic !== undefined) marker.italic = level.run.italic;
+  if (level.run.color && level.run.color !== "000000") marker.color = `#${level.run.color.toLowerCase()}`;
+  return marker;
 }
 
 async function readParagraph(p: XmlElement, ctx: Context, cell: "cell" | "header" | null): Promise<Block[]> {
@@ -731,28 +957,50 @@ async function readParagraph(p: XmlElement, ctx: Context, cell: "cell" | "header
 
   const kind: BlockKind = isList ? "list" : style.kind === "heading" || style.kind === "title" || style.kind === "subtitle" || style.kind === "quote" || style.kind === "code" ? style.kind : (cell ?? "paragraph");
   const headingLevel = Math.max(1, Math.min(6, style.level ?? 1));
-  const para = merge(ctx.defaults.para, ...chain.map((item) => item.para), numbering?.para ?? {}, readParaProps(pPr));
+  const layers = [ctx.defaults.para, ...chain.map((item) => item.para), numbering?.para ?? {}, readParaProps(pPr)];
+  const para = merge(...layers);
   const runBase = merge(ctx.defaults.run, ...chain.map((item) => item.run));
 
+  // The paragraph's own size: its mark's (all an empty paragraph has), but no larger than its largest text, since
+  // a line is as tall as the largest text on it (the page sizes lines from it). Headings keep the size of their kind.
+  let size: number | null = null;
+  let hasText = false;
+  if (kind === "paragraph" || kind === "list" || kind === "cell" || kind === "header" || kind === "quote") {
+    const mark = merge(runBase, readRunProps(child(pPr, "w:rPr"))).size ?? ctx.settings.fontSize;
+    let largest = -Infinity;
+    forEachRun(p, (run) => {
+      const text = runText(run);
+      if (text.trim()) hasText = true;
+      if (!text && !child(run, "w:tab")) return;
+      largest = Math.max(largest, runProps(run, ctx, runBase).size ?? ctx.settings.fontSize);
+    });
+    const own = largest === -Infinity ? mark : Math.min(mark, largest);
+    // Only a paragraph that would otherwise be too tall (empty, or all its text smaller than the document's)
+    // needs a size of its own; the text's own sizes say the rest.
+    if (own < ctx.settings.fontSize - 0.01 || (largest === -Infinity && Math.abs(own - ctx.settings.fontSize) > 0.01)) size = own;
+  } else {
+    forEachRun(p, (run) => {
+      if (runText(run).trim()) hasText = true;
+    });
+  }
+
   const content: ParagraphContent = { inline: [], blocks: [], pageBreakBefore: Boolean(flag(pPr, "w:pageBreakBefore")) };
-  await readInline(p, ctx, { base: runBase, kind, level: headingLevel, link: null }, content);
+  await readInline(p, ctx, { base: runBase, kind, level: headingLevel, link: null, size, inText: hasText }, content);
   const blocks: Block[] = [];
   if (content.pageBreakBefore && !cell) blocks.push(schema.nodes.page_break!.create());
   // A paragraph holding only a page break is the break itself (Google Docs and Inline both write breaks so).
   if (content.breakOnly && !content.inline.length && !content.blocks.length) return blocks;
 
   const align = para.align ?? "left";
-  const border = (side: string) => {
-    const value = val(child(child(pPr, "w:pBdr"), `w:${side}`));
-    return Boolean(value && value !== "nil" && value !== "none");
-  };
-  const boxed = border("top") && border("bottom") && border("left") && border("right");
-  const underlined = border("bottom") && !boxed;
-  // An empty paragraph with only a bottom border is a horizontal line.
-  if (!content.inline.length && !content.blocks.length && underlined) return [...blocks, schema.nodes.horizontal_rule!.create()];
+  // A quote's or code's border and tabs are its kind's look (Inline's Quote style draws a line), not the paragraph's own.
+  const ownLayers = kind === "quote" || kind === "code" ? [numbering?.para ?? {}, readParaProps(pPr)] : layers;
+  const borders = layeredBorders(ownLayers);
+  const tabs = layeredTabs(ownLayers);
+  const boxed = Boolean(borders?.top && borders.bottom && borders.left && borders.right);
   // Pictures sit where their paragraph aligns them.
   const placed = content.blocks.map((block) => (block.type === schema.nodes.image ? block.type.create({ ...block.attrs, align: align === "justify" ? "left" : align }) : block));
   const layout = blockLayout(ctx, para, kind, headingLevel, isList || kind === "quote");
+  const own = { ...(size ? { fontSize: size } : {}), ...(tabs ? { tabs } : {}), ...(borders && !boxed ? { borders } : {}) };
   let inline = content.inline;
   // A checklist item, as Inline writes one.
   let checked: boolean | null = null;
@@ -771,15 +1019,26 @@ async function readParagraph(p: XmlElement, ctx: Context, cell: "cell" | "header
       const number = levels.get(level) ?? numbering!.start;
       levels.set(level, number + 1);
       for (const deeper of [...levels.keys()]) if (deeper > level) levels.delete(deeper);
-      blocks.push({ list: { numId: numId!, level, bullet: numbering!.bullet, start: number, numbering: numbering!.numbering }, checked, paragraph: schema.nodes.paragraph!.create({ align, ...layout }, inline) });
-    } else if (kind === "title") blocks.push(schema.nodes.title!.create({ align, ...layout }, inline));
-    else if (kind === "subtitle") blocks.push(schema.nodes.subtitle!.create({ align, ...layout }, inline));
-    else if (kind === "heading") blocks.push(schema.nodes.heading!.create({ align, ...layout, level: headingLevel }, inline));
+      const hanging = para.hanging ?? (para.firstLine ? -para.firstLine : 0);
+      const marker = numbering!.bullet ? listMarker(numbering!, ctx) : null;
+      // Inline writes its own lists from definitions 1 and 2, and lists with indents of their own from 3 and 4.
+      const plain = ctx.inline && (numbering!.abstract === "1" || numbering!.abstract === "2");
+      blocks.push({
+        list: { numId: numId!, level, bullet: numbering!.bullet, start: number, numbering: numbering!.numbering },
+        layout: { left: para.left ?? 0, hanging, marker, plain },
+        checked,
+        paragraph: schema.nodes.paragraph!.create({ align, ...layout, ...own }, inline),
+      });
+    } else if (kind === "title") blocks.push(schema.nodes.title!.create({ align, ...layout, ...own }, inline));
+    else if (kind === "subtitle") blocks.push(schema.nodes.subtitle!.create({ align, ...layout, ...own }, inline));
+    else if (kind === "heading") blocks.push(schema.nodes.heading!.create({ align, ...layout, ...own, level: headingLevel }, inline));
     else if (kind === "code") blocks.push(schema.nodes.code_block!.create(null, inline.length ? schema.text(inline.map((item) => item.textContent || "\n").join("")) : undefined));
-    else if (kind === "quote") blocks.push(schema.nodes.blockquote!.create(null, schema.nodes.paragraph!.create({ align, ...layout }, inline)));
-    else blocks.push(schema.nodes.paragraph!.create({ align, ...layout }, inline));
-    // A line drawn under a paragraph (a resume's section headings, say) is a horizontal line after it.
-    if (underlined && !isList) blocks.push(schema.nodes.horizontal_rule!.create());
+    else if (kind === "quote") blocks.push(schema.nodes.blockquote!.create(null, schema.nodes.paragraph!.create({ align, ...layout, ...own }, inline)));
+    else {
+      const paragraph = schema.nodes.paragraph!.create({ align, ...layout, ...own }, inline);
+      if (!inline.length && !content.blocks.length && borders?.bottom && !borders.top && !borders.left && !borders.right) ruleCandidates.add(paragraph);
+      blocks.push(paragraph);
+    }
   }
   blocks.push(...placed);
   if (boxed && !isList && !cell) return [{ boxed: blocks.filter((block): block is PMNode => !("list" in block) && !("boxed" in block)) }];
@@ -885,6 +1144,9 @@ function groupLists(blocks: Block[]): PMNode[] {
       } else if (block.type === schema.nodes.blockquote && previous?.type === schema.nodes.blockquote) {
         // ...and a quote as one paragraph after another in the Quote style.
         out[out.length - 1] = schema.nodes.blockquote!.create(previous.attrs, [...childrenOf(previous), ...childrenOf(block)]);
+      } else if (ruleCandidates.has(block as PMNode) && ![blocks[i - 1], blocks[i + 1]].some((other) => other && !("list" in other) && !("boxed" in other) && sameBorders(other.attrs.borders, (block as PMNode).attrs.borders))) {
+        // An empty paragraph with a line under it is a horizontal line, unless its line is shared with a neighbour's.
+        out.push(schema.nodes.horizontal_rule!.create());
       } else out.push(block as PMNode);
       i += 1;
       continue;
@@ -894,20 +1156,25 @@ function groupLists(blocks: Block[]): PMNode[] {
       run.push(blocks[i] as ListEntry);
       i += 1;
     }
-    out.push(...buildLists(run, Math.min(...run.map((item) => item.list.level)), 0));
+    out.push(...buildLists(run, Math.min(...run.map((item) => item.list.level)), 0, 0));
   }
   return out;
 }
 
-/** `depth` counts the numbered lists these sit inside, which decides their usual marker style (1., a., i.). */
-function buildLists(run: ListEntry[], level: number, depth: number): PMNode[] {
+/**
+ * `depth` counts the numbered lists these sit inside, which decides their usual marker style (1., a., i.);
+ * `parentLeft` is where the text of the item they sit in starts (twips from the margin).
+ */
+function buildLists(run: ListEntry[], level: number, depth: number, parentLeft: number): PMNode[] {
   const lists: PMNode[] = [];
   let items: PMNode[] = [];
-  let kind: { bullet: boolean; start: number; numId?: string; numbering?: ListNumbering } | null = null;
+  let kind: { bullet: boolean; start: number; numId?: string; numbering?: ListNumbering; layout: ListLayout } | null = null;
   const flush = () => {
     if (!items.length || !kind) return;
     const numbering = kind.numbering && kind.numbering !== defaultListNumbering(depth) ? kind.numbering : null;
-    lists.push(kind.bullet ? schema.nodes.bullet_list!.create(null, items) : schema.nodes.ordered_list!.create({ order: kind.start, numbering }, items));
+    // Where the text starts and the marker hangs, as Word and Google Docs indent the list.
+    const geometry = kind.layout.plain ? {} : { indent: Math.max(0, round((kind.layout.left - parentLeft) / 20, 0.01)), hanging: Math.max(0, round(kind.layout.hanging / 20, 0.01)), marker: kind.layout.marker };
+    lists.push(kind.bullet ? schema.nodes.bullet_list!.create(geometry, items) : schema.nodes.ordered_list!.create({ ...geometry, marker: null, order: kind.start, numbering }, items));
     items = [];
   };
   let i = 0;
@@ -922,17 +1189,17 @@ function buildLists(run: ListEntry[], level: number, depth: number): PMNode[] {
         // Sub-items before any item at this level have no item to sit in; they're a list of their own
         // (an empty parent would take a number of its own and its style would leak to this list).
         flush();
-        lists.push(...buildLists(nested, inner, depth));
+        lists.push(...buildLists(nested, inner, depth, parentLeft));
         continue;
       }
       // Deeper entries nest inside the previous item.
-      const sublists = buildLists(nested, inner, depth + (kind!.bullet ? 0 : 1));
+      const sublists = buildLists(nested, inner, depth + (kind!.bullet ? 0 : 1), kind!.layout.left);
       items.push(last.type.create(last.attrs, [...childrenOf(last), ...sublists]));
       continue;
     }
     // A different Word list (a lettered list after a numbered one, say) is a list of its own.
     if (kind && (kind.bullet !== entry.list.bullet || (kind.numId && kind.numId !== entry.list.numId))) flush();
-    if (!items.length) kind = { bullet: entry.list.bullet, start: entry.list.start, numId: entry.list.numId, numbering: entry.list.numbering };
+    if (!items.length) kind = { bullet: entry.list.bullet, start: entry.list.start, numId: entry.list.numId, numbering: entry.list.numbering, layout: entry.layout };
     items.push(schema.nodes.list_item!.create({ checked: entry.checked ?? null }, entry.paragraph));
     i += 1;
   }
@@ -1080,7 +1347,39 @@ function finishDoc(blocks: PMNode[]) {
 }
 
 /** Read a .docx package: its settings and its content, one entry per Google Docs tab (or just one). */
-export async function readDocx(parts: DocxParts, options: { saveImage?: SaveImage; tabs?: boolean } = {}): Promise<ImportedDocx> {
+/**
+ * The fonts the document carries (Google Docs carries every font that isn't
+ * one of Windows'), undoing Word's obfuscation: the first 32 bytes are XORed
+ * with the font's key.
+ */
+export function embeddedFonts(parts: DocxParts): EmbeddedFont[] {
+  const xml = readPart(parts, "word/fontTable.xml");
+  if (!xml) return [];
+  const rels = readRels(parts, "word/_rels/fontTable.xml.rels");
+  const fonts: EmbeddedFont[] = [];
+  for (const font of elements(child(parseXml(xml), "w:fonts") ?? EMPTY, "w:font")) {
+    const family = font.attrs["w:name"]?.trim();
+    if (!family) continue;
+    for (const [name, bold, italic] of [["w:embedRegular", false, false], ["w:embedBold", true, false], ["w:embedItalic", false, true], ["w:embedBoldItalic", true, true]] as const) {
+      const embed = child(font, name);
+      const target = embed ? rels.get(embed.attrs["r:id"] ?? "")?.target : undefined;
+      if (!embed || !target) continue;
+      const stored = parts.get(target.startsWith("/") ? target.slice(1) : `word/${target}`);
+      if (!stored || stored.length < 64) continue;
+      const data = stored.slice();
+      const key = (embed.attrs["w:fontKey"] ?? "").replace(/[^0-9a-f]/gi, "");
+      if (key.length === 32 && /[1-9a-f]/i.test(key)) {
+        const bytes = key.match(/../g)!.map((pair) => parseInt(pair, 16)).reverse();
+        for (let i = 0; i < 32; i += 1) data[i]! ^= bytes[i % 16]!;
+      }
+      const tag = String.fromCharCode(data[0]!, data[1]!, data[2]!, data[3]!);
+      if (tag === "\u0000\u0001\u0000\u0000" || tag === "OTTO" || tag === "true") fonts.push({ family, bold, italic, data });
+    }
+  }
+  return fonts;
+}
+
+export async function readDocx(parts: DocxParts, options: { saveImage?: SaveImage; saveFont?: SaveFont; tabs?: boolean } = {}): Promise<ImportedDocx> {
   const xml = readPart(parts, "word/document.xml");
   if (!xml) throw new DocxImportError("This isn't a Word document (word/document.xml is missing).");
   const body = child(child(parseXml(xml), "w:document"), "w:body");
@@ -1100,11 +1399,15 @@ export async function readDocx(parts: DocxParts, options: { saveImage?: SaveImag
     parts,
     saveImage: options.saveImage,
     settings,
-    bodyFont: normalRun.font ?? "Arial",
+    bodyFont: primaryFamily(settings.fontFamily) || normalRun.font || "Arial",
     commentMarks,
     activeComments: new Set(),
     commentQuotes: new Map(),
+    // Google Docs names its normal style in lower case.
+    inline: inlineOrigin(parts).ours,
+    google: /<w:style\b[^>]*w:styleId="Normal"[^>]*>\s*<w:name w:val="normal"\/>/.test(readPart(parts, "word/styles.xml") ?? ""),
   };
+  if (options.saveFont) for (const font of embeddedFonts(parts)) await options.saveFont(font);
 
   const sections = (options.tabs !== false && googleTabs(body, ctx)) || [{ title: null, items: elements(body) }];
   const tabs: ImportedTab[] = [];
