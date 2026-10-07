@@ -16,6 +16,7 @@ module.exports = {
   // Inline's server and the Claude Code CLI are copied in by this hook rather
   // than extraResources, which leaves out node_modules folders.
   afterPack: "scripts/after-pack.cjs",
+  artifactBuildCompleted: "scripts/notarize-dmg.cjs",
 
   protocols: [{ name: "Inline", schemes: ["inline"] }],
 
@@ -46,6 +47,10 @@ module.exports = {
   // releases/latest/download/<name> always fetch the newest one.
   dmg: {
     artifactName: "Inline-mac-${arch}.${ext}",
+    // Sign the disk image itself too, not just the app inside it; the
+    // artifactBuildCompleted hook notarizes it. Updates use the zips.
+    sign: true,
+    writeUpdateInfo: false,
     title: "Inline ${version}",
     window: { width: 540, height: 380 },
     contents: [
