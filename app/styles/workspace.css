@@ -38,9 +38,33 @@
   min-width: 0;
 }
 
-.titlebar > .logo {
+/* The logo is the way home. */
+.home-btn {
   flex: none;
-  margin: 0 4px 0 2px;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin: 0 2px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  cursor: pointer;
+  transition: background-color 0.12s, transform 0.12s;
+}
+
+.home-btn:hover {
+  background: var(--surface-hover);
+}
+
+.home-btn:active {
+  transform: scale(0.94);
+}
+
+.home-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
 }
 
 /* Title and menus share one row, like a desktop app's title bar. */
@@ -1309,6 +1333,36 @@
 .version-diff .is-same {
   color: color-mix(in srgb, currentColor 65%, transparent);
 }
+.version-diff .diff-para:not(.is-same) {
+  scroll-margin: 120px 0;
+  border-radius: 3px;
+  transition: box-shadow 0.15s;
+}
+.version-diff .diff-para.is-focused {
+  background: color-mix(in srgb, var(--focus) 7%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--focus) 7%, transparent), 0 0 0 5px color-mix(in srgb, var(--focus) 35%, transparent);
+}
+
+/* Up/down arrows that step through the changes, like Google Docs' version history. */
+.change-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.change-count {
+  min-width: 74px;
+  padding: 0 4px;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--muted);
+  white-space: nowrap;
+}
 
 
 /* Find bar */
@@ -1795,8 +1849,9 @@ button.status-item:hover {
     height: 40px;
   }
 
-  .titlebar > .logo {
-    display: none;
+  .home-btn {
+    width: 40px;
+    height: 40px;
   }
 
   .title-input {

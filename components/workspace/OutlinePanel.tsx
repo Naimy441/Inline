@@ -107,7 +107,7 @@ export function OutlinePanel({
   };
 
   const openHeading = (tabId: string, pos: number) => {
-    if (tabId === session.id) session.scrollTo(pos + 1, pos + 1);
+    if (tabId === session.id) session.scrollTo(pos + 1, pos + 1, "start");
     else {
       scrollAfterOpen(tabId, pos + 1);
       router.push(`/d/${tabId}`);

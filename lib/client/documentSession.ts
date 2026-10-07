@@ -1018,12 +1018,30 @@ export class DocumentSession {
     return uploaded;
   }
 
-  scrollTo(from: number, to: number) {
+  /**
+   * Select a range and bring it into view: centered, or near the top for a
+   * heading picked in the outline. The canvas is scrolled directly, because
+   * ProseMirror scrolls from where the DOM selection is, which is outside the
+   * editor when the outline or a comment was clicked.
+   */
+  scrollTo(from: number, to: number, align: "center" | "start" = "center") {
     const view = this.view;
     if (!view) return;
     const size = view.state.doc.content.size;
-    const tr = view.state.tr.setSelection(TextSelection.create(view.state.doc, Math.min(from, size), Math.min(to, size))).scrollIntoView();
-    this.dispatch(tr);
+    const head = Math.min(from, size);
+    this.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, head, Math.min(to, size))));
+    let scroller = view.dom.parentElement;
+    while (scroller && !(scroller.scrollHeight > scroller.clientHeight && /(auto|scroll)/.test(getComputedStyle(scroller).overflowY))) scroller = scroller.parentElement;
+    if (!scroller) return;
+    let coords: { top: number; bottom: number };
+    try {
+      coords = view.coordsAtPos(head, 1);
+    } catch {
+      return;
+    }
+    const box = scroller.getBoundingClientRect();
+    const offset = align === "start" ? Math.min(96, box.height / 5) : (box.height - (coords.bottom - coords.top)) / 2;
+    scroller.scrollTo({ top: Math.max(0, scroller.scrollTop + coords.top - box.top - offset) });
   }
 }
 

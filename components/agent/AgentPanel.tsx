@@ -6,7 +6,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffec
 import type { Attachment, ChatMessage, DocumentMention, ChatSettings, SelectionContext, Todo } from "@/lib/agent/types";
 import { ActivityLine, isWaiting } from "@/components/agent/Activity";
 import { refreshAgentStatus, useAgentStatus } from "@/lib/client/agentStatus";
-import { ChatSession, newChatId, warmChat, type ChatUiState } from "@/lib/client/chatSession";
+import { acquireChat, ChatSession, newChatId, peekChat, releaseChat, rememberChat, rememberedChat, warmChat, type ChatUiState } from "@/lib/client/chatSession";
 import { Composer, type ComposerHandle } from "@/components/agent/Composer";
 import { MessageList, type TurnHunk } from "@/components/agent/MessageView";
 import { Button, IconButton } from "@/components/ui/Button";
@@ -37,26 +37,11 @@ const SUGGESTIONS = [
   { label: "Format nicely", prompt: "Improve the formatting: consistent headings, lists where they help, and clean spacing. Don't change the wording." },
 ];
 
-function storageKey(documentId: string) {
-  return `inline-chat:${documentId}`;
-}
+const readChatId = rememberedChat;
+const writeChatId = rememberChat;
 
-function readChatId(documentId: string) {
-  try {
-    return localStorage.getItem(storageKey(documentId));
-  } catch {
-    return null;
-  }
-}
-
-function writeChatId(documentId: string, chatId: string | null) {
-  try {
-    if (chatId) localStorage.setItem(storageKey(documentId), chatId);
-    else localStorage.removeItem(storageKey(documentId));
-  } catch {
-    // ignore
-  }
-}
+/** Chats already checked to still exist, this page load. */
+const fresh = new Set<string>();
 
 export const AgentPanel = forwardRef<
   AgentPanelHandle,
@@ -74,7 +59,8 @@ export const AgentPanel = forwardRef<
   const { status, defaults } = useAgentStatus();
   const router = useRouter();
   const [chatId, setChatId] = useState<string | null>(() => (typeof window === "undefined" ? null : readChatId(chatKey)));
-  const [session, setSession] = useState<ChatSession | null>(null);
+  // A chat that is already open shows straight away, with nothing to load.
+  const [session, setSession] = useState<ChatSession | null>(() => (chatId ? peekChat(chatId) : null));
   const [draftSettings, setDraftSettings] = useState<ChatSettings | null>(null);
   // The quoted selection is part of the unsent message: it survives closing the panel.
   const [selection, setSelection] = useState<SelectionContext | null>(() => (typeof window === "undefined" ? null : loadDraftSelection(documentId)));
@@ -96,12 +82,11 @@ export const AgentPanel = forwardRef<
       setSession(null);
       return;
     }
-    const next = created.current?.id === chatId ? created.current : new ChatSession(chatId);
+    const next = acquireChat(chatId, created.current?.id === chatId ? created.current : undefined);
     created.current = null;
-    next.connect();
     setSession(next);
     writeChatId(chatKey, chatId);
-    return () => next.close();
+    return () => releaseChat(next);
   }, [chatId, chatKey]);
 
   const store = session?.ui ?? emptyStore;
@@ -109,11 +94,11 @@ export const AgentPanel = forwardRef<
   const chat = ui.chat;
 
   // A chat id remembered from an earlier session may have been deleted.
-  const fresh = useRef(new Set<string>());
   useEffect(() => {
-    if (!chatId || fresh.current.has(chatId)) return;
+    if (!chatId || fresh.has(chatId)) return;
     let cancelled = false;
-    fetch(`/api/agent/chats/${chatId}`).then((response) => {
+    fetch(`/api/agent/chats/${chatId}`, { method: "HEAD" }).then((response) => {
+      if (response.ok) fresh.add(chatId);
       if (!cancelled && response.status === 404) {
         writeChatId(chatKey, null);
         setChatId(null);
@@ -177,7 +162,7 @@ export const AgentPanel = forwardRef<
         draftId.current = null;
         const next = new ChatSession(id);
         created.current = next;
-        fresh.current.add(id);
+        fresh.add(id);
         setChatId(id);
         await next.create(input, settings);
       } catch (error) {
@@ -279,6 +264,13 @@ export const AgentPanel = forwardRef<
           <div className="messages">
             <MessageList messages={chat.messages} hunks={hunks} onRetry={retry} onReview={review} documentId={documentId} onRestore={(versionId, messageId) => setRewinding({ versionId, messageId })} />
             {chat.running && isWaiting(chat.status, lastAssistant(chat.messages)) && <ActivityLine status={chat.status} message={lastAssistant(chat.messages)} since={lastSent(chat.messages)} />}
+          </div>
+        ) : chatId && !chat && !ui.error ? (
+          // The chat is still loading: hold its place rather than flash the new-chat screen.
+          <div className="chat-loading" aria-busy="true" aria-label="Loading chat">
+            <span />
+            <span />
+            <span />
           </div>
         ) : (
           <EmptyState onPick={(prompt) => composer.current?.setText(prompt)} />

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Check, CloudOff, Download, History, ListTree, Loader2, MessageSquare, Moon, MoreHorizontal, PanelRight, Sparkles, Sun } from "lucide-react";
+import { Check, CloudOff, Download, History, ListTree, Loader2, MessageSquare, Moon, MoreHorizontal, PanelRight, Sparkles, Sun } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { EditorState } from "prosemirror-state";
@@ -25,6 +25,7 @@ import { CommentMargin, marginFits } from "@/components/workspace/CommentMargin"
 import { FindBar } from "@/components/workspace/FindBar";
 import { HistoryPanel, VersionPreview, type VersionSummary } from "@/components/workspace/HistoryPanel";
 import { prefetchVersions } from "@/lib/client/versions";
+import { acquireChat, releaseChat, rememberedChat } from "@/lib/client/chatSession";
 import { addTab, rememberedRoot, takeScroll, useTabs } from "@/lib/client/tabs";
 import { documentMenus, MenuBar, type MenuActions } from "@/components/workspace/MenuBar";
 import { OutlinePanel } from "@/components/workspace/OutlinePanel";
@@ -172,13 +173,23 @@ export function Workspace({ documentId }: { documentId: string }) {
   useEffect(() => {
     if (!ready) return;
     const pos = takeScroll(documentId);
-    if (pos !== null) requestAnimationFrame(() => session.scrollTo(pos, pos));
+    // After the pages are laid out, so the heading is where it will stay.
+    if (pos === null) return;
+    const timer = setTimeout(() => session.scrollTo(pos, pos, "start"), 120);
+    return () => clearTimeout(timer);
   }, [ready, documentId, session]);
   const prefs = useSyncExternalStore(preferences.subscribe, preferences.get, () => DEFAULT_PREFERENCES);
   const meta = ui.meta;
   // A document's tabs share one Claude chat, kept under the first tab's id.
   const [rememberedChatKey] = useState(() => (typeof window === "undefined" ? documentId : rememberedRoot(documentId)));
   const chatKey = meta ? (meta.parentId ?? meta.id) : rememberedChatKey;
+  // Keep the document's chat open while the panel is closed, so opening it shows the chat at once.
+  useEffect(() => {
+    const chatId = rememberedChat(chatKey);
+    if (!chatId) return;
+    const chat = acquireChat(chatId);
+    return () => releaseChat(chat);
+  }, [chatKey]);
 
   useEffect(() => session.setFlow(phone), [session, phone]);
   const flow = ui.flow && !ui.printing && !ui.exporting;
@@ -518,10 +529,9 @@ export function Workspace({ documentId }: { documentId: string }) {
   return (
     <div className={`workspace${panel ? " has-panel" : ""}${focusMode ? " is-focus" : ""} is-${ui.mode}`} style={{ ["--panel-width" as string]: `${panelWidth}px` }}>
       <header className="titlebar">
-        <button type="button" className="icon-btn icon-btn-md" aria-label="All documents" data-tip="All documents" onClick={() => router.push("/")}>
-          <ArrowLeft size={17} />
+        <button type="button" className="home-btn" aria-label="All documents" data-tip="All documents" onClick={() => router.push("/")}>
+          <InlineLogo />
         </button>
-        <InlineLogo />
         <div className="title-stack">
           <TitleInput meta={meta} onRename={(title) => void session.updateMeta({ title })} />
           <MenuBar session={session} actions={actions} zoom={effectiveZoom} hunks={ui.hunks.length} />
