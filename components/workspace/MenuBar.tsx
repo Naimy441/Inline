@@ -5,6 +5,7 @@ import { AllSelection } from "prosemirror-state";
 import { createRef, useRef, useState, type RefObject } from "react";
 import type { DocumentSession, EditorMode } from "@/lib/client/documentSession";
 import { currentRevealLabel } from "@/lib/client/fileManager";
+import { desktop } from "@/lib/client/desktop";
 import { modeMenuItems } from "@/components/workspace/modes";
 import {
   changeCase,
@@ -136,6 +137,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       },
       { label: "Print", shortcut: `⌘P`, onSelect: actions.print },
       { label: currentRevealLabel(), onSelect: actions.reveal },
+      ...(desktop() ? [{ label: "Open in browser", onSelect: () => desktop()?.openInBrowser() }] : []),
       { kind: "separator" },
       { label: "Version history", onSelect: actions.history },
       { label: "Page setup", onSelect: () => actions.pageSetup("page") },

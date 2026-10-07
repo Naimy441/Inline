@@ -674,6 +674,85 @@
   line-height: 1.6;
 }
 
+.signin {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 320px;
+  margin-top: 6px;
+}
+
+.signin a.btn {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.signin-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+}
+
+.signin-code {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+}
+
+.signin-code input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.signin-code input:focus {
+  outline: none;
+  border-color: var(--focus);
+}
+
+.signin-error {
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.link-button {
+  border: 0;
+  background: none;
+  padding: 2px 4px;
+  color: var(--muted);
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.onboarding-terminal {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  max-width: 320px;
+  margin-top: 8px;
+}
+
+.onboarding-terminal summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.onboarding-terminal[open] > summary {
+  margin-bottom: 4px;
+}
+
 /* Plan (TodoWrite), queue */
 
 .todos {

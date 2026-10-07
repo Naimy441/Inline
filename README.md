@@ -1,4 +1,24 @@
+<div align="center">
+
+<img src="desktop/resources/icon.png" alt="Inline" width="112" height="112">
+
 # Inline
+
+**Google Docs-style documents with Claude Code built in.**
+
+[![Latest release](https://img.shields.io/github/v/release/Naimy441/Inline?label=release&color=2f6feb)](https://github.com/Naimy441/Inline/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/Naimy441/Inline/total?color=2f6feb)](https://github.com/Naimy441/Inline/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/Naimy441/Inline/ci.yml?branch=main&label=CI)](https://github.com/Naimy441/Inline/actions/workflows/ci.yml)
+[![Desktop build](https://img.shields.io/github/actions/workflow/status/Naimy441/Inline/desktop.yml?label=desktop%20build)](https://github.com/Naimy441/Inline/actions/workflows/desktop.yml)
+![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-555)
+[![Powered by Claude Code](https://img.shields.io/badge/powered%20by-Claude%20Code-d97757)](https://www.anthropic.com/claude-code)
+
+[![Download for macOS (Apple silicon)](https://img.shields.io/badge/macOS-Apple%20silicon-000?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/Naimy441/Inline/releases/latest/download/Inline-mac-arm64.dmg)
+[![Download for macOS (Intel)](https://img.shields.io/badge/macOS-Intel-000?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/Naimy441/Inline/releases/latest/download/Inline-mac-x64.dmg)
+[![Download for Windows](https://img.shields.io/badge/Windows-x64-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Naimy441/Inline/releases/latest/download/Inline-windows-x64-setup.exe)
+[![Download for Linux](https://img.shields.io/badge/Linux-AppImage-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/Naimy441/Inline/releases/latest/download/Inline-linux-x86_64.AppImage)
+
+</div>
 
 TLDR: Inline is an open-source project that bridges AI coding-agent tools (like Cursor) with Google Docs-style rich-text editing. Today, AI agents work well in code/markdown environments but not inside a WYSIWYG document editor, while tools like Google Docs lack deep agentic capabilities. Inline aims to combine both, letting an AI agent work directly inside a collaborative rich-text document.
 
@@ -14,6 +34,23 @@ npm run dev        # http://localhost:3000
 ```
 
 For a production build, run `npm run build && npm start`.
+
+### Desktop app
+
+Inline also comes as an app for macOS, Windows and Linux:
+
+| Platform | Download | Notes |
+| --- | --- | --- |
+| macOS (Apple silicon) | [Inline-mac-arm64.dmg](https://github.com/Naimy441/Inline/releases/latest/download/Inline-mac-arm64.dmg) | Signed and notarized by Apple. Updates itself. |
+| macOS (Intel) | [Inline-mac-x64.dmg](https://github.com/Naimy441/Inline/releases/latest/download/Inline-mac-x64.dmg) | Signed and notarized by Apple. Updates itself. |
+| Windows 10/11 | [Inline-windows-x64-setup.exe](https://github.com/Naimy441/Inline/releases/latest/download/Inline-windows-x64-setup.exe) | Not yet signed: on first launch choose **More info › Run anyway**. |
+| Linux | [Inline-linux-x86_64.AppImage](https://github.com/Naimy441/Inline/releases/latest/download/Inline-linux-x86_64.AppImage) | `chmod +x` it, then run it. A `.tar.gz` is on the [release page](https://github.com/Naimy441/Inline/releases/latest). |
+
+Older versions are on the [Releases](https://github.com/Naimy441/Inline/releases) page. The app runs Inline's server on your computer and includes Claude Code, so there's nothing else to install. Sign in from the Claude panel with **Sign in with Claude**.
+
+You can use the browser at the same time. While the app is open, **File › Open in Browser** opens the page you're on at `http://localhost:4319`, and both show the same documents live.
+
+The app's code is in [`desktop/`](desktop/README.md). It's a separate npm package, so `npm install` and `npm run dev` here stay web-only. To work on the app, run `npm install --prefix desktop` once, then `npm run desktop:dev`. To build installers, run `npm run desktop:dist`.
 
 Open a document and press <kbd>Ctrl/⌘</kbd>+<kbd>J</kbd> to open the Claude panel. Claude reads and edits the document through Inline's MCP tools. Each edit shows up as a tracked change that you can keep or undo, one at a time or all at once. Select text and press <kbd>Ctrl/⌘</kbd>+<kbd>L</kbd> to ask about just that passage.
 
@@ -35,10 +72,6 @@ On the home page, **Organize with Claude** (or <kbd>Ctrl/⌘</kbd>+<kbd>J</kbd>)
 
 ### Your documents on your computer
 
-Inline keeps a Word (.docx) copy of every document in a folder on your computer, `~/Documents/Inline` by default, arranged in the same folders as on the home page. Each copy is updated a couple of seconds after you stop typing and keeps everything the page shows: fonts, margins, page size, headers and footers, page numbers, images and tables. Renaming or moving a document moves its file, trashed documents go to an `Inline Trash` folder, and deleting one for good removes its file. Inline never overwrites a Word file it didn't write. Choose the folder, or turn copies off, with **On this computer** on the home page.
-
-### Your documents on your computer
-
 Inline keeps a Word (.docx) copy of every document in a folder on your computer, `~/Documents/Inline` by default, arranged in the same folders as on the home page. Each copy is updated a couple of seconds after you stop typing and keeps everything the page shows: fonts, margins, page size, headers and footers, page numbers, images and tables. Renaming or moving a document moves its file, trashed documents go to an `Inline Trash` folder, and deleting one for good removes its file. Inline never overwrites a Word file it didn't write.
 
 Choose the folder, or turn copies off, with **On this computer** on the home page. **Show in Finder** (File Explorer on Windows) on any document or folder opens it there, and **Download all** gives you the same folder as a ZIP.
@@ -52,7 +85,6 @@ Export your Google Drive with [Google Takeout](https://takeout.google.com/) (Dri
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `INLINE_DATA_DIR` | `.inline` in the project folder | Where documents, versions, chats and uploads are stored. |
-| `INLINE_MIRROR_DIR` | `~/Documents/Inline` (or the folder chosen on the home page) | Where the Word copy of every document is kept. Set it to `off` to turn copies off. When set, it overrides the choice on the home page. |
 | `INLINE_MIRROR_DIR` | `~/Documents/Inline` (or the folder chosen on the home page) | Where the Word copy of every document is kept. Set it to `off` to turn copies off. When set, it overrides the choice on the home page. |
 | `INLINE_ALLOWED_HOSTS` | local hostnames only | Comma-separated extra hostnames to accept, for serving Inline on a network. Requests for other hosts are refused, which blocks DNS-rebinding attacks. |
 | `INLINE_ACCESS_TOKEN` | unset | When set, every request must carry this secret, either as a `Bearer` token or as the `inline_token` cookie. Visit any page with `?token=<secret>` once to set the cookie. Set this whenever Inline is reachable by anyone but you, because the agent acts with your Claude account. |

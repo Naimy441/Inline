@@ -9,7 +9,9 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test \"lib/**/*.test.ts\" \"tests/**/*.test.ts\"",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "desktop:dev": "npm --prefix desktop run dev",
+    "desktop:dist": "npm --prefix desktop run dist"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.289",

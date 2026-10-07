@@ -14,7 +14,7 @@ import { ChatHistory } from "@/components/agent/ChatHistory";
 import { UsageMeter } from "@/components/agent/UsageMeter";
 import { Dialog } from "@/components/ui/Dialog";
 import { toast } from "@/components/ui/Toast";
-import { post } from "@/lib/client/api";
+import { api, post } from "@/lib/client/api";
 import { loadDraftSelection, saveDraftSelection } from "@/lib/client/drafts";
 
 export type AgentPanelHandle = {
@@ -440,37 +440,128 @@ function EmptyState({ home, onPick }: { home: boolean; onPick: (prompt: string) 
 
 function Onboarding({ state, message }: { state: "signed_out" | "unavailable"; message: string }) {
   const [checking, setChecking] = useState(false);
+  const signedOut = state === "signed_out";
   return (
     <div className="onboarding">
       <div className="panel-empty-mark">
         <Terminal size={22} />
       </div>
-      <h3>{state === "signed_out" ? "Sign in to Claude Code" : "Claude Code isn't available"}</h3>
+      <h3>{signedOut ? "Sign in to Claude" : "Claude Code isn't available"}</h3>
       <p>
         Inline&apos;s agent runs on Claude Code with your own Claude account, so there are no API keys to manage.
         {state === "unavailable" && message ? ` ${message}` : ""}
       </p>
-      <ol className="onboarding-steps">
-        <li>
-          Open a terminal on the machine running Inline and run <code>claude</code>.
-        </li>
-        <li>
-          Type <code>/login</code> and sign in with your Claude account.
-        </li>
-        <li>Come back here and check again.</li>
-      </ol>
-      <Button
-        variant="primary"
-        icon={<RefreshCw size={14} />}
-        loading={checking}
-        onClick={async () => {
-          setChecking(true);
-          await refreshAgentStatus(true);
-          setChecking(false);
-        }}
-      >
-        Check again
+      {signedOut && <SignIn />}
+      <details className="onboarding-terminal" open={!signedOut}>
+        <summary>{signedOut ? "Or sign in from a terminal" : "Set up Claude Code"}</summary>
+        <ol className="onboarding-steps">
+          <li>
+            Open a terminal on the machine running Inline and run <code>claude</code>.
+          </li>
+          <li>
+            Type <code>/login</code> and sign in with your Claude account.
+          </li>
+          <li>Come back here and check again.</li>
+        </ol>
+        <Button
+          variant={signedOut ? "secondary" : "primary"}
+          icon={<RefreshCw size={14} />}
+          loading={checking}
+          onClick={async () => {
+            setChecking(true);
+            await refreshAgentStatus(true);
+            setChecking(false);
+          }}
+        >
+          Check again
+        </Button>
+      </details>
+    </div>
+  );
+}
+
+type LoginState = { state: "idle" } | { state: "waiting"; url: string | null } | { state: "done" } | { state: "failed"; message: string };
+
+/** Signs in with `claude auth login` on the computer running Inline: the sign-in page opens in the browser and this follows along. */
+function SignIn() {
+  const [login, setLogin] = useState<LoginState>({ state: "idle" });
+  const [starting, setStarting] = useState(false);
+  const [code, setCode] = useState("");
+  const waiting = login.state === "waiting";
+
+  useEffect(() => {
+    if (!waiting) return;
+    let cancelled = false;
+    const timer = window.setInterval(async () => {
+      try {
+        const result = await api<{ login: LoginState }>("/api/agent/login");
+        if (cancelled) return;
+        setLogin(result.login);
+        if (result.login.state === "done") await refreshAgentStatus(true);
+      } catch {
+        // the next poll tries again
+      }
+    }, 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [waiting]);
+
+  const start = async () => {
+    setStarting(true);
+    try {
+      const result = await post<{ login: LoginState }>("/api/agent/login", { action: "start" });
+      setLogin(result.login);
+    } catch (error) {
+      setLogin({ state: "failed", message: error instanceof Error ? error.message : "Couldn't start signing in." });
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  if (login.state === "waiting") {
+    return (
+      <div className="signin">
+        <p className="signin-status">
+          <Loader2 size={14} className="spin" /> Finish signing in in your browser.
+        </p>
+        {login.url && (
+          <a className="btn btn-secondary btn-sm" href={login.url} target="_blank" rel="noopener noreferrer">
+            Open the sign-in page again
+          </a>
+        )}
+        <form
+          className="signin-code"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            if (!code.trim()) return;
+            try {
+              setLogin((await post<{ login: LoginState }>("/api/agent/login", { action: "code", code })).login);
+              setCode("");
+            } catch (error) {
+              toast(error instanceof Error ? error.message : "Couldn't send the code.");
+            }
+          }}
+        >
+          <input value={code} onChange={(event) => setCode(event.target.value)} placeholder="Shown a code? Paste it here" aria-label="Sign-in code" />
+          <Button size="sm" type="submit" disabled={!code.trim()}>
+            Continue
+          </Button>
+        </form>
+        <button type="button" className="link-button" onClick={() => void post("/api/agent/login", { action: "cancel" }).then(() => setLogin({ state: "idle" }))}>
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="signin">
+      <Button variant="primary" loading={starting || login.state === "done"} onClick={start}>
+        Sign in with Claude
       </Button>
+      {login.state === "failed" && <p className="signin-error">{login.message}</p>}
     </div>
   );
 }
