@@ -62,7 +62,8 @@ export type ClientCommand =
   | { kind: "export_pdf"; tabs?: "all" | "tab" }
   | { kind: "open_document"; documentId: string }
   | { kind: "scroll_to"; from: number; to: number; version: number }
-  | { kind: "download"; url: string; filename: string };
+  | { kind: "download"; url: string; filename: string }
+  | { kind: "dictionary"; words: string[] };
 
 export type HubEvent =
   | { type: "steps"; version: number; steps: unknown[]; clientIDs: string[]; hunks?: HunkJSON[] }

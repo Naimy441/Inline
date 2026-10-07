@@ -45,7 +45,8 @@ export type ClientCommand =
   | { kind: "export_pdf"; tabs?: "all" | "tab" }
   | { kind: "open_document"; documentId: string }
   | { kind: "scroll_to"; from: number; to: number; version: number }
-  | { kind: "download"; url: string; filename: string };
+  | { kind: "download"; url: string; filename: string }
+  | { kind: "dictionary"; words: string[] };
 
 type Snapshot = { meta: DocumentMeta; epoch?: string; doc: unknown; version: number; comments: DocComment[]; hunks: HunkJSON[]; activity: AgentActivity | null };
 
@@ -347,6 +348,7 @@ export class DocumentSession {
       if (this.callbacks.offline) return;
       window.addEventListener("beforeunload", this.onBeforeUnload);
       this.connect();
+      void this.syncDictionary();
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) this.ui.set((ui) => ({ ...ui, status: "error", error: "This document doesn't exist or was deleted." }));
       else this.ui.set((ui) => ({ ...ui, status: "error", error: error instanceof Error ? error.message : "Couldn't open the document." }));
@@ -632,7 +634,9 @@ export class DocumentSession {
         this.applyActivity(event.activity);
         return;
       case "command":
-        this.callbacks.onCommand?.(event.command);
+        // Words Claude added to the dictionary stop being underlined straight away.
+        if (event.command.kind === "dictionary") this.applyDictionary([...preferences.get().dictionary, ...event.command.words]);
+        else this.callbacks.onCommand?.(event.command);
         return;
       case "tabs":
         setTabs(event.tabs);
@@ -792,14 +796,33 @@ export class DocumentSession {
     this.view?.setProps({});
   }
 
-  /** Never underline this word as misspelled again (in every document, in this browser). */
+  /** Never underline this word as misspelled again, in every document. Saved on the server too, so Claude's spelling check skips it. */
   addToDictionary(word: string) {
     const normalized = normalizeWord(word);
     if (!normalized) return;
-    const words = [...new Set([...preferences.get().dictionary, normalized])];
-    setPreference("dictionary", words);
+    this.applyDictionary([...preferences.get().dictionary, normalized]);
+    void post("/api/dictionary", { add: [normalized] }).catch(() => undefined);
+  }
+
+  private applyDictionary(words: string[]) {
+    const unique = [...new Set(words)];
+    setPreference("dictionary", unique);
     const view = this.view;
-    if (view) view.dispatch(setDictionary(view.state.tr, words));
+    if (view) view.dispatch(setDictionary(view.state.tr, unique));
+  }
+
+  /** Merge this browser's dictionary with the server's (words added by Claude, or in another browser). */
+  private async syncDictionary() {
+    try {
+      const { words } = await api<{ words: string[] }>("/api/dictionary");
+      const local = preferences.get().dictionary;
+      const server = new Set(words);
+      const missing = local.filter((word) => !server.has(word));
+      if (missing.length) void post("/api/dictionary", { add: missing }).catch(() => undefined);
+      if (words.some((word) => !local.includes(word))) this.applyDictionary([...local, ...words]);
+    } catch {
+      // Offline: the local dictionary still applies.
+    }
   }
 
   setShowInvisibles(on: boolean) {

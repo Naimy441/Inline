@@ -341,3 +341,27 @@ export async function workspaceDir() {
   await fs.mkdir(folder, { recursive: true });
   return folder;
 }
+
+// --- dictionary -------------------------------------------------------------
+// Words the user (or Claude, for them) added to the spelling dictionary, so
+// they aren't underlined. Kept here so Claude's spelling check can skip them.
+
+const MAX_DICTIONARY = 5000;
+let dictionaryWrites: Promise<unknown> = Promise.resolve();
+
+export async function readDictionary(): Promise<string[]> {
+  const stored = await readJson<{ words?: unknown }>(dir("dictionary.json"));
+  return Array.isArray(stored?.words) ? stored.words.filter((word): word is string => typeof word === "string") : [];
+}
+
+/** Add and remove words (already normalized) and return the whole dictionary. */
+export function updateDictionary(add: readonly string[], remove: readonly string[] = []): Promise<string[]> {
+  const run = dictionaryWrites.then(async () => {
+    const drop = new Set(remove);
+    const words = [...new Set([...(await readDictionary()), ...add])].filter((word) => word && !drop.has(word)).slice(-MAX_DICTIONARY);
+    await writeJsonAtomic(dir("dictionary.json"), { words });
+    return words;
+  });
+  dictionaryWrites = run.catch(() => undefined);
+  return run;
+}
