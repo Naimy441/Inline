@@ -14,6 +14,7 @@ import type { DocComment, DocumentMeta } from "@/lib/doc/settings";
 import { insertImage, insertText } from "@/lib/editor/commands";
 import { AgentPanel, type AgentPanelHandle } from "@/components/agent/AgentPanel";
 import { Spark } from "@/components/agent/Activity";
+import { PanelResizer } from "@/components/ui/PanelResizer";
 import { Button, IconButton } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { ConfirmHost } from "@/components/ui/Confirm";
@@ -884,30 +885,6 @@ function SyncStatus({ sync, connection, compact }: { sync: "saved" | "saving" | 
     <span className="sync-status">
       <Check size={13} /> {label("Saved")}
     </span>
-  );
-}
-
-function PanelResizer({ width, onResize }: { width: number; onResize: (width: number) => void }) {
-  return (
-    <div
-      className="panel-resizer"
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="Resize panel"
-      onPointerDown={(event) => {
-        const startX = event.clientX;
-        const start = width;
-        const target = event.currentTarget;
-        target.setPointerCapture(event.pointerId);
-        const move = (moveEvent: PointerEvent) => onResize(Math.max(320, Math.min(760, start + (startX - moveEvent.clientX))));
-        const up = () => {
-          target.removeEventListener("pointermove", move);
-          target.removeEventListener("pointerup", up);
-        };
-        target.addEventListener("pointermove", move);
-        target.addEventListener("pointerup", up);
-      }}
-    />
   );
 }
 

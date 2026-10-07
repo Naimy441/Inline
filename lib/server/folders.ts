@@ -1,4 +1,4 @@
-import { canMoveFolder, cleanFolderName, FOLDER_COLORS, folderPath, isFolderColor, MAX_FOLDER_DEPTH, type Folder, type FolderColor } from "@/lib/doc/folders";
+import { canMoveFolder, cleanFolderName, FOLDER_COLORS, folderPath, isFolderColor, isWithin, MAX_FOLDER_DEPTH, type Folder, type FolderColor } from "@/lib/doc/folders";
 import { newId } from "@/lib/doc/ids";
 import { documentHub } from "@/lib/server/hub";
 import { readFoldersFile, writeFoldersFile } from "@/lib/server/store";
@@ -15,9 +15,9 @@ const MAX_FOLDERS = 2000;
 
 let writes: Promise<unknown> = Promise.resolve();
 
-function normalize(raw: unknown): Folder[] {
-  const list = Array.isArray((raw as { folders?: unknown } | null)?.folders) ? ((raw as { folders: unknown[] }).folders as Partial<Folder>[]) : [];
-  const folders = list
+/** Valid folder records, as stored or as sent back to restore. */
+function cleanEntries(list: unknown): Folder[] {
+  return (Array.isArray(list) ? (list as Partial<Folder>[]) : [])
     .filter((item): item is Partial<Folder> & { id: string } => Boolean(item) && typeof item.id === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(item.id))
     .map((item) => ({
       id: item.id,
@@ -27,6 +27,10 @@ function normalize(raw: unknown): Folder[] {
       createdAt: typeof item.createdAt === "number" ? item.createdAt : Date.now(),
       updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : Date.now(),
     }));
+}
+
+function normalize(raw: unknown): Folder[] {
+  const folders = cleanEntries((raw as { folders?: unknown } | null)?.folders);
   // A folder whose parent is gone moves to the top level.
   const ids = new Set(folders.map((folder) => folder.id));
   return folders.map((folder) => (folder.parentId && !ids.has(folder.parentId) ? { ...folder, parentId: null } : folder));
@@ -91,25 +95,41 @@ export function updateFolder(id: string, patch: { name?: string; parentId?: stri
 }
 
 /**
- * Delete a folder. Nothing inside is lost: its documents (trashed ones too)
- * and the folders in it move up into its parent.
+ * Delete a folder and everything in it: the folders inside are deleted and
+ * their documents move to the trash (kept there for 30 days). Documents keep
+ * naming their folder, so restoreFolders can put everything back.
  */
 export function deleteFolder(id: string) {
   return change(async (folders) => {
     const folder = requireFolder(folders, id);
-    let moved = 0;
+    const removed = [...folders.values()].filter((item) => isWithin(folders, item.id, id));
+    const ids = new Set(removed.map((item) => item.id));
     const hub = documentHub();
-    const metas = [...(await hub.list({ purge: false })), ...(await hub.list({ trashed: true, purge: false }))];
-    for (const meta of metas) {
-      if (meta.folderId !== id) continue;
+    const trashed: string[] = [];
+    for (const meta of await hub.list({ purge: false })) {
+      if (!meta.folderId || !ids.has(meta.folderId)) continue;
       const doc = await hub.get(meta.id);
       if (!doc) continue;
-      doc.setFolder(folder.parentId);
-      moved += 1;
+      doc.setTrashed(true);
+      trashed.push(doc.id);
     }
-    for (const child of folders.values()) if (child.parentId === id) folders.set(child.id, { ...child, parentId: folder.parentId });
-    folders.delete(id);
-    return { moved, parentId: folder.parentId };
+    for (const item of removed) folders.delete(item.id);
+    return { trashed, folders: removed, parentId: folder.parentId };
+  });
+}
+
+/** Put deleted folders back with their ids (undoing deleteFolder); ones that already exist are left alone. */
+export function restoreFolders(list: Folder[]) {
+  return change((folders) => {
+    const restored: Folder[] = [];
+    for (const item of cleanEntries(list)) {
+      if (folders.has(item.id) || folders.size >= MAX_FOLDERS) continue;
+      folders.set(item.id, item);
+      restored.push(item);
+    }
+    // A parent that didn't come back (or is gone) leaves the folder at the top level.
+    for (const item of restored) if (item.parentId && !folders.has(item.parentId)) folders.set(item.id, { ...item, parentId: null });
+    return restored;
   });
 }
 

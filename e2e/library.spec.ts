@@ -73,6 +73,8 @@ test("Claude files documents from the home page, and the page updates as it work
   const panel = page.getByRole("complementary", { name: "Claude" });
   await expect(panel.getByRole("heading", { name: "Organize with Claude" })).toBeVisible();
   await expect(panel.getByRole("button", { name: "Sort everything into folders" })).toBeVisible();
+  await panel.getByRole("button", { name: "Organize my Google Docs import" }).click();
+  await expect(page.getByLabel("Message Claude")).toHaveValue(/"To Delete" for documents I probably don't need and "Misc"/);
   const composer = page.getByLabel("Message Claude");
   await expect(composer).toBeEnabled();
   await composer.fill(`file "${title}" in "Finance/Invoices"`);
@@ -90,7 +92,20 @@ test("Claude files documents from the home page, and the page updates as it work
   await expect(page.locator(".crumbs")).toContainText("Finance");
   await expect(page.locator(".doc-card", { hasText: title })).toBeVisible();
 
-  // Ctrl/Cmd+J closes and reopens the panel, which keeps the chat.
+  // The panel resizes from its left edge.
+  const before = (await page.locator(".home-agent").boundingBox())!;
+  const handle = (await page.locator(".home-agent .panel-resizer").boundingBox())!;
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + 200);
+  await page.mouse.down();
+  await page.mouse.move(handle.x - 120, handle.y + 200, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(async () => (await page.locator(".home-agent").boundingBox())!.width).toBeGreaterThan(before.width + 80);
+
+  // The Organize button toggles the panel, as does Ctrl/Cmd+J, and the chat is kept.
+  await page.getByRole("button", { name: "Organize with Claude" }).click();
+  await expect(panel).toHaveCount(0);
+  await page.getByRole("button", { name: "Organize with Claude" }).click();
+  await expect(panel.locator(".msg-assistant").last()).toContainText("Filed");
   await page.keyboard.press("ControlOrMeta+j");
   await expect(panel).toHaveCount(0);
   await page.keyboard.press("ControlOrMeta+j");

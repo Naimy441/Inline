@@ -6,6 +6,7 @@ import { FOLDER_COLORS, type Folder, type FolderColor, type FolderSummary } from
 import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { DocCover } from "./covers";
 import { dragSource, useDropTarget, type DragItem } from "./dnd";
+import { itemHandlers, SelectCheck, type Selection } from "./selection";
 
 export type FolderActions = {
   open: (id: string | null) => void;
@@ -16,7 +17,7 @@ export type FolderActions = {
   remove: (folder: Folder) => void;
   /** Whether a dragged document or folder may drop into this folder (null: the top level). */
   canDrop: (target: string | null, item: DragItem) => boolean;
-  drop: (target: string | null, item: DragItem) => void;
+  drop: (target: string | null, items: DragItem[]) => void;
 };
 
 export const COLOR_NAMES: Record<FolderColor, string> = { gray: "Gray", clay: "Clay", amber: "Amber", green: "Green", teal: "Teal", blue: "Blue", violet: "Violet", rose: "Rose" };
@@ -62,25 +63,27 @@ export function folderMenuItems(folder: Folder, actions: FolderActions, options:
  * A folder as a block: the first pages of its three latest documents, and a
  * fourth tile counting the rest.
  */
-export function FolderCard({ folder, summary, actions }: { folder: Folder; summary: FolderSummary | undefined; actions: FolderActions }) {
+export function FolderCard({ folder, summary, actions, selection }: { folder: Folder; summary: FolderSummary | undefined; actions: FolderActions; selection?: Selection }) {
   const [menu, setMenu] = useState(false);
   const ref = useRef<HTMLButtonElement>(null);
-  const drop = useDropTarget((item) => actions.canDrop(folder.id, item), (item) => actions.drop(folder.id, item));
+  const drop = useDropTarget((item) => actions.canDrop(folder.id, item), (items) => actions.drop(folder.id, items));
+  const item: DragItem = { kind: "folder", id: folder.id, title: folder.name };
+  const selected = selection?.has("folder", folder.id) ?? false;
   const docs = summary?.documents ?? [];
   const previews = docs.slice(0, 3);
   const more = docs.length - previews.length;
   const subfolders = summary?.folders ?? 0;
   return (
     <div
-      className={`folder-card folder-${folder.color}${drop.over ? " is-drop" : ""}`}
+      className={`folder-card folder-${folder.color}${drop.over ? " is-drop" : ""}${selected ? " is-selected" : ""}`}
       role="button"
       tabIndex={0}
-      aria-label={`${folder.name}, folder, ${countLabel(summary)}`}
-      onClick={() => actions.open(folder.id)}
-      onKeyDown={(event) => event.key === "Enter" && actions.open(folder.id)}
-      {...dragSource({ kind: "folder", id: folder.id, title: folder.name })}
+      aria-label={`${folder.name}, folder, ${countLabel(summary)}${selected ? ", selected" : ""}`}
+      {...itemHandlers(selection, item, () => actions.open(folder.id))}
+      {...dragSource(item, true, selection?.items)}
       {...drop.props}
     >
+      <SelectCheck selection={selection} item={item} />
       <div className="folder-card-cover">
         {docs.length === 0 ? (
           <div className="folder-empty">
@@ -143,7 +146,7 @@ export function FolderCard({ folder, summary, actions }: { folder: Folder; summa
 
 /** One step of the breadcrumb trail; documents and folders can be dropped on it to move them there. */
 function Crumb({ id, label, icon, actions }: { id: string | null; label: string; icon?: ReactNode; actions: FolderActions }) {
-  const drop = useDropTarget((item) => actions.canDrop(id, item), (item) => actions.drop(id, item));
+  const drop = useDropTarget((item) => actions.canDrop(id, item), (items) => actions.drop(id, items));
   return (
     <button type="button" className={`crumb${drop.over ? " is-drop" : ""}`} onClick={() => actions.open(id)} {...drop.props}>
       {icon}

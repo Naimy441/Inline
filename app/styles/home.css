@@ -259,7 +259,7 @@
   border: 1px solid var(--border);
   border-radius: 2px 2px 0 0;
   box-shadow: none;
-  background: #fff;
+  background: var(--paper);
 }
 
 .doc-card-cover .template-thumb {
@@ -323,7 +323,7 @@
 .template-thumb.is-image {
   padding: 0;
   gap: 0;
-  background: #fff;
+  background: var(--paper);
 }
 
 .template-thumb.is-image img {
