@@ -42,7 +42,10 @@ module.exports = {
     artifactName: "Inline-${version}-mac-${arch}.${ext}",
   },
 
+  // Installers are named without the version so README links to
+  // releases/latest/download/<name> always fetch the newest one.
   dmg: {
+    artifactName: "Inline-mac-${arch}.${ext}",
     title: "Inline ${version}",
     window: { width: 540, height: 380 },
     contents: [
@@ -54,10 +57,12 @@ module.exports = {
   win: {
     icon: "resources/icon.png",
     target: [{ target: "nsis", arch: ["x64"] }],
-    artifactName: "Inline-${version}-windows-${arch}-setup.${ext}",
   },
 
+  appImage: { artifactName: "Inline-linux-${arch}.${ext}" },
+
   nsis: {
+    artifactName: "Inline-windows-${arch}-setup.${ext}",
     oneClick: true,
     perMachine: false,
     deleteAppDataOnUninstall: false,
