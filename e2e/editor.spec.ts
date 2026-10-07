@@ -17,6 +17,20 @@ test("typing is saved and survives a reload", async ({ page }) => {
   await expect(page.locator(".doc-content strong")).toHaveText("bold");
 });
 
+test("a toolbar button acts on a selection the browser hasn't reported yet", async ({ page }) => {
+  await newBlankDocument(page);
+  await page.locator(".doc-content").click();
+  await page.keyboard.type("Hello world");
+  await expect(page.locator(".doc-content p").first()).toHaveText("Hello world");
+  // Select and click in one go, before the browser's selectionchange event can reach the editor.
+  await page.evaluate(() => {
+    const text = document.querySelector(".doc-content p")!.firstChild!;
+    window.getSelection()!.setBaseAndExtent(text, 0, text, text.textContent!.length);
+    document.querySelector<HTMLButtonElement>('.toolbar [aria-label="Bold"]')!.click();
+  });
+  await expect(page.locator(".doc-content strong")).toHaveText("Hello world");
+});
+
 test("long documents flow onto a second page", async ({ page }) => {
   await newBlankDocument(page);
   await page.locator(".doc-content").click();
