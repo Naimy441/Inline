@@ -125,19 +125,26 @@ export class ChatSession {
   private frame = 0;
   /** Set while the chat is still being created on the server; the stream connects once it exists. */
   private creating: Promise<unknown> | null = null;
+  /** A connect is already waiting for the chat to be created. */
+  private gated = false;
 
   constructor(readonly id: string) {}
 
   connect() {
     if (this.closed) return;
     if (this.creating) {
+      if (this.gated) return;
+      this.gated = true;
       const gate = this.creating;
       void gate.then(
         () => {
+          this.gated = false;
           if (this.creating === gate) this.creating = null;
           this.connect();
         },
-        () => undefined,
+        () => {
+          this.gated = false;
+        },
       );
       return;
     }
@@ -191,7 +198,7 @@ export class ChatSession {
 
   /** Connect unless the stream is already open or about to reconnect. */
   ensureConnected() {
-    if (this.closed || this.timer || this.creating) return;
+    if (this.closed || this.timer || this.gated) return;
     if (this.source && this.source.readyState !== EventSource.CLOSED) return;
     this.connect();
   }

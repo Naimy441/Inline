@@ -228,18 +228,17 @@ test("equations typed as $…$ show typeset and open for editing when clicked", 
   await page.keyboard.type("Energy is $E = mc^2$ and prices like $5 and $10 stay text.");
   await expect(page.locator(".doc-content .math-render .katex")).toHaveCount(1);
   await expect(page.locator(".doc-content")).toContainText("prices like $5 and $10");
-  await page.locator(".math-render").click();
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("$$ \\frac{a}{b}");
+  await expect(page.locator(".math-block.is-editing")).toHaveCount(1);
+  // Clicking the inline equation leaves the displayed one, which shows typeset.
+  await page.locator("p .math-render").click();
+  await expect(page.locator(".math-block .katex-display")).toHaveCount(1);
   await expect(page.locator(".math-src.is-editing")).toHaveText("E = mc^2");
   await page.keyboard.type("+1");
   await expect(page.locator(".math-pop annotation")).toHaveText("E = mc^2+1");
   await page.keyboard.press("Escape");
   await expect(page.locator(".math-src.is-editing")).toHaveCount(0);
-  await expect(page.locator(".sync-status")).toHaveText(/Saved/);
-  await page.keyboard.press("End");
-  await page.keyboard.press("Enter");
-  await page.keyboard.type("$$ \\frac{a}{b}");
-  await page.keyboard.press("ArrowUp");
-  await expect(page.locator(".math-block .katex-display")).toHaveCount(1);
   await expect(page.locator(".sync-status")).toHaveText(/Saved/);
   const id = page.url().split("/d/")[1];
   const markdown = await (await page.request.get(`/api/documents/${id}/export?format=md`)).text();
