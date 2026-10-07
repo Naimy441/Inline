@@ -252,9 +252,13 @@ export const Composer = forwardRef<
             ? disabledReason ?? "Claude Code isn't available"
             : running
               ? "Queue a follow-up…"
-              : settings.mode === "ask"
-                ? "Ask about your document…"
-                : "Ask Claude to write, edit or review…"
+              : !documentId
+                ? settings.mode === "ask"
+                  ? "Ask about your documents…"
+                  : "Ask Claude to organize or find documents…"
+                : settings.mode === "ask"
+                  ? "Ask about your document…"
+                  : "Ask Claude to write, edit or review…"
         }
         disabled={disabled}
         onFocus={() => onWarm?.()}
@@ -385,7 +389,13 @@ export const Composer = forwardRef<
       </div>
       <div className="composer-hint">
         <span>
-          <kbd>⏎</kbd> send · <kbd>⇧⏎</kbd> new line · <kbd><Shortcut keys="⌘L" /></kbd> add selection
+          <kbd>⏎</kbd> send · <kbd>⇧⏎</kbd> new line
+          {documentId && (
+            <>
+              {" "}
+              · <kbd><Shortcut keys="⌘L" /></kbd> add selection
+            </>
+          )}
         </span>
       </div>
     </div>

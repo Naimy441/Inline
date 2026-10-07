@@ -1,6 +1,10 @@
 "use client";
 
 import {
+  FolderInput,
+  FolderPlus,
+  FolderTree,
+  FolderX,
   BookOpen,
   BookPlus,
   Check,
@@ -168,6 +172,24 @@ export function describeTool(part: ToolPart): Described {
       return { icon: <Sparkles size={14} />, verb: "Analyzed", target: "the writing", live: "Analyzing" };
     case "list_documents":
       return { icon: <FileText size={14} />, verb: "Listed", target: "documents", live: "Listing" };
+    case "list_library":
+      return { icon: <FolderTree size={14} />, verb: "Looked through", target: "your documents", live: "Looking through" };
+    case "list_folders":
+      return { icon: <FolderTree size={14} />, verb: "Listed", target: "folders", live: "Listing" };
+    case "move_documents": {
+      const moves = Array.isArray(input.moves) ? (input.moves as Array<{ folder?: unknown }>) : [];
+      const folders = new Set(moves.map((move) => (typeof move.folder === "string" ? move.folder : "")));
+      const only = folders.size === 1 ? [...folders][0] : undefined;
+      const count = moves.length === 1 ? "a document" : moves.length ? `${moves.length} documents` : "documents";
+      const where = only === undefined ? "" : only && !/^[A-Za-z0-9_-]{10}$/.test(only) ? ` to “${str(only, 40)}”` : only === "" ? " to the top level" : "";
+      return { icon: <FolderInput size={14} />, verb: "Moved", target: `${count}${where}`, live: "Moving" };
+    }
+    case "create_folder":
+      return { icon: <FolderPlus size={14} />, verb: "Created", target: str(field("name"), 40) ? `the folder “${str(field("name"), 40)}”` : "a folder", live: "Creating" };
+    case "update_folder":
+      return { icon: <Pencil size={14} />, verb: "Updated", target: "a folder", live: "Updating" };
+    case "delete_folder":
+      return { icon: <FolderX size={14} />, verb: "Deleted", target: "a folder", live: "Deleting" };
     case "create_document":
       return { icon: <FilePlus2 size={14} />, verb: "Created", target: str(field("title"), 40) ?? "a document", live: "Creating" };
     case "open_document":

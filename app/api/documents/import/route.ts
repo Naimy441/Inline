@@ -2,18 +2,20 @@ import { randomUUID } from "node:crypto";
 import { docxTitle, docxToDoc, DocxImportError } from "@/lib/doc/docxImport";
 import type { DocumentMeta } from "@/lib/doc/settings";
 import { HttpError, json, route } from "@/lib/server/http";
-import { folderExists } from "@/lib/server/folders";
+import { MAX_FOLDER_DEPTH } from "@/lib/doc/folders";
+import { ensureFolderPath, folderExists } from "@/lib/server/folders";
 import { documentHub } from "@/lib/server/hub";
 import { saveUpload, uploadExtension } from "@/lib/server/store";
-import { openZip, readZip, ZipError } from "@/lib/server/unzip";
+import { archiveFolders, openZip, readZip, ZipError } from "@/lib/server/unzip";
 
 const MAX_IMPORT_BYTES = 50 * 1024 * 1024;
 const MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024;
 
 const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 
+
 /** Create a document from a .docx package. Embedded images become uploads. */
-async function importDocx(data: Uint8Array, fileName: string, folderId: string | null) {
+async function importDocx(data: Uint8Array, fileName: string, folderId: string | null, options: { preferFileName?: boolean } = {}) {
   let doc;
   let parts;
   try {
@@ -31,7 +33,9 @@ async function importDocx(data: Uint8Array, fileName: string, folderId: string |
     if (error instanceof ZipError || error instanceof DocxImportError) throw new HttpError(422, `This file couldn't be read as a Word document. ${error.message}`);
     throw error;
   }
-  const title = docxTitle(parts) || fileName.replace(/\.docx$/i, "") || "Imported document";
+  // Google Takeout names each file after its Google Doc, which is a better title than the file's own properties.
+  const named = fileName.replace(/\.docx$/i, "").trim();
+  const title = (options.preferFileName && named) || docxTitle(parts) || named || "Imported document";
   return documentHub().create({ title, doc: doc.toJSON(), folderId });
 }
 
@@ -54,9 +58,15 @@ async function importArchive(data: Uint8Array, folderId: string | null) {
   if (!names.length) throw new HttpError(422, "No Word (.docx) files were found in this ZIP. In Google Takeout, choose Drive and keep Google Docs exporting as DOCX.");
   const documents: DocumentMeta[] = [];
   const failed: { name: string; error: string }[] = [];
+  // Drive's folders come along: each document lands in the same folders it had, inside the one being imported into.
+  const folders = archiveFolders(names);
+  const made = new Map<string, string | null>();
   for (const name of names) {
     try {
-      const live = await importDocx(entries.get(name)!(), baseName(name), folderId);
+      const path = folders.get(name)!.slice(0, MAX_FOLDER_DEPTH - 1);
+      const key = path.join("/");
+      if (!made.has(key)) made.set(key, path.length ? ((await ensureFolderPath(path, { parentId: folderId }).catch(() => null))?.folder?.id ?? folderId) : folderId);
+      const live = await importDocx(entries.get(name)!(), baseName(name), made.get(key) ?? folderId, { preferFileName: true });
       documents.push(live.snapshot().meta);
     } catch (error) {
       if (error instanceof HttpError) failed.push({ name, error: error.message });
@@ -65,7 +75,7 @@ async function importArchive(data: Uint8Array, folderId: string | null) {
     }
   }
   if (!documents.length) throw new HttpError(422, `None of the ${names.length} Word files in this ZIP could be read.`, { failed });
-  return json({ documents, failed }, { status: 201 });
+  return json({ documents, failed, folders: [...made.values()].filter((id) => id && id !== folderId).length }, { status: 201 });
 }
 
 /**

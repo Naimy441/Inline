@@ -397,6 +397,7 @@ export class DocumentSession {
         onActivateComment: (id) => this.setActiveComment(id),
         geometry: () => this.geometry(),
         onPages: (layout) => {
+          this.latestLayout = layout;
           this.ui.set((ui) => (ui.pages === layout.pages ? ui : { ...ui, pages: layout.pages }));
           this.scheduleLayoutReport(layout);
         },
@@ -714,6 +715,22 @@ export class DocumentSession {
 
   private thumbnailTimer: ReturnType<typeof setTimeout> | null = null;
   private thumbnailKey: string | null = null;
+  private latestLayout: PageLayout | null = null;
+
+  /**
+   * Draw the first page and save it as the thumbnail now. Used off screen on
+   * the home page for documents nobody has opened yet (imports, documents
+   * Claude made), so they get a real cover. Resolves to when it was saved.
+   */
+  async captureThumbnail(): Promise<number | null> {
+    const view = this.view;
+    if (!view) throw new Error("The document isn't open yet.");
+    relayout(view);
+    await settleLayout(() => pageCount(view.state));
+    const root = view.dom.closest<HTMLElement>(".page-stack");
+    if (root) await imagesLoaded(root);
+    return this.saveThumbnail(this.latestLayout, { force: true });
+  }
 
   private scheduleThumbnail(layout: PageLayout) {
     if (this.callbacks.offline) return;
@@ -722,30 +739,32 @@ export class DocumentSession {
   }
 
   /** Save a small picture of the first page for the home page, when what the first page shows has changed. */
-  private async saveThumbnail(layout: PageLayout) {
+  private async saveThumbnail(layout: PageLayout | null, options: { force?: boolean } = {}): Promise<number | null> {
     const view = this.view;
     const meta = this.meta;
     const ui = this.ui.get();
-    if (!view || !meta || this.destroyed || ui.flow || ui.printing || ui.exporting || document.visibilityState !== "visible") return;
-    const end = Math.min(layout.starts[0] ?? view.state.doc.content.size, view.state.doc.content.size);
+    if (!view || !meta || this.destroyed || ui.flow || ui.printing || ui.exporting || (!options.force && document.visibilityState !== "visible")) return null;
+    const end = Math.min(layout?.starts[0] ?? view.state.doc.content.size, view.state.doc.content.size);
     // "2": thumbnails since there is a dark version as well, so older ones are redrawn once.
     const key = hashText(`2\n${meta.title}\n${JSON.stringify(meta.settings)}\n${JSON.stringify(view.state.doc.slice(0, end).content.toJSON())}`);
-    if (key === (this.thumbnailKey ?? meta.thumbnailKey)) return;
+    if (key === (this.thumbnailKey ?? meta.thumbnailKey) && !options.force) return null;
     const root = view.dom.closest<HTMLElement>(".page-stack");
-    if (!root) return;
+    if (!root) return null;
     const [{ snapshotPages, domMeasurer }, { renderThumbnail }, { rasterizeMath }] = await Promise.all([import("@/lib/pdf/pageSnapshot"), import("@/lib/pdf/thumbnail"), import("@/lib/pdf/mathRaster")]);
     const firstPage = root.querySelector<HTMLElement>(".sheet");
     const rasters = firstPage ? await rasterizeMath(firstPage) : new Map();
-    if (this.destroyed) return;
+    if (this.destroyed) return null;
     const page = snapshotPages(root, meta.title, domMeasurer(rasters), undefined, 1).pages[0];
-    if (!page) return;
+    if (!page) return null;
     // A light and a dark picture, so the home page matches the theme. The dark one goes first:
     // saving the light one is what tells the home page there is a new picture.
     const [light, dark] = await Promise.all([renderThumbnail(page), renderThumbnail(page, undefined, "dark")]);
-    if (!light || this.destroyed) return;
+    if (!light || this.destroyed) return null;
     if (dark) await fetch(`/api/documents/${this.id}/thumbnail?theme=dark`, { method: "PUT", body: dark, headers: { "Content-Type": dark.type } });
     const response = await fetch(`/api/documents/${this.id}/thumbnail?key=${key}`, { method: "PUT", body: light, headers: { "Content-Type": light.type } });
-    if (response.ok) this.thumbnailKey = key;
+    if (!response.ok) return null;
+    this.thumbnailKey = key;
+    return ((await response.json().catch(() => ({}))) as { thumbnailAt?: number }).thumbnailAt ?? Date.now();
   }
 
   // --- selection reporting --------------------------------------------------------------

@@ -190,6 +190,27 @@ describe("a turn", () => {
     assert.match(fake.turns[0]!.context, /No document is open/);
   });
 
+  it("tells Claude which folder the user is looking at on the home page", async () => {
+    const fake = useModel(() => undefined);
+    const { createFolder } = await import("@/lib/server/folders");
+    const folder = await createFolder({ name: "Recipes" });
+    const chat = await agentRuntime().create();
+    await turn(chat, "Sort these", { home: { folderId: folder.id } });
+    assert.match(fake.turns[0]!.context, new RegExp(`on the home page, not in a document, looking at the folder "Recipes" \\(id ${folder.id}\\)\\. Their library has \\d+ documents`));
+    await turn(chat, "And the rest", { home: { folderId: null } });
+    assert.match(fake.turns[1]!.context, /looking at all documents \(the top level\)/);
+  });
+
+  it("tells Claude which folder the open document is filed in", async () => {
+    const fake = useModel(() => undefined);
+    const { ensureFolderPath } = await import("@/lib/server/folders");
+    const { folder } = await ensureFolderPath(["School", "History"]);
+    const { chat, doc } = await newChat();
+    doc.setFolder(folder!.id);
+    await turn(chat, "Where is this?");
+    assert.match(fake.turns[0]!.context, /It is filed in the folder "School\/History"\./);
+  });
+
   it("rejects an empty message", async () => {
     useModel(() => undefined);
     const { chat } = await newChat();

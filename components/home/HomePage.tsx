@@ -1,6 +1,6 @@
 "use client";
 
-import { Download, FilePlus2, FileText, FileUp, FolderOpen, FolderPlus, LayoutGrid, List, Moon, Plus, Search, Sun, Trash2, X } from "lucide-react";
+import { Download, FilePlus2, FileText, FileUp, FolderOpen, FolderPlus, LayoutGrid, List, Moon, Plus, Search, Sparkles, Sun, Trash2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, del, patch, post } from "@/lib/client/api";
@@ -9,6 +9,7 @@ import { useTheme } from "@/lib/client/theme";
 import { canMoveFolder, documentFolder, folderPath, summarizeFolders, type Folder, type FolderColor } from "@/lib/doc/folders";
 import type { DocumentMeta } from "@/lib/doc/settings";
 import { documentTemplates, type DocumentTemplate } from "@/lib/doc/templates";
+import { AgentPanel } from "@/components/agent/AgentPanel";
 import { AgentStatusBadge } from "@/components/agent/AgentStatusBadge";
 import { Button, IconButton } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
@@ -18,6 +19,8 @@ import { InlineLogo } from "@/components/ui/Logo";
 import { TextCover, ThemedCover } from "./covers";
 import type { DragItem } from "./dnd";
 import { AddDocumentsDialog, FolderDialog, MoveDialog, type MoveTarget } from "./FolderDialogs";
+import { dismissGoogleImport, GoogleImportBanner, shouldShowGoogleImport, TakeoutGuide } from "./GoogleImport";
+import { ThumbnailQueue, type ThumbnailProgress } from "./thumbnails";
 import { Breadcrumbs, FolderCard, FolderGlyph, type FolderActions } from "./folders";
 import { DocumentCard, DocumentList, documentTime, type DocumentActions, type Sort } from "./items";
 
@@ -76,6 +79,11 @@ export function HomePage() {
   const [moving, setMoving] = useState<MoveTarget | null>(null);
   const [adding, setAdding] = useState<Folder | null>(null);
   const [importing, setImporting] = useState(false);
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [googleTip, setGoogleTip] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
+  const [previews, setPreviews] = useState<ThumbnailProgress | null>(null);
+  const thumbnails = useRef<ThumbnailQueue | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const { dark, toggle } = useTheme();
   const templates = useMemo(() => documentTemplates(), []);
@@ -96,6 +104,26 @@ export function HomePage() {
     }
   }, []);
 
+  // Documents nobody has opened (imports, ones Claude made) get their first page drawn in the background.
+  useEffect(() => {
+    const queue = new ThumbnailQueue((id, thumbnailAt) => setDocuments((list) => list?.map((doc) => (doc.id === id ? { ...doc, thumbnailAt } : doc)) ?? list), setPreviews);
+    thumbnails.current = queue;
+    return () => queue.stop();
+  }, []);
+  useEffect(() => {
+    if (documents) thumbnails.current?.add(documents.filter((doc) => !doc.thumbnailAt).map((doc) => doc.id));
+  }, [documents]);
+
+  useEffect(() => {
+    void shouldShowGoogleImport().then(setGoogleTip);
+  }, []);
+
+  const closeGoogleTip = () => {
+    setGoogleTip(false);
+    setGuideOpen(false);
+    dismissGoogleImport();
+  };
+
   useEffect(() => {
     document.title = "Inline";
     void load();
@@ -108,7 +136,21 @@ export function HomePage() {
       setView("documents");
     };
     window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
+    // Coming back to the tab picks up changes made elsewhere (an editor tab, an MCP client).
+    const onFocus = () => void load();
+    window.addEventListener("focus", onFocus);
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "j") {
+        event.preventDefault();
+        setAgentOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("keydown", onKey);
+    };
   }, [load]);
 
   const folders = useMemo(() => new Map(folderList.map((folder) => [folder.id, folder])), [folderList]);
@@ -195,12 +237,16 @@ export function HomePage() {
     }
     setImporting(true);
     let imported = 0;
+    let fromArchives = 0;
+    let folderCount = 0;
     const failed: string[] = [];
     for (const file of files) {
       try {
         if (/\.zip$/i.test(file.name)) {
-          const result = await api<{ documents: DocumentMeta[]; failed: { name: string }[] }>("/api/documents/import", { method: "POST", body: uploadForm(file) });
+          const result = await api<{ documents: DocumentMeta[]; failed: { name: string }[]; folders?: number }>("/api/documents/import", { method: "POST", body: uploadForm(file) });
           imported += result.documents.length;
+          fromArchives += result.documents.length;
+          folderCount += result.folders ?? 0;
           failed.push(...result.failed.map((item) => item.name.slice(item.name.lastIndexOf("/") + 1)));
         } else {
           await importOne(file);
@@ -217,7 +263,11 @@ export function HomePage() {
     }
     setImporting(false);
     void load();
-    const summary = `Imported ${plural(imported, "document")}${targetFolder && current ? ` into "${current.name}"` : ""}.`;
+    // The Google Docs tip has done its job once an archive came in.
+    if (fromArchives && googleTip) closeGoogleTip();
+    else setGuideOpen(false);
+    const where = folderCount ? ` in ${plural(folderCount, "folder")}` : targetFolder && current ? ` into "${current.name}"` : "";
+    const summary = `Imported ${plural(imported, "document")}${where}.`;
     if (!failed.length) toast(summary, { tone: "success" });
     else toast(`${summary} Couldn't read ${failed.length === 1 ? failed[0] : `${failed.length} files`}.`, { tone: imported ? "info" : "error", duration: 8000 });
   };
@@ -420,7 +470,7 @@ export function HomePage() {
   );
 
   return (
-    <div className="home">
+    <div className={`home${agentOpen ? " has-agent" : ""}`}>
       <header className="home-header">
         <div className="home-brand">
           <InlineLogo />
@@ -437,6 +487,9 @@ export function HomePage() {
         </div>
         <div className="home-header-actions">
           <AgentStatusBadge />
+          <IconButton label="Claude" shortcut="⌘J" active={agentOpen} onClick={() => setAgentOpen((open) => !open)}>
+            <Sparkles size={16} />
+          </IconButton>
           <IconButton label={dark ? "Light theme" : "Dark theme"} onClick={toggle}>
             {dark ? <Sun size={16} /> : <Moon size={16} />}
           </IconButton>
@@ -463,6 +516,8 @@ export function HomePage() {
             </IconButton>
           </div>
         )}
+
+        {googleTip && <GoogleImportBanner onShowGuide={() => setGuideOpen(true)} onDismiss={closeGoogleTip} />}
 
         <section className="home-section">
           <div className="home-section-head">
@@ -520,6 +575,17 @@ export function HomePage() {
               ))}
             </div>
             <span className="home-spacer" />
+            {previews && (
+              <span className="home-progress" role="status" aria-live="polite">
+                <span className="spinner" aria-hidden />
+                Drawing previews {Math.min(previews.done + 1, previews.total)} of {previews.total}
+              </span>
+            )}
+            {view !== "trash" && (documents?.length ?? 0) > 0 && (
+              <Button size="sm" variant="ghost" icon={<Sparkles size={15} />} className="organize-button" onClick={() => setAgentOpen(true)} title="Ask Claude to sort your documents into folders">
+                Organize with Claude
+              </Button>
+            )}
             {view === "documents" && (
               <Button size="sm" variant="ghost" icon={<FolderPlus size={15} />} onClick={() => setFolderDialog({ mode: "create", parentId: currentId })}>
                 New folder
@@ -637,6 +703,14 @@ export function HomePage() {
           <Plus size={24} />
         </button>
       )}
+
+      {agentOpen && (
+        <div className="home-agent">
+          <AgentPanel documentId={null} home={{ folderId: currentId }} onClose={() => setAgentOpen(false)} onLibraryChange={() => void load()} />
+        </div>
+      )}
+
+      <TakeoutGuide open={guideOpen} importing={importing} onClose={() => setGuideOpen(false)} onImport={() => fileInput.current?.click()} />
 
       <RenameDialog
         doc={renaming}

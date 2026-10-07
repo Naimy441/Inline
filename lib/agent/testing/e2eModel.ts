@@ -43,6 +43,20 @@ const model: FakeModel = async (turn, claude) => {
     return;
   }
 
+  // From the home page: find a document in the library by title and file it.
+  const file = text.match(/^file "(.+)" in "(.+)"$/i);
+  if (file) {
+    const listing = await claude.call("list_library", { excerpt_words: 0 });
+    const id = new RegExp(`- (\\S+)(?: \\(open\\))? · "${file[1]!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`).exec(listing.text)?.[1];
+    if (!id) {
+      claude.say(`I couldn't find "${file[1]}".`);
+      return;
+    }
+    const moved = await claude.call("move_documents", { moves: [{ document_id: id, folder: file[2] }] });
+    claude.say(moved.isError ? moved.text : `Filed "${file[1]}" in ${file[2]}.`);
+    return;
+  }
+
   if (/take your time/i.test(text)) {
     claude.say("Starting a long review.");
     await claude.untilInterrupted();

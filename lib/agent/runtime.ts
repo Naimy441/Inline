@@ -31,6 +31,8 @@ import type {
 } from "@/lib/agent/types";
 import { DEFAULT_MAX_TURNS } from "@/lib/agent/types";
 import { documentHub, type LiveDocument } from "@/lib/server/hub";
+import { folderPathName, listFolders } from "@/lib/server/folders";
+import { library } from "@/lib/server/library";
 import { findText, textblockLines } from "@/lib/doc/editing";
 import { serializeDoc } from "@/lib/doc/markdown";
 import { chatFilePath, deleteChatFile, FileSummaryCache, findUpload, listChatIds, readChatFile, workspaceDir, writeChatFile } from "@/lib/server/store";
@@ -95,6 +97,8 @@ export type SendInput = {
   mentions?: DocumentMention[];
   /** Ids the panel already gave the message and the reply it shows right away, so the server's copies replace them in place. */
   ids?: { user: string; assistant: string };
+  /** Sent from the home page: the folder the user is looking at (null for the top level). */
+  home?: { folderId: string | null };
 };
 
 type TurnInput = Omit<SendInput, "documentId">;
@@ -410,6 +414,7 @@ class ChatRuntime {
       this.state.documentId = input.documentId;
       this.emitMeta();
     }
+    if (input.home) this.home = input.home;
     const ids = input.ids && !this.state.messages.some((message) => message.id === input.ids!.user || message.id === input.ids!.assistant) ? input.ids : undefined;
     if (this.state.running) {
       const queued: QueuedMessage = { id: ids?.user ?? randomUUID(), text, createdAt: Date.now(), selection: input.selection, attachments: input.attachments, mentions: input.mentions };
@@ -520,6 +525,12 @@ class ChatRuntime {
       } else {
         context.push(`Open document: "${doc.meta.title}" (id ${doc.id}).`);
       }
+      const root = doc.meta.parentId ? await documentHub().get(doc.meta.parentId) : doc;
+      if (root?.meta.folderId) {
+        const folders = new Map((await listFolders()).map((folder) => [folder.id, folder]));
+        const where = folderPathName(folders, root.meta.folderId);
+        if (where) context.push(`It is filed in the folder "${where}".`);
+      }
       const suggestions = doc.hunks.filter(isUserSuggestion).length;
       const pending = doc.hunks.length - suggestions;
       if (pending) context.push(`${pending} earlier change${pending === 1 ? "" : "s"} by Claude ${pending === 1 ? "is" : "are"} still awaiting the user's review.`);
@@ -539,6 +550,11 @@ class ChatRuntime {
       this.eventsToldAt = Date.now();
       const events = doc.userEvents.filter((event) => event.at > since).map((event) => event.text);
       if (events.length) context.push(`Since your last reply, the user ${events.join("; ")}. The document may differ from what you last saw, so read it again before relying on earlier content.`);
+    } else if (this.home && !this.state.documentId) {
+      const { folders, documents } = await library();
+      const unfiled = documents.filter((item) => !item.folderId || !folders.has(item.folderId)).length;
+      const where = this.home.folderId && folders.has(this.home.folderId) ? `the folder "${folderPathName(folders, this.home.folderId)}" (id ${this.home.folderId})` : "all documents (the top level)";
+      context.push(`The user is on the home page, not in a document, looking at ${where}. Their library has ${documents.length} document${documents.length === 1 ? "" : "s"} (${unfiled} unfiled) and ${folders.size} folder${folders.size === 1 ? "" : "s"}. Use list_library to see them.`);
     } else {
       context.push("No document is open.");
     }
@@ -583,6 +599,9 @@ class ChatRuntime {
     if (input.text) blocks.push({ type: "text", text: input.text });
     return { type: "user", message: { role: "user", content: blocks as never }, parent_tool_use_id: null };
   }
+
+  /** For chats on the home page: what the user is looking at, from their latest message. */
+  private home: { folderId: string | null } | null = null;
 
   /** When the user's events were last told to Claude, so each is told once. */
   private eventsToldAt = 0;

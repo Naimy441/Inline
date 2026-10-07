@@ -92,6 +92,12 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   read_attachment: { attachment_id: "missing" },
   check_spelling: {},
   add_to_dictionary: { words: ["Zorblat"] },
+  list_library: {},
+  list_folders: {},
+  move_documents: { moves: [{ folder: "Archive" }] },
+  create_folder: { name: "Projects" },
+  update_folder: { folder: "missing", name: "x" },
+  delete_folder: { folder: "missing" },
 };
 
 describe("tool registry", () => {

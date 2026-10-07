@@ -34,6 +34,9 @@ import { findMisspellings, speller, type Misspelling } from "@/lib/server/spellc
 import { normalizeWord } from "@/lib/doc/words";
 import { detectAiTropes } from "@/lib/writing/tropes";
 import { describePageStarts, pageCount, pageCountNow } from "@/lib/agent/pages";
+import { FOLDER_COLORS } from "@/lib/doc/folders";
+import { createFolder, deleteFolder, FolderError, folderPathName, updateFolder } from "@/lib/server/folders";
+import { formatFolderTree, formatLibrary, library, MAX_EXCERPT_WORDS, moveDocuments, resolveFolder } from "@/lib/server/library";
 
 /**
  * The tools Claude uses to work in Inline documents. They are transport
@@ -242,7 +245,7 @@ function wrapErrors(handler: (...args: never[]) => Promise<ToolResult>) {
     try {
       return await handler(...args);
     } catch (error) {
-      if (error instanceof EditError || error instanceof LockedContentError) return fail(error.message);
+      if (error instanceof EditError || error instanceof LockedContentError || error instanceof FolderError) return fail(error.message);
       const message = error instanceof Error ? error.message : String(error);
       return fail(`Tool failed: ${message}`);
     }
@@ -1104,6 +1107,137 @@ export const TOOLS = [
   }),
 
   defineTool({
+    name: "list_library",
+    title: "List library",
+    description:
+      "The user's document library for organizing it: the folder tree, then each document's id, title, folder and the first few words of its text. Cheap: it reads no document bodies, so use it (not read_document on every document) to decide where documents belong. Large libraries come in pages; pass offset to continue.",
+    shape: {
+      folder: z.string().optional().describe('Only documents in this folder and the folders inside it: an id or a path like "Work/Q3".'),
+      unfiled_only: z.boolean().optional().describe("Only documents that aren't in any folder yet."),
+      excerpt_words: z.number().int().min(0).max(MAX_EXCERPT_WORDS).optional().describe(`Words of each document's opening text to include (default 15, max ${MAX_EXCERPT_WORDS}; 0 for titles only, best for a first pass over hundreds of documents).`),
+      limit: z.number().int().min(1).max(500).optional().describe("Documents per page (default 200)."),
+      offset: z.number().int().min(0).optional(),
+    },
+    write: false,
+    async handler(args, ctx) {
+      const { folders, documents } = await library();
+      const folderId = args.unfiled_only ? null : args.folder ? (await resolveFolder(args.folder, { create: false })).id : undefined;
+      const offset = args.offset ?? 0;
+      const listing = formatLibrary(folders, documents, { folderId, excerptWords: args.excerpt_words ?? 15, limit: args.limit ?? 200, offset, openId: ctx.documentId ?? null });
+      return ok(offset ? listing : `Folders:\n${formatFolderTree(folders, documents)}\n\nDocuments: ${listing}`);
+    },
+  }),
+
+  defineTool({
+    name: "list_folders",
+    title: "List folders",
+    description: "The user's folders as a tree, with ids, colors and how many documents each holds.",
+    shape: {},
+    write: false,
+    async handler() {
+      const { folders, documents } = await library();
+      const unfiled = documents.filter((doc) => !doc.folderId || !folders.has(doc.folderId)).length;
+      return ok(`${formatFolderTree(folders, documents)}\n${unfiled} of ${documents.length} documents are unfiled (at the top level).`);
+    },
+  }),
+
+  defineTool({
+    name: "move_documents",
+    title: "Move documents",
+    description:
+      'File documents in folders, many at once. Each move names a folder by id or by path of names ("Work/Q3"); folders on the path that don\'t exist yet are created (new top-level folders get their own color). Use "" for the top level. A tab moves with its document.',
+    shape: {
+      moves: z
+        .array(
+          z.object({
+            document_id: z.string().optional().describe("Defaults to the document the user is working in."),
+            folder: z.string().describe('Folder id, path like "Work/Q3", or "" for the top level.'),
+          }),
+        )
+        .min(1)
+        .max(500),
+      create_missing: z.boolean().optional().describe("Create folders on paths that don't exist (default true)."),
+    },
+    write: true,
+    async handler(args, ctx) {
+      const moves = [];
+      for (const move of args.moves) {
+        const id = move.document_id || ctx.documentId;
+        if (!id) return fail("Pass document_id for each move; no document is open.");
+        moves.push({ documentId: id, folder: move.folder });
+      }
+      const result = await moveDocuments(moves, { create: args.create_missing !== false });
+      const { folders } = await library();
+      const byFolder = new Map<string, string[]>();
+      for (const item of result.moved) {
+        const name = item.to ? folderPathName(folders, item.to) : "the top level";
+        byFolder.set(name, [...(byFolder.get(name) ?? []), item.title]);
+      }
+      const lines = [...byFolder].map(([name, titles]) => `- ${name}: ${titles.length > 6 ? `${titles.slice(0, 6).map((title) => `"${title}"`).join(", ")} and ${titles.length - 6} more` : titles.map((title) => `"${title}"`).join(", ")}`);
+      const parts = [result.moved.length ? `Moved ${result.moved.length} document${result.moved.length === 1 ? "" : "s"}:\n${lines.join("\n")}` : "No documents moved."];
+      if (result.created.length) parts.push(`Created folder${result.created.length === 1 ? "" : "s"}: ${result.created.map((folder) => `"${folderPathName(folders, folder.id)}" (id ${folder.id})`).join(", ")}.`);
+      if (result.unchanged) parts.push(`${result.unchanged} already in place.`);
+      if (result.problems.length) parts.push(`Skipped: ${result.problems.join("; ")}.`);
+      return { text: parts.join("\n"), isError: !result.moved.length && Boolean(result.problems.length) };
+    },
+  }),
+
+  defineTool({
+    name: "create_folder",
+    title: "Create folder",
+    description: "Create a folder, at the top level or inside another. (move_documents also creates folders named by path.)",
+    shape: {
+      name: z.string().min(1).max(120),
+      parent: z.string().optional().describe('Folder id or path to create it in; omit for the top level.'),
+      color: z.enum(FOLDER_COLORS).optional(),
+    },
+    write: true,
+    async handler(args) {
+      const parentId = (await resolveFolder(args.parent, { create: false })).id;
+      const folder = await createFolder({ name: args.name, parentId, color: args.color ?? (parentId ? (await library()).folders.get(parentId)?.color : undefined) });
+      const { folders } = await library();
+      return ok(`Created the folder "${folderPathName(folders, folder.id)}" (id ${folder.id}).`);
+    },
+  }),
+
+  defineTool({
+    name: "update_folder",
+    title: "Update folder",
+    description: "Rename a folder, change its color, or move it into another folder (parent: \"\" for the top level).",
+    shape: {
+      folder: z.string().describe("Folder id or path."),
+      name: z.string().min(1).max(120).optional(),
+      color: z.enum(FOLDER_COLORS).optional(),
+      parent: z.string().optional().describe('New parent folder id or path; "" for the top level.'),
+    },
+    write: true,
+    async handler(args) {
+      const id = (await resolveFolder(args.folder, { create: false })).id;
+      if (!id) return fail("Name a folder to update.");
+      const parentId = args.parent === undefined ? undefined : (await resolveFolder(args.parent, { create: false })).id;
+      const folder = await updateFolder(id, { name: args.name, color: args.color, parentId });
+      const { folders } = await library();
+      return ok(`Updated the folder: now "${folderPathName(folders, folder.id)}" (${folder.color}).`);
+    },
+  }),
+
+  defineTool({
+    name: "delete_folder",
+    title: "Delete folder",
+    description: "Delete a folder. No documents are deleted: everything inside (documents and folders) moves up into its parent.",
+    shape: { folder: z.string().describe("Folder id or path.") },
+    write: true,
+    async handler(args) {
+      const id = (await resolveFolder(args.folder, { create: false })).id;
+      if (!id) return fail("Name a folder to delete.");
+      const { folders } = await library();
+      const name = folderPathName(folders, id);
+      const result = await deleteFolder(id);
+      return ok(`Deleted the folder "${name}". ${result.moved} document${result.moved === 1 ? "" : "s"} and any folders inside moved to ${result.parentId ? `"${folderPathName(folders, result.parentId)}"` : "the top level"}.`);
+    },
+  }),
+
+  defineTool({
     name: "list_documents",
     title: "List documents",
     description: "List the user's documents with ids, titles, word counts and last-edited times. The document the user has open is marked.",
@@ -1114,10 +1248,14 @@ export const TOOLS = [
       const metas = await hub.list({ trashed: Boolean(args.include_trashed) });
       if (!metas.length) return ok("No documents yet.");
       const current = ctx.documentId ?? hub.activeDocumentId;
+      const { folders } = await library();
       return ok(
         metas
           .slice(0, 100)
-          .map((meta) => `- ${meta.id}${meta.id === current ? " (open)" : ""}: "${meta.title}" · ${meta.wordCount} words · edited ${new Date(meta.updatedAt).toISOString()}`)
+          .map((meta) => {
+            const where = meta.folderId && folders.has(meta.folderId) ? ` · in ${folderPathName(folders, meta.folderId)}` : "";
+            return `- ${meta.id}${meta.id === current ? " (open)" : ""}: "${meta.title}"${where} · ${meta.wordCount} words · edited ${new Date(meta.updatedAt).toISOString()}`;
+          })
           .join("\n"),
       );
     },
@@ -1131,12 +1269,14 @@ export const TOOLS = [
       title: z.string(),
       content: z.string().optional().describe("Initial content as Markdown."),
       open: z.boolean().optional().describe("Open it in the editor (default true)."),
+      folder: z.string().optional().describe('Folder to file it in: an id or a path like "Work/Q3" (created if missing).'),
     },
     write: true,
     async handler(args, ctx) {
       if (ctx.readOnly) return fail("You are in Ask mode, so documents can't be created.");
       const hub = documentHub();
-      const created = await hub.create({ title: args.title, markdown: args.content });
+      const folderId = args.folder ? (await resolveFolder(args.folder, { create: true })).id : null;
+      const created = await hub.create({ title: args.title, markdown: args.content, folderId });
       if (args.open !== false) {
         const current = ctx.documentId ? await hub.get(ctx.documentId) : await hub.active();
         current?.sendCommand({ kind: "open_document", documentId: created.id });

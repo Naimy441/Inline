@@ -37,14 +37,15 @@ export function ChatHistory({
   open: boolean;
   onClose: () => void;
   anchor: RefObject<HTMLElement | null>;
-  documentId: string;
+  /** The open document; null on the home page, where every chat is listed. */
+  documentId: string | null;
   currentChatId: string | null;
   onOpenChat: (chatId: string) => void;
   onOpenElsewhere: (documentId: string, chatId: string) => void;
   onDeleted: (chatId: string) => void;
 }) {
   const phone = useIsPhone();
-  const [scope, setScope] = useState<"document" | "all">("document");
+  const [scope, setScope] = useState<"document" | "all">(documentId ? "document" : "all");
   const [query, setQuery] = useState("");
   const [chats, setChats] = useState<ChatSummary[] | null>(null);
   const [titles, setTitles] = useState<Map<string, string>>(new Map());
@@ -55,7 +56,7 @@ export function ChatHistory({
     let cancelled = false;
     setChats(null);
     void Promise.all([
-      chatApi.list(scope === "document" ? documentId : undefined).catch(() => [] as ChatSummary[]),
+      chatApi.list(scope === "document" && documentId ? documentId : undefined).catch(() => [] as ChatSummary[]),
       api<{ documents: DocumentMeta[] }>("/api/documents").catch(() => ({ documents: [] as DocumentMeta[] })),
     ]).then(([list, docs]) => {
       if (cancelled) return;
@@ -99,14 +100,14 @@ export function ChatHistory({
           <Search size={14} />
           <input ref={input} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search chats" aria-label="Search chats" />
         </div>
-        <div className="segmented" role="tablist">
+        {documentId && <div className="segmented" role="tablist">
           <button type="button" role="tab" aria-selected={scope === "document"} className={scope === "document" ? "is-active" : ""} onClick={() => setScope("document")}>
             This document
           </button>
           <button type="button" role="tab" aria-selected={scope === "all"} className={scope === "all" ? "is-active" : ""} onClick={() => setScope("all")}>
             All
           </button>
-        </div>
+        </div>}
       </div>
       <div className="chat-history-list" role="listbox" aria-label="Chats">
         {filtered === null ? (

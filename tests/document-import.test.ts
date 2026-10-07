@@ -51,6 +51,15 @@ describe("importing Word documents", () => {
   });
 });
 
+describe("folders inside an archive", () => {
+  test("Takeout's wrapper and a single top folder are dropped; the rest become folders", async () => {
+    const { archiveFolders } = await import("@/lib/server/unzip");
+    assert.deepEqual([...archiveFolders(["Takeout/Drive/Work/Q3/a.docx", "Takeout/Drive/b.docx"]).values()], [["Work", "Q3"], []]);
+    assert.deepEqual([...archiveFolders(["export/School/a.docx", "export/b.docx"]).values()], [["School"], []]);
+    assert.deepEqual([...archiveFolders(["a.docx", "Notes/b.docx"]).values()], [[], ["Notes"]]);
+  });
+});
+
 describe("importing a ZIP of Word documents (Google Takeout)", () => {
   type ArchiveResult = { documents: { id: string; title: string }[]; failed: { name: string; error: string }[]; error?: string };
 
@@ -70,6 +79,11 @@ describe("importing a ZIP of Word documents (Google Takeout)", () => {
     assert.deepEqual(result.documents.map((doc) => doc.title).sort(), ["Budget", "Trip notes"]);
     assert.deepEqual(result.failed.map((item) => item.name), ["Takeout/Drive/Broken.docx"]);
     assert.match(result.failed[0]!.error, /couldn't be read as a Word document/);
+    // Drive's folders come along: Budget sat in Projects.
+    const budget = result.documents.find((doc) => doc.title === "Budget") as { folderId?: string };
+    const { listFolders } = await import("@/lib/server/folders");
+    assert.equal((await listFolders()).find((folder) => folder.id === budget.folderId)?.name, "Projects");
+    assert.equal((result.documents.find((doc) => doc.title === "Trip notes") as { folderId?: string }).folderId, undefined);
     const { docToMarkdown } = await import("@/lib/doc/markdown");
     const notes = result.documents.find((doc) => doc.title === "Trip notes")!;
     assert.equal(docToMarkdown((await hub.get(notes.id))!.doc).trim(), "Hello");

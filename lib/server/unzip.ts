@@ -59,3 +59,18 @@ export function openZip(data: Uint8Array): Map<string, () => Uint8Array> {
   }
   return entries;
 }
+
+/**
+ * The folders a file sits in inside the archive, without the archive's own
+ * wrapping: Google Takeout puts Drive under "Takeout/Drive/", and other ZIPs
+ * often hold everything in one top folder.
+ */
+export function archiveFolders(names: string[]) {
+  const dirs = names.map((name) => name.split("/").slice(0, -1));
+  let skip = 0;
+  if (dirs.length && dirs.every((dir) => dir[0] === "Takeout" && dir.length >= 2)) skip = 2;
+  else {
+    while (dirs.length > 0 && dirs.every((dir) => dir.length > skip && dir[skip] === dirs[0]![skip])) skip += 1;
+  }
+  return new Map(names.map((name, index) => [name, dirs[index]!.slice(skip).filter((part) => part.trim())]));
+}

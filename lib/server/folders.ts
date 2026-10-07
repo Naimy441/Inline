@@ -1,4 +1,4 @@
-import { canMoveFolder, cleanFolderName, isFolderColor, type Folder, type FolderColor } from "@/lib/doc/folders";
+import { canMoveFolder, cleanFolderName, FOLDER_COLORS, folderPath, isFolderColor, MAX_FOLDER_DEPTH, type Folder, type FolderColor } from "@/lib/doc/folders";
 import { newId } from "@/lib/doc/ids";
 import { documentHub } from "@/lib/server/hub";
 import { readFoldersFile, writeFoldersFile } from "@/lib/server/store";
@@ -111,4 +111,47 @@ export function deleteFolder(id: string) {
     folders.delete(id);
     return { moved, parentId: folder.parentId };
   });
+}
+
+const sameName = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base" }) === 0;
+
+/** A color for a new top-level folder: the one used least so far, so a freshly sorted library isn't all one color. */
+function nextColor(folders: Map<string, Folder>): FolderColor {
+  const used = new Map<FolderColor, number>(FOLDER_COLORS.filter((color) => color !== "gray").map((color) => [color, 0]));
+  for (const folder of folders.values()) if (!folder.parentId && used.has(folder.color)) used.set(folder.color, used.get(folder.color)! + 1);
+  return [...used].sort((a, b) => a[1] - b[1])[0]![0];
+}
+
+/**
+ * Find a folder by its path of names ("Work/Q3"), matching names without
+ * regard to case, and make whichever folders along it don't exist yet. New
+ * top-level folders get a fresh color; folders inside take their parent's.
+ */
+export function ensureFolderPath(names: string[], options: { parentId?: string | null } = {}) {
+  return change((folders) => {
+    const clean = names.map((name) => cleanFolderName(name));
+    let parent: Folder | null = options.parentId ? (folders.get(options.parentId) ?? null) : null;
+    if (folderPath(folders, parent?.id).length + clean.length > MAX_FOLDER_DEPTH) throw new FolderError("Folders can't be nested that deep.");
+    const created: Folder[] = [];
+    for (const name of clean) {
+      const parentId: string | null = parent ? parent.id : null;
+      let next: Folder | undefined = [...folders.values()].find((folder) => folder.parentId === parentId && sameName(folder.name, name));
+      if (!next) {
+        if (folders.size >= MAX_FOLDERS) throw new FolderError(`You can have up to ${MAX_FOLDERS} folders.`);
+        const now = Date.now();
+        next = { id: newId(10), name, parentId, color: parent ? parent.color : nextColor(folders), createdAt: now, updatedAt: now };
+        folders.set(next.id, next);
+        created.push(next);
+      }
+      parent = next;
+    }
+    return { folder: parent, created };
+  });
+}
+
+/** A folder's full path of names, "Work/Q3". */
+export function folderPathName(folders: Map<string, Folder>, id: string | null | undefined) {
+  return folderPath(folders, id)
+    .map((folder) => folder.name)
+    .join("/");
 }

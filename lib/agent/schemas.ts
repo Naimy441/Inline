@@ -39,4 +39,6 @@ export const SendSchema = z.object({
   attachments: z.array(AttachmentSchema).max(10).optional(),
   mentions: z.array(z.object({ id: z.string().max(80), title: z.string().max(300) })).max(20).optional(),
   ids: z.object({ user: ClientIdSchema, assistant: ClientIdSchema }).optional(),
+  /** Sent from the home page: the folder the user is looking at (null for the top level). */
+  home: z.object({ folderId: z.string().max(80).nullable() }).optional(),
 });
