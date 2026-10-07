@@ -15,6 +15,7 @@ import { insertImage, insertText } from "@/lib/editor/commands";
 import { AgentPanel, type AgentPanelHandle } from "@/components/agent/AgentPanel";
 import { Spark } from "@/components/agent/Activity";
 import { PanelResizer } from "@/components/ui/PanelResizer";
+import { loadServerPlatform, revealOnDisk } from "@/lib/client/fileManager";
 import { Button, IconButton } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { ConfirmHost } from "@/components/ui/Confirm";
@@ -409,6 +410,9 @@ export function Workspace({ documentId }: { documentId: string }) {
     }
   };
 
+  // For the File menu's "Show in Finder" label; read when the menu opens, so nothing re-renders.
+  useEffect(() => void loadServerPlatform(), []);
+
   const actions: MenuActions = {
     newDocument: async () => {
       const { document } = await post<{ document: { meta: DocumentMeta } }>("/api/documents", {});
@@ -422,6 +426,7 @@ export function Workspace({ documentId }: { documentId: string }) {
     },
     download: (format) => void download(format),
     print: () => void session.print(),
+    reveal: () => void session.whenSaved().then(() => revealOnDisk({ documentId })),
     pageSetup: (tab = "page") => setSetup({ tab }),
     history: () => setPanel("history"),
     trash: async () => {

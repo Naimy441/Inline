@@ -1083,3 +1083,55 @@ button.crumb:hover {
     display: none;
   }
 }
+
+/* --- copies on this computer --------------------------------------------------- */
+
+.mirror {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.mirror-dir {
+  display: flex;
+  gap: 8px;
+}
+
+.mirror-dir .input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.mirror-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.mirror-status.is-idle svg {
+  color: var(--success);
+}
+
+.mirror-status.is-error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.mirror-note,
+.mirror-loading {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.mirror-open {
+  margin-right: auto;
+}

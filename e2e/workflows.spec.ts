@@ -63,7 +63,7 @@ test.describe("home page", () => {
     await page.goto("/");
     await page.getByRole("tab", { name: /Trash/ }).click();
     await expect(page.locator(".doc-card", { hasText: title })).toHaveCount(1);
-    await expect(page.getByText("deleted forever after 30 days")).toBeVisible();
+    await expect(page.getByText("stay in the trash until you delete them")).toBeVisible();
     await page.getByRole("button", { name: "Empty trash" }).click();
     await page.getByRole("dialog", { name: "Empty the trash?" }).getByRole("button", { name: "Delete forever" }).click();
     await expect(page.getByText("Trash is empty.")).toBeVisible();
@@ -87,7 +87,7 @@ test.describe("home page", () => {
     await createDocument(request, "In the backup", "Hello.");
     await page.goto("/");
     const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Download all" }).click()]);
-    expect(download.suggestedFilename()).toMatch(/^inline-backup-.*\.zip$/);
+    expect(download.suggestedFilename()).toMatch(/^Inline documents .*\.zip$/);
   });
 
   test("dark theme persists across reloads", async ({ page }) => {

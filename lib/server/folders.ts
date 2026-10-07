@@ -1,5 +1,6 @@
 import { canMoveFolder, cleanFolderName, FOLDER_COLORS, folderPath, isFolderColor, isWithin, MAX_FOLDER_DEPTH, type Folder, type FolderColor } from "@/lib/doc/folders";
 import { newId } from "@/lib/doc/ids";
+import { libraryChanged } from "@/lib/server/changes";
 import { documentHub } from "@/lib/server/hub";
 import { readFoldersFile, writeFoldersFile } from "@/lib/server/store";
 
@@ -46,6 +47,7 @@ async function change<T>(update: (folders: Map<string, Folder>) => Promise<T> | 
     const folders = new Map(normalize(await readFoldersFile()).map((folder) => [folder.id, folder]));
     const result = await update(folders);
     await writeFoldersFile({ folders: [...folders.values()] });
+    libraryChanged();
     return result;
   });
   writes = run.catch(() => undefined);
@@ -96,7 +98,7 @@ export function updateFolder(id: string, patch: { name?: string; parentId?: stri
 
 /**
  * Delete a folder and everything in it: the folders inside are deleted and
- * their documents move to the trash (kept there for 30 days). Documents keep
+ * their documents move to the trash (kept there until it's emptied). Documents keep
  * naming their folder, so restoreFolders can put everything back.
  */
 export function deleteFolder(id: string) {
@@ -106,7 +108,7 @@ export function deleteFolder(id: string) {
     const ids = new Set(removed.map((item) => item.id));
     const hub = documentHub();
     const trashed: string[] = [];
-    for (const meta of await hub.list({ purge: false })) {
+    for (const meta of await hub.list()) {
       if (!meta.folderId || !ids.has(meta.folderId)) continue;
       const doc = await hub.get(meta.id);
       if (!doc) continue;

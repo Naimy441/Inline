@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, ChevronRight, Folder as FolderIcon, FolderInput, FolderOpen, FolderPlus, House, MoreHorizontal, MoreVertical, Palette, Pencil, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Folder as FolderIcon, FolderInput, FolderOpen, FolderPlus, FolderSearch, House, MoreHorizontal, MoreVertical, Palette, Pencil, Trash2 } from "lucide-react";
 import { Fragment, useRef, useState, type ReactNode } from "react";
 import { FOLDER_COLORS, type Folder, type FolderColor, type FolderSummary } from "@/lib/doc/folders";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
@@ -9,6 +9,9 @@ import { dragSource, useDropTarget, type DragItem } from "./dnd";
 import { itemHandlers, SelectCheck, type Selection } from "./selection";
 
 export type FolderActions = {
+  /** "Show in Finder" (or File Explorer): its label, and what it does. */
+  revealLabel: string;
+  reveal: (folder: Folder) => void;
   open: (id: string | null) => void;
   rename: (folder: Folder) => void;
   recolor: (folder: Folder, color: FolderColor) => void;
@@ -54,6 +57,7 @@ export function folderMenuItems(folder: Folder, actions: FolderActions, options:
       })),
     },
     { label: "Move to…", icon: <FolderInput size={14} />, onSelect: () => actions.move(folder) },
+    { label: actions.revealLabel, icon: <FolderSearch size={14} />, onSelect: () => actions.reveal(folder) },
     { kind: "separator" },
     { label: "Delete folder", icon: <Trash2 size={14} />, danger: true, onSelect: () => actions.remove(folder) },
   ];

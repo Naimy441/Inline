@@ -4,6 +4,7 @@ import { redo, undo } from "prosemirror-history";
 import { AllSelection } from "prosemirror-state";
 import { createRef, useRef, useState, type RefObject } from "react";
 import type { DocumentSession, EditorMode } from "@/lib/client/documentSession";
+import { currentRevealLabel } from "@/lib/client/fileManager";
 import { modeMenuItems } from "@/components/workspace/modes";
 import {
   changeCase,
@@ -26,6 +27,8 @@ export type MenuActions = {
   newDocument: () => void;
   goHome: () => void;
   duplicate: () => void;
+  /** Show the document's Word copy on disk ("Show in Finder"). */
+  reveal: () => void;
   download: (format: "docx" | "pdf" | "md" | "html" | "txt") => void;
   print: () => void;
   pageSetup: (tab?: "page" | "text" | "header") => void;
@@ -132,6 +135,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
         ],
       },
       { label: "Print", shortcut: `⌘P`, onSelect: actions.print },
+      { label: currentRevealLabel(), onSelect: actions.reveal },
       { kind: "separator" },
       { label: "Version history", onSelect: actions.history },
       { label: "Page setup", onSelect: () => actions.pageSetup("page") },

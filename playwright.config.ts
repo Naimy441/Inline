@@ -3,6 +3,9 @@ import os from "node:os";
 import path from "node:path";
 
 const port = 3199;
+/** Where the server under test keeps its Word copies (see lib/server/mirror.ts). Set once, so test workers see the same folder. */
+process.env.INLINE_E2E_MIRROR_DIR ??= path.join(os.tmpdir(), `inline-e2e-mirror-${Date.now()}`);
+const MIRROR_DIR = process.env.INLINE_E2E_MIRROR_DIR;
 // E2E_START=1 runs against `next start` (after `npm run build`), as CI does; otherwise a dev server.
 const server = process.env.E2E_START ? `npx next start -p ${port}` : `npx next dev -p ${port}`;
 
@@ -21,6 +24,6 @@ export default defineConfig({
     url: `http://localhost:${port}`,
     reuseExistingServer: false,
     timeout: 120_000,
-    env: { INLINE_FAKE_CLAUDE: "1", INLINE_DATA_DIR: path.join(os.tmpdir(), `inline-e2e-${Date.now()}`) },
+    env: { INLINE_FAKE_CLAUDE: "1", INLINE_DATA_DIR: path.join(os.tmpdir(), `inline-e2e-${Date.now()}`), INLINE_MIRROR_DIR: MIRROR_DIR },
   },
 });

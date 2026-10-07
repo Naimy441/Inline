@@ -101,7 +101,7 @@ describe("organizing the library", () => {
     const deleted = await runTool("delete_folder", { folder: "Archive" }, ctx);
     assert.match(deleted.text, /Deleted the folder "Archive"\. 0 documents moved to the trash/);
     const lastYear = await runTool("delete_folder", { folder: "Last year" }, ctx);
-    assert.match(lastYear.text, /Deleted the folder "Last year"\. 1 document moved to the trash \(restorable for 30 days\)/);
+    assert.match(lastYear.text, /Deleted the folder "Last year"\. 1 document moved to the trash, where the user can restore them\./);
     assert.ok(old.meta.trashedAt);
     assert.equal((await runTool("delete_folder", { folder: "Gone" }, ctx)).isError, true);
   });
