@@ -1,43 +1,80 @@
 "use client";
 
-import { Copy, Download, FilePlus2, FileText, FileUp, Moon, MoreVertical, Pencil, Plus, RotateCcw, Search, Sun, Trash2, X } from "lucide-react";
+import { Download, FilePlus2, FileText, FileUp, FolderOpen, FolderPlus, LayoutGrid, List, Moon, Plus, Search, Sun, Trash2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, del, patch, post } from "@/lib/client/api";
 import { dismissLegacyDocuments, hasLegacyDocuments, htmlToDocJSON, importLegacyDocuments } from "@/lib/client/legacyImport";
 import { useTheme } from "@/lib/client/theme";
+import { canMoveFolder, documentFolder, folderPath, summarizeFolders, type Folder, type FolderColor } from "@/lib/doc/folders";
 import type { DocumentMeta } from "@/lib/doc/settings";
 import { documentTemplates, type DocumentTemplate } from "@/lib/doc/templates";
 import { AgentStatusBadge } from "@/components/agent/AgentStatusBadge";
 import { Button, IconButton } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
-import { Menu } from "@/components/ui/Menu";
 import { toast } from "@/components/ui/Toast";
 import { confirmDialog } from "@/components/ui/Confirm";
 import { InlineLogo } from "@/components/ui/Logo";
+import { TextCover, ThemedCover } from "./covers";
+import type { DragItem } from "./dnd";
+import { AddDocumentsDialog, FolderDialog, MoveDialog, type MoveTarget } from "./FolderDialogs";
+import { Breadcrumbs, FolderCard, FolderGlyph, type FolderActions } from "./folders";
+import { DocumentCard, DocumentList, documentTime, type DocumentActions, type Sort } from "./items";
 
 type Snapshot = { meta: DocumentMeta };
+type View = "documents" | "recent" | "trash";
+type Layout = "grid" | "list";
+type FolderDialogState = { mode: "create"; parentId: string | null } | { mode: "edit"; folder: Folder } | null;
 
-function relativeTime(at: number) {
-  const diff = Date.now() - at;
-  const minute = 60_000;
-  if (diff < minute) return "Just now";
-  if (diff < 60 * minute) return `${Math.floor(diff / minute)} min ago`;
-  if (diff < 24 * 60 * minute) return `${Math.floor(diff / (60 * minute))} h ago`;
-  const date = new Date(at);
-  const sameYear = date.getFullYear() === new Date().getFullYear();
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(sameYear ? {} : { year: "numeric" }) });
+const LAYOUT_KEY = "inline-home-layout";
+const SORT_KEY = "inline-home-sort";
+
+function readStored<T>(key: string, valid: (value: unknown) => value is T): T | null {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(key) ?? "null") as unknown;
+    return valid(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function store(key: string, value: unknown) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Private browsing: the choice lasts for this visit.
+  }
+}
+
+const isLayout = (value: unknown): value is Layout => value === "grid" || value === "list";
+const isSort = (value: unknown): value is Sort =>
+  Boolean(value) && typeof value === "object" && ["modified", "name", "words"].includes((value as Sort).key) && typeof (value as Sort).descending === "boolean";
+
+/** The folder open on the home page, kept in the address (?folder=…) so Back and links work. */
+function folderFromAddress() {
+  return new URLSearchParams(window.location.search).get("folder");
+}
+
+function plural(count: number, word: string) {
+  return `${count} ${word}${count === 1 ? "" : "s"}`;
 }
 
 export function HomePage() {
   const router = useRouter();
   const [documents, setDocuments] = useState<DocumentMeta[] | null>(null);
   const [trashed, setTrashed] = useState<DocumentMeta[]>([]);
-  const [view, setView] = useState<"recent" | "trash">("recent");
+  const [folderList, setFolderList] = useState<Folder[]>([]);
+  const [view, setView] = useState<View>("documents");
+  const [folderId, setFolderId] = useState<string | null>(null);
+  const [layout, setLayout] = useState<Layout>("grid");
+  const [sort, setSort] = useState<Sort>({ key: "modified", descending: true });
   const [query, setQuery] = useState("");
   const [creating, setCreating] = useState<string | null>(null);
   const [legacy, setLegacy] = useState(false);
   const [renaming, setRenaming] = useState<DocumentMeta | null>(null);
+  const [folderDialog, setFolderDialog] = useState<FolderDialogState>(null);
+  const [moving, setMoving] = useState<MoveTarget | null>(null);
+  const [adding, setAdding] = useState<Folder | null>(null);
   const [importing, setImporting] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const { dark, toggle } = useTheme();
@@ -45,15 +82,17 @@ export function HomePage() {
 
   const load = useCallback(async () => {
     try {
-      const [live, trash] = await Promise.all([
+      const [live, trash, folderData] = await Promise.all([
         api<{ documents: DocumentMeta[] }>("/api/documents"),
         api<{ documents: DocumentMeta[] }>("/api/documents?trashed=1"),
+        api<{ folders: Folder[] }>("/api/folders"),
       ]);
       setDocuments(live.documents);
       setTrashed(trash.documents);
+      setFolderList(folderData.folders);
     } catch (error) {
       toast(error instanceof Error ? error.message : "Couldn't load documents.", { tone: "error" });
-      setDocuments([]);
+      setDocuments((current) => current ?? []);
     }
   }, []);
 
@@ -61,7 +100,45 @@ export function HomePage() {
     document.title = "Inline";
     void load();
     setLegacy(hasLegacyDocuments());
+    setFolderId(folderFromAddress());
+    setLayout(readStored(LAYOUT_KEY, isLayout) ?? "grid");
+    setSort(readStored(SORT_KEY, isSort) ?? { key: "modified", descending: true });
+    const onPop = () => {
+      setFolderId(folderFromAddress());
+      setView("documents");
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
   }, [load]);
+
+  const folders = useMemo(() => new Map(folderList.map((folder) => [folder.id, folder])), [folderList]);
+  const summaries = useMemo(() => summarizeFolders(folders, documents ?? []), [folders, documents]);
+  // A folder that no longer exists (deleted elsewhere, an old link) shows the top level.
+  const currentId = folderId && folders.has(folderId) ? folderId : null;
+  const current = currentId ? folders.get(currentId)! : null;
+  const path = useMemo(() => folderPath(folders, currentId), [folders, currentId]);
+  const searching = query.trim().length > 0;
+  /** Where new documents go: the open folder, when browsing one. */
+  const targetFolder = view === "documents" && !searching ? currentId : null;
+
+  const openFolder = useCallback((id: string | null) => {
+    setView("documents");
+    setQuery("");
+    setFolderId(id);
+    const url = id ? `/?folder=${encodeURIComponent(id)}` : "/";
+    if (window.location.pathname + window.location.search !== url) window.history.pushState(null, "", url);
+    window.scrollTo({ top: 0 });
+  }, []);
+
+  const changeLayout = (next: Layout) => {
+    setLayout(next);
+    store(LAYOUT_KEY, next);
+  };
+
+  const changeSort = (next: Sort) => {
+    setSort(next);
+    store(SORT_KEY, next);
+  };
 
   const open = (id: string) => router.push(`/d/${id}`);
 
@@ -72,6 +149,7 @@ export function HomePage() {
         title: template.documentTitle,
         markdown: template.markdown,
         settings: template.settings,
+        folderId: targetFolder,
       });
       const suffix = template.suggestion ? `?ask=${encodeURIComponent(template.suggestion)}` : "";
       router.push(`/d/${document.meta.id}${suffix}`);
@@ -81,18 +159,23 @@ export function HomePage() {
     }
   };
 
+  const uploadForm = (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (targetFolder) form.append("folderId", targetFolder);
+    return form;
+  };
+
   /** Create one document from a file without opening it. Returns its id. */
   const importOne = async (file: File) => {
     if (/\.docx$/i.test(file.name)) {
-      const form = new FormData();
-      form.append("file", file);
-      const { document } = await api<{ document: Snapshot }>("/api/documents/import", { method: "POST", body: form });
+      const { document } = await api<{ document: Snapshot }>("/api/documents/import", { method: "POST", body: uploadForm(file) });
       return document.meta.id;
     }
     const text = await file.text();
     const title = file.name.replace(/\.[^.]+$/, "") || "Imported document";
     const body = /\.html?$/i.test(file.name) ? { title, doc: htmlToDocJSON(text) } : { title, markdown: text };
-    const { document } = await post<{ document: Snapshot }>("/api/documents", body);
+    const { document } = await post<{ document: Snapshot }>("/api/documents", { ...body, folderId: targetFolder });
     return document.meta.id;
   };
 
@@ -116,9 +199,7 @@ export function HomePage() {
     for (const file of files) {
       try {
         if (/\.zip$/i.test(file.name)) {
-          const form = new FormData();
-          form.append("file", file);
-          const result = await api<{ documents: DocumentMeta[]; failed: { name: string }[] }>("/api/documents/import", { method: "POST", body: form });
+          const result = await api<{ documents: DocumentMeta[]; failed: { name: string }[] }>("/api/documents/import", { method: "POST", body: uploadForm(file) });
           imported += result.documents.length;
           failed.push(...result.failed.map((item) => item.name.slice(item.name.lastIndexOf("/") + 1)));
         } else {
@@ -136,7 +217,7 @@ export function HomePage() {
     }
     setImporting(false);
     void load();
-    const summary = `Imported ${imported} document${imported === 1 ? "" : "s"}.`;
+    const summary = `Imported ${plural(imported, "document")}${targetFolder && current ? ` into "${current.name}"` : ""}.`;
     if (!failed.length) toast(summary, { tone: "success" });
     else toast(`${summary} Couldn't read ${failed.length === 1 ? failed[0] : `${failed.length} files`}.`, { tone: imported ? "info" : "error", duration: 8000 });
   };
@@ -145,19 +226,113 @@ export function HomePage() {
     try {
       const count = await importLegacyDocuments();
       setLegacy(false);
-      toast(`Imported ${count} document${count === 1 ? "" : "s"} from the previous version.`, { tone: "success" });
+      toast(`Imported ${plural(count, "document")} from the previous version.`, { tone: "success" });
       void load();
     } catch {
       toast("Couldn't import your earlier documents.", { tone: "error" });
     }
   };
 
-  const filtered = useMemo(() => {
-    const list = view === "trash" ? trashed : (documents ?? []);
-    const q = query.trim().toLowerCase();
-    if (!q) return list;
-    return list.filter((doc) => doc.title.toLowerCase().includes(q) || doc.preview.toLowerCase().includes(q));
-  }, [documents, trashed, view, query]);
+  // --- moving ---------------------------------------------------------------
+
+  const folderName = useCallback((id: string | null) => (id ? (folders.get(id)?.name ?? "folder") : "All documents"), [folders]);
+
+  const moveDocuments = async (ids: string[], target: string | null, options: { undo?: boolean } = {}) => {
+    const docs = (documents ?? []).filter((doc) => ids.includes(doc.id));
+    const previous = new Map(docs.map((doc) => [doc.id, documentFolder(folders, doc)]));
+    // Show the move at once; the list reloads from the server after.
+    setDocuments((list) => list?.map((doc) => (ids.includes(doc.id) ? { ...doc, folderId: target ?? undefined } : doc)) ?? list);
+    try {
+      await Promise.all(ids.map((id) => patch(`/api/documents/${id}`, { folderId: target })));
+      if (options.undo !== false) {
+        toast(docs.length === 1 ? `Moved "${docs[0]!.title}" to ${folderName(target)}.` : `Moved ${plural(docs.length, "document")} to ${folderName(target)}.`, {
+          tone: "success",
+          action: {
+            label: "Undo",
+            run: () => void Promise.all([...previous].map(([id, folder]) => patch(`/api/documents/${id}`, { folderId: folder }))).then(load),
+          },
+        });
+      }
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Couldn't move that.", { tone: "error" });
+    }
+    void load();
+  };
+
+  const moveFolder = async (folder: Folder, target: string | null) => {
+    try {
+      await patch(`/api/folders/${folder.id}`, { parentId: target });
+      toast(`Moved "${folder.name}" to ${folderName(target)}.`, {
+        tone: "success",
+        action: { label: "Undo", run: () => void patch(`/api/folders/${folder.id}`, { parentId: folder.parentId }).then(load) },
+      });
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Couldn't move that folder.", { tone: "error" });
+    }
+    void load();
+  };
+
+  const createFolder = async (name: string, color: FolderColor, parentId: string | null) => {
+    try {
+      const { folder } = await post<{ folder: Folder }>("/api/folders", { name, color, parentId });
+      setFolderList((list) => [...list, folder]);
+      return folder;
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Couldn't create the folder.", { tone: "error" });
+      return null;
+    }
+  };
+
+  const updateFolder = async (folder: Folder, change: { name?: string; color?: FolderColor }) => {
+    setFolderList((list) => list.map((item) => (item.id === folder.id ? { ...item, ...change } : item)));
+    try {
+      await patch(`/api/folders/${folder.id}`, change);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Couldn't change the folder.", { tone: "error" });
+    }
+    void load();
+  };
+
+  const deleteFolder = async (folder: Folder) => {
+    const summary = summaries.get(folder.id);
+    const inside = [summary?.documents.length ? plural(summary.documents.length, "document") : "", summary?.folders ? plural(summary.folders, "folder") : ""].filter(Boolean).join(" and ");
+    const ok = await confirmDialog({
+      title: `Delete "${folder.name}"?`,
+      body: inside ? `The ${inside} inside move to ${folderName(folder.parentId)}. No documents are deleted.` : "The folder is empty.",
+      confirmLabel: "Delete folder",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await del(`/api/folders/${folder.id}`);
+      toast(`Deleted the folder "${folder.name}".`);
+      if (currentId && folderPath(folders, currentId).some((item) => item.id === folder.id)) openFolder(folder.parentId);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Couldn't delete the folder.", { tone: "error" });
+    }
+    void load();
+  };
+
+  const folderActions: FolderActions = {
+    open: openFolder,
+    rename: (folder) => setFolderDialog({ mode: "edit", folder }),
+    recolor: (folder, color) => void updateFolder(folder, { color }),
+    newFolder: (parentId) => setFolderDialog({ mode: "create", parentId }),
+    move: (folder) => setMoving({ kind: "folder", id: folder.id, title: folder.name, from: folder.parentId }),
+    remove: (folder) => void deleteFolder(folder),
+    canDrop: (target: string | null, item: DragItem) => {
+      if (item.kind === "folder") return item.id !== target && folders.get(item.id)?.parentId !== target && canMoveFolder(folders, item.id, target);
+      const doc = documents?.find((entry) => entry.id === item.id);
+      return Boolean(doc) && documentFolder(folders, doc!) !== target;
+    },
+    drop: (target, item) => {
+      if (item.kind === "document") void moveDocuments([item.id], target);
+      else {
+        const folder = folders.get(item.id);
+        if (folder) void moveFolder(folder, target);
+      }
+    },
+  };
 
   const moveToTrash = async (doc: DocumentMeta) => {
     await patch(`/api/documents/${doc.id}`, { trashed: true });
@@ -170,6 +345,80 @@ export function HomePage() {
     void load();
   };
 
+  const documentActions: DocumentActions = {
+    open: (doc) => open(doc.id),
+    rename: (doc) => setRenaming(doc),
+    duplicate: async (doc) => {
+      const { document } = await post<{ document: Snapshot }>(`/api/documents/${doc.id}/duplicate`);
+      toast(`Created "${document.meta.title}".`);
+      void load();
+    },
+    move: (doc) => setMoving({ kind: "document", id: doc.id, title: doc.title, from: documentFolder(folders, doc) }),
+    trash: (doc) => void moveToTrash(doc),
+    restore: async (doc) => {
+      await patch(`/api/documents/${doc.id}`, { trashed: false });
+      void load();
+    },
+    deleteForever: async (doc) => {
+      await del(`/api/documents/${doc.id}`);
+      toast(`Deleted "${doc.title}" permanently.`);
+      void load();
+    },
+  };
+
+  // --- what's shown ---------------------------------------------------------
+
+  const { shownFolders, shownDocs } = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const byName = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+    const direction = sort.descending ? -1 : 1;
+    const sortDocs = (list: DocumentMeta[]) =>
+      [...list].sort((a, b) => {
+        if (sort.key === "name") return direction * byName(a.title, b.title);
+        if (sort.key === "words") return direction * (a.wordCount - b.wordCount);
+        return direction * (documentTime(a, view === "trash") - documentTime(b, view === "trash"));
+      });
+    const sortFolders = (list: Folder[]) =>
+      [...list].sort((a, b) => {
+        if (sort.key === "modified") return direction * ((summaries.get(a.id)?.updatedAt ?? a.updatedAt) - (summaries.get(b.id)?.updatedAt ?? b.updatedAt));
+        if (sort.key === "words") {
+          const words = (folder: Folder) => summaries.get(folder.id)?.documents.reduce((total, doc) => total + doc.wordCount, 0) ?? 0;
+          return direction * (words(a) - words(b));
+        }
+        return (sort.key === "name" ? direction : 1) * byName(a.name, b.name);
+      });
+    const matches = (doc: DocumentMeta) => doc.title.toLowerCase().includes(q) || doc.preview.toLowerCase().includes(q);
+    if (view === "trash") return { shownFolders: [], shownDocs: sortDocs(q ? trashed.filter(matches) : trashed) };
+    const all = documents ?? [];
+    if (q) return { shownFolders: view === "documents" ? sortFolders(folderList.filter((folder) => folder.name.toLowerCase().includes(q))) : [], shownDocs: sortDocs(all.filter(matches)) };
+    if (view === "recent") return { shownFolders: [], shownDocs: sortDocs(all) };
+    return {
+      shownFolders: sortFolders(folderList.filter((folder) => folder.parentId === currentId)),
+      shownDocs: sortDocs(all.filter((doc) => documentFolder(folders, doc) === currentId)),
+    };
+  }, [documents, trashed, folderList, folders, summaries, view, query, sort, currentId]);
+
+  const showLocation = searching || view === "recent";
+  const closeFolderDialog = useCallback(() => setFolderDialog(null), []);
+  const closeMove = useCallback(() => setMoving(null), []);
+  const closeAdd = useCallback(() => setAdding(null), []);
+  const closeRename = useCallback(() => setRenaming(null), []);
+  const folderDialogInitial = useMemo(
+    () => (folderDialog?.mode === "edit" ? { name: folderDialog.folder.name, color: folderDialog.folder.color } : { name: "", color: (folderDialog?.parentId && folders.get(folderDialog.parentId)?.color) || ("gray" as FolderColor) }),
+    [folderDialog, folders],
+  );
+
+  const grid = (
+    <div className="doc-grid">
+      {shownFolders.map((folder) => (
+        <FolderCard key={folder.id} folder={folder} summary={summaries.get(folder.id)} actions={folderActions} />
+      ))}
+      {shownDocs.map((doc) => (
+        <DocumentCard key={doc.id} doc={doc} trashed={view === "trash"} folders={folders} showLocation={showLocation} actions={documentActions} />
+      ))}
+    </div>
+  );
+
   return (
     <div className="home">
       <header className="home-header">
@@ -179,7 +428,12 @@ export function HomePage() {
         </div>
         <div className="home-search">
           <Search size={15} />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search documents" aria-label="Search documents" />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={view === "trash" ? "Search the trash" : "Search documents and folders"} aria-label="Search documents" />
+          {query && (
+            <button type="button" className="home-search-clear" aria-label="Clear search" onClick={() => setQuery("")}>
+              <X size={14} />
+            </button>
+          )}
         </div>
         <div className="home-header-actions">
           <AgentStatusBadge />
@@ -212,7 +466,14 @@ export function HomePage() {
 
         <section className="home-section">
           <div className="home-section-head">
-            <h2>Start something new</h2>
+            <h2>
+              Start something new
+              {targetFolder && current && (
+                <span className="home-target">
+                  <FolderGlyph color={current.color} size={13} /> saves to {current.name}
+                </span>
+              )}
+            </h2>
             <Button size="sm" variant="ghost" icon={<FileUp size={15} />} loading={importing} onClick={() => fileInput.current?.click()} title="Word, Markdown, HTML or text files, or a ZIP of Word files such as a Google Takeout export">
               {importing ? "Importing…" : "Import files"}
             </Button>
@@ -244,15 +505,26 @@ export function HomePage() {
         </section>
 
         <section className="home-section">
-          <div className="home-section-head">
+          <div className="home-section-head home-toolbar">
             <div className="segmented" role="tablist">
-              <button type="button" role="tab" aria-selected={view === "recent"} className={view === "recent" ? "is-active" : ""} onClick={() => setView("recent")}>
-                Recent
-              </button>
-              <button type="button" role="tab" aria-selected={view === "trash"} className={view === "trash" ? "is-active" : ""} onClick={() => setView("trash")}>
-                Trash{trashed.length ? ` (${trashed.length})` : ""}
-              </button>
+              {(
+                [
+                  ["documents", "Documents"],
+                  ["recent", "Recent"],
+                  ["trash", `Trash${trashed.length ? ` (${trashed.length})` : ""}`],
+                ] as const
+              ).map(([id, label]) => (
+                <button key={id} type="button" role="tab" aria-selected={view === id} className={view === id ? "is-active" : ""} onClick={() => setView(id)}>
+                  {label}
+                </button>
+              ))}
             </div>
+            <span className="home-spacer" />
+            {view === "documents" && (
+              <Button size="sm" variant="ghost" icon={<FolderPlus size={15} />} onClick={() => setFolderDialog({ mode: "create", parentId: currentId })}>
+                New folder
+              </Button>
+            )}
             {view === "trash" && trashed.length > 0 && (
               <Button
                 size="sm"
@@ -268,7 +540,7 @@ export function HomePage() {
                   if (!ok) return;
                   try {
                     const { deleted } = await del<{ deleted: number }>("/api/documents?trashed=1");
-                    toast(`Deleted ${deleted} document${deleted === 1 ? "" : "s"} permanently.`);
+                    toast(`Deleted ${plural(deleted, "document")} permanently.`);
                   } catch (error) {
                     toast(error instanceof Error ? error.message : "Couldn't empty the trash.", { tone: "error" });
                   }
@@ -278,8 +550,33 @@ export function HomePage() {
                 Empty trash
               </Button>
             )}
+            <div className="segmented layout-toggle" role="group" aria-label="Layout">
+              <button type="button" aria-label="Grid view" title="Grid view" aria-pressed={layout === "grid"} className={layout === "grid" ? "is-active" : ""} onClick={() => changeLayout("grid")}>
+                <LayoutGrid size={15} />
+              </button>
+              <button type="button" aria-label="List view" title="List view" aria-pressed={layout === "list"} className={layout === "list" ? "is-active" : ""} onClick={() => changeLayout("list")}>
+                <List size={15} />
+              </button>
+            </div>
           </div>
-          {view === "trash" && <p className="home-note">Documents in the trash are deleted forever after 30 days.</p>}
+
+          {view === "documents" && !searching && (
+            <div className="home-location">
+              <Breadcrumbs path={path} actions={folderActions} />
+              {current && (
+                <Button size="sm" variant="ghost" icon={<Plus size={15} />} onClick={() => setAdding(current)}>
+                  Add documents
+                </Button>
+              )}
+            </div>
+          )}
+          {searching && (
+            <p className="home-note">
+              {shownFolders.length + shownDocs.length ? `${plural(shownFolders.length + shownDocs.length, "result")} for "${query.trim()}"` : ""}
+              {view === "trash" ? " in the trash" : ""}
+            </p>
+          )}
+          {view === "trash" && !searching && <p className="home-note">Documents in the trash are deleted forever after 30 days.</p>}
 
           {documents === null ? (
             <div className="doc-grid">
@@ -289,12 +586,22 @@ export function HomePage() {
                 </div>
               ))}
             </div>
-          ) : filtered.length === 0 ? (
+          ) : shownFolders.length + shownDocs.length === 0 ? (
             <div className="home-empty">
-              {view === "trash" ? (
+              {view === "trash" && !searching ? (
                 "Trash is empty."
-              ) : query ? (
-                `No documents match "${query}".`
+              ) : searching ? (
+                `Nothing matches "${query.trim()}".`
+              ) : current ? (
+                <>
+                  <FolderOpen size={30} strokeWidth={1.5} />
+                  <p>
+                    <strong>{current.name}</strong> is empty. Drag documents here, add ones you already have, or start one from a template above.
+                  </p>
+                  <Button size="sm" variant="secondary" icon={<Plus size={15} />} onClick={() => setAdding(current)}>
+                    Add documents
+                  </Button>
+                </>
               ) : (
                 <>
                   <FileText size={28} />
@@ -302,38 +609,30 @@ export function HomePage() {
                 </>
               )}
             </div>
+          ) : layout === "list" ? (
+            <DocumentList folderRows={shownFolders} docs={shownDocs} folders={folders} summaries={summaries} trashed={view === "trash"} showLocation={showLocation} sort={sort} onSort={changeSort} folderActions={folderActions} documentActions={documentActions} />
+          ) : shownFolders.length && shownDocs.length ? (
+            <>
+              <h3 className="home-subhead">Folders</h3>
+              <div className="doc-grid">
+                {shownFolders.map((folder) => (
+                  <FolderCard key={folder.id} folder={folder} summary={summaries.get(folder.id)} actions={folderActions} />
+                ))}
+              </div>
+              <h3 className="home-subhead">Documents</h3>
+              <div className="doc-grid">
+                {shownDocs.map((doc) => (
+                  <DocumentCard key={doc.id} doc={doc} trashed={view === "trash"} folders={folders} showLocation={showLocation} actions={documentActions} />
+                ))}
+              </div>
+            </>
           ) : (
-            <div className="doc-grid">
-              {filtered.map((doc) => (
-                <DocumentCard
-                  key={doc.id}
-                  doc={doc}
-                  trashed={view === "trash"}
-                  onOpen={() => open(doc.id)}
-                  onRename={() => setRenaming(doc)}
-                  onDuplicate={async () => {
-                    const { document } = await post<{ document: Snapshot }>(`/api/documents/${doc.id}/duplicate`);
-                    toast(`Created "${document.meta.title}".`);
-                    void load();
-                  }}
-                  onTrash={() => void moveToTrash(doc)}
-                  onRestore={async () => {
-                    await patch(`/api/documents/${doc.id}`, { trashed: false });
-                    void load();
-                  }}
-                  onDelete={async () => {
-                    await del(`/api/documents/${doc.id}`);
-                    toast(`Deleted "${doc.title}" permanently.`);
-                    void load();
-                  }}
-                />
-              ))}
-            </div>
+            grid
           )}
         </section>
       </main>
 
-      {view === "recent" && (
+      {view !== "trash" && (
         <button type="button" className="home-fab" aria-label="New document" onClick={() => void create(templates[0]!)} disabled={creating !== null}>
           <Plus size={24} />
         </button>
@@ -341,12 +640,55 @@ export function HomePage() {
 
       <RenameDialog
         doc={renaming}
-        onClose={() => setRenaming(null)}
+        onClose={closeRename}
         onSave={async (title) => {
           if (!renaming) return;
           await patch(`/api/documents/${renaming.id}`, { title });
           setRenaming(null);
           void load();
+        }}
+      />
+      <FolderDialog
+        open={folderDialog !== null}
+        title={folderDialog?.mode === "edit" ? "Rename folder" : folderDialog?.parentId ? `New folder in "${folderName(folderDialog.parentId)}"` : "New folder"}
+        confirmLabel={folderDialog?.mode === "edit" ? "Save" : "Create"}
+        initial={folderDialogInitial}
+        onClose={closeFolderDialog}
+        onSave={async (name, color) => {
+          const state = folderDialog;
+          setFolderDialog(null);
+          if (state?.mode === "edit") void updateFolder(state.folder, { name, color });
+          else if (state) {
+            const folder = await createFolder(name, color, state.parentId);
+            if (folder) toast(`Created the folder "${folder.name}".`, { tone: "success", action: { label: "Open", run: () => openFolder(folder.id) } });
+          }
+        }}
+      />
+      <MoveDialog
+        item={moving}
+        folders={folderList}
+        onClose={closeMove}
+        onCreateFolder={(name, parentId) => createFolder(name, parentId ? (folders.get(parentId)?.color ?? "gray") : "gray", parentId)}
+        onMove={(target) => {
+          const item = moving;
+          setMoving(null);
+          if (!item) return;
+          if (item.kind === "document") void moveDocuments([item.id], target);
+          else {
+            const folder = folders.get(item.id);
+            if (folder) void moveFolder(folder, target);
+          }
+        }}
+      />
+      <AddDocumentsDialog
+        folder={adding}
+        documents={documents ?? []}
+        folders={folders}
+        onClose={closeAdd}
+        onAdd={(ids) => {
+          const folder = adding;
+          setAdding(null);
+          if (folder) void moveDocuments(ids, folder.id);
         }}
       />
     </div>
@@ -370,126 +712,6 @@ function TemplateThumb({ template }: { template: DocumentTemplate }) {
     );
   }
   return <TextCover lines={template.markdown.split("\n")} />;
-}
-
-/**
- * A first-page picture for each theme. CSS shows the one for the current
- * theme; the hidden one isn't fetched (lazy images that aren't displayed
- * don't load), and switching theme swaps them at once.
- */
-function ThemedCover({ light, dark, onError }: { light: string; dark: string; onError: () => void }) {
-  const [darkFailed, setDarkFailed] = useState(false);
-  return (
-    <>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img className={darkFailed ? undefined : "cover-light"} src={light} alt="" loading="lazy" onError={onError} />
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      {!darkFailed && <img className="cover-dark" src={dark} alt="" loading="lazy" onError={() => setDarkFailed(true)} />}
-    </>
-  );
-}
-
-/** A cover drawn from text, for documents (and templates) without a saved picture of their first page. */
-function TextCover({ lines: raw }: { lines: string[] }) {
-  const lines = raw.filter((line) => line.trim() && line.trim() !== "&nbsp;" && !line.startsWith("|") && line !== "\\pagebreak").slice(0, 14);
-  return (
-    <span className="template-thumb" aria-hidden>
-      {lines.map((line, index) => {
-        const heading = /^#{1,6}\s/.test(line);
-        const title = /\{\.title/.test(line);
-        const center = /align=center/.test(line);
-        const text = line
-          .replace(/^#{1,6}\s/, "")
-          .replace(/\s*\{[^}]*\}\s*$/, "")
-          .replace(/[*_`=]|<br>/g, " ")
-          .replace(/^[-\d.]+\s|^- \[ \]\s/, "• ");
-        return (
-          <span key={index} className={`thumb-line${title ? " is-title" : heading ? " is-heading" : ""}${center ? " is-center" : ""}`}>
-            {text}
-          </span>
-        );
-      })}
-    </span>
-  );
-}
-
-function DocumentCard({
-  doc,
-  trashed,
-  onOpen,
-  onRename,
-  onDuplicate,
-  onTrash,
-  onRestore,
-  onDelete,
-}: {
-  doc: DocumentMeta;
-  trashed: boolean;
-  onOpen: () => void;
-  onRename: () => void;
-  onDuplicate: () => void;
-  onTrash: () => void;
-  onRestore: () => void;
-  onDelete: () => void;
-}) {
-  const [menu, setMenu] = useState(false);
-  const [broken, setBroken] = useState(false);
-  const ref = useRef<HTMLButtonElement>(null);
-  const sentences = doc.preview.split(/(?<=[.!?])\s+/);
-  return (
-    <div className="doc-card" role="button" tabIndex={0} aria-label={doc.title} onClick={() => !trashed && onOpen()} onKeyDown={(event) => event.key === "Enter" && !trashed && onOpen()}>
-      <div className="doc-card-cover">
-        {doc.thumbnailAt && !broken ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <ThemedCover light={`/api/documents/${doc.id}/thumbnail?v=${doc.thumbnailAt}`} dark={`/api/documents/${doc.id}/thumbnail?v=${doc.thumbnailAt}&theme=dark`} onError={() => setBroken(true)} />
-        ) : doc.preview ? (
-          <TextCover lines={sentences} />
-        ) : (
-          <span className="template-thumb is-blank" />
-        )}
-      </div>
-      <div className="doc-card-info">
-        <span className="doc-card-title">{doc.title}</span>
-        <div className="doc-card-meta">
-          <FileText size={14} className="doc-card-icon" />
-          <span className="doc-card-time" title={`${doc.wordCount.toLocaleString()} words`}>{relativeTime(trashed && doc.trashedAt ? doc.trashedAt : Math.max(doc.updatedAt, doc.lastOpenedAt))}</span>
-          <button
-            ref={ref}
-            type="button"
-            className="icon-btn icon-btn-sm doc-card-menu"
-            aria-label="Document actions"
-            onClick={(event) => {
-              event.stopPropagation();
-              setMenu(true);
-            }}
-          >
-            <MoreVertical size={16} />
-          </button>
-        </div>
-      </div>
-      <Menu
-        open={menu}
-        onClose={() => setMenu(false)}
-        anchor={ref}
-        placement="bottom-end"
-        items={
-          trashed
-            ? [
-                { label: "Restore", icon: <RotateCcw size={14} />, onSelect: onRestore },
-                { kind: "separator" },
-                { label: "Delete forever", icon: <Trash2 size={14} />, danger: true, onSelect: onDelete },
-              ]
-            : [
-                { label: "Open", icon: <FileText size={14} />, onSelect: onOpen },
-                { label: "Rename", icon: <Pencil size={14} />, onSelect: onRename },
-                { label: "Make a copy", icon: <Copy size={14} />, onSelect: onDuplicate },
-                { kind: "separator" },
-                { label: "Move to trash", icon: <Trash2 size={14} />, danger: true, onSelect: onTrash },
-              ]
-        }
-      />
-    </div>
-  );
 }
 
 function RenameDialog({ doc, onClose, onSave }: { doc: DocumentMeta | null; onClose: () => void; onSave: (title: string) => void }) {

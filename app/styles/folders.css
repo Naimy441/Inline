@@ -1,0 +1,815 @@
+/* Folders, breadcrumbs and the list layout on the home page. */
+
+/* Each folder color is one token; tints are mixed from it, so both themes work. */
+.folder-gray { --folder: #7a776f; }
+.folder-clay { --folder: #c96442; }
+.folder-amber { --folder: #c48812; }
+.folder-green { --folder: #2f8a52; }
+.folder-teal { --folder: #198a86; }
+.folder-blue { --folder: #3b6fd8; }
+.folder-violet { --folder: #7b5bd6; }
+.folder-rose { --folder: #cf4677; }
+
+:root[data-theme="dark"] .folder-gray { --folder: #a5a29a; }
+:root[data-theme="dark"] .folder-clay { --folder: #e08a6a; }
+:root[data-theme="dark"] .folder-amber { --folder: #e2b14c; }
+:root[data-theme="dark"] .folder-green { --folder: #62c58a; }
+:root[data-theme="dark"] .folder-teal { --folder: #4dc2bd; }
+:root[data-theme="dark"] .folder-blue { --folder: #7ea6ff; }
+:root[data-theme="dark"] .folder-violet { --folder: #a98ff6; }
+:root[data-theme="dark"] .folder-rose { --folder: #f27ea8; }
+
+.folder-glyph {
+  flex: none;
+  color: var(--folder);
+}
+
+.color-dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--folder);
+}
+
+/* --- toolbar ------------------------------------------------------------- */
+
+.home-spacer {
+  flex: 1;
+}
+
+.home-toolbar {
+  gap: 6px;
+}
+
+.layout-toggle button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 9px;
+}
+
+.home-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 12px;
+  vertical-align: 1px;
+}
+
+.home-search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--surface-hover);
+  color: var(--muted);
+}
+
+.home-search-clear:hover {
+  color: var(--text);
+}
+
+.home-subhead {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+.doc-grid + .home-subhead {
+  margin-top: 28px;
+}
+
+.is-dragging {
+  opacity: 0.4;
+}
+
+/* --- breadcrumbs ----------------------------------------------------------- */
+
+.home-location {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  margin: -2px 0 14px;
+}
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  margin-left: -8px;
+}
+
+.crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 240px;
+  height: 36px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s, box-shadow 0.12s;
+}
+
+.crumb > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+button.crumb:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.crumb.is-current {
+  flex-shrink: 0;
+  max-width: min(360px, 60%);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.crumb.is-drop {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.crumb-sep {
+  flex: none;
+  color: var(--faint);
+}
+
+.crumb-caret {
+  flex: none;
+  color: var(--muted);
+}
+
+/* --- folder blocks --------------------------------------------------------- */
+
+.folder-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.2s var(--ease), transform 0.2s var(--ease);
+}
+
+.folder-card:hover,
+.folder-card:focus-visible {
+  border-color: var(--folder);
+  box-shadow: var(--shadow-sm);
+  outline: none;
+}
+
+.folder-card.is-drop {
+  border-color: var(--folder);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--folder) 30%, transparent), var(--shadow-md);
+  transform: scale(1.02);
+}
+
+.folder-card-cover {
+  aspect-ratio: 1 / 1;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--folder) 11%, var(--surface-2));
+}
+
+.folder-mosaic {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 8px;
+  height: 100%;
+}
+
+.folder-tile {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 5px;
+  background: var(--paper);
+  border: 1px solid color-mix(in srgb, var(--folder) 16%, var(--border));
+  box-shadow: 0 1px 2px rgba(31, 30, 28, 0.08);
+  transition: transform 0.22s var(--ease), box-shadow 0.22s var(--ease);
+}
+
+.folder-card:hover .folder-tile:not(.is-slot) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 10px rgba(31, 30, 28, 0.12);
+}
+
+.folder-card:hover .folder-tile:nth-child(2) {
+  transition-delay: 30ms;
+}
+
+.folder-card:hover .folder-tile:nth-child(3) {
+  transition-delay: 60ms;
+}
+
+.folder-card:hover .folder-tile:nth-child(4) {
+  transition-delay: 90ms;
+}
+
+/* A tile shows the top of the document's first page. */
+.folder-tile img,
+.folder-tile .template-thumb {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 8.5 / 11;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.folder-tile img {
+  background: #fff;
+}
+
+.folder-tile .template-thumb {
+  gap: 2px;
+  padding: 8px 7px;
+  background: var(--paper);
+}
+
+.folder-tile .thumb-line {
+  font-size: 4px;
+}
+
+.folder-tile .thumb-line.is-heading {
+  font-size: 5px;
+  margin-top: 1px;
+}
+
+.folder-tile .thumb-line.is-title {
+  font-size: 6.5px;
+  margin-bottom: 2px;
+}
+
+.folder-tile.is-slot {
+  background: transparent;
+  border: 1.5px dashed color-mix(in srgb, var(--folder) 28%, var(--border));
+  box-shadow: none;
+}
+
+.folder-tile.is-more {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border-color: transparent;
+  background: color-mix(in srgb, var(--folder) 18%, var(--surface));
+  color: color-mix(in srgb, var(--folder) 75%, var(--text));
+  box-shadow: none;
+  font-size: 11.5px;
+  font-weight: 500;
+  text-align: center;
+}
+
+.folder-tile.is-more strong {
+  font-size: 22px;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.folder-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 100%;
+  border: 1.5px dashed color-mix(in srgb, var(--folder) 30%, var(--border));
+  border-radius: 6px;
+  color: color-mix(in srgb, var(--folder) 60%, var(--muted));
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.doc-card-location {
+  display: inline-flex;
+  flex: none;
+}
+
+/* --- list layout ----------------------------------------------------------- */
+
+.doc-list {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.doc-list-head,
+.doc-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 130px 84px 36px;
+  align-items: center;
+  gap: 12px;
+  padding: 0 8px 0 14px;
+}
+
+.doc-list.has-location .doc-list-head,
+.doc-list.has-location .doc-row {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 200px) 130px 84px 36px;
+}
+
+.doc-list-head {
+  height: 38px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.doc-list-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  justify-self: start;
+  height: 26px;
+  margin-left: -6px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.doc-list-sort:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.doc-list-sort.is-active {
+  color: var(--text);
+}
+
+.doc-list-head .doc-list-words {
+  justify-self: end;
+  margin-right: -6px;
+  margin-left: 0;
+}
+
+.doc-row {
+  min-height: 54px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.doc-row + .doc-row {
+  border-top: 1px solid var(--border);
+}
+
+.doc-row:hover,
+.doc-row:focus-visible {
+  background: var(--surface-hover);
+  outline: none;
+}
+
+.doc-row.is-drop {
+  background: color-mix(in srgb, var(--folder) 14%, var(--surface));
+  box-shadow: inset 0 0 0 2px var(--folder);
+}
+
+.doc-row-name {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.doc-row-thumb {
+  flex: none;
+  width: 30px;
+  height: 38px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--paper);
+}
+
+.doc-row-thumb img,
+.doc-row-thumb .template-thumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 4px 3px;
+  gap: 1px;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  object-fit: cover;
+  object-position: top;
+}
+
+.doc-row-thumb img {
+  padding: 0;
+  background: #fff;
+}
+
+.doc-row-thumb .thumb-line {
+  font-size: 2.5px;
+}
+
+.doc-row-thumb .thumb-line.is-title,
+.doc-row-thumb .thumb-line.is-heading {
+  font-size: 3.5px;
+  margin: 0;
+}
+
+.doc-row-thumb.is-folder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-color: transparent;
+  background: color-mix(in srgb, var(--folder) 14%, var(--surface));
+}
+
+.doc-row-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-weight: 500;
+  font-size: 13.5px;
+}
+
+.doc-row-title > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-row-sub {
+  display: none;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.doc-row.is-folder .doc-row-sub {
+  display: block;
+}
+
+.doc-list-location,
+.doc-list-modified,
+.doc-list-words {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.doc-row .doc-list-words {
+  text-align: right;
+}
+
+.doc-row .doc-card-menu {
+  justify-self: end;
+}
+
+/* --- dialogs --------------------------------------------------------------- */
+
+.folder-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.folder-form-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.folder-form-name .input {
+  flex: 1;
+}
+
+.color-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-left: 32px;
+}
+
+.color-swatch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--folder);
+  color: #fff;
+  transition: transform 0.12s var(--ease), box-shadow 0.12s;
+}
+
+.color-swatch:hover {
+  transform: scale(1.1);
+}
+
+.color-swatch.is-active {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--folder);
+}
+
+.folder-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: min(340px, 50vh);
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.folder-pick {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.folder-pick > span:not(.folder-pick-note) {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-pick:hover:not(:disabled):not(.is-new) {
+  background: var(--surface-hover);
+}
+
+.folder-pick.is-selected {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 500;
+}
+
+.folder-pick:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.folder-pick-note {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.folder-pick.is-new {
+  color: var(--muted);
+}
+
+.folder-pick.is-new .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.move-new-folder {
+  margin-right: auto;
+}
+
+.add-docs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.add-docs-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 6px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.add-docs-search:focus-within {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 18%, transparent);
+}
+
+.add-docs-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+}
+
+.add-docs-all {
+  flex: none;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--surface-hover);
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.add-docs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: min(380px, 52vh);
+  overflow-y: auto;
+  margin: 0 -6px;
+  padding: 0 6px;
+}
+
+.add-docs-empty {
+  margin: 0;
+  padding: 28px 0;
+  text-align: center;
+  color: var(--muted);
+}
+
+.add-doc {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.add-doc:hover {
+  background: var(--surface-hover);
+}
+
+.add-doc.is-picked {
+  background: var(--accent-soft);
+}
+
+.add-doc-check {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: #fff;
+}
+
+.add-doc.is-picked .add-doc-check {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.add-doc-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.add-doc-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.add-doc-where {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+@media (max-width: 720px) {
+  .home-toolbar .btn:last-of-type {
+    margin-right: 0;
+  }
+  .home-toolbar .segmented button {
+    padding: 0 11px;
+  }
+  .home-toolbar .layout-toggle button {
+    padding: 0 9px;
+  }
+  .home-target {
+    display: none;
+  }
+  .crumb {
+    height: 40px;
+    font-size: 16px;
+    max-width: 140px;
+  }
+  .crumb.is-current {
+    max-width: 70%;
+  }
+  /* Inside a folder, the way back to the top is just the house icon. */
+  .crumbs > button.crumb:first-child > span {
+    display: none;
+  }
+  .home-location .btn {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    justify-content: center;
+  }
+  .home-location .btn-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .folder-card-cover {
+    padding: 10px;
+  }
+  .folder-mosaic {
+    gap: 6px;
+  }
+  .doc-list-head {
+    display: none;
+  }
+  .doc-row,
+  .doc-list.has-location .doc-row {
+    grid-template-columns: minmax(0, 1fr) 40px;
+    min-height: 60px;
+    padding: 0 4px 0 12px;
+  }
+  .doc-row .doc-list-location,
+  .doc-row .doc-list-modified,
+  .doc-row .doc-list-words {
+    display: none;
+  }
+  .doc-row-sub {
+    display: block;
+  }
+  .doc-row-title {
+    font-size: 14.5px;
+  }
+  .doc-row .doc-card-menu {
+    min-width: 36px;
+    height: 36px;
+  }
+}

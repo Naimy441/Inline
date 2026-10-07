@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { docxTitle, docxToDoc, DocxImportError } from "@/lib/doc/docxImport";
 import type { DocumentMeta } from "@/lib/doc/settings";
 import { HttpError, json, route } from "@/lib/server/http";
+import { folderExists } from "@/lib/server/folders";
 import { documentHub } from "@/lib/server/hub";
 import { saveUpload, uploadExtension } from "@/lib/server/store";
 import { openZip, readZip, ZipError } from "@/lib/server/unzip";
@@ -12,7 +13,7 @@ const MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024;
 const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 
 /** Create a document from a .docx package. Embedded images become uploads. */
-async function importDocx(data: Uint8Array, fileName: string) {
+async function importDocx(data: Uint8Array, fileName: string, folderId: string | null) {
   let doc;
   let parts;
   try {
@@ -31,7 +32,7 @@ async function importDocx(data: Uint8Array, fileName: string) {
     throw error;
   }
   const title = docxTitle(parts) || fileName.replace(/\.docx$/i, "") || "Imported document";
-  return documentHub().create({ title, doc: doc.toJSON() });
+  return documentHub().create({ title, doc: doc.toJSON(), folderId });
 }
 
 /**
@@ -39,7 +40,7 @@ async function importDocx(data: Uint8Array, fileName: string) {
  * Google Drive (Takeout saves each Google Doc as a .docx). Other files in the
  * archive are skipped; a document that can't be read doesn't stop the rest.
  */
-async function importArchive(data: Uint8Array) {
+async function importArchive(data: Uint8Array, folderId: string | null) {
   let entries;
   try {
     entries = openZip(data);
@@ -55,7 +56,7 @@ async function importArchive(data: Uint8Array) {
   const failed: { name: string; error: string }[] = [];
   for (const name of names) {
     try {
-      const live = await importDocx(entries.get(name)!(), baseName(name));
+      const live = await importDocx(entries.get(name)!(), baseName(name), folderId);
       documents.push(live.snapshot().meta);
     } catch (error) {
       if (error instanceof HttpError) failed.push({ name, error: error.message });
@@ -70,17 +71,21 @@ async function importArchive(data: Uint8Array) {
 /**
  * Import a Word document (.docx) as a new Inline document, or a ZIP of them
  * (a Google Takeout export, for example) as one new document per file.
+ * An optional "folderId" field files them in that folder.
  */
 export const POST = route(async (request) => {
   const form = await request.formData().catch(() => null);
   const file = form?.get("file");
   if (!(file instanceof File)) throw new HttpError(400, 'Send the file as multipart form field "file".');
+  const folder = form?.get("folderId");
+  const folderId = typeof folder === "string" && folder ? folder : null;
+  if (folderId && !(await folderExists(folderId))) throw new HttpError(404, "That folder was not found.");
   if (/\.zip$/i.test(file.name)) {
     if (file.size > MAX_ARCHIVE_BYTES) throw new HttpError(413, "ZIP archives can be up to 1 GB. In Google Takeout, pick a smaller archive size to split the export.");
-    return importArchive(new Uint8Array(await file.arrayBuffer()));
+    return importArchive(new Uint8Array(await file.arrayBuffer()), folderId);
   }
   if (file.size > MAX_IMPORT_BYTES) throw new HttpError(413, "Word files can be up to 50 MB.");
   if (!/\.docx$/i.test(file.name)) throw new HttpError(415, "Only Word (.docx) files and ZIP archives of them can be imported here. Older .doc files need saving as .docx first.");
-  const live = await importDocx(new Uint8Array(await file.arrayBuffer()), file.name);
+  const live = await importDocx(new Uint8Array(await file.arrayBuffer()), file.name, folderId);
   return json({ document: live.snapshot() }, { status: 201 });
 });
