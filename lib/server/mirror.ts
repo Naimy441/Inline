@@ -22,7 +22,8 @@ import { readSettingsFile, writeSettingsFile } from "@/lib/server/store";
  * It never slows the editor down. Saves only poke it; a background pass runs
  * once things go quiet, works out what changed from document metadata alone
  * (no document is read unless its Word file must be rewritten), then writes
- * one file at a time, yielding between files. A manifest in the folder
+ * one file at a time, yielding between files. The first pass runs when the
+ * server is first used (see documentHub()). A manifest in the folder
  * remembers which file belongs to which document, so renames, moves, trashing
  * and deleting move or remove that file rather than leaving copies behind.
  */

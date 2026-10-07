@@ -999,7 +999,13 @@ function cleanTabTitle(value: string) {
 const globalForHub = globalThis as unknown as { __inlineHub?: DocumentHub; __inlineHubExitHook?: boolean };
 
 export function documentHub(): DocumentHub {
-  if (!globalForHub.__inlineHub) globalForHub.__inlineHub = new DocumentHub();
+  if (!globalForHub.__inlineHub) {
+    globalForHub.__inlineHub = new DocumentHub();
+    // Bring the Word copies on disk up to date once the server is first used. This runs from a
+    // request, not a startup hook: code loaded at startup is bundled apart from the routes, and a
+    // hub made there would hold documents built from a different copy of the schema.
+    libraryChanged();
+  }
   if (!globalForHub.__inlineHubExitHook) {
     globalForHub.__inlineHubExitHook = true;
     const flush = () => {
