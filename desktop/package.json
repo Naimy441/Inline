@@ -6,8 +6,8 @@
   "private": true,
   "description": "Inline for macOS, Windows and Linux: the Inline web app in a native window, with its server built in.",
   "homepage": "https://github.com/Naimy441/Inline",
-  "author": "Inline",
-  "license": "UNLICENSED",
+  "author": "Abdullah Naim",
+  "license": "MIT",
   "main": "src/main.mjs",
   "type": "module",
   "scripts": {

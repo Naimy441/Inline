@@ -2,6 +2,7 @@
   "name": "inline",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "Inline: a paginated document editor with Claude Code built in.",
   "scripts": {
     "dev": "next dev",

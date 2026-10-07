@@ -11,6 +11,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/Naimy441/Inline/ci.yml?branch=main&label=CI)](https://github.com/Naimy441/Inline/actions/workflows/ci.yml)
 [![Desktop build](https://img.shields.io/github/actions/workflow/status/Naimy441/Inline/desktop.yml?label=desktop%20build)](https://github.com/Naimy441/Inline/actions/workflows/desktop.yml)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-555)
+[![License: MIT](https://img.shields.io/badge/license-MIT-2f6feb)](LICENSE)
 [![Powered by Claude Code](https://img.shields.io/badge/powered%20by-Claude%20Code-d97757)](https://www.anthropic.com/claude-code)
 
 [![Download for macOS (Apple silicon)](https://img.shields.io/badge/macOS-Apple%20silicon-000?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/Naimy441/Inline/releases/latest/download/Inline-mac-arm64.dmg)
@@ -236,3 +237,7 @@ GENERAL FEATURES
 - Focus Mode (no or less AI)
 - Collaborative Editing
 - Light/Dark Mode
+
+## License
+
+Inline is released under the [MIT License](LICENSE).

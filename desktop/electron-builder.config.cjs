@@ -8,7 +8,7 @@
 module.exports = {
   appId: "com.naimy441.inline",
   productName: "Inline",
-  copyright: "Copyright © Inline",
+  copyright: "Copyright © 2026 Abdullah Naim",
   directories: { output: "dist", buildResources: "resources" },
   files: ["src/**/*", "resources/icon.png", "package.json", "!**/*.map"],
   asar: true,
