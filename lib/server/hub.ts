@@ -380,20 +380,24 @@ export class LiveDocument {
     if (!comment) throw new Error(`No comment with id ${id}.`);
     const reply = { id: newId(10), author, body: body.trim(), createdAt: Date.now() };
     this.comments = this.comments.map((item) => (item.id === id ? { ...item, replies: [...item.replies, reply] } : item));
-    this.emit({ type: "comments", comments: this.comments });
-    this.schedulePersist();
+    this.commentsChanged();
     return reply;
   }
 
   setCommentResolved(id: string, resolved: boolean) {
     if (!this.comments.some((item) => item.id === id)) throw new Error(`No comment with id ${id}.`);
     this.comments = this.comments.map((item) => (item.id === id ? { ...item, resolved } : item));
-    this.emit({ type: "comments", comments: this.comments });
-    this.schedulePersist();
+    this.commentsChanged();
   }
 
   editComment(id: string, body: string) {
     this.comments = this.comments.map((item) => (item.id === id ? { ...item, body: body.trim() } : item));
+    this.commentsChanged();
+  }
+
+  /** A change to comments alone: the Word copy holds them too, so it counts as an update. */
+  private commentsChanged() {
+    this.meta = { ...this.meta, updatedAt: Date.now() };
     this.emit({ type: "comments", comments: this.comments });
     this.schedulePersist();
   }
@@ -670,6 +674,9 @@ export type CreateDocumentInput = {
   folderId?: string | null;
 };
 
+/** When the last document was created, so creation times never tie (see create). */
+let lastCreatedAt = 0;
+
 class DocumentHub {
   private metas = new FileSummaryCache<DocumentMeta>();
   private open = new Map<string, LiveDocument>();
@@ -708,7 +715,9 @@ class DocumentHub {
   }
 
   async create(input: CreateDocumentInput = {}): Promise<LiveDocument> {
-    const now = Date.now();
+    // Creation times never tie (an import makes many documents a millisecond apart), so "older" always has an answer.
+    const now = Math.max(Date.now(), lastCreatedAt + 1);
+    lastCreatedAt = now;
     let doc: PMNode;
     if (input.doc) doc = loadDoc(input.doc);
     else if (input.markdown?.trim()) doc = ensureBlockIds(markdownToDoc(input.markdown));

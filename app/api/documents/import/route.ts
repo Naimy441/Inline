@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { docxTitle, docxToDoc, DocxImportError } from "@/lib/doc/docxImport";
+import { docxTitle, readDocx, DocxImportError } from "@/lib/doc/docxImport";
 import type { DocumentMeta } from "@/lib/doc/settings";
 import { HttpError, json, route } from "@/lib/server/http";
 import { MAX_FOLDER_DEPTH } from "@/lib/doc/folders";
@@ -14,13 +14,17 @@ const MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024;
 const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 
 
-/** Create a document from a .docx package. Embedded images become uploads. */
+/**
+ * Create a document from a .docx package, with its page setup, fonts, header
+ * and footer, and comments. Embedded images become uploads; a Google Doc's
+ * tabs become tabs.
+ */
 async function importDocx(data: Uint8Array, fileName: string, folderId: string | null, options: { preferFileName?: boolean } = {}) {
-  let doc;
+  let imported;
   let parts;
   try {
     parts = readZip(data);
-    doc = await docxToDoc(parts, {
+    imported = await readDocx(parts, {
       saveImage: async (image, mime) => {
         const extension = uploadExtension(mime);
         if (!extension) return null;
@@ -36,7 +40,18 @@ async function importDocx(data: Uint8Array, fileName: string, folderId: string |
   // Google Takeout names each file after its Google Doc, which is a better title than the file's own properties.
   const named = fileName.replace(/\.docx$/i, "").trim();
   const title = (options.preferFileName && named) || docxTitle(parts) || named || "Imported document";
-  return documentHub().create({ title, doc: doc.toJSON(), folderId });
+  const hub = documentHub();
+  const [first, ...rest] = imported.tabs;
+  const tabName = (tab: { title: string | null }, index: number) => (imported.tabs.length > 1 ? tab.title || `Tab ${index + 1}` : undefined);
+  const root = await hub.create({ title, doc: first!.doc.toJSON(), settings: imported.settings, comments: first!.comments, folderId, tabTitle: tabName(first!, 0) });
+  if (rest.length) {
+    const ids = [root.id];
+    for (const [index, tab] of rest.entries()) {
+      ids.push((await hub.create({ title: root.meta.title, doc: tab.doc.toJSON(), settings: imported.settings, comments: tab.comments, parentId: root.id, tabTitle: tabName(tab, index + 1) })).id);
+    }
+    root.setTabMeta({ tabs: ids });
+  }
+  return root;
 }
 
 /**

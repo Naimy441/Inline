@@ -3,7 +3,7 @@
  * the agent tools. Everything here is plain JSON.
  */
 
-export type PaperSize = "letter" | "a4" | "legal";
+export type PaperSize = "letter" | "a4" | "legal" | "statement";
 export type Orientation = "portrait" | "landscape";
 export type HorizontalAlign = "left" | "center" | "right";
 
@@ -12,6 +12,7 @@ export const PAPER_SIZES: Record<PaperSize, { label: string; width: number; heig
   letter: { label: "Letter (8.5\" × 11\")", width: 8.5, height: 11 },
   a4: { label: "A4 (8.27\" × 11.69\")", width: 210 / 25.4, height: 297 / 25.4 },
   legal: { label: "Legal (8.5\" × 14\")", width: 8.5, height: 14 },
+  statement: { label: "Statement (5.5\" × 8.5\")", width: 5.5, height: 8.5 },
 };
 
 export type Margins = { top: number; right: number; bottom: number; left: number };
@@ -151,7 +152,7 @@ export function normalizeSettings(input: unknown, base: DocumentSettings = DEFAU
   const pn = (raw.pageNumbers && typeof raw.pageNumbers === "object" ? raw.pageNumbers : {}) as Partial<PageNumberSettings>;
   return {
     pageSetup: {
-      paperSize: oneOf(page.paperSize, ["letter", "a4", "legal"] as const, base.pageSetup.paperSize),
+      paperSize: oneOf(page.paperSize, Object.keys(PAPER_SIZES) as PaperSize[], base.pageSetup.paperSize),
       orientation: oneOf(page.orientation, ["portrait", "landscape"] as const, base.pageSetup.orientation),
       margins: {
         top: num(margins.top, base.pageSetup.margins.top, 0, 3),

@@ -125,6 +125,7 @@ function blockAttrTokens(node: PMNode, context: BlockContext): string[] {
   const textIndent = Number(node.attrs.textIndent) || 0;
   if (textIndent > 0) tokens.push(`first-line=${textIndent}`);
   if (textIndent < 0) tokens.push(`hanging=${-textIndent}`);
+  if (node.attrs.dir === "rtl") tokens.push("dir=rtl");
   return tokens;
 }
 
@@ -731,6 +732,7 @@ class BlockBuilder {
       const hanging = Number(spec.values.hanging);
       if (Number.isFinite(firstLine) && firstLine > 0) nodeAttrs.textIndent = Math.min(3, firstLine);
       else if (Number.isFinite(hanging) && hanging > 0) nodeAttrs.textIndent = -Math.min(3, hanging);
+      if (spec.values.dir === "rtl") nodeAttrs.dir = "rtl";
     }
     if (nodeType !== "heading") delete nodeAttrs.level;
     let content = this.inline(tokens);

@@ -43,6 +43,27 @@ describe("importing Word documents", () => {
     assert.match(markdown, /\| Rent \| 1200 \|/);
   });
 
+  test("a Google Doc keeps its tabs, settings and comments", async () => {
+    const { createZip } = await import("@/lib/doc/zip");
+    const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+    const title = (text: string) => `<w:p><w:pPr><w:pStyle w:val="Title"/><w:sectPr/></w:pPr><w:r><w:t>${text}</w:t></w:r></w:p>`;
+    const google = createZip([
+      { name: "word/document.xml", data: `<w:document ${W}><w:body>${title("Notes")}<w:p><w:pPr><w:sectPr/></w:pPr><w:commentRangeStart w:id="0"/><w:r><w:t>Idea</w:t></w:r><w:commentRangeEnd w:id="0"/></w:p>${title("Draft")}<w:p><w:r><w:t>Once upon a time</w:t></w:r></w:p><w:sectPr><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720"/></w:sectPr></w:body></w:document>` },
+      { name: "word/styles.xml", data: `<w:styles ${W}><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/></w:style></w:styles>` },
+      { name: "word/comments.xml", data: `<w:comments ${W}><w:comment w:id="0" w:author="Sam" w:date="2024-01-01T00:00:00Z"><w:p><w:r><w:t>Expand this</w:t></w:r></w:p></w:comment></w:comments>` },
+    ]);
+    const response = await upload("Story.docx", google);
+    assert.equal(response.status, 201);
+    const { document } = (await response.json()) as { document: { meta: { id: string } } };
+    const tabs = await hub.tabs(document.meta.id);
+    assert.deepEqual(tabs.map((tab) => tab.title), ["Notes", "Draft"]);
+    const root = (await hub.get(document.meta.id))!;
+    assert.equal(root.meta.settings.pageSetup.margins.top, 0.5);
+    assert.equal(root.snapshot().comments[0]?.body, "Sam: Expand this");
+    const { docToMarkdown } = await import("@/lib/doc/markdown");
+    assert.equal(docToMarkdown((await hub.get(tabs[1]!.id))!.doc).trim(), "Once upon a time");
+  });
+
   test("other files and broken Word files are refused with a clear message", async () => {
     assert.equal((await upload("notes.doc", "old binary")).status, 415);
     const broken = await upload("broken.docx", "this is not a zip");
@@ -84,6 +105,9 @@ describe("importing a ZIP of Word documents (Google Takeout)", () => {
     const { listFolders } = await import("@/lib/server/folders");
     assert.equal((await listFolders()).find((folder) => folder.id === budget.folderId)?.name, "Projects");
     assert.equal((result.documents.find((doc) => doc.title === "Trip notes") as { folderId?: string }).folderId, undefined);
+    // Documents made in the same millisecond still have an order (the Word copies number namesakes by it).
+    const created = result.documents.map((doc) => (doc as { createdAt?: number }).createdAt!);
+    assert.equal(new Set(created).size, created.length);
     const { docToMarkdown } = await import("@/lib/doc/markdown");
     const notes = result.documents.find((doc) => doc.title === "Trip notes")!;
     assert.equal(docToMarkdown((await hub.get(notes.id))!.doc).trim(), "Hello");

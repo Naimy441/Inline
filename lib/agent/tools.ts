@@ -24,7 +24,7 @@ import {
 } from "@/lib/doc/editing";
 import { markdownToDoc, serializeDoc } from "@/lib/doc/markdown";
 import { changedRanges, isUserSuggestion } from "@/lib/doc/review";
-import { FONT_FAMILIES, PAPER_SIZES, type DocumentSettings } from "@/lib/doc/settings";
+import { FONT_FAMILIES, PAPER_SIZES, type DocumentSettings, type PaperSize } from "@/lib/doc/settings";
 import { documentHub, type LiveDocument } from "@/lib/server/hub";
 import { lintWriting } from "@/lib/writing/lint";
 import { readFile } from "node:fs/promises";
@@ -666,7 +666,7 @@ export const TOOLS = [
       font_size: z.number().min(6).max(96).optional().describe("Default size in points."),
       line_spacing: z.number().min(0.8).max(4).optional(),
       paragraph_spacing: z.number().min(0).max(72).optional().describe("Points after each paragraph."),
-      paper_size: z.enum(Object.keys(PAPER_SIZES) as ["letter", "a4", "legal"]).optional(),
+      paper_size: z.enum(Object.keys(PAPER_SIZES) as [PaperSize, ...PaperSize[]]).optional(),
       orientation: z.enum(["portrait", "landscape"]).optional(),
       margins: z
         .object({ top: z.number().optional(), right: z.number().optional(), bottom: z.number().optional(), left: z.number().optional() })

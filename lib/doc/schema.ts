@@ -29,6 +29,15 @@ export function safeHref(href: unknown): string | null {
 }
 
 export const ALIGNMENTS: Align[] = ["left", "center", "right", "justify"];
+
+/** Numbered-list marker styles, as CSS names them. */
+export const LIST_NUMBERINGS = ["decimal", "lower-alpha", "upper-alpha", "lower-roman", "upper-roman"] as const;
+export type ListNumbering = (typeof LIST_NUMBERINGS)[number];
+
+/** The marker style a numbered list gets by default at a depth (0 for the top), as app/styles/document.css numbers them. */
+export function defaultListNumbering(depth: number): ListNumbering {
+  return depth === 0 ? "decimal" : depth === 1 ? "lower-alpha" : "lower-roman";
+}
 export const MAX_INDENT = 8;
 
 const blockAttrs = {
@@ -40,14 +49,23 @@ const blockAttrs = {
   spaceAfter: { default: null as number | null },
   /** First-line indent in inches; negative is a hanging indent (works cited, bibliographies). */
   textIndent: { default: null as number | null },
+  /**
+   * "rtl" for right-to-left text (Arabic, Hebrew). As in Word, "left" and
+   * "right" alignment then mean the paragraph's start and end: a right-to-left
+   * paragraph aligned "left" sits at the right.
+   */
+  dir: { default: null as "rtl" | null },
 };
 
 function blockStyle(node: PMNode, extra = ""): string {
   const parts: string[] = [];
-  const { align, indent, lineHeight, spaceBefore, spaceAfter, textIndent } = node.attrs;
-  if (align && align !== "left") parts.push(`text-align: ${align}`);
-  if (indent) parts.push(`margin-left: ${Number(indent) * 0.5}in`);
-  if (textIndent) parts.push(`text-indent: ${textIndent}in`, ...(textIndent < 0 ? [`padding-left: ${-textIndent}in`] : []));
+  const { align, indent, lineHeight, spaceBefore, spaceAfter, textIndent, dir } = node.attrs;
+  const rtl = dir === "rtl";
+  // Right-to-left blocks align and indent from their start, the right.
+  if (align && align !== "left") parts.push(`text-align: ${rtl && align === "right" ? "left" : align}`);
+  const side = rtl ? "right" : "left";
+  if (indent) parts.push(`margin-${side}: ${Number(indent) * 0.5}in`);
+  if (textIndent) parts.push(`text-indent: ${textIndent}in`, ...(textIndent < 0 ? [`padding-${side}: ${-textIndent}in`] : []));
   if (lineHeight) parts.push(`line-height: ${lineHeight}`);
   if (spaceBefore != null) parts.push(`margin-top: ${spaceBefore}pt`);
   if (spaceAfter != null) parts.push(`margin-bottom: ${spaceAfter}pt`);
@@ -58,6 +76,7 @@ function blockStyle(node: PMNode, extra = ""): string {
 function blockDomAttrs(node: PMNode, extra: Record<string, string> = {}) {
   const attrs: Record<string, string> = { ...extra };
   if (node.attrs.id) attrs["data-id"] = node.attrs.id;
+  if (node.attrs.dir === "rtl") attrs.dir = "rtl";
   const style = blockStyle(node);
   if (style) attrs.style = style;
   return attrs;
@@ -74,8 +93,11 @@ export function parseTextIndent(value: string): number | null {
 
 function parseBlockAttrs(dom: HTMLElement) {
   const style = dom.style;
-  const align = (style?.textAlign || dom.getAttribute("align") || "left") as Align;
-  const marginLeft = style?.marginLeft || "";
+  const rtl = dom.getAttribute("dir") === "rtl";
+  let align = (style?.textAlign || dom.getAttribute("align") || "left") as Align;
+  // A right-to-left block's "right" is its start; its far edge, the left, is "right".
+  if (rtl && (align === "left" || align === "right")) align = align === "left" ? "right" : "left";
+  const marginLeft = (rtl ? style?.marginRight : style?.marginLeft) || "";
   let indent = 0;
   const inches = marginLeft.match(/^([\d.]+)in$/);
   const px = marginLeft.match(/^([\d.]+)px$/);
@@ -89,6 +111,7 @@ function parseBlockAttrs(dom: HTMLElement) {
     spaceBefore: null,
     spaceAfter: null,
     textIndent: parseTextIndent(style?.textIndent || ""),
+    dir: rtl ? ("rtl" as const) : null,
   };
 }
 
@@ -239,16 +262,25 @@ const nodes: Record<string, NodeSpec> = {
   ordered_list: {
     content: "list_item+",
     group: "block",
-    attrs: { id: { default: null }, order: { default: 1 } },
+    /** `numbering` is the marker style when it isn't the usual one for the list's depth (1., a., i.). */
+    attrs: { id: { default: null }, order: { default: 1 }, numbering: { default: null as ListNumbering | null } },
     parseDOM: [
       {
         tag: "ol",
-        getAttrs: (dom) => ({ order: Number((dom as HTMLElement).getAttribute("start") || 1) || 1 }),
+        getAttrs: (dom) => {
+          const el = dom as HTMLElement;
+          const type = el.style.listStyleType || ({ "1": "decimal", a: "lower-alpha", A: "upper-alpha", i: "lower-roman", I: "upper-roman" } as Record<string, string>)[el.getAttribute("type") ?? ""] || "";
+          return { order: Number(el.getAttribute("start") || 1) || 1, numbering: (LIST_NUMBERINGS as readonly string[]).includes(type) ? type : null };
+        },
       },
     ],
     toDOM: (node): DOMOutputSpec => [
       "ol",
-      { ...(node.attrs.order !== 1 ? { start: String(node.attrs.order) } : {}), ...(node.attrs.id ? { "data-id": node.attrs.id } : {}) },
+      {
+        ...(node.attrs.order !== 1 ? { start: String(node.attrs.order) } : {}),
+        ...(node.attrs.numbering ? { style: `list-style-type: ${node.attrs.numbering}` } : {}),
+        ...(node.attrs.id ? { "data-id": node.attrs.id } : {}),
+      },
       0,
     ],
   },

@@ -5,7 +5,7 @@ import { docToMarkdown } from "@/lib/doc/markdown";
 import { rejectHunks } from "@/lib/doc/review";
 import { joinTabs } from "@/lib/doc/tabs";
 import { HttpError, route, routeDocument } from "@/lib/server/http";
-import { documentHub, type LiveDocument } from "@/lib/server/hub";
+import { documentHub, tabTitle, type LiveDocument } from "@/lib/server/hub";
 import { loadImage } from "@/lib/server/images";
 
 type Context = { params: Promise<{ id: string }> };
@@ -35,7 +35,10 @@ export const GET = route(async (request, context: Context) => {
   const tabs = all ? (await documentHub().family(doc.id)).tabs : [doc];
   const content = joinTabs(tabs.map(textOf));
   let body: BodyInit;
-  if (format === "docx") body = (await documentToDocx(content, doc.meta, loadImage)) as Uint8Array<ArrayBuffer>;
+  if (format === "docx") {
+    const file = tabs.length > 1 ? await documentToDocx(tabs.map((tab, index) => ({ title: tabTitle(tab.meta, index), doc: textOf(tab), comments: tab.snapshot().comments })), doc.meta, loadImage) : await documentToDocx(content, doc.meta, loadImage, doc.snapshot().comments);
+    body = file as Uint8Array<ArrayBuffer>;
+  }
   else if (format === "html") body = documentHtmlFile(content, doc.meta);
   else if (format === "md") body = docToMarkdown(content);
   else body = docPlainText(content);

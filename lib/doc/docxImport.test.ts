@@ -3,7 +3,7 @@ import { deflateRawSync } from "node:zlib";
 import { describe, it } from "node:test";
 
 import { documentToDocx } from "./docx";
-import { docxTitle, docxToDoc, DocxImportError } from "./docxImport";
+import { docxTitle, docxToDoc, DocxImportError, readDocx } from "./docxImport";
 import { docToMarkdown, markdownToDoc } from "./markdown";
 import { DEFAULT_SETTINGS, type DocumentMeta } from "./settings";
 import { readZip, ZipError } from "@/lib/server/unzip";
@@ -127,6 +127,112 @@ describe("reading Word documents", () => {
     assert.equal(image.attrs.src, "/api/uploads/abc.png");
     assert.equal(image.attrs.alt, "Company logo");
     assert.equal(image.attrs.width, "100px");
+  });
+
+  it("reads Google Docs' page setup, body font, spacing and header into the settings", async () => {
+    const sect = '<w:sectPr><w:headerReference w:type="default" r:id="rId20"/><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="720" w:right="1080" w:bottom="720" w:left="1080"/></w:sectPr>';
+    const parts = readZip(
+      deflatedZip({
+        "word/document.xml": `<w:document ${W}><w:body>${p("Body")}${sect}</w:body></w:document>`,
+        "word/styles.xml": `<w:styles ${W}><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Times New Roman"/><w:sz w:val="24"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:line="480" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="normal"/></w:style></w:styles>`,
+        "word/_rels/document.xml.rels": `<Relationships xmlns="x"><Relationship Id="rId20" Type="header" Target="header1.xml"/></Relationships>`,
+        "word/header1.xml": `<w:hdr ${W}><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:t xml:space="preserve">Smith </w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>PAGE</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:hdr>`,
+      }),
+    );
+    const { settings, tabs } = await readDocx(parts);
+    assert.equal(settings.fontFamily, '"Times New Roman", Times, serif');
+    assert.equal(settings.fontSize, 12);
+    assert.equal(settings.lineSpacing, 2);
+    assert.equal(settings.paragraphSpacing, 0, "Word's default is no space after paragraphs");
+    assert.deepEqual(settings.pageSetup.margins, { top: 0.5, right: 0.75, bottom: 0.5, left: 0.75 });
+    assert.equal(settings.headerFooter.header, "Smith {page}");
+    assert.equal(settings.headerFooter.headerAlign, "right");
+    // The body font and size are the document's, so the text needs no marks for them.
+    assert.deepEqual(tabs[0]!.doc.firstChild!.firstChild!.marks, []);
+  });
+
+  it("formats text the way Word's styles show it, and lays out paragraphs with their spacing and indents", async () => {
+    const styles = `<w:styles ${W}><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial"/><w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="normal"/></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:rPr><w:color w:val="00AB44"/><w:sz w:val="28"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:rPr><w:sz w:val="32"/></w:rPr></w:style></w:styles>`;
+    const parts = readZip(
+      deflatedZip({
+        "word/document.xml": `<w:document ${W}><w:body>${[
+          p("Green", '<w:pStyle w:val="Heading1"/>'),
+          p("Plain heading", '<w:pStyle w:val="Heading2"/>'),
+          p("Indented", '<w:spacing w:before="240" w:after="0"/><w:ind w:firstLine="720"/>'),
+          p("Works cited", '<w:ind w:left="720" w:hanging="720"/>'),
+          p("Calibri", "", '<w:rFonts w:ascii="Calibri"/><w:highlight w:val="yellow"/>'),
+          p("Shaded", "", '<w:shd w:val="clear" w:fill="D9EAD3"/>'),
+          `<w:p><w:r><w:pict><v:rect xmlns:v="v" xmlns:o="o" style="width:0;height:1.5pt" o:hr="t"/></w:pict></w:r></w:p>`,
+        ].join("")}<w:sectPr/></w:body></w:document>`,
+        "word/styles.xml": styles,
+      }),
+    );
+    const doc = (await readDocx(parts)).tabs[0]!.doc;
+    const marks = (index: number) => Object.fromEntries(doc.child(index).firstChild!.marks.map((mark) => [mark.type.name, mark.attrs.color ?? mark.attrs.size ?? mark.attrs.family ?? true]));
+    assert.deepEqual(marks(0), { text_color: "#00ab44", font_size: "14pt" }, "a heading style's own size and color");
+    assert.deepEqual(marks(1), {}, "Heading 2 at its usual 16pt needs no marks");
+    assert.equal(doc.child(2).attrs.spaceBefore, 12);
+    assert.equal(doc.child(2).attrs.textIndent, 0.5);
+    assert.equal(doc.child(3).attrs.indent, 0);
+    assert.equal(doc.child(3).attrs.textIndent, -0.5, "a hanging indent");
+    assert.deepEqual(marks(4), { font_family: "Calibri, sans-serif", highlight: "#ffff00" });
+    assert.deepEqual(marks(5), { highlight: "#d9ead3" }, "shading behind text is a highlight");
+    assert.equal(doc.child(6).type.name, "horizontal_rule");
+  });
+
+  it("carries numbering on across an interruption and reads merged and shaded table cells", async () => {
+    const cell = (text: string, props = "") => `<w:tc>${props ? `<w:tcPr>${props}</w:tcPr>` : ""}${p(text)}</w:tc>`;
+    const parts = wordDocument(
+      [
+        p("Third", '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr>'),
+        p("A note between items"),
+        p("Fourth", '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr>'),
+        `<w:tbl><w:tr>${cell("Tall", '<w:vMerge w:val="restart"/><w:shd w:fill="FCE5CD"/>')}${cell("B1")}</w:tr><w:tr>${cell("", "<w:vMerge/>")}${cell("B2")}</w:tr></w:tbl>`,
+        p("After"),
+      ].join(""),
+    );
+    const doc = await docxToDoc(parts);
+    assert.equal(doc.child(0).attrs.order, 3);
+    assert.equal(doc.child(2).attrs.order, 4, "the list goes on from 3 to 4");
+    const table = doc.child(3);
+    assert.equal(table.childCount, 2);
+    assert.equal(table.child(0).child(0).attrs.rowspan, 2);
+    assert.equal(table.child(0).child(0).attrs.background, "#fce5cd");
+    assert.equal(table.child(1).childCount, 1, "the merged cell isn't repeated in the second row");
+    // Word gets the merge back, and no empty paragraph is added between the table and the next one.
+    const exported = new TextDecoder().decode(readZip(await documentToDocx(doc, meta, async () => null)).get("word/document.xml")!);
+    assert.match(exported, /<w:vMerge w:val="restart"\/>/);
+    assert.match(exported, /<w:vMerge\/><\/w:tcPr><w:p\/><\/w:tc>/);
+    assert.match(exported, /<\/w:tbl><w:p><w:r><w:t xml:space="preserve">After/);
+  });
+
+  it("brings comments along, with replies in their thread", async () => {
+    const comment = (id: string, author: string, date: string, text: string) => `<w:comment w:id="${id}" w:author="${author}" w:date="${date}"><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:comment>`;
+    const parts = wordDocument(
+      `<w:p><w:r><w:t xml:space="preserve">This is </w:t></w:r><w:commentRangeStart w:id="0"/><w:commentRangeStart w:id="1"/><w:r><w:t>difficult</w:t></w:r><w:commentRangeEnd w:id="0"/><w:commentRangeEnd w:id="1"/><w:r><w:t> to say.</w:t></w:r></w:p>`,
+      { "word/comments.xml": `<w:comments ${W}>${comment("0", "Sam", "2023-10-30T02:15:27Z", "Rephrase?")}${comment("1", "Writer", "2023-10-31T09:00:00Z", "Done")}</w:comments>` },
+    );
+    const { tabs } = await readDocx(parts);
+    const [thread] = tabs[0]!.comments;
+    assert.equal(tabs[0]!.comments.length, 1);
+    assert.equal(thread!.body, "Sam: Rephrase?");
+    assert.equal(thread!.quote, "difficult");
+    assert.deepEqual(thread!.replies.map((reply) => reply.body), ["Writer: Done"]);
+    const marked = tabs[0]!.doc.firstChild!.child(1);
+    assert.equal(marked.text, "difficult");
+    assert.equal(marked.marks.find((mark) => mark.type.name === "comment")?.attrs.id, thread!.id);
+  });
+
+  it("splits a Google Doc's tabs, which Google writes as titled sections", async () => {
+    const tabTitle = (text: string) => `<w:p><w:pPr><w:pStyle w:val="Title"/><w:sectPr/></w:pPr><w:r><w:t>${text}</w:t></w:r></w:p>`;
+    const sectionEnd = (text: string) => `<w:p><w:pPr><w:sectPr/></w:pPr><w:r><w:t>${text}</w:t></w:r></w:p>`;
+    const parts = wordDocument([tabTitle("Outline"), p("First tab"), sectionEnd("End of one"), tabTitle("Draft"), p("Second tab")].join(""));
+    const { tabs } = await readDocx(parts);
+    assert.deepEqual(tabs.map((tab) => tab.title), ["Outline", "Draft"]);
+    assert.equal(docToMarkdown(tabs[0]!.doc).trim(), "First tab\n\nEnd of one");
+    assert.equal(docToMarkdown(tabs[1]!.doc).trim(), "Second tab");
+    // A document read as one keeps everything in order.
+    assert.match(docToMarkdown(await docxToDoc(parts)), /Outline[\s\S]*First tab[\s\S]*Draft[\s\S]*Second tab/);
   });
 
   it("rejects files that aren't Word documents", async () => {

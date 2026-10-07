@@ -158,6 +158,71 @@ describe("Word copies on disk", () => {
     await runTool("write_document", { content: "Revised appendix." }, { author: "test", documentId: tab.id });
     await sync();
     assert.match(docxText(file("Handbook.docx")), /Revised appendix\./);
+    // Each tab is a section headed by its name, as Google Docs writes tabs, so the file reads back with its tabs.
+    const { readDocx } = await import("@/lib/doc/docxImport");
+    const back = await readDocx(readZip(new Uint8Array(readFileSync(file("Handbook.docx")))));
+    assert.deepEqual(back.tabs.map((item) => item.title), ["Tab 1", "Appendix"]);
+    assert.deepEqual(back.tabs.map((item) => item.doc.textContent), ["Chapter one text.", "Revised appendix."]);
+  });
+
+  test("comments are in the Word copy, and replying or resolving updates it", async () => {
+    const doc = await hub.create({ title: "Reviewed", markdown: "Please check this sentence." });
+    const comment = doc.addComment({ from: 14, to: 27, body: "Is this right?", author: "user" }, { kind: "system", label: "test" });
+    await doc.flush();
+    await sync();
+    const commentsXml = () => new TextDecoder().decode(readZip(new Uint8Array(readFileSync(file("Reviewed.docx")))).get("word/comments.xml"));
+    assert.match(docxText(file("Reviewed.docx")), /<w:commentRangeStart w:id="0"\/>.*this sentence.*<w:commentRangeEnd w:id="0"\/>/);
+    assert.match(commentsXml(), /Is this right\?/);
+    doc.replyToComment(comment.id, "Yes, it is.", "claude");
+    doc.setCommentResolved(comment.id, true);
+    await doc.flush();
+    await sync();
+    assert.match(commentsXml(), /w:author="Claude"[^>]*>.*Yes, it is\./);
+    const { readDocx } = await import("@/lib/doc/docxImport");
+    const [thread] = (await readDocx(readZip(new Uint8Array(readFileSync(file("Reviewed.docx")))))).tabs[0]!.comments;
+    assert.deepEqual([thread!.body, thread!.quote, thread!.resolved, thread!.replies.map((reply) => [reply.author, reply.body])], ["Is this right?", "this sentence", true, [["claude", "Yes, it is."]]]);
+  });
+
+  test("a Google Doc imported from Takeout has a Word copy that reads back as the same document", async () => {
+    const google = await import("./support/googleDocx");
+    const route = await import("@/app/api/documents/import/route");
+    const takeout = google.googleDocx(
+      [
+        google.tabTitle("Draft"),
+        google.para("Chapter One", { style: "Heading1" }),
+        google.para([google.run("It was "), google.commentStart(0), google.run("dark", '<w:b w:val="1"/>'), google.commentEnd(0), google.run(" out.")], { ind: 'w:firstLine="720"', spacing: 'w:line="480" w:lineRule="auto"' }),
+        google.para("Pack bags", { list: { id: google.LIST.bullet } }),
+        google.para("Leave", { list: { id: google.LIST.decimal } }),
+        google.table([[{ text: "Day", fill: "fce5cd" }, { text: "Miles" }], [{ text: "Monday" }, { text: "12" }]]),
+        google.horizontalRule(),
+        google.tabEnd("The end."),
+        google.tabTitle("Notes"),
+        google.para("Ideas for later."),
+      ],
+      { comments: [{ id: 0, author: "Editor", date: "2024-05-01T10:00:00Z", text: "Too vague" }], header: { text: "Smith {page}", align: "right" }, margins: { top: 720, right: 720, bottom: 720, left: 720 } },
+    );
+    const { createZip } = await import("@/lib/doc/zip");
+    const form = new FormData();
+    form.append("file", new File([Buffer.from(createZip([{ name: "Takeout/Drive/Stories/Night Walk.docx", data: takeout }]))], "takeout.zip"));
+    const response = await route.POST(new Request("http://localhost:3000/api/documents/import", { method: "POST", body: form }), {} as never);
+    assert.equal(response.status, 201);
+    const { documents } = (await response.json()) as { documents: { id: string }[] };
+    await sync();
+    const target = file("Stories", "Night Walk.docx");
+    assert.ok(existsSync(target), readdirSync(root, { recursive: true }).join(", "));
+
+    const { readDocx } = await import("@/lib/doc/docxImport");
+    const back = await readDocx(readZip(new Uint8Array(readFileSync(target))));
+    const { tabs } = await hub.family(documents[0]!.id);
+    const root0 = tabs[0]!;
+    assert.deepEqual(back.settings, root0.meta.settings, "page setup, fonts, spacing and header");
+    assert.equal(root0.meta.settings.headerFooter.header, "Smith {page}");
+    assert.deepEqual(back.tabs.map((tab) => tab.title), ["Draft", "Notes"]);
+    tabs.forEach((tab, index) => {
+      assert.deepEqual(google.comparable(back.tabs[index]!.doc), google.comparable(tab.doc), `tab ${index + 1}`);
+      assert.deepEqual(back.tabs[index]!.comments.map((c) => [c.body, c.quote]), tab.snapshot().comments.map((c) => [c.body, c.quote]));
+    });
+    assert.deepEqual(tabs[0]!.snapshot().comments.map((c) => c.body), ["Editor: Too vague"]);
   });
 
   test("status reports the folder and how many files it holds", async () => {
