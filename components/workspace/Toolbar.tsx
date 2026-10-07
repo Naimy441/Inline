@@ -55,6 +55,7 @@ import {
 import { IconButton } from "@/components/ui/Button";
 import { MenuButton, type MenuItem } from "@/components/ui/Menu";
 import { Popover } from "@/components/ui/Popover";
+import { FontPicker } from "@/components/workspace/FontPicker";
 
 const BLOCK_LABELS: Record<BlockKind, string> = {
   paragraph: "Normal text",
@@ -220,17 +221,14 @@ const ToolbarView = memo(function ToolbarView({
         >
           <span className="tb-select-text">{format.equation ? "Equation" : kind ? BLOCK_LABELS[kind] : "Mixed"}</span> <ChevronDown size={13} />
         </MenuButton>
-        <MenuButton
+        <FontPicker
           className="tb-select tb-font"
           label="Font"
-          items={FONT_FAMILIES.map((font) => ({
-            label: font.label,
-            checked: (family ?? meta?.settings.fontFamily) === font.value,
-            onSelect: () => run(setMark(schema.marks.font_family!, font.value === meta?.settings.fontFamily ? null : { family: font.value })),
-          }))}
+          value={family ?? meta?.settings.fontFamily ?? FONT_FAMILIES[0].value}
+          onPick={(value) => run(setMark(schema.marks.font_family!, value === meta?.settings.fontFamily ? null : { family: value }))}
         >
           <span className="tb-select-text">{fontLabel(family, meta?.settings.fontFamily ?? "Arial")}</span> <ChevronDown size={13} />
-        </MenuButton>
+        </FontPicker>
       </Group>,
       <Group key="size">
         <IconButton label="Decrease font size" size="sm" disabled={disabled} onClick={() => setSize(size - 1)}>

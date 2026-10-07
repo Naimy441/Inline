@@ -119,6 +119,15 @@ export const FONT_FAMILIES = [
   { label: "Courier New", value: "\"Courier New\", Courier, monospace" },
 ] as const;
 
+/** A Google Fonts family (lib/server/googleFonts.ts) and its kind. */
+export type GoogleFont = { family: string; category: "sans-serif" | "serif" | "display" | "handwriting" | "monospace" };
+
+/** The CSS font-family a Google font is set as: the family, then a generic one like it. */
+export function googleFontValue(font: GoogleFont) {
+  const generic = font.category === "serif" ? "serif" : font.category === "monospace" ? "monospace" : font.category === "handwriting" ? "cursive" : "sans-serif";
+  return `"${font.family}", ${generic}`;
+}
+
 export const DEFAULT_SETTINGS: DocumentSettings = {
   pageSetup: { paperSize: "letter", orientation: "portrait", margins: { top: 1, right: 1, bottom: 1, left: 1 } },
   fontFamily: FONT_FAMILIES[0].value,

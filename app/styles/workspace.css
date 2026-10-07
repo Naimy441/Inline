@@ -259,6 +259,62 @@
   flex: 1 0 8px;
 }
 
+/* Font picker (FontPicker.tsx): a search box over the standard fonts and Google Fonts. Above dialogs, for Page setup's. */
+.popover.font-picker {
+  z-index: 95;
+  width: 280px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.font-picker-body {
+  display: flex;
+  flex-direction: column;
+  max-height: min(420px, 70vh);
+}
+
+.font-picker-search {
+  flex: none;
+  width: auto;
+  height: 32px;
+  margin: 6px;
+}
+
+.font-picker-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 5px 5px;
+}
+
+.font-picker-item {
+  font-size: 14px;
+}
+
+.font-picker-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.font-picker-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.font-picker-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
 /* "More tools": the groups that don't fit in the toolbar's row. */
 .tb-overflow {
   display: flex;
