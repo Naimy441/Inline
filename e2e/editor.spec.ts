@@ -221,3 +221,45 @@ test("non-printing characters can be shown", async ({ page }) => {
   await page.keyboard.press("Control+Shift+P");
   await expect(page.locator(".doc-content .np-para")).toHaveCount(0);
 });
+
+test("equations typed as $…$ show typeset and open for editing when clicked", async ({ page }) => {
+  await newBlankDocument(page);
+  await page.locator(".doc-content").click();
+  await page.keyboard.type("Energy is $E = mc^2$ and prices like $5 and $10 stay text.");
+  await expect(page.locator(".doc-content .math-render .katex")).toHaveCount(1);
+  await expect(page.locator(".doc-content")).toContainText("prices like $5 and $10");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("$$ \\frac{a}{b}");
+  await expect(page.locator(".math-block.is-editing")).toHaveCount(1);
+  // Clicking the inline equation leaves the displayed one, which shows typeset.
+  await page.locator("p .math-render").click();
+  await expect(page.locator(".math-block .katex-display")).toHaveCount(1);
+  await expect(page.locator(".math-src.is-editing")).toHaveText("E = mc^2");
+  await page.keyboard.type("+1");
+  await expect(page.locator(".math-pop annotation")).toHaveText("E = mc^2+1");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".math-src.is-editing")).toHaveCount(0);
+  await expect(page.locator(".sync-status")).toHaveText(/Saved/);
+  const id = page.url().split("/d/")[1];
+  const markdown = await (await page.request.get(`/api/documents/${id}/export?format=md`)).text();
+  expect(markdown).toContain("Energy is $E = mc^2+1$ and prices like \\$5 and \\$10 stay text.");
+  expect(markdown).toContain("$$\n\\frac{a}{b}\n$$");
+});
+
+test("picking a heading in the outline scrolls the page to it", async ({ page }) => {
+  const filler = "Words that fill the page so the heading starts well below the fold of the window. ".repeat(14);
+  const markdown = Array.from({ length: 6 }, (_, i) => `## Part ${i + 1}\n\n${filler}\n\n${filler}`).join("\n\n");
+  const { document } = await (await page.request.post("/api/documents", { data: { title: "Outline", markdown } })).json();
+  await page.goto(`/d/${document.meta.id}`);
+  await expect(page.locator(".doc-content h2")).toHaveCount(6);
+  if (!(await page.locator(".outline").count())) await page.getByRole("button", { name: "Tabs & outline" }).click();
+  await page.locator(".outline-item", { hasText: "Part 5" }).click();
+  const heading = page.locator(".doc-content h2", { hasText: "Part 5" });
+  await expect(heading).toBeInViewport();
+});
+
+test("the logo goes home", async ({ page }) => {
+  await newBlankDocument(page);
+  await page.getByRole("button", { name: "All documents" }).click();
+  await page.waitForURL((url) => url.pathname === "/");
+});

@@ -1,6 +1,6 @@
 "use client";
 
-import { History, RotateCcw, Save, Sparkles, X } from "lucide-react";
+import { ChevronDown, ChevronUp, History, RotateCcw, Save, Sparkles, X } from "lucide-react";
 import { DOMSerializer, Node as PMNode } from "prosemirror-model";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { post } from "@/lib/client/api";
@@ -169,12 +169,28 @@ export function HistoryPanel({
  * A saved version shown in place of the document, with its differences from
  * the current text one click away, and a way back or to restore it.
  */
+type View = "version" | "changes" | "since";
+
+const blocksText = (node: PMNode) => node.textBetween(0, node.content.size, "\n", "");
+
+/**
+ * A saved version shown in place of the document. "Changes" marks what the
+ * version changed from the one before it, with arrows to step through each
+ * change; "Since then" compares it with the current text.
+ */
 export function VersionPreview({ session, version, onClose }: { session: DocumentSession; version: VersionSummary; onClose: () => void }) {
   const container = useRef<HTMLDivElement>(null);
+  const diffRef = useRef<HTMLDivElement>(null);
+  const versions = useVersions(session.id);
+  const index = versions?.findIndex((item) => item.id === version.id) ?? -1;
+  const previous = index >= 0 ? (versions![index + 1] ?? null) : undefined;
   const [doc, setDoc] = useState<PMNode | null>(null);
+  const [before, setBefore] = useState<PMNode | null>(null);
   const [failed, setFailed] = useState(false);
   const [restoring, setRestoring] = useState(false);
-  const [comparing, setComparing] = useState(false);
+  const [view, setView] = useState<View>("version");
+  const [current, setCurrent] = useState(-1);
+  const comparing = view !== "version";
 
   useEffect(() => {
     let cancelled = false;
@@ -189,18 +205,81 @@ export function VersionPreview({ session, version, onClose }: { session: Documen
     };
   }, [session.id, version.id]);
 
+  // The version before this one, which "Changes" compares against (the first version compares with an empty page).
+  useEffect(() => {
+    setBefore(null);
+    if (previous === undefined) return;
+    if (previous === null) {
+      setBefore(schema.node("doc", null, [schema.node("paragraph")]));
+      return;
+    }
+    let cancelled = false;
+    versionDoc(session.id, previous.id)
+      .then((json) => !cancelled && setBefore(PMNode.fromJSON(schema, json as Parameters<typeof PMNode.fromJSON>[1])))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [session.id, previous]);
+
   const comparison = useMemo(() => {
-    if (!comparing || !doc || !session.view) return null;
-    const blocks = (node: PMNode) => node.textBetween(0, node.content.size, "\n", "");
-    const paragraphs = diffParagraphs(blocks(doc), blocks(session.view.state.doc));
-    return { paragraphs, ...diffStats(paragraphs) };
-  }, [comparing, doc, session.view]);
+    if (!doc) return null;
+    let paragraphs;
+    if (view === "changes") {
+      if (!before) return null;
+      paragraphs = diffParagraphs(blocksText(before), blocksText(doc));
+    } else if (view === "since" && session.view) {
+      paragraphs = diffParagraphs(blocksText(doc), blocksText(session.view.state.doc));
+    } else return null;
+    // Each changed paragraph is a stop for the arrows.
+    const stops: number[] = [];
+    paragraphs.forEach((paragraph, i) => {
+      if (paragraph.kind !== "same") stops.push(i);
+    });
+    return { paragraphs, stops, ...diffStats(paragraphs) };
+  }, [view, doc, before, session.view]);
+
+  useEffect(() => setCurrent(-1), [version.id]);
 
   useEffect(() => {
     const element = container.current;
     if (!element || !doc || comparing) return;
     element.replaceChildren(DOMSerializer.fromSchema(schema).serializeFragment(doc.content));
   }, [doc, comparing]);
+
+  const stops = comparison?.stops ?? [];
+  const step = (direction: 1 | -1) => {
+    if (!comparing) {
+      // From the plain version, the arrows open its changes at the first (or last) one.
+      setView("changes");
+      setCurrent(direction > 0 ? 0 : -2);
+      return;
+    }
+    if (!stops.length) return;
+    setCurrent((value) => (value < 0 ? (direction > 0 ? 0 : stops.length - 1) : Math.max(0, Math.min(stops.length - 1, value + direction))));
+  };
+
+  // Bring the change the arrows landed on into view.
+  useEffect(() => {
+    if (current === -2 && stops.length) setCurrent(stops.length - 1);
+    if (current < 0) return;
+    const stop = stops[current];
+    const element = diffRef.current?.querySelector<HTMLElement>(`[data-diff="${stop}"]`);
+    element?.scrollIntoView({ block: "center" });
+  }, [current, stops]);
+
+  // [ and ] step through the changes, like the arrows.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if ((event.target as HTMLElement | null)?.closest("input, textarea, [contenteditable=true]")) return;
+      if (event.key !== "[" && event.key !== "]") return;
+      event.preventDefault();
+      step(event.key === "]" ? 1 : -1);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  });
 
   const restore = async () => {
     setRestoring(true);
@@ -218,6 +297,7 @@ export function VersionPreview({ session, version, onClose }: { session: Documen
     }
   };
 
+  const activeStop = current >= 0 ? stops[current] : undefined;
   const settings = session.meta?.settings;
   return (
     <div className="version-view" aria-label={`Version: ${version.label}`}>
@@ -230,12 +310,31 @@ export function VersionPreview({ session, version, onClose }: { session: Documen
         </div>
         <div className="version-bar-actions">
           <div className="segmented" role="tablist" aria-label="Show">
-            <button type="button" role="tab" aria-selected={!comparing} className={comparing ? "" : "is-active"} onClick={() => setComparing(false)}>
-              This version
-            </button>
-            <button type="button" role="tab" aria-selected={comparing} className={comparing ? "is-active" : ""} onClick={() => setComparing(true)}>
-              Changes since
-            </button>
+            {(
+              [
+                ["version", "This version"],
+                ["changes", "Changes"],
+                ["since", "Since then"],
+              ] as const
+            ).map(([value, label]) => (
+              <button key={value} type="button" role="tab" aria-selected={view === value} className={view === value ? "is-active" : ""} onClick={() => {
+                  setView(value);
+                  setCurrent(-1);
+                }}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="change-stepper" role="group" aria-label="Step through changes">
+            <IconButton label="Previous change" shortcut="[" size="sm" disabled={comparing && (!stops.length || current === 0)} onClick={() => step(-1)}>
+              <ChevronUp size={16} />
+            </IconButton>
+            <span className="change-count" aria-live="polite">
+              {!comparing || !comparison ? "Changes" : !stops.length ? "No changes" : current < 0 ? `${stops.length} change${stops.length === 1 ? "" : "s"}` : `${current + 1} of ${stops.length}`}
+            </span>
+            <IconButton label="Next change" shortcut="]" size="sm" disabled={comparing && (!stops.length || current === stops.length - 1)} onClick={() => step(1)}>
+              <ChevronDown size={16} />
+            </IconButton>
           </div>
           <Button variant="ghost" onClick={onClose}>
             Back to current
@@ -248,10 +347,11 @@ export function VersionPreview({ session, version, onClose }: { session: Documen
       {comparison && (
         <div className="version-stats">
           {comparison.added + comparison.removed === 0 ? (
-            "No text changes between this version and now."
+            view === "changes" ? "No text changed in this version." : "No text changes between this version and now."
           ) : (
             <>
-              <span className="change-stat add">+{comparison.added}</span> <span className="change-stat del">−{comparison.removed}</span> words changed since this version
+              <span className="change-stat add">+{comparison.added}</span> <span className="change-stat del">−{comparison.removed}</span>{" "}
+              {view === "changes" ? (previous ? "words changed in this version" : "words in the first version") : "words changed since this version"}
             </>
           )}
         </div>
@@ -259,24 +359,26 @@ export function VersionPreview({ session, version, onClose }: { session: Documen
       <div className="version-page" style={settings ? { fontFamily: settings.fontFamily, fontSize: `${settings.fontSize}pt`, lineHeight: String(settings.lineSpacing) } : undefined}>
         {failed ? (
           <p className="muted">This version couldn&apos;t be loaded.</p>
-        ) : !doc ? (
+        ) : !doc || (comparing && !comparison) ? (
           <div className="version-skeleton" aria-hidden>
             <span />
             <span />
             <span />
           </div>
         ) : comparing && comparison ? (
-          <div className="version-diff doc-content" aria-label="Changes since this version">
-            {comparison.paragraphs.map((paragraph, index) =>
-              paragraph.kind === "same" && !paragraph.parts[0]!.text ? null : (
-                <p key={index} className={`diff-para is-${paragraph.kind}`}>
-                  {paragraph.parts.map((part, i) => (part.kind === "insert" ? <ins key={i}>{part.text}</ins> : part.kind === "delete" ? <del key={i}>{part.text}</del> : <span key={i}>{part.text}</span>))}
+          <div key="diff" ref={diffRef} className="version-diff doc-content" aria-label={view === "changes" ? "Changes in this version" : "Changes since this version"}>
+            {comparison.paragraphs.map((paragraph, i) => {
+              if (paragraph.kind === "same" && !paragraph.parts[0]!.text) return null;
+              const focused = i === activeStop;
+              return (
+                <p key={i} data-diff={i} className={`diff-para is-${paragraph.kind}${focused ? " is-focused" : ""}`}>
+                  {paragraph.parts.map((part, j) => (part.kind === "insert" ? <ins key={j}>{part.text}</ins> : part.kind === "delete" ? <del key={j}>{part.text}</del> : <span key={j}>{part.text}</span>))}
                 </p>
-              ),
-            )}
+              );
+            })}
           </div>
         ) : (
-          <div className="doc-content" ref={container} />
+          <div key="version" className="doc-content" ref={container} />
         )}
       </div>
     </div>

@@ -357,6 +357,19 @@ const marks: Record<string, MarkSpec> = {
     toDOM: (): DOMOutputSpec => ["code", 0],
   },
 
+  /**
+   * An inline equation: the text is its LaTeX source, which the editor shows
+   * typeset (lib/editor/math.ts) until the cursor goes into it. Displayed
+   * equations are code blocks with the language "math".
+   */
+  math: {
+    inclusive: false,
+    code: true,
+    excludes: "bold italic underline strike code link superscript subscript highlight text_color font_family font_size",
+    parseDOM: [{ tag: "span[data-math]", priority: 60 }],
+    toDOM: (): DOMOutputSpec => ["span", { class: "math-src", "data-math": "inline" }, 0],
+  },
+
   superscript: {
     excludes: "subscript",
     parseDOM: [{ tag: "sup" }, { style: "vertical-align=super" }],
@@ -428,7 +441,10 @@ export const schema = new Schema({ nodes, marks });
 export type NodeName = keyof typeof nodes;
 
 /** Marks that the Markdown view can express. Everything else is preserved invisibly. */
-export const MARKDOWN_MARKS = new Set(["bold", "italic", "underline", "strike", "code", "link", "superscript", "subscript", "highlight"]);
+export const MARKDOWN_MARKS = new Set(["bold", "italic", "underline", "strike", "code", "math", "link", "superscript", "subscript", "highlight"]);
+
+/** The code block language that makes it a displayed equation. */
+export const MATH_LANGUAGE = "math";
 
 /** Marks that describe ranges (comments, locks) rather than styling. */
 export const RANGE_MARKS = new Set(["comment", "locked"]);

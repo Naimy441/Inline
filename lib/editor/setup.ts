@@ -30,6 +30,7 @@ import { commentsPlugin } from "@/lib/editor/comments";
 import { findPlugin } from "@/lib/editor/find";
 import { spellingPlugin } from "@/lib/editor/spelling";
 import { invisiblesPlugin } from "@/lib/editor/invisibles";
+import { inMath, mathInputRules, mathPlugin } from "@/lib/editor/math";
 import { paginationPlugin, type PageGeometry, type PageLayout } from "@/lib/editor/pagination";
 import { placeholderPlugin } from "@/lib/editor/placeholder";
 import { presencePlugin } from "@/lib/editor/presence";
@@ -55,7 +56,7 @@ function blockIdPlugin() {
 function markInputRule(pattern: RegExp, type: MarkType) {
   return new InputRule(pattern, (state, match, start, end) => {
     const text = match[2];
-    if (!text) return null;
+    if (!text || inMath(state, start) || inMath(state, end)) return null;
     const tr = state.tr;
     const textStart = start + match[0].indexOf(match[1]!);
     tr.replaceWith(textStart, end, schema.text(text, [...state.doc.resolve(start).marks(), type.create()]));
@@ -90,13 +91,15 @@ const SUBSTITUTIONS: InputRule[] = [
 
 function whenEnabled(rule: InputRule, enabled: () => boolean) {
   const handler = (rule as unknown as { handler: (state: EditorState, match: RegExpMatchArray, start: number, end: number) => Transaction | null }).handler;
-  return new InputRule((rule as unknown as { match: RegExp }).match, (state, match, start, end) => (enabled() ? handler(state, match, start, end) : null));
+  // Never inside an equation's LaTeX, where "->" or "<=" mean what they say.
+  return new InputRule((rule as unknown as { match: RegExp }).match, (state, match, start, end) => (enabled() && !inMath(state, start) ? handler(state, match, start, end) : null));
 }
 
 function buildInputRules(substitutions: () => boolean) {
   return inputRules({
     rules: [
       ...SUBSTITUTIONS.map((rule) => whenEnabled(rule, substitutions)),
+      ...mathInputRules,
       textblockTypeInputRule(/^(#{1,6})\s$/, nodes.heading!, (match) => ({ level: match[1]!.length })),
       textblockTypeInputRule(/^```$/, nodes.code_block!),
       wrappingInputRule(/^\s*>\s$/, nodes.blockquote!),
@@ -259,6 +262,8 @@ export function editorPlugins(options: EditorPluginOptions) {
   return [
     readOnlyPlugin(options.readOnly ?? (() => false)),
     buildInputRules(options.substitutions ?? (() => true)),
+    // Before the keymaps: Enter and the arrows mean something else around an equation.
+    mathPlugin(),
     buildKeymap(options.keys ?? {}),
     keymap(baseKeymap),
     history(),

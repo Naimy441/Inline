@@ -49,6 +49,8 @@ export type PageMeasurer = {
   /** Advance width in CSS pixels of text set in the given style. */
   textWidth(text: string, style: SnapshotStyle): number;
   image(img: HTMLImageElement, width: number, height: number): { jpeg: Uint8Array; width: number; height: number } | null;
+  /** A picture of a typeset equation (see mathRaster.ts), drawn instead of its text. */
+  raster?(el: Element): { jpeg: Uint8Array; width: number; height: number; box: Box } | null;
 };
 
 const PX_TO_PT = 0.75;
@@ -83,11 +85,14 @@ export const EDITOR_LAYOUT: SnapshotLayout = {
     ".ProseMirror-separator",
     ".ProseMirror-trailingBreak",
     ".column-resize-handle",
+    ".math-src.is-hidden",
+    ".math-preview",
+    ".katex-mathml",
     "script",
     "style",
     "template",
   ].join(","),
-  noBackground: [".sheet", ".page-content", ".doc-content", ".review-insert", ".review-format", ".comment-hl", ".find-match", ".agent-range", ".np-space"].join(","),
+  noBackground: [".sheet", ".page-content", ".doc-content", ".review-insert", ".review-format", ".comment-hl", ".find-match", ".agent-range", ".np-space", ".math-render", ".math-block", ".math-src"].join(","),
 };
 
 type Placed = { page: number; x: number; y: number; width: number; height: number };
@@ -303,6 +308,13 @@ export function snapshotPages(
       strike: decoration.strike || lines.includes("line-through"),
     };
 
+    const raster = el.classList.contains("katex") ? measure.raster?.(el) : null;
+    if (raster) {
+      const at = place(raster.box);
+      add(at.page, { kind: "image", x: at.x, y: at.y, width: at.width, height: at.height, jpeg: raster.jpeg, pixelWidth: raster.width, pixelHeight: raster.height, ink: true });
+      return;
+    }
+
     if (el.tagName === "IMG") {
       const img = el as HTMLImageElement;
       const box = measure.box(img);
@@ -479,7 +491,7 @@ function blend(color: ParsedColor): RGB {
   return color.rgb.map((channel) => channel * alpha + (1 - alpha)) as RGB;
 }
 
-export function domMeasurer(): PageMeasurer {
+export function domMeasurer(rasters?: ReadonlyMap<Element, { jpeg: Uint8Array; width: number; height: number; box: Box }>): PageMeasurer {
   const toBox = (rect: DOMRect | DOMRectReadOnly): Box => ({ left: rect.left, top: rect.top, width: rect.width, height: rect.height });
   let canvas: HTMLCanvasElement | null = null;
   const context = () => {
@@ -496,6 +508,7 @@ export function domMeasurer(): PageMeasurer {
       return [...range.getClientRects()].map(toBox);
     },
     layoutSize: (el) => ({ width: el.offsetWidth, height: el.offsetHeight }),
+    raster: (el) => rasters?.get(el) ?? null,
     style: (el) => window.getComputedStyle(el),
     textWidth: (text, style) => {
       const ctx = context();

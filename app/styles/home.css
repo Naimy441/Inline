@@ -495,3 +495,13 @@
   font-size: 13px;
   color: var(--muted);
 }
+
+/* Covers come in a light and a dark picture; show the one for the theme. */
+.cover-dark,
+:root[data-theme="dark"] .cover-light {
+  display: none !important;
+}
+
+:root[data-theme="dark"] .cover-dark {
+  display: block !important;
+}

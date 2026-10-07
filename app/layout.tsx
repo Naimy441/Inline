@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { themeBootScript } from "@/lib/client/theme";
 import { TooltipLayer } from "@/components/ui/Tooltip";
+import "katex/dist/katex.min.css";
 import "./globals.css";
 
 export const metadata: Metadata = {

@@ -253,7 +253,7 @@ test.describe("editing", () => {
     await expect(page.locator(".sync-status")).toHaveText(/Saved/);
 
     await page.locator(".version-row", { hasText: "Before" }).click();
-    await page.getByRole("tab", { name: "Changes since" }).click();
+    await page.getByRole("tab", { name: "Since then" }).click();
     const diff = page.getByLabel("Changes since this version");
     await expect(diff.locator("del")).toHaveText("Tuesday");
     await expect(diff.locator("ins")).toHaveText("Thursday");

@@ -2,6 +2,7 @@
 
 import {
   BookOpen,
+  BookPlus,
   Check,
   ChevronRight,
   CircleAlert,
@@ -13,13 +14,20 @@ import {
   Globe,
   Hash,
   History,
+  ImageIcon,
+  ListTodo,
   ListTree,
+  Lock,
   MessageSquare,
   Paintbrush,
+  PanelsTopLeft,
+  Paperclip,
+  Pencil,
   PenLine,
   RotateCcw,
   Search,
   Settings2,
+  SpellCheck,
   Sparkles,
   TextCursorInput,
   Undo2,
@@ -66,6 +74,16 @@ function previewFields(preview: string | undefined, field: string) {
 /** Partial JSON while the input streams: pull out a string field if it has arrived. */
 function previewField(preview: string | undefined, field: string) {
   return previewFields(preview, field)[0];
+}
+
+/** "some_tool" or "SomeTool" as "Some tool", for tools without their own wording. */
+export function humanizeToolName(name: string) {
+  const words = name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .toLowerCase();
+  return words ? words[0]!.toUpperCase() + words.slice(1) : name;
 }
 
 export function describeTool(part: ToolPart): Described {
@@ -122,6 +140,30 @@ export function describeTool(part: ToolPart): Described {
       return { icon: <MessageSquare size={14} />, verb: "Replied to", target: "a comment", live: "Replying" };
     case "resolve_comment":
       return { icon: <Check size={14} />, verb: "Resolved", target: "a comment", live: "Resolving" };
+    case "delete_comment":
+      return { icon: <MessageSquare size={14} />, verb: "Deleted", target: "a comment", live: "Deleting" };
+    case "lock_text":
+      return input.locked === false
+        ? { icon: <Lock size={14} />, verb: "Unlocked", target: str(field("text"), 40) ? `“${str(field("text"), 40)}”` : "text", live: "Unlocking" }
+        : { icon: <Lock size={14} />, verb: "Locked", target: str(field("text"), 40) ? `“${str(field("text"), 40)}”` : "text", live: "Locking" };
+    case "list_locked_text":
+      return { icon: <Lock size={14} />, verb: "Checked", target: "locked text", live: "Checking" };
+    case "insert_image":
+      return { icon: <ImageIcon size={14} />, verb: "Inserted", target: "an image", live: "Inserting" };
+    case "read_attachment":
+      return { icon: <Paperclip size={14} />, verb: "Read", target: "an attachment", live: "Reading" };
+    case "check_spelling":
+      return { icon: <SpellCheck size={14} />, verb: "Checked", target: "spelling", live: "Checking" };
+    case "add_to_dictionary": {
+      const words = Array.isArray(input.words) ? (input.words as unknown[]).filter((word): word is string => typeof word === "string") : [];
+      return { icon: <BookPlus size={14} />, verb: "Added", target: words.length ? `${words.slice(0, 3).map((word) => `“${word}”`).join(", ")}${words.length > 3 ? ` and ${words.length - 3} more` : ""} to the dictionary` : "words to the dictionary", live: "Adding" };
+    }
+    case "list_tabs":
+      return { icon: <PanelsTopLeft size={14} />, verb: "Listed", target: "tabs", live: "Listing" };
+    case "create_tab":
+      return { icon: <PanelsTopLeft size={14} />, verb: "Created", target: str(field("title"), 40) ? `the tab “${str(field("title"), 40)}”` : "a tab", live: "Creating" };
+    case "rename_tab":
+      return { icon: <Pencil size={14} />, verb: "Renamed", target: str(field("title"), 40) ? `a tab to “${str(field("title"), 40)}”` : "a tab", live: "Renaming" };
     case "analyze_writing":
       return { icon: <Sparkles size={14} />, verb: "Analyzed", target: "the writing", live: "Analyzing" };
     case "list_documents":
@@ -142,8 +184,10 @@ export function describeTool(part: ToolPart): Described {
       return { icon: <Globe size={14} />, verb: "Searched the web for", target: str(field("query"), 60) ? `“${str(field("query"), 60)}”` : undefined, live: "Searching the web" };
     case "WebFetch":
       return { icon: <Globe size={14} />, verb: "Read", target: host(field("url")), live: "Reading" };
+    case "TodoWrite":
+      return { icon: <ListTodo size={14} />, verb: "Updated", target: "the plan", live: "Planning" };
     default:
-      return { icon: <Sparkles size={14} />, verb: name.replace(/_/g, " "), live: name.replace(/_/g, " ") };
+      return { icon: <Sparkles size={14} />, verb: humanizeToolName(name), live: humanizeToolName(name) };
   }
 }
 

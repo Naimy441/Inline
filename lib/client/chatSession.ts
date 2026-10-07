@@ -125,19 +125,26 @@ export class ChatSession {
   private frame = 0;
   /** Set while the chat is still being created on the server; the stream connects once it exists. */
   private creating: Promise<unknown> | null = null;
+  /** A connect is already waiting for the chat to be created. */
+  private gated = false;
 
   constructor(readonly id: string) {}
 
   connect() {
     if (this.closed) return;
     if (this.creating) {
+      if (this.gated) return;
+      this.gated = true;
       const gate = this.creating;
       void gate.then(
         () => {
+          this.gated = false;
           if (this.creating === gate) this.creating = null;
           this.connect();
         },
-        () => undefined,
+        () => {
+          this.gated = false;
+        },
       );
       return;
     }
@@ -187,6 +194,13 @@ export class ChatSession {
       }
       return next;
     });
+  }
+
+  /** Connect unless the stream is already open or about to reconnect. */
+  ensureConnected() {
+    if (this.closed || this.timer || this.gated) return;
+    if (this.source && this.source.readyState !== EventSource.CLOSED) return;
+    this.connect();
   }
 
   close() {
@@ -309,3 +323,77 @@ export const chatApi = {
   create: (input: { documentId: string | null; settings?: Partial<ChatSettings> }) => post<{ chat: ChatState }>("/api/agent/chats", input).then((r) => r.chat),
   remove: (id: string) => del(`/api/agent/chats/${id}`),
 };
+
+// --- open chats ------------------------------------------------------------------------------
+// Chats stay open for a while after the panel lets go of them, so closing and
+// reopening the panel, or switching document tabs, shows the chat at once
+// instead of an empty panel while it reloads.
+
+const KEEP_MS = 2 * 60_000;
+const KEEP_IDLE = 2;
+const open = new Map<string, { session: ChatSession; users: number; timer: ReturnType<typeof setTimeout> | null }>();
+
+/** The open chat with this id, if there is one, without taking hold of it. */
+export function peekChat(id: string) {
+  return open.get(id)?.session ?? null;
+}
+
+/** Hold a chat open (connecting it if needed). `created` is a session made for a chat that is still being created. */
+export function acquireChat(id: string, created?: ChatSession) {
+  let entry = open.get(id);
+  if (entry && created && entry.session !== created) {
+    entry.session.close();
+    entry = undefined;
+  }
+  if (!entry) {
+    entry = { session: created ?? new ChatSession(id), users: 0, timer: null };
+    open.set(id, entry);
+  }
+  if (entry.timer) clearTimeout(entry.timer);
+  entry.timer = null;
+  entry.users += 1;
+  entry.session.ensureConnected();
+  return entry.session;
+}
+
+export function releaseChat(session: ChatSession) {
+  const entry = open.get(session.id);
+  if (!entry || entry.session !== session) {
+    session.close();
+    return;
+  }
+  entry.users = Math.max(0, entry.users - 1);
+  if (entry.users > 0) return;
+  entry.timer = setTimeout(() => evict(session.id), KEEP_MS);
+  // Each open chat holds a connection; keep only the most recent few idle ones.
+  const idle = [...open.entries()].filter(([, value]) => value.users === 0);
+  for (const [chatId] of idle.slice(0, Math.max(0, idle.length - KEEP_IDLE))) evict(chatId);
+}
+
+function evict(id: string) {
+  const entry = open.get(id);
+  if (!entry || entry.users > 0) return;
+  if (entry.timer) clearTimeout(entry.timer);
+  open.delete(id);
+  entry.session.close();
+}
+
+const CHAT_KEY = "inline-chat:";
+
+/** The chat last open for a document (or its tabs, under the first tab's id). */
+export function rememberedChat(documentId: string) {
+  try {
+    return localStorage.getItem(`${CHAT_KEY}${documentId}`);
+  } catch {
+    return null;
+  }
+}
+
+export function rememberChat(documentId: string, chatId: string | null) {
+  try {
+    if (chatId) localStorage.setItem(`${CHAT_KEY}${documentId}`, chatId);
+    else localStorage.removeItem(`${CHAT_KEY}${documentId}`);
+  } catch {
+    // ignore
+  }
+}

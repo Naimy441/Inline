@@ -20,6 +20,7 @@ import { gotoHunk, mapHunksThrough, reviewHunkAtCursor, setHunks } from "@/lib/e
 import { editorPlugins } from "@/lib/editor/setup";
 import { setInvisibles } from "@/lib/editor/invisibles";
 import { normalizeWord, setDictionary } from "@/lib/editor/spelling";
+import { codeBlockView } from "@/lib/editor/math";
 import { rebaseLocalEdits, unconfirmedEdits } from "@/lib/editor/resync";
 import { loadPreferences, preferences, setPreference } from "@/lib/client/preferences";
 import { formatShortcut, isApple } from "@/lib/client/platform";
@@ -45,7 +46,8 @@ export type ClientCommand =
   | { kind: "export_pdf"; tabs?: "all" | "tab" }
   | { kind: "open_document"; documentId: string }
   | { kind: "scroll_to"; from: number; to: number; version: number }
-  | { kind: "download"; url: string; filename: string };
+  | { kind: "download"; url: string; filename: string }
+  | { kind: "dictionary"; words: string[] };
 
 type Snapshot = { meta: DocumentMeta; epoch?: string; doc: unknown; version: number; comments: DocComment[]; hunks: HunkJSON[]; activity: AgentActivity | null };
 
@@ -294,7 +296,7 @@ export class DocumentSession {
     if (!root) throw new Error("The page layout isn't ready yet.");
     const title = this.meta?.title ?? "Untitled document";
     // The PDF code loads on first use, keeping it out of the editor's start-up code.
-    const { snapshotPages } = await import("@/lib/pdf/pageSnapshot");
+    const [{ snapshotPages, domMeasurer }, { rasterizeMath }] = await Promise.all([import("@/lib/pdf/pageSnapshot"), import("@/lib/pdf/mathRaster")]);
     // Lay the pages out without review marks (as printing does) while they're read.
     root.classList.add("is-clean");
     try {
@@ -305,7 +307,8 @@ export class DocumentSession {
       relayout(view);
       await settleLayout(() => pageCount(view.state));
       await imagesLoaded(root);
-      return snapshotPages(root, title);
+      const rasters = await rasterizeMath(root);
+      return snapshotPages(root, title, domMeasurer(rasters));
     } finally {
       root.classList.remove("is-clean");
       if (this.ui.get().exporting) {
@@ -332,7 +335,7 @@ export class DocumentSession {
         editable: () => !this.callbacks.offline && this.ui.get().mode !== "viewing",
         state: this.createState(document),
         dispatchTransaction: (tr) => this.dispatch(tr),
-        nodeViews: { image: (node, view, getPos) => new ImageView(node, view, getPos) },
+        nodeViews: { image: (node, view, getPos) => new ImageView(node, view, getPos), code_block: codeBlockView },
         attributes: () => ({ class: "doc-content", spellcheck: preferences.get().spellcheck ? "true" : "false", "aria-label": "Document", role: "textbox", "aria-multiline": "true" }),
         handleDOMEvents: {
           focus: () => {
@@ -347,6 +350,7 @@ export class DocumentSession {
       if (this.callbacks.offline) return;
       window.addEventListener("beforeunload", this.onBeforeUnload);
       this.connect();
+      void this.syncDictionary();
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) this.ui.set((ui) => ({ ...ui, status: "error", error: "This document doesn't exist or was deleted." }));
       else this.ui.set((ui) => ({ ...ui, status: "error", error: error instanceof Error ? error.message : "Couldn't open the document." }));
@@ -632,7 +636,9 @@ export class DocumentSession {
         this.applyActivity(event.activity);
         return;
       case "command":
-        this.callbacks.onCommand?.(event.command);
+        // Words Claude added to the dictionary stop being underlined straight away.
+        if (event.command.kind === "dictionary") this.applyDictionary([...preferences.get().dictionary, ...event.command.words]);
+        else this.callbacks.onCommand?.(event.command);
         return;
       case "tabs":
         setTabs(event.tabs);
@@ -722,15 +728,23 @@ export class DocumentSession {
     const ui = this.ui.get();
     if (!view || !meta || this.destroyed || ui.flow || ui.printing || ui.exporting || document.visibilityState !== "visible") return;
     const end = Math.min(layout.starts[0] ?? view.state.doc.content.size, view.state.doc.content.size);
-    const key = hashText(`${meta.title}\n${JSON.stringify(meta.settings)}\n${JSON.stringify(view.state.doc.slice(0, end).content.toJSON())}`);
+    // "2": thumbnails since there is a dark version as well, so older ones are redrawn once.
+    const key = hashText(`2\n${meta.title}\n${JSON.stringify(meta.settings)}\n${JSON.stringify(view.state.doc.slice(0, end).content.toJSON())}`);
     if (key === (this.thumbnailKey ?? meta.thumbnailKey)) return;
     const root = view.dom.closest<HTMLElement>(".page-stack");
     if (!root) return;
-    const [{ snapshotPages }, { renderThumbnail }] = await Promise.all([import("@/lib/pdf/pageSnapshot"), import("@/lib/pdf/thumbnail")]);
-    const page = snapshotPages(root, meta.title, undefined, undefined, 1).pages[0];
-    const image = page ? await renderThumbnail(page) : null;
-    if (!image || this.destroyed) return;
-    const response = await fetch(`/api/documents/${this.id}/thumbnail?key=${key}`, { method: "PUT", body: image, headers: { "Content-Type": image.type } });
+    const [{ snapshotPages, domMeasurer }, { renderThumbnail }, { rasterizeMath }] = await Promise.all([import("@/lib/pdf/pageSnapshot"), import("@/lib/pdf/thumbnail"), import("@/lib/pdf/mathRaster")]);
+    const firstPage = root.querySelector<HTMLElement>(".sheet");
+    const rasters = firstPage ? await rasterizeMath(firstPage) : new Map();
+    if (this.destroyed) return;
+    const page = snapshotPages(root, meta.title, domMeasurer(rasters), undefined, 1).pages[0];
+    if (!page) return;
+    // A light and a dark picture, so the home page matches the theme. The dark one goes first:
+    // saving the light one is what tells the home page there is a new picture.
+    const [light, dark] = await Promise.all([renderThumbnail(page), renderThumbnail(page, undefined, "dark")]);
+    if (!light || this.destroyed) return;
+    if (dark) await fetch(`/api/documents/${this.id}/thumbnail?theme=dark`, { method: "PUT", body: dark, headers: { "Content-Type": dark.type } });
+    const response = await fetch(`/api/documents/${this.id}/thumbnail?key=${key}`, { method: "PUT", body: light, headers: { "Content-Type": light.type } });
     if (response.ok) this.thumbnailKey = key;
   }
 
@@ -787,14 +801,33 @@ export class DocumentSession {
     this.view?.setProps({});
   }
 
-  /** Never underline this word as misspelled again (in every document, in this browser). */
+  /** Never underline this word as misspelled again, in every document. Saved on the server too, so Claude's spelling check skips it. */
   addToDictionary(word: string) {
     const normalized = normalizeWord(word);
     if (!normalized) return;
-    const words = [...new Set([...preferences.get().dictionary, normalized])];
-    setPreference("dictionary", words);
+    this.applyDictionary([...preferences.get().dictionary, normalized]);
+    void post("/api/dictionary", { add: [normalized] }).catch(() => undefined);
+  }
+
+  private applyDictionary(words: string[]) {
+    const unique = [...new Set(words)];
+    setPreference("dictionary", unique);
     const view = this.view;
-    if (view) view.dispatch(setDictionary(view.state.tr, words));
+    if (view) view.dispatch(setDictionary(view.state.tr, unique));
+  }
+
+  /** Merge this browser's dictionary with the server's (words added by Claude, or in another browser). */
+  private async syncDictionary() {
+    try {
+      const { words } = await api<{ words: string[] }>("/api/dictionary");
+      const local = preferences.get().dictionary;
+      const server = new Set(words);
+      const missing = local.filter((word) => !server.has(word));
+      if (missing.length) void post("/api/dictionary", { add: missing }).catch(() => undefined);
+      if (words.some((word) => !local.includes(word))) this.applyDictionary([...local, ...words]);
+    } catch {
+      // Offline: the local dictionary still applies.
+    }
   }
 
   setShowInvisibles(on: boolean) {
@@ -1018,12 +1051,30 @@ export class DocumentSession {
     return uploaded;
   }
 
-  scrollTo(from: number, to: number) {
+  /**
+   * Select a range and bring it into view: centered, or near the top for a
+   * heading picked in the outline. The canvas is scrolled directly, because
+   * ProseMirror scrolls from where the DOM selection is, which is outside the
+   * editor when the outline or a comment was clicked.
+   */
+  scrollTo(from: number, to: number, align: "center" | "start" = "center") {
     const view = this.view;
     if (!view) return;
     const size = view.state.doc.content.size;
-    const tr = view.state.tr.setSelection(TextSelection.create(view.state.doc, Math.min(from, size), Math.min(to, size))).scrollIntoView();
-    this.dispatch(tr);
+    const head = Math.min(from, size);
+    this.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, head, Math.min(to, size))));
+    let scroller = view.dom.parentElement;
+    while (scroller && !(scroller.scrollHeight > scroller.clientHeight && /(auto|scroll)/.test(getComputedStyle(scroller).overflowY))) scroller = scroller.parentElement;
+    if (!scroller) return;
+    let coords: { top: number; bottom: number };
+    try {
+      coords = view.coordsAtPos(head, 1);
+    } catch {
+      return;
+    }
+    const box = scroller.getBoundingClientRect();
+    const offset = align === "start" ? Math.min(96, box.height / 5) : (box.height - (coords.bottom - coords.top)) / 2;
+    scroller.scrollTo({ top: Math.max(0, scroller.scrollTop + coords.top - box.top - offset) });
   }
 }
 

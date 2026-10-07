@@ -29,7 +29,9 @@ import { documentHub, type LiveDocument } from "@/lib/server/hub";
 import { lintWriting } from "@/lib/writing/lint";
 import { readFile } from "node:fs/promises";
 import { attachmentText } from "@/lib/agent/attachments";
-import { findUpload } from "@/lib/server/store";
+import { findUpload, readDictionary, updateDictionary } from "@/lib/server/store";
+import { findMisspellings, speller, type Misspelling } from "@/lib/server/spellcheck";
+import { normalizeWord } from "@/lib/doc/words";
 import { detectAiTropes } from "@/lib/writing/tropes";
 import { describePageStarts, pageCount, pageCountNow } from "@/lib/agent/pages";
 
@@ -1047,6 +1049,57 @@ export const TOOLS = [
       return ok(
         [`Writing analysis of "${doc.meta.title}"${lines ? ` (lines ${lines.from}-${lines.to})` : ""}:`, ...stats, issues.length ? `Issues:\n${issues.join("\n")}` : "No structural issues.", trope.length ? `AI-writing tropes:\n${trope.join("\n")}` : "No common AI-writing tropes found."].join("\n"),
       );
+    },
+  }),
+
+  defineTool({
+    name: "check_spelling",
+    title: "Check spelling",
+    description:
+      "Find the words the editor underlines in red as misspelled: each word with its line, the text around it and suggested corrections. Code, equations and words in the user's dictionary are skipped. Fix real typos with edit_document; for names, places and invented words that are spelled as intended (a character or a fictional town), use add_to_dictionary so the user stops seeing the underline. The editor's underlines come from the user's browser, so a few may differ from this list.",
+    shape: { document_id: documentId, from_line: z.number().int().min(1).optional(), to_line: z.number().int().min(1).optional() },
+    write: false,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      const lines = lineRange(args.from_line, args.to_line);
+      showActivity(ctx, doc, { chatId: ctx.author, status: "reading", label: "Checking spelling" });
+      const [check, dictionary] = await Promise.all([speller(), readDictionary()]);
+      const found = findMisspellings(doc.doc, check, new Set(dictionary), lines ?? undefined);
+      const where = lines ? ` (lines ${lines.from}-${lines.to})` : "";
+      if (!found.length) return ok(`No misspelled words in "${doc.meta.title}"${where}.`);
+      // One entry per word, with every line it's on; suggestions for the first few dozen words (they are slow to compute).
+      const groups = new Map<string, Misspelling[]>();
+      for (const item of found) {
+        const key = normalizeWord(item.word);
+        groups.set(key, [...(groups.get(key) ?? []), item]);
+      }
+      const entries = [...groups.values()].slice(0, 80).map((items, index) => {
+        const first = items[0]!;
+        const suggestions = index < 30 ? check.suggest(first.word).slice(0, 4) : [];
+        const lineList = [...new Set(items.map((item) => item.line))];
+        return `- "${first.word}"${items.length > 1 ? ` ×${items.length}` : ""}, line${lineList.length > 1 ? "s" : ""} ${lineList.slice(0, 8).join(", ")}${lineList.length > 8 ? "…" : ""}: "${clip(first.context, 90)}"${suggestions.length ? ` → ${suggestions.map((word) => `"${word}"`).join(", ")}` : " (no suggestions)"}`;
+      });
+      return ok(
+        `${groups.size} misspelled word${groups.size === 1 ? "" : "s"} (${found.length} underline${found.length === 1 ? "" : "s"}) in "${doc.meta.title}"${where}:\n${entries.join("\n")}${groups.size > 80 ? `\n… and ${groups.size - 80} more words.` : ""}`,
+      );
+    },
+  }),
+
+  defineTool({
+    name: "add_to_dictionary",
+    title: "Add to dictionary",
+    description:
+      "Add words to the user's spelling dictionary so the editor stops underlining them, in every document. Use it for names, places and invented words that are spelled as intended, never to hide real typos. Ask the user first unless they asked you to deal with the underlines.",
+    shape: { document_id: documentId, words: z.array(z.string().min(1).max(100)).min(1).max(200).describe("The words, as spelled in the document.") },
+    write: true,
+    async handler(args, ctx) {
+      if (ctx.readOnly) return fail("You are in Ask mode, so the dictionary can't be changed. Suggest the words to add instead.");
+      const doc = await resolveDocument(ctx, args.document_id);
+      const words = [...new Set(args.words.map(normalizeWord).filter(Boolean))];
+      if (!words.length) return fail("None of those are words.");
+      await updateDictionary(words);
+      doc.sendCommand({ kind: "dictionary", words });
+      return ok(`Added ${words.map((word) => `"${word}"`).join(", ")} to the dictionary. The editor no longer underlines ${words.length === 1 ? "it" : "them"}.`);
     },
   }),
 

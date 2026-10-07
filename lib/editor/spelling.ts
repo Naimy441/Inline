@@ -1,6 +1,7 @@
 import type { Node as PMNode } from "prosemirror-model";
 import { Plugin, PluginKey, type EditorState, type Transaction } from "prosemirror-state";
 import { Decoration, DecorationSet, type EditorView } from "prosemirror-view";
+import { normalizeWord, WORD } from "@/lib/doc/words";
 
 /**
  * Words the user added to their dictionary: every occurrence is wrapped with
@@ -11,12 +12,7 @@ import { Decoration, DecorationSet, type EditorView } from "prosemirror-view";
 const spellingKey = new PluginKey<SpellingState>("spelling");
 type SpellingState = { words: ReadonlySet<string>; decorations: DecorationSet };
 
-const WORD = /[\p{L}\p{M}][\p{L}\p{M}\p{N}'’-]*/gu;
-
-/** Dictionary words compare without case and with plain apostrophes. */
-export function normalizeWord(word: string) {
-  return word.replace(/’/g, "'").replace(/^['-]+|['-]+$/g, "").toLowerCase();
-}
+export { normalizeWord };
 
 function build(doc: PMNode, words: ReadonlySet<string>) {
   if (!words.size) return DecorationSet.empty;
@@ -24,7 +20,9 @@ function build(doc: PMNode, words: ReadonlySet<string>) {
   doc.descendants((node, pos) => {
     if (!node.isText || !node.text) return true;
     for (const match of node.text.matchAll(WORD)) {
-      if (words.has(normalizeWord(match[0]))) decorations.push(Decoration.inline(pos + match.index, pos + match.index + match[0].length, { spellcheck: "false" }));
+      const word = normalizeWord(match[0]);
+      // A dictionary name covers its possessive too ("Quillith's").
+      if (words.has(word) || words.has(word.replace(/'s$/, ""))) decorations.push(Decoration.inline(pos + match.index, pos + match.index + match[0].length, { spellcheck: "false" }));
     }
     return false;
   });

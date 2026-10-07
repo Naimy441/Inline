@@ -139,21 +139,28 @@ export async function writeDocumentFile(file: StoredDocumentFile) {
 export async function deleteDocumentFile(id: string) {
   await removeFile(dir("documents", `${assertSafeId(id)}.json`));
   await removeFile(dir("thumbnails", `${id}.img`));
+  await removeFile(dir("thumbnails", `${id}.dark.img`));
   await fs.rm(dir("versions", assertSafeId(id)), { recursive: true, force: true });
 }
 
-/** The small first-page image shown on the home page (WebP or JPEG). */
-export async function writeThumbnail(id: string, data: Uint8Array) {
-  const file = dir("thumbnails", `${assertSafeId(id)}.img`);
+export type ThumbnailTheme = "light" | "dark";
+
+function thumbnailFile(id: string, theme: ThumbnailTheme) {
+  return dir("thumbnails", `${assertSafeId(id)}${theme === "dark" ? ".dark" : ""}.img`);
+}
+
+/** The small first-page image shown on the home page (WebP or JPEG), drawn for the light or the dark theme. */
+export async function writeThumbnail(id: string, data: Uint8Array, theme: ThumbnailTheme = "light") {
+  const file = thumbnailFile(id, theme);
   await fs.mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.tmp`;
   await fs.writeFile(temp, data);
   await fs.rename(temp, file);
 }
 
-export async function readThumbnail(id: string): Promise<Uint8Array | null> {
+export async function readThumbnail(id: string, theme: ThumbnailTheme = "light"): Promise<Uint8Array | null> {
   try {
-    return new Uint8Array(await fs.readFile(dir("thumbnails", `${assertSafeId(id)}.img`)));
+    return new Uint8Array(await fs.readFile(thumbnailFile(id, theme)));
   } catch {
     return null;
   }
@@ -333,4 +340,28 @@ export async function workspaceDir() {
   const folder = dir("workspace");
   await fs.mkdir(folder, { recursive: true });
   return folder;
+}
+
+// --- dictionary -------------------------------------------------------------
+// Words the user (or Claude, for them) added to the spelling dictionary, so
+// they aren't underlined. Kept here so Claude's spelling check can skip them.
+
+const MAX_DICTIONARY = 5000;
+let dictionaryWrites: Promise<unknown> = Promise.resolve();
+
+export async function readDictionary(): Promise<string[]> {
+  const stored = await readJson<{ words?: unknown }>(dir("dictionary.json"));
+  return Array.isArray(stored?.words) ? stored.words.filter((word): word is string => typeof word === "string") : [];
+}
+
+/** Add and remove words (already normalized) and return the whole dictionary. */
+export function updateDictionary(add: readonly string[], remove: readonly string[] = []): Promise<string[]> {
+  const run = dictionaryWrites.then(async () => {
+    const drop = new Set(remove);
+    const words = [...new Set([...(await readDictionary()), ...add])].filter((word) => word && !drop.has(word)).slice(-MAX_DICTIONARY);
+    await writeJsonAtomic(dir("dictionary.json"), { words });
+    return words;
+  });
+  dictionaryWrites = run.catch(() => undefined);
+  return run;
 }

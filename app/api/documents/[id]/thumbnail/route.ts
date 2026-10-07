@@ -11,10 +11,12 @@ function imageType(data: Uint8Array) {
   return null;
 }
 
-/** The document's first page as a small image, for the home page. */
-export const GET = route(async (_request, context: Context) => {
+const themeOf = (request: Request) => (new URL(request.url).searchParams.get("theme") === "dark" ? "dark" : "light");
+
+/** The document's first page as a small image, for the home page. ?theme=dark asks for the dark theme's (the light one if there is none yet). */
+export const GET = route(async (request, context: Context) => {
   const doc = await routeDocument(context, { allowTrashed: true });
-  const data = await readThumbnail(doc.id);
+  const data = (themeOf(request) === "dark" ? await readThumbnail(doc.id, "dark") : null) ?? (await readThumbnail(doc.id));
   const type = data && imageType(data);
   if (!data || !type) throw notFound("No thumbnail yet.");
   return new Response(data as Uint8Array<ArrayBuffer>, {
@@ -27,12 +29,16 @@ export const GET = route(async (_request, context: Context) => {
   });
 });
 
-/** The editor saves a new thumbnail when the first page changes. ?key= names what it shows. */
+/** The editor saves a new thumbnail when the first page changes: the dark one (?theme=dark), then the light one, whose ?key= names what it shows. */
 export const PUT = route(async (request, context: Context) => {
   const doc = await routeDocument(context);
   const data = new Uint8Array(await request.arrayBuffer());
   if (data.length > MAX_BYTES) throw new HttpError(413, "Thumbnails can be up to 300 KB.");
   if (!imageType(data)) throw new HttpError(415, "Send a WebP or JPEG image.");
+  if (themeOf(request) === "dark") {
+    await writeThumbnail(doc.id, data, "dark");
+    return json({ ok: true });
+  }
   await writeThumbnail(doc.id, data);
   doc.setThumbnail((new URL(request.url).searchParams.get("key") ?? "").slice(0, 64));
   return json({ thumbnailAt: doc.meta.thumbnailAt });

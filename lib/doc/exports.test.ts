@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import { diffSequences, textSimilarity } from "./diff";
 import { documentToDocx, imageSize } from "./docx";
 import { documentHtmlFile, escapeHtml, fragmentToHtml } from "./html";
+import { latexToOmml } from "./omml";
 import { blockIdFixes, ensureBlockIds, newId } from "./ids";
 import { markdownToDoc } from "./markdown";
 import { DEFAULT_SETTINGS, type DocumentMeta } from "./settings";
@@ -118,5 +119,23 @@ describe("diff", () => {
     assert.equal(textSimilarity("same text", "same text"), 1);
     assert.ok(textSimilarity("the quick brown fox", "the quick red fox") > 0.5);
     assert.ok(textSimilarity("alpha", "zzzzz") < 0.3);
+  });
+});
+
+describe("equations in exports", () => {
+  const doc = markdownToDoc("Inline $x^2$ here.\n\n$$\n\\frac{a}{b}\n$$");
+
+  it("are MathML in HTML", () => {
+    const html = fragmentToHtml(doc);
+    assert.match(html, /<math[^>]*><semantics><mrow><msup><mi>x<\/mi><mn>2<\/mn><\/msup>/);
+    assert.match(html, /<div class="math-display"><span class="katex"><math[^>]*display="block"/);
+  });
+
+  it("are Word equations in .docx", () => {
+    const omml = latexToOmml("\\frac{a}{b} + \\sqrt{x}", false);
+    assert.match(omml, /^<m:oMath><m:f><m:num>.*<m:t xml:space="preserve">a<\/m:t>.*<\/m:num><m:den>.*b.*<\/m:den><\/m:f>/);
+    assert.match(omml, /<m:rad><m:radPr><m:degHide m:val="1"\/><\/m:radPr><m:deg\/><m:e>/);
+    assert.match(latexToOmml("x", true), /^<m:oMathPara><m:oMath>/);
+    assert.match(latexToOmml("\\frac{", false), /\\frac\{/);
   });
 });

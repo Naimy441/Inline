@@ -774,3 +774,120 @@ img.ProseMirror-separator {
   background: #ff9632;
   color: #000;
 }
+
+/* Equations (lib/editor/math.ts): typeset with KaTeX, LaTeX source while editing. */
+
+/* Collapsed rather than display: none, so the caret can still sit on either side of it. */
+.doc-content .math-src.is-hidden {
+  font-size: 0;
+  letter-spacing: 0;
+  color: transparent;
+}
+
+.doc-content .math-src.is-editing {
+  padding: 1px 3px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+  font-family: "Roboto Mono", var(--font-mono);
+  font-size: 0.88em;
+}
+
+.doc-content .math-render {
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background-color 0.12s;
+}
+
+.doc-content .math-render:hover {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.doc-content .math-render.is-selected {
+  background: var(--selection);
+}
+
+.doc-content .math-render.is-empty {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.doc-content .math-render .katex {
+  font-size: 1.1em;
+}
+
+.doc-content .katex-error {
+  color: var(--danger) !important;
+  font-family: "Roboto Mono", var(--font-mono);
+  font-size: 0.85em;
+}
+
+/* The live preview under an equation being edited. */
+.doc-content .math-preview {
+  position: relative;
+  display: inline-block;
+  width: 0;
+  height: 0;
+  vertical-align: bottom;
+}
+
+.doc-content .math-pop {
+  position: absolute;
+  top: 6px;
+  right: 0;
+  z-index: 5;
+  min-width: 32px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  color: var(--text);
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: math-pop-in 0.12s var(--ease);
+}
+
+@keyframes math-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+.doc-content .math-block {
+  margin: 0 0 var(--para-space);
+}
+
+.doc-content .math-block > .math-display {
+  padding: 6px 0;
+  text-align: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.doc-content .math-block > .math-display .katex-display {
+  margin: 0;
+}
+
+.doc-content .math-block > pre {
+  display: none;
+  margin: 6px 0 0;
+}
+
+.doc-content .math-block.is-editing > pre {
+  display: block;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.doc-content .math-block.is-editing > .math-display {
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.doc-content .math-block > .math-display.is-empty {
+  color: var(--muted);
+  font-style: italic;
+  font-size: 0.9em;
+}
