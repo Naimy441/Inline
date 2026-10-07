@@ -227,7 +227,8 @@ export function mergeBlock(old: PMNode, next: PMNode): PMNode {
         const children = mergeChildren(a, b);
         return schema.nodes.list_item!.create({ checked: b.attrs.checked }, children);
       });
-      return next.type.create({ ...next.attrs, id: old.attrs.id }, items);
+      // A list's own indents and bullet aren't in Markdown; they stay.
+      return next.type.create({ ...next.attrs, id: old.attrs.id, indent: old.attrs.indent ?? null, hanging: old.attrs.hanging ?? null, marker: old.attrs.marker ?? null }, items);
     }
     case "blockquote":
       return next.type.create({ ...next.attrs, id: old.attrs.id }, mergeChildren(old, next));
@@ -333,7 +334,9 @@ export function mergeInline(old: PMNode, next: PMNode): Fragment {
       for (let k = 0; k < op.aEnd - op.aStart; k += 1) {
         const before = a[op.aStart + k]!;
         const after = b[op.bStart + k]!;
-        out.push({ key: after.key, node: before.node ?? after.node, marks: combineMarks(before.marks, after.marks) });
+        // Markdown can't say how a space is formatted (bold or italic around spaces alone), so an unchanged one keeps its own.
+        const space = !before.node && /^\s$/.test(before.key) && !after.marks.some((mark) => mark.type.name === "code" || mark.type.name === "math");
+        out.push({ key: after.key, node: before.node ?? after.node, marks: space ? before.marks : combineMarks(before.marks, after.marks) });
       }
       continue;
     }

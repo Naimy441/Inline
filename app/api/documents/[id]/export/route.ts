@@ -7,6 +7,7 @@ import { joinTabs } from "@/lib/doc/tabs";
 import { HttpError, route, routeDocument } from "@/lib/server/http";
 import { documentHub, tabTitle, type LiveDocument } from "@/lib/server/hub";
 import { loadImage } from "@/lib/server/images";
+import { loadFontsForWord } from "@/lib/server/fonts";
 
 type Context = { params: Promise<{ id: string }> };
 
@@ -36,7 +37,7 @@ export const GET = route(async (request, context: Context) => {
   const content = joinTabs(tabs.map(textOf));
   let body: BodyInit;
   if (format === "docx") {
-    const file = tabs.length > 1 ? await documentToDocx(tabs.map((tab, index) => ({ title: tabTitle(tab.meta, index), doc: textOf(tab), comments: tab.snapshot().comments })), doc.meta, loadImage) : await documentToDocx(content, doc.meta, loadImage, doc.snapshot().comments);
+    const file = tabs.length > 1 ? await documentToDocx(tabs.map((tab, index) => ({ title: tabTitle(tab.meta, index), doc: textOf(tab), comments: tab.snapshot().comments })), doc.meta, loadImage, [], loadFontsForWord) : await documentToDocx(content, doc.meta, loadImage, doc.snapshot().comments, loadFontsForWord);
     body = file as Uint8Array<ArrayBuffer>;
   }
   else if (format === "html") body = documentHtmlFile(content, doc.meta);

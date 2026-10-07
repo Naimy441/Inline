@@ -53,6 +53,14 @@ export type DocumentSettings = {
   paragraphSpacing: number;
   headerFooter: HeaderFooterSettings;
   pageNumbers: PageNumberSettings;
+  /**
+   * "font": line spacing is a multiple of each font's own line height, as in
+   * Google Docs and Word (see lib/doc/fontMetrics.ts); imported documents are
+   * laid out so. Unset: a multiple of the font size.
+   */
+  lineModel?: "font";
+  /** Points between the default tab stops, when not Google's and Word's half inch. */
+  tabStop?: number;
 };
 
 export type DocumentMeta = {
@@ -181,8 +189,16 @@ export function normalizeSettings(input: unknown, base: DocumentSettings = DEFAU
       align: oneOf(pn.align, ALIGNS, base.pageNumbers.align),
       skipFirst: typeof pn.skipFirst === "boolean" ? pn.skipFirst : base.pageNumbers.skipFirst,
     },
+    ...((raw.lineModel === undefined ? base.lineModel : raw.lineModel) === "font" ? { lineModel: "font" as const } : {}),
+    ...(() => {
+      const stop = raw.tabStop === undefined ? base.tabStop : raw.tabStop;
+      return typeof stop === "number" && Number.isFinite(stop) && stop >= 1 && stop <= 360 && stop !== DEFAULT_TAB_STOP ? { tabStop: stop } : {};
+    })(),
   };
 }
+
+/** Google Docs' and Word's default tab stops: every half inch, in points. */
+export const DEFAULT_TAB_STOP = 36;
 
 /** Deep-merge a partial settings patch onto existing settings. */
 export function patchSettings(current: DocumentSettings, patch: unknown): DocumentSettings {
@@ -205,7 +221,7 @@ export function patchSettings(current: DocumentSettings, patch: unknown): Docume
 /** The settings that decide where pages break, as a string, so a page count measured under other settings isn't trusted. */
 export function layoutKey(settings: DocumentSettings) {
   const { paperSize, orientation, margins } = settings.pageSetup;
-  return [paperSize, orientation, margins.top, margins.right, margins.bottom, margins.left, settings.fontFamily, settings.fontSize, settings.lineSpacing, settings.paragraphSpacing].join("|");
+  return [paperSize, orientation, margins.top, margins.right, margins.bottom, margins.left, settings.fontFamily, settings.fontSize, settings.lineSpacing, settings.paragraphSpacing, ...(settings.lineModel ? [settings.lineModel] : []), ...(settings.tabStop ? [`tab ${settings.tabStop}`] : [])].join("|");
 }
 
 /** Page dimensions in inches, accounting for orientation. */

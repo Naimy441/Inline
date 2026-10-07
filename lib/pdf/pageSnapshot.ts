@@ -51,7 +51,13 @@ export type PageMeasurer = {
   image(img: HTMLImageElement, width: number, height: number): { jpeg: Uint8Array; width: number; height: number } | null;
   /** A picture of a typeset equation (see mathRaster.ts), drawn instead of its text. */
   raster?(el: Element): { jpeg: Uint8Array; width: number; height: number; box: Box } | null;
+  /** The style of an element's ::before (a list's own bullet). */
+  pseudo?(el: Element, which: "::before"): SnapshotStyle;
+  /** A font the document carries for text in this style, and where the baseline sits in its text boxes (0-1). */
+  font?(style: SnapshotStyle): FontChoice | null;
 };
+
+export type FontChoice = { key: string; baseline: number };
 
 const PX_TO_PT = 0.75;
 
@@ -97,7 +103,8 @@ export const EDITOR_LAYOUT: SnapshotLayout = {
 
 type Placed = { page: number; x: number; y: number; width: number; height: number };
 type Inherited = { underline: boolean; strike: boolean };
-type Marker = { text: string; right: number; style: SnapshotStyle };
+/** A list marker: right-aligned before the item (the page's own markers) or starting at `left` (a list's own bullet). */
+type Marker = { text: string; right: number; left?: number; style: SnapshotStyle };
 
 export function snapshotPages(
   root: HTMLElement,
@@ -168,23 +175,27 @@ export function snapshotPages(
     const at = place(box);
     const sizePt = cssPx(style.fontSize) * PX_TO_PT;
     const font = standardFont(style);
-    const baseline = at.y + at.height * baselineRatio(font);
+    // A font the document carries is drawn as the page drew it: same baseline, same width.
+    const own = measure.font?.(style) ?? null;
+    const baseline = at.y + at.height * (own ? own.baseline : baselineRatio(font));
     if (marker) {
       const markerColor = textColor(marker.style) ?? color;
+      const markerFont = measure.font?.(marker.style) ?? null;
       const width = measure.textWidth(marker.text, marker.style) * PX_TO_PT;
-      const right = ((marker.right - paperBoxes[at.page].left) / scale) * PX_TO_PT;
+      const x = marker.left !== undefined ? ((marker.left - paperBoxes[at.page].left) / scale) * PX_TO_PT : ((marker.right - paperBoxes[at.page].left) / scale) * PX_TO_PT - width;
       add(at.page, {
         kind: "text",
-        x: right - width,
+        x,
         y: baseline,
         text: marker.text,
         font: standardFont(marker.style),
         size: cssPx(marker.style.fontSize) * PX_TO_PT,
         color: markerColor,
+        ...(markerFont ? { embedded: markerFont.key, width } : {}),
       });
       marker = null;
     }
-    add(at.page, { kind: "text", x: at.x, y: baseline, text: transform(text, style.textTransform), font, size: sizePt, color });
+    add(at.page, { kind: "text", x: at.x, y: baseline, text: transform(text, style.textTransform), font, size: sizePt, color, ...(own ? { embedded: own.key, width: at.width } : {}) });
   };
 
   /** Underline and strike-through run across a whole line of the node, spaces included. */
@@ -193,11 +204,14 @@ export function snapshotPages(
     if (!color || !box.width || (!decoration.underline && !decoration.strike)) return;
     const at = place(box);
     const sizePt = cssPx(style.fontSize) * PX_TO_PT;
-    const baseline = at.y + at.height * baselineRatio(standardFont(style));
-    const thickness = Math.max(0.5, sizePt * 0.06);
+    const own = measure.font?.(style) ?? null;
+    const baseline = at.y + at.height * (own ? own.baseline : baselineRatio(standardFont(style)));
+    // As Google Docs draws them: a point thick (or more for large text), on whole points, a tenth of an em below the baseline.
+    const thickness = Math.max(1, sizePt * 0.05);
+    const snap = (y: number) => Math.floor(y) + 0.5;
     const line = (y: number) => add(at.page, { kind: "line", x1: at.x, y1: y, x2: at.x + at.width, y2: y, width: thickness, color });
-    if (decoration.underline) line(baseline + sizePt * 0.12);
-    if (decoration.strike) line(baseline - sizePt * 0.28);
+    if (decoration.underline) line(snap(baseline + sizePt * 0.1));
+    if (decoration.strike) line(snap(baseline - sizePt * 0.28));
   };
 
   const walkText = (node: Text, style: SnapshotStyle, decoration: Inherited) => {
@@ -228,9 +242,10 @@ export function snapshotPages(
       if (pieceBox) emitText(data.slice(pieceStart, end), pieceBox, style);
     }
     if (decoration.underline || decoration.strike) {
-      const first = data.search(/\S/);
-      const last = data.length - (data.match(/\s*$/)?.[0].length ?? 0);
-      if (first >= 0) for (const box of measure.textBoxes(node, first, last)) decorate(box, style, decoration);
+      // Spaces between underlined words are underlined too, even in a text of their own; spaces ending a block aren't.
+      const ending = !node.nextSibling && !node.parentElement?.nextSibling;
+      const last = ending ? data.length - (data.match(/\s*$/)?.[0].length ?? 0) : data.length;
+      if (last > 0) for (const box of measure.textBoxes(node, 0, last)) decorate(box, style, decoration);
     }
   };
 
@@ -253,18 +268,24 @@ export function snapshotPages(
     ] as const;
     if (sides.every(([, width, kind]) => !cssPx(width) || kind === "none" || kind === "hidden")) return;
     const at = place(measure.box(el));
+    // A paragraph's own border is drawn as Google Docs draws one: at least a point wide, on whole points.
+    const paragraph = /^(P|H[1-6])$/.test(el.tagName);
     for (const [side, widthValue, kind, colorValue] of sides) {
-      const width = cssPx(widthValue) * PX_TO_PT;
-      const color = parseColor(colorValue);
-      if (!width || kind === "none" || kind === "hidden" || !color || color.alpha === 0) continue;
+      const css = cssPx(widthValue) * PX_TO_PT;
+      const parsed = parseColor(colorValue);
+      if (!css || kind === "none" || kind === "hidden" || !parsed || parsed.alpha === 0) continue;
+      const width = paragraph ? Math.max(1, css) : css;
       // Collapsed table borders are shared by neighboring cells, so center them on the edge.
-      const half = el.tagName === "TD" || el.tagName === "TH" ? 0 : width / 2;
+      const half = el.tagName === "TD" || el.tagName === "TH" ? 0 : css / 2;
+      const snap = (value: number) => (paragraph ? Math.floor(value) + 0.5 : value);
       const line =
-        side === "Top" ? [at.x, at.y + half, at.x + at.width, at.y + half]
-        : side === "Bottom" ? [at.x, at.y + at.height - half, at.x + at.width, at.y + at.height - half]
-        : side === "Left" ? [at.x + half, at.y, at.x + half, at.y + at.height]
-        : [at.x + at.width - half, at.y, at.x + at.width - half, at.y + at.height];
-      add(at.page, { kind: "line", x1: line[0], y1: line[1], x2: line[2], y2: line[3], width, color: blend(color) });
+        side === "Top" ? [at.x, snap(at.y + half), at.x + at.width, snap(at.y + half)]
+        : side === "Bottom" ? [at.x, snap(at.y + at.height - half), at.x + at.width, snap(at.y + at.height - half)]
+        : side === "Left" ? [snap(at.x + half), at.y, snap(at.x + half), at.y + at.height]
+        : [snap(at.x + at.width - half), at.y, snap(at.x + at.width - half), at.y + at.height];
+      // The page's ink (a border in the text's color) prints black, as text does.
+      const color = ink && sameColor(parsed, ink) ? ([0, 0, 0] as RGB) : blend(parsed);
+      add(at.page, { kind: "line", x1: line[0], y1: line[1], x2: line[2], y2: line[3], width, color });
     }
   };
 
@@ -358,10 +379,18 @@ export function snapshotPages(
     if (el.tagName === "LI" && el.classList.contains("task-item")) checkbox(el, style);
 
     if (el.tagName === "LI") {
-      const text = markerText(el, style);
       const box = measure.box(el);
-      const em = cssPx(style.fontSize) * scale;
-      marker = text ? { text, right: box.left - 0.3 * em, style } : null;
+      const own = el.parentElement?.hasAttribute("data-marker") && el.firstElementChild && measure.pseudo ? measure.pseudo(el.firstElementChild, "::before") : null;
+      if (own) {
+        // The list's own bullet hangs its own distance before the text (document.css).
+        const text = cssContent(own.getPropertyValue("content"));
+        const hanging = cssPx(measure.style(el.parentElement!).getPropertyValue("--marker-hanging").trim()) * scale;
+        marker = text ? { text, right: box.left, left: box.left - hanging, style: own } : null;
+      } else {
+        const text = markerText(el, style);
+        const em = cssPx(style.fontSize) * scale;
+        marker = text ? { text, right: box.left - 0.3 * em, style } : null;
+      }
     }
 
     for (const child of el.childNodes) {
@@ -375,6 +404,12 @@ export function snapshotPages(
   for (const child of root.children) walk(child as HTMLElement, { underline: false, strike: false });
 
   return { title: title.trim() || "Untitled document", pages: pages.slice(0, maxPages) };
+}
+
+/** The text of a CSS content value such as "\"•\"". */
+function cssContent(value: string) {
+  const match = /^"((?:[^"\\]|\\.)*)"$/.exec(value.trim());
+  return match ? match[1]!.replace(/\\(.)/g, "$1") : "";
 }
 
 function markerText(li: HTMLElement, style: SnapshotStyle) {
@@ -491,7 +526,7 @@ function blend(color: ParsedColor): RGB {
   return color.rgb.map((channel) => channel * alpha + (1 - alpha)) as RGB;
 }
 
-export function domMeasurer(rasters?: ReadonlyMap<Element, { jpeg: Uint8Array; width: number; height: number; box: Box }>): PageMeasurer {
+export function domMeasurer(rasters?: ReadonlyMap<Element, { jpeg: Uint8Array; width: number; height: number; box: Box }>, font?: PageMeasurer["font"]): PageMeasurer {
   const toBox = (rect: DOMRect | DOMRectReadOnly): Box => ({ left: rect.left, top: rect.top, width: rect.width, height: rect.height });
   let canvas: HTMLCanvasElement | null = null;
   const context = () => {
@@ -510,6 +545,8 @@ export function domMeasurer(rasters?: ReadonlyMap<Element, { jpeg: Uint8Array; w
     layoutSize: (el) => ({ width: el.offsetWidth, height: el.offsetHeight }),
     raster: (el) => rasters?.get(el) ?? null,
     style: (el) => window.getComputedStyle(el),
+    pseudo: (el, which) => window.getComputedStyle(el, which),
+    font,
     textWidth: (text, style) => {
       const ctx = context();
       if (!ctx) return text.length * cssPx(style.fontSize) * 0.5;
@@ -518,8 +555,8 @@ export function domMeasurer(rasters?: ReadonlyMap<Element, { jpeg: Uint8Array; w
     },
     image: (img, width, height) => {
       if (!img.complete || !img.naturalWidth) return null;
-      // Twice the laid-out size keeps print sharpness without embedding huge originals.
-      const w = Math.max(1, Math.round(Math.min(img.naturalWidth, width * 2)));
+      // Twice the laid-out size keeps print sharpness without embedding huge originals (small icons get more).
+      const w = Math.max(1, Math.round(Math.min(img.naturalWidth, Math.max(width * 2, 64))));
       const h = Math.max(1, Math.round(Math.min(img.naturalHeight, (w / img.naturalWidth) * img.naturalHeight)));
       const target = document.createElement("canvas");
       target.width = w;
@@ -529,6 +566,9 @@ export function domMeasurer(rasters?: ReadonlyMap<Element, { jpeg: Uint8Array; w
       ctx.fillStyle = "#fff";
       ctx.fillRect(0, 0, w, h);
       try {
+        // A faded picture (its opacity) is faded onto the white page.
+        const opacity = Number.parseFloat(window.getComputedStyle(img).opacity);
+        if (Number.isFinite(opacity) && opacity < 1) ctx.globalAlpha = Math.max(0, opacity);
         ctx.drawImage(img, 0, 0, w, h);
         const url = target.toDataURL("image/jpeg", 0.9);
         const binary = atob(url.slice(url.indexOf(",") + 1));

@@ -2,7 +2,8 @@
 
 import { memo, useEffect, useRef } from "react";
 import { geometryFor, type DocumentSession } from "@/lib/client/documentSession";
-import { fillHeaderTokens, type DocumentMeta } from "@/lib/doc/settings";
+import { lineFactor, lineMetrics } from "@/lib/doc/fontMetrics";
+import { DEFAULT_TAB_STOP, fillHeaderTokens, type DocumentMeta } from "@/lib/doc/settings";
 
 /**
  * The page stack: paper sheets with headers, footers and page numbers drawn
@@ -45,8 +46,14 @@ export const PageCanvas = memo(function PageCanvas({
         fontSize: `${settings.fontSize}pt`,
         lineHeight: String(settings.lineSpacing),
         ["--para-space" as string]: `${settings.paragraphSpacing}pt`,
+        // Line spacing in each font's own line height (document.css), and where default tab stops fall.
+        ["--ls" as string]: String(settings.lineSpacing),
+        ["--font-lh" as string]: String(lineFactor(settings.fontFamily)),
+        ["--font-lh-step" as string]: lineMetrics(settings.fontFamily).pixelRound ? "1px" : "0.01px",
+        ["--tab-stop" as string]: `${settings.tabStop ?? DEFAULT_TAB_STOP}pt`,
       }
     : undefined;
+  const lineModel = settings?.lineModel === "font" ? " font-lines" : "";
 
   // The tree stays the same in both layouts so the editor's DOM is never remounted.
   return (
@@ -55,7 +62,7 @@ export const PageCanvas = memo(function PageCanvas({
         {!flow &&
           Array.from({ length: pages }, (_, index) => <Sheet key={index} index={index} pages={pages} meta={meta} top={index * pitch} geometry={geometry} />)}
         <div
-          className="page-content"
+          className={`page-content${lineModel}`}
           style={
             flow
               ? contentStyle

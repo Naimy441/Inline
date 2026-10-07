@@ -12,7 +12,7 @@ function OffscreenPages({ session }: { session: DocumentSession }) {
   return <PageCanvas session={session} meta={ui.meta} pages={ui.pages} zoom={1} printing={false} flow={false} />;
 }
 
-async function tabPages(id: string): Promise<PdfPage[]> {
+async function tabPages(id: string): Promise<PdfDocumentModel> {
   const host = document.createElement("div");
   host.className = "offscreen-pages";
   host.setAttribute("aria-hidden", "true");
@@ -30,7 +30,7 @@ async function tabPages(id: string): Promise<PdfPage[]> {
       };
       check();
     });
-    return (await session.pdfModel()).pages;
+    return await session.pdfModel();
   } finally {
     root.unmount();
     host.remove();
@@ -41,7 +41,12 @@ async function tabPages(id: string): Promise<PdfPage[]> {
 export function withOtherTabs(openId: string, tabIds: string[]) {
   return async (own: PdfDocumentModel): Promise<PdfDocumentModel> => {
     const pages: PdfPage[] = [];
-    for (const id of tabIds) pages.push(...(id === openId ? own.pages : await tabPages(id)));
-    return { title: own.title, pages };
+    const fonts = { ...own.fonts };
+    for (const id of tabIds) {
+      const model = id === openId ? own : await tabPages(id);
+      pages.push(...model.pages);
+      Object.assign(fonts, model.fonts);
+    }
+    return { title: own.title, pages, fonts };
   };
 }
