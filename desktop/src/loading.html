@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:" />
+    <title>Inline</title>
+    <style>
+      :root {
+        --bg: #f6f5f2;
+        --text: #26251f;
+        --muted: #7a776f;
+        --accent: #c96442;
+        --surface: #ffffff;
+        --border: #e4e2dc;
+      }
+      :root[data-theme="dark"] {
+        --bg: #1b1b1a;
+        --text: #ecebe8;
+        --muted: #9a978f;
+        --surface: #252524;
+        --border: #34332f;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        -webkit-user-select: none;
+        user-select: none;
+        cursor: default;
+      }
+      body {
+        display: grid;
+        place-items: center;
+        -webkit-app-region: drag;
+      }
+      main {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 14px;
+        max-width: 440px;
+        padding: 24px;
+        text-align: center;
+        animation: in 0.4s ease both 0.15s;
+      }
+      .mark {
+        width: 56px;
+        height: 56px;
+        animation: breathe 1.6s ease-in-out infinite;
+      }
+      h1 {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 600;
+      }
+      p {
+        margin: 0;
+        color: var(--muted);
+      }
+      pre {
+        max-width: 100%;
+        max-height: 140px;
+        overflow: auto;
+        margin: 0;
+        padding: 10px 12px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface);
+        color: var(--muted);
+        font: 11px/1.45 ui-monospace, Menlo, Consolas, monospace;
+        text-align: left;
+        white-space: pre-wrap;
+        -webkit-user-select: text;
+        user-select: text;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+        -webkit-app-region: no-drag;
+      }
+      button {
+        height: 30px;
+        padding: 0 14px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: var(--surface);
+        color: var(--text);
+        font: inherit;
+        font-weight: 500;
+      }
+      button.primary {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: #fff;
+      }
+      .error .mark {
+        animation: none;
+        opacity: 0.6;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      @keyframes breathe {
+        50% {
+          transform: scale(0.94);
+          opacity: 0.75;
+        }
+      }
+      @keyframes in {
+        from {
+          opacity: 0;
+          transform: translateY(4px);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="20" height="20" rx="6" fill="#c96442" /><path d="M8 7.5h8M8 12h8M8 16.5h5" stroke="#fff" stroke-width="1.8" stroke-linecap="round" /></svg>
+      <div id="starting">
+        <p>Opening Inline…</p>
+      </div>
+      <div id="failed" hidden>
+        <h1>Inline couldn't start</h1>
+        <p>Something stopped Inline's server. Your documents are safe.</p>
+      </div>
+      <pre id="detail" hidden></pre>
+      <div class="actions" id="actions" hidden>
+        <button class="primary" id="retry">Try Again</button>
+        <button id="log">Show Log</button>
+      </div>
+    </main>
+    <script>
+      const params = new URLSearchParams(location.search);
+      if (params.get("theme") === "dark") document.documentElement.dataset.theme = "dark";
+      if (params.get("state") === "failed") {
+        document.body.classList.add("error");
+        document.getElementById("starting").hidden = true;
+        document.getElementById("failed").hidden = false;
+        document.getElementById("actions").hidden = false;
+        const detail = params.get("detail");
+        if (detail) {
+          const pre = document.getElementById("detail");
+          pre.textContent = detail;
+          pre.hidden = false;
+        }
+      }
+      document.getElementById("retry").onclick = () => (location.hash = "retry");
+      document.getElementById("log").onclick = () => (location.hash = "log");
+    </script>
+  </body>
+</html>

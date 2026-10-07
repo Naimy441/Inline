@@ -1,11 +1,7 @@
 "use client";
 
 import { useCallback, useSyncExternalStore } from "react";
-
-const KEY = "inline-theme";
-
-/** Inline script for <head> that applies the saved theme before first paint. */
-export const themeBootScript = `try{var t=localStorage.getItem('${KEY}');if(t==='dark'||(t!=='light'&&matchMedia('(prefers-color-scheme: dark)').matches))document.documentElement.dataset.theme='dark'}catch(e){}`;
+import { THEME_KEY as KEY } from "@/lib/client/bootScripts";
 
 const listeners = new Set<() => void>();
 

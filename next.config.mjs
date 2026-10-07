@@ -19,6 +19,9 @@ const securityHeaders = [
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // The desktop app (desktop/) ships a self-contained server. `next dev`,
+  // `next build` and `next start` are unaffected unless this is set.
+  ...(process.env.INLINE_STANDALONE === "1" ? { output: "standalone" } : {}),
   // The Agent SDK launches the Claude Code CLI that ships inside the package,
   // so it has to be loaded from node_modules rather than bundled. The spelling
   // dictionary reads its Hunspell files from its package folder the same way.

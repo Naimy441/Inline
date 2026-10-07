@@ -25,5 +25,5 @@
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts"
   ],
-  "exclude": ["node_modules", "agent-panel-ui.tsx"]
+  "exclude": ["node_modules", "desktop", "agent-panel-ui.tsx"]
 }

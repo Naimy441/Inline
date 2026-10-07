@@ -15,6 +15,14 @@ npm run dev        # http://localhost:3000
 
 For a production build, run `npm run build && npm start`.
 
+### Desktop app
+
+Inline also comes as an app for macOS, Windows and Linux. Download it from the [Releases](https://github.com/Naimy441/Inline/releases) page. The app runs Inline's server on your computer and includes Claude Code, so there's nothing else to install. Sign in from the Claude panel with **Sign in with Claude**.
+
+You can use the browser at the same time. While the app is open, **File › Open in Browser** opens the page you're on at `http://localhost:4319`, and both show the same documents live.
+
+The app's code is in [`desktop/`](desktop/README.md). It's a separate npm package, so `npm install` and `npm run dev` here stay web-only. To work on the app, run `npm install --prefix desktop` once, then `npm run desktop:dev`. To build installers, run `npm run desktop:dist`.
+
 Open a document and press <kbd>Ctrl/⌘</kbd>+<kbd>J</kbd> to open the Claude panel. Claude reads and edits the document through Inline's MCP tools. Each edit shows up as a tracked change that you can keep or undo, one at a time or all at once. Select text and press <kbd>Ctrl/⌘</kbd>+<kbd>L</kbd> to ask about just that passage.
 
 ### Use Inline from Claude Code (or any MCP client)

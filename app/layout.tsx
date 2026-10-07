@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
-import { themeBootScript } from "@/lib/client/theme";
+import { desktopBootScript, themeBootScript } from "@/lib/client/bootScripts";
 import { TooltipLayer } from "@/components/ui/Tooltip";
 import "katex/dist/katex.min.css";
 import "./globals.css";
@@ -27,7 +27,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
+        <script dangerouslySetInnerHTML={{ __html: themeBootScript + desktopBootScript }} />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
         <link

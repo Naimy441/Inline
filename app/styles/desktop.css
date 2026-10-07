@@ -1,0 +1,65 @@
+/*
+ * The desktop app (desktop/). Its window has no separate title bar: Inline's
+ * own header is the title bar, so it can be dragged by, and makes room for
+ * the window controls (the traffic lights on the left on macOS, minimise /
+ * maximise / close on the right on Windows). html[data-desktop] is set before
+ * first paint by desktopBootScript; browsers never see any of this.
+ */
+
+[data-desktop] {
+  --desktop-controls-left: 0px;
+  --desktop-controls-right: 0px;
+}
+
+[data-desktop="darwin"] {
+  --desktop-controls-left: 76px;
+}
+
+/* Full screen hides the traffic lights. */
+[data-desktop="darwin"][data-fullscreen] {
+  --desktop-controls-left: 0px;
+}
+
+/* Window Controls Overlay: the area the controls cover, with the usual width as a fallback. */
+[data-desktop="win32"] {
+  --desktop-controls-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 138px)));
+}
+
+[data-desktop] .titlebar,
+[data-desktop] .home-header {
+  -webkit-app-region: drag;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+[data-desktop] .titlebar {
+  padding-left: calc(8px + var(--desktop-controls-left));
+  padding-right: calc(10px + var(--desktop-controls-right));
+}
+
+[data-desktop] .home-header {
+  padding-left: calc(20px + var(--desktop-controls-left));
+  padding-right: calc(20px + var(--desktop-controls-right));
+}
+
+/* Everything you can click or type in stays clickable. */
+[data-desktop] .titlebar :is(button, input, a, select, textarea, [role="button"], [role="menubar"], [role="menuitem"], .menubar, .title-input),
+[data-desktop] .home-header :is(button, input, a, select, textarea, [role="button"], .home-search) {
+  -webkit-app-region: no-drag;
+}
+
+/* The title bar's status text and logo read as window chrome, not page content. */
+[data-desktop] .titlebar-status,
+[data-desktop] .home-brand {
+  cursor: default;
+}
+
+/* Windows: the home page's Claude panel opens below the header, clear of the window controls. */
+[data-desktop="win32"] .home-agent {
+  top: 56px;
+}
+
+/* A native app doesn't rubber-band or show a focus ring on the page itself. */
+[data-desktop] body {
+  overscroll-behavior: none;
+}
