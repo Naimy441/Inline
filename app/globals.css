@@ -1,6 +1,7 @@
 @import "./styles/base.css";
 @import "./styles/ui.css";
 @import "./styles/home.css";
+@import "./styles/folders.css";
 @import "./styles/workspace.css";
 @import "./styles/document.css";
 @import "./styles/agent.css";

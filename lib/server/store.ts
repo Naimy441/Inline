@@ -365,3 +365,13 @@ export function updateDictionary(add: readonly string[], remove: readonly string
   dictionaryWrites = run.catch(() => undefined);
   return run;
 }
+
+// --- folders ----------------------------------------------------------------
+
+export async function readFoldersFile<T>() {
+  return readJson<T>(dir("folders.json"));
+}
+
+export async function writeFoldersFile(value: unknown) {
+  await writeJsonAtomic(dir("folders.json"), value);
+}

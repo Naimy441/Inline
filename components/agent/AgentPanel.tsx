@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, CircleDashed, History, Loader2, MessageSquarePlus, Plus, RefreshCw, Terminal, X } from "lucide-react";
+import { Check, CircleDashed, FolderTree, History, Loader2, MessageSquarePlus, Plus, RefreshCw, Terminal, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Attachment, ChatMessage, DocumentMention, ChatSettings, SelectionContext, Todo } from "@/lib/agent/types";
@@ -25,6 +25,10 @@ export type AgentPanelHandle = {
   warm: () => void;
 };
 
+const NO_HUNKS: ReadonlyArray<TurnHunk> = [];
+/** Where the home page's open chat is remembered. */
+const HOME_CHAT_KEY = "home";
+
 const EMPTY_UI: ChatUiState = { chat: null, connected: false, error: null, rateLimit: null };
 const emptyStore = { subscribe: () => () => undefined, get: () => EMPTY_UI };
 
@@ -37,6 +41,17 @@ const SUGGESTIONS = [
   { label: "Format nicely", prompt: "Improve the formatting: consistent headings, lists where they help, and clean spacing. Don't change the wording." },
 ];
 
+/** Starting points on the home page, where Claude organizes rather than edits. */
+const HOME_SUGGESTIONS = [
+  { label: "Sort everything into folders", prompt: "Sort my documents into folders. Use a few clear folders with plain names, and keep any folders I already have." },
+  { label: "File what's unfiled", prompt: "File the documents that aren't in a folder yet into my existing folders, making a new folder only where nothing fits." },
+  { label: "Suggest folders first", prompt: "Look through my documents and suggest a folder structure. Don't move anything yet; show me the plan first." },
+  { label: "Find a document", prompt: "Help me find the document about " },
+];
+
+/** Tools that change the folders or the document list, after which the home page reloads. */
+const LIBRARY_TOOLS = /__(move_documents|create_folder|update_folder|delete_folder|create_document)$/;
+
 const readChatId = rememberedChat;
 const writeChatId = rememberChat;
 
@@ -46,16 +61,22 @@ const fresh = new Set<string>();
 export const AgentPanel = forwardRef<
   AgentPanelHandle,
   {
-    documentId: string;
+    /** The open document; null on the home page. */
+    documentId: string | null;
     /** Where the open chat is remembered: the document's first tab, so every tab shares it. */
     chatKey?: string;
-    hunks: ReadonlyArray<TurnHunk>;
+    hunks?: ReadonlyArray<TurnHunk>;
     onClose: () => void;
-    onReview: (action: "next" | "accept" | "reject", ids: string[]) => void;
+    onReview?: (action: "next" | "accept" | "reject", ids: string[]) => void;
     initialPrompt?: string | null;
+    /** On the home page: the folder the user is looking at, told to Claude with each message. */
+    home?: { folderId: string | null };
+    /** Claude changed folders or documents (home page): time to reload the list. */
+    onLibraryChange?: () => void;
   }
->(function AgentPanel({ documentId, chatKey: chatKeyProp, hunks, onClose, onReview, initialPrompt }, ref) {
-  const chatKey = chatKeyProp ?? documentId;
+>(function AgentPanel({ documentId, chatKey: chatKeyProp, hunks = NO_HUNKS, onClose, onReview, initialPrompt, home, onLibraryChange }, ref) {
+  const chatKey = chatKeyProp ?? documentId ?? HOME_CHAT_KEY;
+  const draftKey = documentId ?? HOME_CHAT_KEY;
   const { status, defaults } = useAgentStatus();
   const router = useRouter();
   const [chatId, setChatId] = useState<string | null>(() => (typeof window === "undefined" ? null : readChatId(chatKey)));
@@ -63,8 +84,8 @@ export const AgentPanel = forwardRef<
   const [session, setSession] = useState<ChatSession | null>(() => (chatId ? peekChat(chatId) : null));
   const [draftSettings, setDraftSettings] = useState<ChatSettings | null>(null);
   // The quoted selection is part of the unsent message: it survives closing the panel.
-  const [selection, setSelection] = useState<SelectionContext | null>(() => (typeof window === "undefined" ? null : loadDraftSelection(documentId)));
-  useEffect(() => saveDraftSelection(documentId, selection), [documentId, selection]);
+  const [selection, setSelection] = useState<SelectionContext | null>(() => (typeof window === "undefined" ? null : loadDraftSelection(draftKey)));
+  useEffect(() => saveDraftSelection(draftKey, selection), [draftKey, selection]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyButton = useRef<HTMLButtonElement>(null);
   const composer = useRef<ComposerHandle>(null);
@@ -150,7 +171,7 @@ export const AgentPanel = forwardRef<
   const send = useCallback(
     async ({ text, attachments, mentions, selected }: { text: string; attachments: Attachment[]; mentions?: DocumentMention[]; selected?: SelectionContext | null }) => {
       stick.current = true;
-      const input = { text, documentId, selection: (selected === undefined ? selection : selected) ?? undefined, attachments, mentions: mentions?.length ? mentions : undefined };
+      const input = { text, documentId, selection: (selected === undefined ? selection : selected) ?? undefined, attachments, mentions: mentions?.length ? mentions : undefined, home: homeRef.current };
       setSelection(null);
       try {
         if (session) {
@@ -173,6 +194,23 @@ export const AgentPanel = forwardRef<
     [session, documentId, settings, selection],
   );
 
+  const homeRef = useRef(home);
+  homeRef.current = home;
+
+  // Each folder or document change Claude finishes reloads the home page's list, once.
+  const libraryChanges = chat?.messages.reduce((count, message) => count + (message.role === "assistant" ? message.parts.filter((part) => part.type === "tool" && part.status === "done" && LIBRARY_TOOLS.test(part.name)).length : 0), 0) ?? 0;
+  const seenChanges = useRef<{ chatId: string; count: number } | null>(null);
+  const libraryRef = useRef(onLibraryChange);
+  libraryRef.current = onLibraryChange;
+  const loadedChatId = chat?.id;
+  useEffect(() => {
+    if (!loadedChatId) return;
+    // A chat that just loaded sets the baseline; only changes after that count.
+    const last = seenChanges.current;
+    if (last?.chatId === loadedChatId && libraryChanges > last.count) libraryRef.current?.();
+    seenChanges.current = { chatId: loadedChatId, count: libraryChanges };
+  }, [loadedChatId, libraryChanges]);
+
   const updateSettings = (patch: Partial<ChatSettings>) => {
     if (session) void session.update({ settings: patch });
     else setDraftSettings({ ...settings, ...patch });
@@ -184,7 +222,7 @@ export const AgentPanel = forwardRef<
   const reviewRef = useRef(onReview);
   reviewRef.current = onReview;
   const retry = useCallback(() => void sessionRef.current?.retry(), []);
-  const review = useCallback((action: "next" | "accept" | "reject", ids: string[]) => reviewRef.current(action, ids), []);
+  const review = useCallback((action: "next" | "accept" | "reject", ids: string[]) => reviewRef.current?.(action, ids), []);
 
   const [rewinding, setRewinding] = useState<{ versionId: string; messageId: string } | null>(null);
   const [restoring, setRestoring] = useState(false);
@@ -262,7 +300,7 @@ export const AgentPanel = forwardRef<
           <Onboarding state={status.state} message={"message" in status ? status.message : ""} />
         ) : chat?.messages.length ? (
           <div className="messages">
-            <MessageList messages={chat.messages} hunks={hunks} onRetry={retry} onReview={review} documentId={documentId} onRestore={(versionId, messageId) => setRewinding({ versionId, messageId })} />
+            <MessageList messages={chat.messages} hunks={hunks} onRetry={retry} onReview={review} documentId={documentId ?? undefined} onRestore={(versionId, messageId) => setRewinding({ versionId, messageId })} />
             {chat.running && isWaiting(chat.status, lastAssistant(chat.messages)) && <ActivityLine status={chat.status} message={lastAssistant(chat.messages)} since={lastSent(chat.messages)} />}
           </div>
         ) : chatId && !chat && !ui.error ? (
@@ -273,7 +311,7 @@ export const AgentPanel = forwardRef<
             <span />
           </div>
         ) : (
-          <EmptyState onPick={(prompt) => composer.current?.setText(prompt)} />
+          <EmptyState home={!documentId} onPick={(prompt) => composer.current?.setText(prompt)} />
         )}
       </div>
 
@@ -374,16 +412,18 @@ function TodoList({ todos, running }: { todos: Todo[]; running: boolean }) {
   );
 }
 
-function EmptyState({ onPick }: { onPick: (prompt: string) => void }) {
+function EmptyState({ home, onPick }: { home: boolean; onPick: (prompt: string) => void }) {
   return (
     <div className="panel-empty">
-      <div className="panel-empty-mark">
-        <MessageSquarePlus size={22} />
-      </div>
-      <h3>Write with Claude</h3>
-      <p>Claude reads and edits this document directly. Every change shows up highlighted so you can keep or undo it.</p>
+      <div className="panel-empty-mark">{home ? <FolderTree size={22} /> : <MessageSquarePlus size={22} />}</div>
+      <h3>{home ? "Organize with Claude" : "Write with Claude"}</h3>
+      <p>
+        {home
+          ? "Tell Claude how you'd like your documents sorted. It reads titles and the first lines of each document, not whole documents, so sorting a big library stays light on your usage."
+          : "Claude reads and edits this document directly. Every change shows up highlighted so you can keep or undo it."}
+      </p>
       <div className="suggestions">
-        {SUGGESTIONS.map((item) => (
+        {(home ? HOME_SUGGESTIONS : SUGGESTIONS).map((item) => (
           <button key={item.label} type="button" className="suggestion" onClick={() => onPick(item.prompt)}>
             {item.label}
           </button>

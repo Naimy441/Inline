@@ -345,6 +345,14 @@ export class LiveDocument {
     this.schedulePersist();
   }
 
+  /** File the document in a folder, or at the top level (null). Not an edit, so the modified time stays. */
+  setFolder(folderId: string | null) {
+    const { folderId: _previous, ...rest } = this.meta;
+    this.meta = folderId ? { ...rest, folderId } : rest;
+    this.emit({ type: "meta", meta: this.meta });
+    this.schedulePersist();
+  }
+
   setTrashed(trashed: boolean) {
     this.meta = { ...this.meta, trashedAt: trashed ? Date.now() : null };
     this.emit({ type: "meta", meta: this.meta });
@@ -657,6 +665,8 @@ export type CreateDocumentInput = {
   /** Creates a tab of this document (the first tab's id) instead of a document of its own. */
   parentId?: string;
   tabTitle?: string;
+  /** The folder to file the new document in. */
+  folderId?: string | null;
 };
 
 class DocumentHub {
@@ -716,6 +726,7 @@ class DocumentHub {
       preview: text.replace(/\s+/g, " ").trim().slice(0, 240),
       ...(input.parentId ? { parentId: input.parentId } : {}),
       ...(input.tabTitle ? { tabTitle: cleanTabTitle(input.tabTitle) } : {}),
+      ...(input.folderId && !input.parentId ? { folderId: input.folderId } : {}),
     };
     const live = new LiveDocument({ format: 3, meta, doc: doc.toJSON(), comments: input.comments ?? [], hunks: [] });
     this.adopt(live);
@@ -861,6 +872,7 @@ class DocumentHub {
       title: `${source.meta.title} (copy)`,
       doc: source.doc.toJSON(),
       settings: source.meta.settings,
+      folderId: source.meta.folderId,
     });
     if (source.meta.tabTitle) copy.setTabMeta({ tabTitle: source.meta.tabTitle });
     if (tabs.length > 1) {
@@ -947,6 +959,7 @@ function normalizeFile(file: StoredDocumentFile): StoredDocumentFile {
       ...(typeof meta.parentId === "string" ? { parentId: meta.parentId } : {}),
       ...(Array.isArray(meta.tabs) && meta.tabs.length ? { tabs: meta.tabs.filter((item): item is string => typeof item === "string") } : {}),
       ...(typeof meta.tabTitle === "string" && meta.tabTitle.trim() ? { tabTitle: meta.tabTitle } : {}),
+      ...(typeof meta.folderId === "string" && meta.folderId ? { folderId: meta.folderId } : {}),
       ...(typeof meta.thumbnailAt === "number" ? { thumbnailAt: meta.thumbnailAt, thumbnailKey: String(meta.thumbnailKey ?? "") } : {}),
     },
     doc: file.doc,

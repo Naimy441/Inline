@@ -102,7 +102,15 @@ export function reduceChat(chat: ChatState, event: SequencedChatEvent): ChatStat
   }
 }
 
-export type SendInput = { text: string; documentId: string | null; selection?: SelectionContext; attachments?: Attachment[]; mentions?: DocumentMention[] };
+export type SendInput = {
+  text: string;
+  documentId: string | null;
+  selection?: SelectionContext;
+  attachments?: Attachment[];
+  mentions?: DocumentMention[];
+  /** Sent from the home page: the folder the user is looking at. */
+  home?: { folderId: string | null };
+};
 
 function newId() {
   return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;

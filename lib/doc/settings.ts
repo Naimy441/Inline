@@ -72,6 +72,8 @@ export type DocumentMeta = {
   tabs?: string[];
   /** The tab's own name ("Tab 1" when unnamed). */
   tabTitle?: string;
+  /** On the root tab: the folder the document is filed in (see lib/doc/folders.ts); unset at the top level. */
+  folderId?: string;
   /** When the first-page thumbnail was last saved, and what it showed (a hash), so it's redrawn only when the page changes. */
   thumbnailAt?: number;
   thumbnailKey?: string;

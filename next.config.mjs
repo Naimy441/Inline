@@ -23,6 +23,12 @@ const nextConfig = {
   // so it has to be loaded from node_modules rather than bundled. The spelling
   // dictionary reads its Hunspell files from its package folder the same way.
   serverExternalPackages: ["@anthropic-ai/claude-agent-sdk", "nspell", "dictionary-en"],
+  experimental: {
+    // proxy.ts runs on every request, and Next.js silently truncates bodies
+    // past this size when a proxy is present. Imports take ZIP archives (a
+    // Google Takeout export) of up to 1 GB.
+    proxyClientMaxBodySize: "1gb",
+  },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

@@ -29,7 +29,13 @@ claude mcp add --transport http inline http://localhost:3000/api/mcp --header "A
 
 The token keeps other programs on your machine from editing your documents. Inline creates it on first run and keeps it in the data folder as `mcp-token`.
 
-The tools are `list_documents`, `open_document`, `create_document`, `read_document`, `get_outline`, `search_document`, `get_editor_context`, `edit_document`, `multi_edit_document`, `insert_content`, `write_document`, `format_text`, `set_paragraph_style`, `get_document_settings`, `update_document_settings`, `get_pending_changes`, `keep_changes`, `revert_changes`, `list_comments`, `add_comment`, `reply_to_comment`, `resolve_comment`, `list_versions`, `save_version`, `restore_version`, `analyze_writing` and `export_document`.
+The tools are `list_documents`, `open_document`, `create_document`, `read_document`, `get_outline`, `search_document`, `get_editor_context`, `edit_document`, `multi_edit_document`, `insert_content`, `write_document`, `format_text`, `set_paragraph_style`, `get_document_settings`, `update_document_settings`, `get_pending_changes`, `keep_changes`, `revert_changes`, `list_comments`, `add_comment`, `reply_to_comment`, `resolve_comment`, `list_versions`, `save_version`, `restore_version`, `analyze_writing`, `export_document`, and for organizing: `list_library`, `list_folders`, `move_documents`, `create_folder`, `update_folder` and `delete_folder`.
+
+On the home page, **Organize with Claude** (or <kbd>Ctrl/⌘</kbd>+<kbd>J</kbd>) opens Claude to sort your documents into folders. It works from titles and the first few words of each document rather than reading every document, so sorting a large library uses little of your Claude usage.
+
+### Moving from Google Docs
+
+Export your Google Drive with [Google Takeout](https://takeout.google.com/) (Drive only, Documents as DOCX) and choose **Import files** on the home page with the .zip. Every Google Doc becomes an Inline document in the same folders it had in Drive, and page previews are drawn in the background.
 
 ### Configuration
 
@@ -101,6 +107,7 @@ Template gallery
 Recent documents
 - Documents (Last opened, Rename, Remove, Open in new tab)
 - Grid view, List view
+- Folders (nested, colored, with a breadcrumb; drag documents in or use Move to…)
 
 DOCUMENT EDITOR
 Logo

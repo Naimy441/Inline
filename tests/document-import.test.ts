@@ -50,3 +50,53 @@ describe("importing Word documents", () => {
     assert.match(((await broken.json()) as { error: string }).error, /couldn't be read as a Word document/);
   });
 });
+
+describe("folders inside an archive", () => {
+  test("Takeout's wrapper and a single top folder are dropped; the rest become folders", async () => {
+    const { archiveFolders } = await import("@/lib/server/unzip");
+    assert.deepEqual([...archiveFolders(["Takeout/Drive/Work/Q3/a.docx", "Takeout/Drive/b.docx"]).values()], [["Work", "Q3"], []]);
+    assert.deepEqual([...archiveFolders(["export/School/a.docx", "export/b.docx"]).values()], [["School"], []]);
+    assert.deepEqual([...archiveFolders(["a.docx", "Notes/b.docx"]).values()], [[], ["Notes"]]);
+  });
+});
+
+describe("importing a ZIP of Word documents (Google Takeout)", () => {
+  type ArchiveResult = { documents: { id: string; title: string }[]; failed: { name: string; error: string }[]; error?: string };
+
+  test("every .docx in the archive becomes a document; other files are skipped and broken ones reported", async () => {
+    const { createZip } = await import("@/lib/doc/zip");
+    const untitled = createZip([{ name: "word/document.xml", data: '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Hello</w:t></w:r></w:p></w:body></w:document>' }]);
+    const archive = createZip([
+      { name: "Takeout/archive_browser.html", data: "<html></html>" },
+      { name: "Takeout/Drive/Projects/Budget.docx", data: docx },
+      { name: "Takeout/Drive/Trip notes.docx", data: untitled },
+      { name: "Takeout/Drive/Broken.docx", data: "not a zip" },
+      { name: "Takeout/Drive/photo.jpg", data: "jpeg bytes" },
+    ]);
+    const response = await upload("takeout-20261007T000000Z-001.zip", archive);
+    assert.equal(response.status, 201);
+    const result = (await response.json()) as ArchiveResult;
+    assert.deepEqual(result.documents.map((doc) => doc.title).sort(), ["Budget", "Trip notes"]);
+    assert.deepEqual(result.failed.map((item) => item.name), ["Takeout/Drive/Broken.docx"]);
+    assert.match(result.failed[0]!.error, /couldn't be read as a Word document/);
+    // Drive's folders come along: Budget sat in Projects.
+    const budget = result.documents.find((doc) => doc.title === "Budget") as { folderId?: string };
+    const { listFolders } = await import("@/lib/server/folders");
+    assert.equal((await listFolders()).find((folder) => folder.id === budget.folderId)?.name, "Projects");
+    assert.equal((result.documents.find((doc) => doc.title === "Trip notes") as { folderId?: string }).folderId, undefined);
+    const { docToMarkdown } = await import("@/lib/doc/markdown");
+    const notes = result.documents.find((doc) => doc.title === "Trip notes")!;
+    assert.equal(docToMarkdown((await hub.get(notes.id))!.doc).trim(), "Hello");
+  });
+
+  test("archives without readable Word files are refused with a clear message", async () => {
+    const { createZip } = await import("@/lib/doc/zip");
+    const empty = await upload("photos.zip", createZip([{ name: "a.jpg", data: "x" }]));
+    assert.equal(empty.status, 422);
+    assert.match(((await empty.json()) as ArchiveResult).error!, /No Word \(\.docx\) files/);
+    const allBroken = await upload("bad.zip", createZip([{ name: "a.docx", data: "x" }]));
+    assert.equal(allBroken.status, 422);
+    assert.equal(((await allBroken.json()) as ArchiveResult).failed.length, 1);
+    assert.equal((await upload("fake.zip", "not a zip")).status, 422);
+  });
+});
