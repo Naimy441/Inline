@@ -26,6 +26,14 @@ export type PageGeometry = {
 
 type Break = { pos: number; height: number; inline: boolean };
 
+/**
+ * How far (px) a line may end past the bottom margin and stay on its page.
+ * Browsers measure the same text a pixel apart (Firefox rounds line boxes
+ * differently from Chrome), so a page that just fits in one would spill a line
+ * in another. A couple of px stays well inside even a tenth-inch margin.
+ */
+const FIT_SLACK = 2;
+
 /** What a layout pass found: the page count, where each page after the first starts, and how full the last page is (0-1). */
 export type PageLayout = {
   pages: number;
@@ -260,7 +268,7 @@ function measure(view: EditorView, geometry: PageGeometry, keepCache = true): { 
     const bottom = unit.bottom + shift;
     const pageStart = page * pitch;
     const pageEnd = pageStart + contentHeight;
-    if (forceNext || (bottom > pageEnd + 0.5 && !firstOnPage)) {
+    if (forceNext || (bottom > pageEnd + FIT_SLACK && !firstOnPage)) {
       // Start this unit at the top of the next page that it reaches.
       let target = page + 1;
       while (!forceNext && top > target * pitch + contentHeight) target += 1;

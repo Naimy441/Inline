@@ -146,7 +146,8 @@ describe("reading Word documents", () => {
     const sect = '<w:sectPr><w:headerReference w:type="default" r:id="rId20"/><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="720" w:right="1080" w:bottom="720" w:left="1080"/></w:sectPr>';
     const parts = readZip(
       deflatedZip({
-        "word/document.xml": `<w:document ${W}><w:body>${p("Body")}${sect}</w:body></w:document>`,
+        // Google writes each run's size; one left out is its Normal text's 11pt, whatever the file's default.
+        "word/document.xml": `<w:document ${W}><w:body>${p("Body", '<w:rPr><w:sz w:val="24"/></w:rPr>', '<w:sz w:val="24"/>')}${sect}</w:body></w:document>`,
         "word/styles.xml": `<w:styles ${W}><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Times New Roman"/><w:sz w:val="24"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:line="480" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="normal"/></w:style></w:styles>`,
         "word/_rels/document.xml.rels": `<Relationships xmlns="x"><Relationship Id="rId20" Type="header" Target="header1.xml"/></Relationships>`,
         "word/header1.xml": `<w:hdr ${W}><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:t xml:space="preserve">Smith </w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>PAGE</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:hdr>`,
@@ -246,6 +247,19 @@ describe("reading Word documents", () => {
     assert.equal(docToMarkdown(tabs[1]!.doc).trim(), "Second tab");
     // A document read as one keeps everything in order.
     assert.match(docToMarkdown(await docxToDoc(parts)), /Outline[\s\S]*First tab[\s\S]*Draft[\s\S]*Second tab/);
+  });
+
+  it("splits a Google Doc downloaded with File › Download, whose tabs are sections without names", async () => {
+    const google = (body: string) => wordDocument(body, { "word/styles.xml": `<w:styles ${W}><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="normal"/></w:style></w:styles>` });
+    const sectionEnd = (text: string) => `<w:p><w:pPr><w:sectPr/></w:pPr><w:r><w:t>${text}</w:t></w:r></w:p>`;
+    const { tabs } = await readDocx(google([p("Actual"), sectionEnd("End of one"), p("Draft"), sectionEnd("End of two"), p("Dream")].join("")));
+    assert.deepEqual(tabs.map((tab) => docToMarkdown(tab.doc).trim()), ["Actual\n\nEnd of one", "Draft\n\nEnd of two", "Dream"]);
+    assert.deepEqual(tabs.map((tab) => tab.title), [null, null, null]);
+    // Text with no size is Google's 11pt, though the file's default (from Word) says 12pt.
+    const sized = await readDocx(wordDocument(p("Plain"), { "word/styles.xml": `<w:styles ${W}><w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="normal"/></w:style></w:styles>` }));
+    assert.equal(sized.settings.fontSize, 11);
+    // Only Google writes its tabs this way; a Word document's sections are one document.
+    assert.equal((await readDocx(wordDocument([p("One"), sectionEnd("Two"), p("Three")].join("")))).tabs.length, 1);
   });
 
   it("rejects files that aren't Word documents", async () => {

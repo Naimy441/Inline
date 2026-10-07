@@ -1308,11 +1308,12 @@ function commentIdsIn(doc: PMNode) {
 const sectionEnd = (item: XmlElement | undefined) => item?.name === "w:p" && Boolean(child(child(item, "w:pPr"), "w:sectPr"));
 
 /**
- * Google Docs writes each tab as a section that starts with the tab's name in
- * the Title style. Splits the body there, or returns null for a document
- * without tabs.
+ * Google Docs writes each tab as a section. Takeout starts each with the tab's
+ * name in the Title style; File › Download leaves the names out, so there each
+ * section is a tab with no name. Splits the body there, or returns null for a
+ * document without tabs.
  */
-function googleTabs(body: XmlElement, ctx: Context): Array<{ title: string; items: XmlElement[] }> | null {
+function googleTabs(body: XmlElement, ctx: Context): Array<{ title: string | null; items: XmlElement[] }> | null {
   const items = elements(body).filter((item) => item.name !== "w:sectPr");
   const starts: number[] = [];
   items.forEach((item, index) => {
@@ -1321,11 +1322,17 @@ function googleTabs(body: XmlElement, ctx: Context): Array<{ title: string; item
     starts.push(index);
   });
   // One tab still gets its name written at the top; it isn't part of the text.
-  if (!starts.length || starts[0] !== 0) return null;
-  return starts.map((start, n) => ({
-    title: textOf(items[start]!).replace(/\s+/g, " ").trim(),
-    items: items.slice(start + 1, starts[n + 1] ?? items.length),
-  }));
+  if (starts.length && starts[0] === 0) {
+    return starts.map((start, n) => ({
+      title: textOf(items[start]!).replace(/\s+/g, " ").trim(),
+      items: items.slice(start + 1, starts[n + 1] ?? items.length),
+    }));
+  }
+  if (!ctx.google || ctx.inline) return null;
+  // A section ends with its last paragraph, which is still part of its text.
+  const ends = items.flatMap((item, index) => (sectionEnd(item) && index < items.length - 1 ? [index + 1] : []));
+  if (!ends.length) return null;
+  return [0, ...ends].map((start, n) => ({ title: null, items: items.slice(start, ends[n] ?? items.length) }));
 }
 
 // --- reading a whole document --------------------------------------------------------------
@@ -1385,6 +1392,11 @@ export async function readDocx(parts: DocxParts, options: { saveImage?: SaveImag
   const body = child(child(parseXml(xml), "w:document"), "w:body");
   if (!body) throw new DocxImportError("This Word document has no body.");
   const { styles, defaults } = readStyles(parts);
+  // Google Docs names its normal style in lower case.
+  const google = /<w:style\b[^>]*w:styleId="Normal"[^>]*>\s*<w:name w:val="normal"\/>/.test(readPart(parts, "word/styles.xml") ?? "");
+  // Google draws text with no size as its Normal text, 11pt, even when the file keeps another default (one first made in Word says 12pt).
+  const ours = inlineOrigin(parts).ours;
+  if (google && !ours) defaults.run.size = 11;
   const defaultParagraphStyle = [...styles].find(([, style]) => style.type === "paragraph" && style.isDefault)?.[0];
   const settings = readSettings(parts, body, styles, defaults, defaultParagraphStyle);
   const normalRun = merge(defaults.run, ...styleChain({ styles }, defaultParagraphStyle).map((style) => style.run));
@@ -1403,9 +1415,8 @@ export async function readDocx(parts: DocxParts, options: { saveImage?: SaveImag
     commentMarks,
     activeComments: new Set(),
     commentQuotes: new Map(),
-    // Google Docs names its normal style in lower case.
-    inline: inlineOrigin(parts).ours,
-    google: /<w:style\b[^>]*w:styleId="Normal"[^>]*>\s*<w:name w:val="normal"\/>/.test(readPart(parts, "word/styles.xml") ?? ""),
+    inline: ours,
+    google,
   };
   if (options.saveFont) for (const font of embeddedFonts(parts)) await options.saveFont(font);
 
