@@ -332,6 +332,7 @@ class MathBlockView implements NodeView {
     this.contentDOM = document.createElement("code");
     pre.append(this.contentDOM);
     this.dom.append(this.preview, pre);
+    this.applySpacing();
     this.preview.addEventListener("mousedown", (event) => {
       event.preventDefault();
       const pos = getPos();
@@ -354,7 +355,14 @@ class MathBlockView implements NodeView {
     if (node.type !== this.node.type || node.attrs.language !== MATH_LANGUAGE) return false;
     this.node = node;
     this.render();
+    this.applySpacing();
     return true;
+  }
+
+  /** The equation's own space above and below (an imported PDF's), when it has one. */
+  private applySpacing() {
+    this.dom.style.marginTop = this.node.attrs.spaceBefore != null ? `${this.node.attrs.spaceBefore}pt` : "";
+    this.dom.style.marginBottom = this.node.attrs.spaceAfter != null ? `${this.node.attrs.spaceAfter}pt` : "";
   }
 
   stopEvent(event: Event) {

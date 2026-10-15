@@ -103,7 +103,7 @@ export type PdfDocumentSummary = {
   header: PdfHeaderFooter | null;
   footer: PdfHeaderFooter | null;
   /** Page numbers printed on the pages, and where. */
-  pageNumbers: { position: "header" | "footer"; align: "left" | "center" | "right" } | null;
+  pageNumbers: { position: "header" | "footer"; align: "left" | "center" | "right"; /** Baseline, from the top of the page. */ y?: number } | null;
   /** Fonts by how much text is set in them. */
   fonts: Array<{ name: string; bold: boolean; italic: boolean; chars: number; sizes: number[] }>;
   /** A rule under the header (LaTeX's fancyhdr, Word's header border). */

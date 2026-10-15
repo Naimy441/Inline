@@ -663,7 +663,7 @@ export const TOOLS = [
     name: "update_document_settings",
     title: "Update document settings",
     description:
-      "Change document-level settings: title, default font and size, line/paragraph spacing, page setup, header and footer text (supports {page}, {pages}, {title}, {date}), and page numbers. Only the fields you pass change.",
+      "Change document-level settings: title, default font and size, line/paragraph spacing, page setup, header and footer text (supports {page}, {pages}, {title}, {date}; tabs split it into left, center and right parts), the header rule and the header and footer distances from the page edge, and page numbers. Only the fields you pass change.",
     shape: {
       document_id: documentId,
       title: z.string().optional(),
@@ -684,6 +684,9 @@ export const TOOLS = [
       different_first_page: z.boolean().optional(),
       first_page_header: z.string().optional(),
       first_page_footer: z.string().optional(),
+      header_rule: z.boolean().optional().describe("A rule under the header."),
+      header_from: z.number().min(0).max(3).nullable().optional().describe("Inches from the top of the page to the top of the header text (null: just inside the margin)."),
+      footer_from: z.number().min(0).max(3).nullable().optional().describe("Inches from the bottom of the page to the bottom of the footer text and page number (null: just inside the margin)."),
       page_numbers: z
         .object({
           enabled: z.boolean().optional(),
@@ -723,6 +726,9 @@ export const TOOLS = [
       if (args.different_first_page !== undefined) headerFooter.differentFirstPage = args.different_first_page;
       if (args.first_page_header !== undefined) headerFooter.firstHeader = args.first_page_header;
       if (args.first_page_footer !== undefined) headerFooter.firstFooter = args.first_page_footer;
+      if (args.header_rule !== undefined) headerFooter.headerRule = args.header_rule;
+      if (args.header_from !== undefined) headerFooter.headerFrom = args.header_from;
+      if (args.footer_from !== undefined) headerFooter.footerFrom = args.footer_from;
       if (Object.keys(headerFooter).length) settings.headerFooter = headerFooter;
       if (args.page_numbers) {
         const pn = args.page_numbers;

@@ -12,7 +12,10 @@ import type { LiveDocument } from "@/lib/server/hub";
 /** A line of text on a rendered page: its left edge and baseline in points from the top left. */
 export type RenderedLine = { x: number; y: number; size: number; text: string };
 
-export type RenderedPage = { page: number; png: Uint8Array; lines?: RenderedLine[] };
+/** A top-level block on a rendered page: its id, and its top and bottom in points from the page's top. */
+export type RenderedBlock = { id: string; top: number; bottom: number; joined?: boolean; /** For a block sharing a box with the one before: the space between them, in points. */ inside?: number };
+
+export type RenderedPage = { page: number; png: Uint8Array; lines?: RenderedLine[]; blocks?: RenderedBlock[] };
 
 type Waiting = { documentId: string; resolve: (pages: RenderedPage[]) => void; timer: ReturnType<typeof setTimeout> };
 

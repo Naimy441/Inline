@@ -175,7 +175,7 @@ describe("summarize", () => {
     const pages = await analyze(buildTestPdf([1, 2, 3].map((n) => ({ content: BODY.replace("PAGENO", String(n)) }))));
     const summary = summarize(pages.map((page) => page.analysis));
     assert.equal(summary.header?.text, "Running header");
-    assert.deepEqual(summary.pageNumbers, { position: "footer", align: "center" });
+    assert.deepEqual(summary.pageNumbers, { position: "footer", align: "center", y: 752 });
     assert.equal(summary.bodyFont, "Helvetica");
     assert.equal(summary.bodySize, 11);
     assert.equal(summary.lineSpacing, round(14 / 11));

@@ -329,11 +329,41 @@ export class DocumentSession {
         canvas.width = 0;
         if (png) form.append(`page-${index}`, png, `page-${index}.png`);
         form.append(`lines-${index}`, JSON.stringify(pageLines(page)));
+        form.append(`blocks-${index}`, JSON.stringify(this.blocksOnPage(index)));
       } finally {
         close();
       }
     }
     await fetch(`/api/documents/${this.id}/render`, { method: "POST", body: form });
+  }
+
+  /**
+   * Where each top-level block on a page (0-based) sits, in points from the
+   * page's top: its id, top and bottom, and whether it shares a box with the
+   * block before it. For lining an imported PDF's pages up with the original.
+   */
+  private blocksOnPage(index: number) {
+    const view = this.view;
+    const sheet = view?.dom.closest(".page-stack")?.querySelectorAll<HTMLElement>(".sheet")[index];
+    if (!view || !sheet) return [];
+    const paper = sheet.getBoundingClientRect();
+    const scale = paper.width / (sheet.offsetWidth || paper.width) || 1;
+    const pt = (px: number) => Math.round(((px / scale) * 72 * 100) / 96) / 100;
+    const blocks: Array<{ id: string; top: number; bottom: number; joined?: boolean; inside?: number }> = [];
+    let previous: HTMLElement | null = null;
+    for (const child of Array.from(view.dom.children) as HTMLElement[]) {
+      const before = previous;
+      previous = child;
+      const id = child.dataset.id ?? child.querySelector<HTMLElement>(":scope > [data-id]")?.dataset.id;
+      if (!id) continue;
+      const rect = child.getBoundingClientRect();
+      if (rect.top < paper.top - 1 || rect.top >= paper.bottom) continue;
+      // In a box shared with the block before, the space between them is that block's padding (lib/editor/borders.ts).
+      const joined = child.classList.contains("border-join-prev");
+      const inside = joined && before ? pt(Number.parseFloat(getComputedStyle(before).paddingBottom) * scale || 0) : null;
+      blocks.push({ id, top: pt(rect.top - paper.top), bottom: pt(rect.bottom - paper.top), ...(joined ? { joined: true, ...(inside !== null ? { inside } : {}) } : {}) });
+    }
+    return blocks;
   }
 
   /** The laid-out pages as a PDF page model, read from the screen without review marks. */

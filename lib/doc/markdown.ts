@@ -558,13 +558,16 @@ function mathPlugin(md: InstanceType<typeof MarkdownIt>) {
       if (!first.startsWith("$$")) return false;
       let content: string;
       let next: number;
+      let attrs = "";
       if (first !== "$$" && first.length > 4 && first.endsWith("$$") && !first.slice(2, -2).includes("$$")) {
         content = first.slice(2, -2).trim();
         next = startLine + 1;
       } else if (first === "$$") {
         let line = startLine + 1;
-        while (line < endLine && lineText(line) !== "$$") line += 1;
+        // The closing $$ may carry spacing: "$$ {before=6 after=6}".
+        while (line < endLine && !/^\$\$(\s*\{[^{}]*\})?$/.test(lineText(line))) line += 1;
         if (line >= endLine) return false;
+        attrs = lineText(line).slice(2).trim();
         const lines: string[] = [];
         for (let i = startLine + 1; i < line; i += 1) lines.push(state.src.slice(state.bMarks[i]! + Math.min(state.tShift[i]!, state.blkIndent), state.eMarks[i]));
         content = lines.join("\n");
@@ -574,6 +577,7 @@ function mathPlugin(md: InstanceType<typeof MarkdownIt>) {
       const token = state.push("math_block", "math", 0);
       token.block = true;
       token.content = content;
+      token.info = attrs;
       token.map = [startLine, next];
       state.line = next;
       return true;
@@ -660,9 +664,13 @@ class BlockBuilder {
           ? schema.node("ordered_list", { order: Number(token.attrGet("start") ?? 1) || 1 }, items)
           : schema.node("bullet_list", null, items);
       }
-      case "math_block":
+      case "math_block": {
         this.index += 1;
-        return schema.node("code_block", { language: MATH_LANGUAGE }, token.content ? schema.text(token.content) : undefined);
+        const spec = ATTR_SUFFIX.exec(token.info ?? "");
+        const layout = spec ? layoutAttrs(parseAttrSpec(spec[1] ?? "")) : {};
+        const spacing = { ...(layout.spaceBefore !== undefined ? { spaceBefore: layout.spaceBefore } : {}), ...(layout.spaceAfter !== undefined ? { spaceAfter: layout.spaceAfter } : {}) };
+        return schema.node("code_block", { language: MATH_LANGUAGE, ...spacing }, token.content ? schema.text(token.content) : undefined);
+      }
       case "fence":
       case "code_block": {
         this.index += 1;

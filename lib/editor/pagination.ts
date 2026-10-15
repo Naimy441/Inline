@@ -268,11 +268,17 @@ function measure(view: EditorView, geometry: PageGeometry, keepCache = true): { 
     const bottom = unit.bottom + shift;
     const pageStart = page * pitch;
     const pageEnd = pageStart + contentHeight;
-    if (forceNext || (bottom > pageEnd + FIT_SLACK && !firstOnPage)) {
+    // A page break fits wherever it falls: pushed onto the next page by the content before it, it would
+    // break again there and leave that page blank.
+    const pageBreak = unit.kind === "box" && unit.forceBreakAfter;
+    if (forceNext || (bottom > pageEnd + FIT_SLACK && !firstOnPage && !pageBreak)) {
       // Start this unit at the top of the next page that it reaches.
       let target = page + 1;
       while (!forceNext && top > target * pitch + contentHeight) target += 1;
-      const height = target * pitch - top;
+      // After a page break, a block keeps the space it asks for above it (as Word does after a manual break);
+      // after a page simply filling up, it starts at the top.
+      const above = forceNext && unit.kind === "line" && Number(unit.block.attrs.spaceBefore) > 0 ? (Number(unit.block.attrs.spaceBefore) * 96) / 72 : 0;
+      const height = target * pitch - top + above;
       if (height > 0) {
         let pos = unit.kind === "line" ? lineStart(view, unit.block, unit.blockPos, unit.top, toLocal, natural) : unit.pos;
         let inline = unit.kind === "line";

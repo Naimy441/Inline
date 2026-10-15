@@ -1,5 +1,5 @@
 import { HttpError, json, route, routeDocument } from "@/lib/server/http";
-import { deliverPageRenders, type RenderedLine, type RenderedPage } from "@/lib/server/renders";
+import { deliverPageRenders, type RenderedBlock, type RenderedLine, type RenderedPage } from "@/lib/server/renders";
 
 type Context = { params: Promise<{ id: string }> };
 
@@ -28,7 +28,15 @@ export const POST = route(async (request, context: Context) => {
     } catch {
       lines = undefined;
     }
-    pages.push({ page: Number(match[1]), png, ...(lines ? { lines } : {}) });
+    let blocks: RenderedBlock[] | undefined;
+    try {
+      const raw = form!.get(`blocks-${match[1]}`);
+      const parsed = typeof raw === "string" ? (JSON.parse(raw) as unknown) : null;
+      if (Array.isArray(parsed)) blocks = parsed.filter((block): block is RenderedBlock => Boolean(block) && typeof block.id === "string" && Number.isFinite(block.top) && Number.isFinite(block.bottom)).slice(0, 2000);
+    } catch {
+      blocks = undefined;
+    }
+    pages.push({ page: Number(match[1]), png, ...(lines ? { lines } : {}), ...(blocks ? { blocks } : {}) });
   }
   return json({ delivered: deliverPageRenders(doc.id, requestId, pages.sort((a, b) => a.page - b.page)) });
 });

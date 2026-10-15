@@ -70,3 +70,15 @@ describe("layout attributes in Markdown", () => {
     assert.equal(docToMarkdown(doc), "Text");
   });
 });
+
+describe("spacing around displayed equations", () => {
+  it("reads before= and after= on the closing $$ line", () => {
+    const [math, after] = parseMarkdown("$$\n\\int_0^1 x\\,dx\n$$ {before=4 after=6.5}\n\nNext");
+    assert.equal(math!.type.name, "code_block");
+    assert.equal(math!.textContent, "\\int_0^1 x\\,dx");
+    assert.deepEqual([math!.attrs.spaceBefore, math!.attrs.spaceAfter], [4, 6.5]);
+    assert.equal(after!.textContent, "Next");
+    const plain = parseMarkdown("$$\nx\n$$")[0]!;
+    assert.deepEqual([plain.attrs.spaceBefore, plain.attrs.spaceAfter], [null, null]);
+  });
+});

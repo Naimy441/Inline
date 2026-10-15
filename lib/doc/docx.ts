@@ -619,7 +619,7 @@ export async function documentToDocx(content: PMNode | DocxTab[], meta: Document
       threads.push(thread);
     }
   }
-  const geometry = `<w:pgSz w:w="${Math.round(size.width * TWIP)}" w:h="${Math.round(size.height * TWIP)}"${settings.pageSetup.orientation === "landscape" ? ' w:orient="landscape"' : ""}/><w:pgMar w:top="${Math.round(m.top * TWIP)}" w:right="${Math.round(m.right * TWIP)}" w:bottom="${Math.round(m.bottom * TWIP)}" w:left="${Math.round(m.left * TWIP)}" w:header="708" w:footer="708" w:gutter="0"/>`;
+  const geometry = `<w:pgSz w:w="${Math.round(size.width * TWIP)}" w:h="${Math.round(size.height * TWIP)}"${settings.pageSetup.orientation === "landscape" ? ' w:orient="landscape"' : ""}/><w:pgMar w:top="${Math.round(m.top * TWIP)}" w:right="${Math.round(m.right * TWIP)}" w:bottom="${Math.round(m.bottom * TWIP)}" w:left="${Math.round(m.left * TWIP)}" w:header="${settings.headerFooter.headerFrom !== undefined ? Math.round(settings.headerFooter.headerFrom * TWIP) : 708}" w:footer="${settings.headerFooter.footerFrom !== undefined ? Math.round(settings.headerFooter.footerFrom * TWIP) : 708}" w:gutter="0"/>`;
   let body = "";
   const sectionEnd = schema.nodes.paragraph!.create();
   for (const [t, tab] of tabs.entries()) {

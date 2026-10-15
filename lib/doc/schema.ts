@@ -134,6 +134,14 @@ function blockStyle(node: PMNode, extra = ""): string {
   return parts.join("; ");
 }
 
+/** A block's own space above and below as CSS margins ("" for the usual). */
+export function blockSpacing(node: PMNode) {
+  const parts: string[] = [];
+  if (node.attrs.spaceBefore != null) parts.push(`margin-top: ${node.attrs.spaceBefore}pt`);
+  if (node.attrs.spaceAfter != null) parts.push(`margin-bottom: ${node.attrs.spaceAfter}pt`);
+  return parts.join("; ");
+}
+
 /** Whether two paragraphs' borders are the same, so they share one box (as Word and Google Docs draw them). */
 export function sameBorders(a: Borders | null | undefined, b: Borders | null | undefined) {
   if (!a || !b) return false;
@@ -329,7 +337,8 @@ const nodes: Record<string, NodeSpec> = {
     group: "block",
     code: true,
     defining: true,
-    attrs: { id: { default: null }, language: { default: "" } },
+    /** Space above and below in points, when not the usual (a displayed equation placed as in an imported PDF). */
+    attrs: { id: { default: null }, language: { default: "" }, spaceBefore: { default: null as number | null }, spaceAfter: { default: null as number | null } },
     parseDOM: [
       {
         tag: "pre",
@@ -339,7 +348,7 @@ const nodes: Record<string, NodeSpec> = {
     ],
     toDOM: (node): DOMOutputSpec => [
       "pre",
-      { ...(node.attrs.id ? { "data-id": node.attrs.id } : {}), "data-language": node.attrs.language || "" },
+      { ...(node.attrs.id ? { "data-id": node.attrs.id } : {}), "data-language": node.attrs.language || "", ...(blockSpacing(node) ? { style: blockSpacing(node) } : {}) },
       ["code", 0],
     ],
   },

@@ -250,7 +250,7 @@ function pageNumberLine(page: PdfPageAnalysis, line: PdfTextLine) {
 
 export function summarize(pages: PdfPageAnalysis[]): PdfDocumentSummary {
   const running = pages.length > 1 ? runningLines(pages) : { header: null, footer: null, lines: new Set<PdfTextLine>() };
-  const numbers: Array<{ position: "header" | "footer"; align: "left" | "center" | "right" }> = [];
+  const numbers: Array<{ position: "header" | "footer"; align: "left" | "center" | "right"; y?: number }> = [];
   const chrome = new Set<PdfTextLine>(running.lines);
   for (const page of pages) {
     const band = page.height * 0.13;
@@ -261,7 +261,7 @@ export function summarize(pages: PdfPageAnalysis[]): PdfDocumentSummary {
       chrome.add(line);
       const center = line.box.x + line.box.width / 2;
       const align = Math.abs(center - page.width / 2) < page.width * 0.1 ? "center" : center < page.width / 2 ? "left" : "right";
-      numbers.push({ position: top ? "header" : "footer", align });
+      numbers.push({ position: top ? "header" : "footer", align, y: line.baseline });
     }
   }
   // A number inside the running header ("… · 3") is drawn as part of it.
@@ -339,10 +339,16 @@ export function summarize(pages: PdfPageAnalysis[]): PdfDocumentSummary {
     paragraphSpacing,
     header: running.header,
     footer: running.footer,
-    pageNumbers: position && align ? { position, align } : null,
+    pageNumbers: position && align ? { position, align, ...(numberBaselines(numbers, position, align)) } : null,
     fonts: fontList.slice(0, 12),
     headerRule,
   };
+}
+
+/** Where the page numbers of the most common kind sit (their median baseline). */
+function numberBaselines(numbers: Array<{ position: string; align: string; y?: number }>, position: string, align: string) {
+  const ys = numbers.filter((item) => item.position === position && item.align === align && item.y !== undefined).map((item) => item.y!);
+  return ys.length ? { y: round(median(ys)) } : {};
 }
 
 function mostCommon(values: string[]): string | null {

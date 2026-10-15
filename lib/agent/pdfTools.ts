@@ -20,7 +20,9 @@ import {
   type PageRange,
   type PdfImportRecord,
 } from "@/lib/server/pdfImports";
-import { RenderUnavailableError, requestPageRenders, type RenderedLine } from "@/lib/server/renders";
+import { RenderUnavailableError, requestPageRenders } from "@/lib/server/renders";
+import { compareLines, planAlignment, type BlockSpacing } from "@/lib/agent/pdfAlign";
+import { MATH_LANGUAGE, TEXTBLOCK_TYPES } from "@/lib/doc/schema";
 import { findUpload } from "@/lib/server/store";
 import type { ToolContext, ToolDefinition, ToolResult } from "@/lib/agent/tools";
 
@@ -49,16 +51,19 @@ The document was made from a PDF. It has one page per original page, separated b
 Work one page at a time:
 1. read_pdf_page — the page as a picture, with its text lines (exact words, positions, fonts, sizes), rules and frames, pictures and drawings.
 2. write_pdf_page — the page's content as Markdown with layout attributes (below). It replaces that page (the placeholder, or what you wrote before). Don't write \\pagebreak: pages are kept apart for you. Write the whole page in one call.
-3. compare_pdf_page — the original next to your page as the editor lays it out, with how far each line sits from where it should. Fix what differs (write_pdf_page again) until the pages match: same line breaks, lines within a few points of their original height, nothing pushed onto an extra page. Usually one or two fixes.
-Then the next page. Plan the pages with TodoWrite for long documents. When every page is done, call finish_pdf_import.
+3. align_pdf_page — sets the space above and below every block so each one's first line lands at its height in the original, measuring in the editor until it matches. Leave vertical spacing to it rather than tuning before=/after= by hand; give blocks your best estimate when writing, and it does the rest.
+4. compare_pdf_page — the original next to your page as the editor lays it out, with how far each line sits from where it should. Fix what alignment can't (write_pdf_page again, then align_pdf_page again): different line breaks, wrong sizes, anything missing or extra, a page that runs onto a second one. Lines within ±3 pt of their original height are a match. An offset that grows within a block means its line spacing (line=) or size differs.
+Only then the next page: compare every page, and don't finish with pages you haven't compared. Plan the pages with TodoWrite for long documents. When every page is done and matches, call finish_pdf_import.
+If a tool says the editor hasn't laid the page out yet, it is busy (or reloading): call it again in a moment, more than once if needed, rather than skipping the check. Only when it keeps failing is the document closed; then say so to the user.
 
 ### Getting it right
 - Transcribe exactly: every word, number and symbol, in order, nothing added, nothing "fixed". Copy words from the text lines (they are exact); for math and symbols trust the picture, since the text layer often garbles them (minus signs, ∼, ∗, accents, superscripts).
-- Math is LaTeX: $…$ in text and $$…$$ for displayed equations (centered on their own line). Match the original's notation: \\mathbb{P}, \\operatorname{Var}, \\sqrt{}, \\frac{}{}, \\sum_{x}, \\int_{-\\infty}^{z}, \\mathcal{N}, \\sim, \\cdot. A derivation over several lines is one $$\\begin{aligned}…\\end{aligned}$$ block with & alignment. Put an equation's own punctuation inside it.
+- Math is LaTeX: $…$ in text and $$…$$ for displayed equations (centered on their own line; the closing line can carry spacing, "$$ {before=6 after=6}"). Match the original's notation: \\mathbb{P}, \\operatorname{Var}, \\sqrt{}, \\frac{}{}, \\sum_{x}, \\int_{-\\infty}^{z}, \\mathcal{N}, \\sim, \\cdot. A derivation over several lines is one $$\\begin{aligned}…\\end{aligned}$$ block with & alignment. Put an equation's own punctuation inside it.
 - Paragraphs: one per paragraph of the original; join the PDF's lines (don't keep its line breaks). <br> only where the original breaks a line on purpose.
 - Headings: use # levels for the structure (the biggest section style as ##, the next ###, …; # only for a real document title), and match their look with **bold** and size= (Inline headings are otherwise light and gray): \`## **1 Variance and Standard Deviation (§3.3)** {size=14.3 before=18 after=8 color=#000000}\`.
+- Keep the original's spacing inside lines: TeX leaves a wide gap after a section number ("1  Variance", "1.1  Standard Deviation"); write it with &ensp; or &emsp; so the text starts where it did.
 - Lists keep their markers: Markdown lists for bullets and 1. 2. numbering; write other markers ((a), (1), •) as text.
-- A frame around paragraphs (a definition or question box): \`{.box border-width=0.4 border-space=3}\` on each paragraph in the frame, including its heading line; neighbouring paragraphs with the same box share one frame. Displayed equations can't take a box; put them in a boxed paragraph as $\\displaystyle …$ with {align=center} when they belong inside a frame.
+- A frame around paragraphs (a definition or question box): \`{.box border-width=0.4 border-space=3}\` on each paragraph in the frame, including its heading line; neighbouring paragraphs with the same box share one frame, so two separate frames one after another need a paragraph between them: an empty one that also makes the gap, \`&nbsp; {size=1 after=40}\`. Displayed equations can't take a box; put them in a boxed paragraph as $\\displaystyle …$ with {align=center} when they belong inside a frame.
 - A rule across the page: \`---\`, or border=bottom on the paragraph above it.
 - Text lined up at tab stops (a table of contents with page numbers at the right, two-column multiple choice): \`Text&#9;Page {tabs="470:right"}\`. Tab positions are points from the left margin (the PDF x minus the left margin).
 - Tables: Markdown tables for real tables of text. A table that is a picture in the PDF stays a picture.
@@ -127,7 +132,8 @@ function pageStatus(range: PageRange | undefined) {
 
 /** Pages of the document an original page takes, from the editor's measured layout (0-based), or null when not measured. */
 async function pagesTaken(doc: LiveDocument, range: PageRange) {
-  const layout = await doc.currentLayout(4000);
+  // The editor measures a change within a second or so; give a busy one longer.
+  const layout = await doc.currentLayout(12_000);
   if (!layout) return null;
   const starts = layout.starts;
   const pageOf = (pos: number) => starts.filter((start) => start <= pos).length;
@@ -140,28 +146,6 @@ function ranges(record: PdfImportRecord, doc: LiveDocument, page: number) {
   if (!Number.isInteger(page) || page < 1 || page > record.manifest.pageCount) throw new EditError(`The PDF has pages 1 to ${record.manifest.pageCount}.`);
   const all = pageRanges(doc.doc);
   return { all, range: all[page - 1] };
-}
-
-/** Where the rendered page's lines are, against the original's: matched by their words. */
-export function compareLines(original: PdfTextLine[], rendered: RenderedLine[]) {
-  const words = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter((word) => word.length > 1);
-  const rows = rendered.map((line) => ({ line, words: new Set(words(line.text)) }));
-  const report: Array<{ text: string; original: number; rendered: number | null; dx: number | null }> = [];
-  let floor = -Infinity;
-  for (const line of original) {
-    const own = words(line.text);
-    if (own.length < 3) continue;
-    let best: { line: RenderedLine; score: number } | null = null;
-    for (const row of rows) {
-      if (row.line.y < floor - 2) continue;
-      const hits = own.filter((word) => row.words.has(word)).length;
-      const score = hits / own.length;
-      if (score >= 0.6 && (!best || score > best.score + 0.05 || (Math.abs(score - best.score) <= 0.05 && Math.abs(row.line.y - line.baseline) < Math.abs(best.line.y - line.baseline)))) best = { line: row.line, score };
-    }
-    if (best) floor = best.line.y;
-    report.push({ text: line.text.replace(/\t/g, " ").slice(0, 60), original: line.baseline, rendered: best?.line.y ?? null, dx: best ? best.line.x - line.box.x : null });
-  }
-  return report;
 }
 
 export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
@@ -322,11 +306,11 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
         const taken = await pagesTaken(doc, written);
         const left = pagesLeft(doc.doc, record.manifest.pageCount);
         const fit = !taken
-          ? "The editor hasn't measured it yet (is the document open?)."
+          ? "The editor hasn't measured it yet; compare_pdf_page will wait for it."
           : taken.count === 1
             ? `It fits on one page (page ${taken.first + 1} of the document).`
             : `It runs over ${taken.count} pages of the document (pages ${taken.first + 1}-${taken.last + 1}): it must fit on one. Tighten its spacing or check for something too tall.`;
-        return ok(`Wrote page ${args.page}: ${blocks.length} block${blocks.length === 1 ? "" : "s"}. ${fit}${left.length ? ` Pages still to convert: ${compactPages(left)}.` : " Every page is converted now; finish with finish_pdf_import once they all match."} Compare it with the original with compare_pdf_page.`);
+        return ok(`Wrote page ${args.page}: ${blocks.length} block${blocks.length === 1 ? "" : "s"}. ${fit}${left.length ? ` Pages still to convert: ${compactPages(left)}.` : " Every page is converted now; finish with finish_pdf_import once they all match."} Next: compare_pdf_page with page ${args.page}, before going on.`);
       },
     }),
 
@@ -342,7 +326,7 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
         const { range } = ranges(record, doc, args.page);
         if (!range) return fail(`Page ${args.page} isn't in the document any more.`);
         const taken = await pagesTaken(doc, range);
-        if (!taken) return fail("The editor hasn't laid the page out (the document needs to be open in Inline). Ask the user to open it, then try again.");
+        if (!taken) return fail("The editor hasn't laid the page out yet: it may be busy, or the document isn't open. Try again in a moment; if it keeps failing, ask the user to open the document in Inline.");
         const wanted = taken.count > 1 ? [taken.first, taken.first + 1] : [taken.first];
         showActivity(ctx, doc, { chatId: ctx.author, status: "reading", label: `Comparing page ${args.page}`, range: { from: range.from, to: range.to } });
         let rendered;
@@ -375,6 +359,75 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
           ].join("\n"),
           images,
         };
+      },
+    }),
+
+    defineTool({
+      name: "align_pdf_page",
+      title: "Align PDF page",
+      description:
+        "Line a converted page up with the original: measures where each block's first line sits in the editor against the PDF and sets the space above and below blocks so every line lands at its original height, repeating until it matches. Run it after write_pdf_page (it changes only spacing), then check with compare_pdf_page. Needs the document open in the editor.",
+      shape: { document_id: documentId, page: z.number().int().min(1).describe("Page number in the PDF (1-based).") },
+      write: true,
+      async handler(args, ctx) {
+        const { doc, record } = await importOf(ctx, args.document_id);
+        const analysis = record.manifest.pages[args.page - 1];
+        if (!analysis) return fail(`The PDF has pages 1 to ${record.manifest.pageCount}.`);
+        await ctx.beforeWrite?.(doc);
+        showActivity(ctx, doc, { chatId: ctx.author, status: "editing", label: `Lining up page ${args.page}` });
+        // Measure, set the spacing, and measure again: a few rounds settle what one can't (lines that wrap differently).
+        const MEASUREMENTS = 5;
+        let measured = 0;
+        let last: ReturnType<typeof planAlignment> | null = null;
+        let pagesUsed = 1;
+        while (measured < MEASUREMENTS) {
+          const { range } = ranges(record, doc, args.page);
+          if (!range) return fail(`Page ${args.page} isn't in the document any more.`);
+          const taken = await pagesTaken(doc, range);
+          if (!taken) return fail("The editor hasn't laid the page out yet: it may be busy, or the document isn't open. Try again in a moment.");
+          pagesUsed = taken.count;
+          let rendered;
+          try {
+            rendered = await requestPageRenders(doc, [taken.first], { scale: 1 });
+          } catch (error) {
+            if (error instanceof RenderUnavailableError) return fail(error.message);
+            throw error;
+          }
+          const page = rendered[0];
+          if (!page?.blocks?.length || !page.lines) return fail("The editor didn't report where the page's blocks are.");
+          // Only the blocks of this original page (a page that overflows starts the next one's blocks on the same sheet).
+          const ids = new Set(range.nodes.map((node) => String(node.attrs.id ?? "")));
+          const blocks = page.blocks.filter((block) => ids.has(block.id));
+          const spacing = (id: string): BlockSpacing | null => {
+            const node = range.nodes.find((item) => item.attrs.id === id);
+            if (!node) return null;
+            // Paragraphs, headings and displayed equations take spacing of their own.
+            const spaced = TEXTBLOCK_TYPES.has(node.type.name) || (node.type.name === "code_block" && node.attrs.language === MATH_LANGUAGE);
+            return { spaceBefore: node.attrs.spaceBefore ?? null, spaceAfter: node.attrs.spaceAfter ?? null, canBefore: spaced, canAfter: spaced };
+          };
+          last = planAlignment(analysis.lines, page.lines, blocks, spacing);
+          measured += 1;
+          if (!last.changes.size || measured === MEASUREMENTS) break;
+          const tr = new Transform(doc.doc);
+          doc.doc.forEach((node, pos) => {
+            const patch = last!.changes.get(String(node.attrs.id ?? ""));
+            if (patch) tr.setNodeMarkup(pos, undefined, { ...node.attrs, ...patch });
+          });
+          if (!tr.docChanged) break;
+          doc.applyTransform(tr, { kind: "system", label: "pdf-align" }, { hunks: mapHunks(doc.hunks, tr.mapping) });
+        }
+        if (!last) return fail("Nothing on the page could be matched with the original.");
+        const offsets = last.offsets.map((row) => row.offset);
+        const worst = offsets.length ? Math.max(...offsets.map(Math.abs)) : 0;
+        return ok(
+          [
+            `Lined up page ${args.page} (${measured} measurement${measured === 1 ? "" : "s"}). ${offsets.length ? `Its blocks' first lines are now ${f(Math.min(...offsets))} to ${f(Math.max(...offsets))} pt from where they are in the original${worst <= 3 ? ": a match" : ""}.` : "No line could be matched by its words."}`,
+            pagesUsed > 1 ? `It still takes ${pagesUsed} pages: shorten its spacing or content so it fits on one, then align again.` : "",
+            "Check it with compare_pdf_page.",
+          ]
+            .filter(Boolean)
+            .join(" "),
+        );
       },
     }),
 

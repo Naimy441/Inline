@@ -103,6 +103,7 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   crop_pdf_region: { page: 1, x: 0, y: 0, width: 10, height: 10 },
   write_pdf_page: { page: 1, content: "Hello" },
   compare_pdf_page: { page: 1 },
+  align_pdf_page: { page: 1 },
   finish_pdf_import: {},
   show_pdf_annotations: { show: true },
 };

@@ -130,6 +130,9 @@ async function rasterize(katexEl: HTMLElement): Promise<MathRaster | null> {
   clone.style.textAlign = style.textAlign;
   clone.style.width = `${width}px`;
   clone.style.margin = "0";
+  // A line of a wrapped equation is drawn from a hidden, positioned copy (rasterizeLines).
+  clone.style.visibility = "visible";
+  clone.style.position = "static";
   const markup = new XMLSerializer().serializeToString(clone);
   const css = `${katexRules().rules}\n${await fontFaces(families)}`;
   // Room above the line box for what reaches over it; the picture is cropped to the ink below.

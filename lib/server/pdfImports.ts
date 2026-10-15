@@ -6,6 +6,7 @@ import { ensureBlockIds } from "@/lib/doc/ids";
 import { schema } from "@/lib/doc/schema";
 import { DEFAULT_SETTINGS, FONT_FAMILIES, PAPER_SIZES, googleFontValue, normalizeSettings, type DocumentSettings, type PaperSize } from "@/lib/doc/settings";
 import type { PdfBox, PdfImportManifest, PdfPageAnalysis } from "@/lib/pdf/import/types";
+import { lineMetrics } from "@/lib/doc/fontMetrics";
 import { saveFont } from "@/lib/server/fonts";
 import { findGoogleFont, keepGoogleFont } from "@/lib/server/googleFonts";
 import { documentHub, type LiveDocument } from "@/lib/server/hub";
@@ -145,6 +146,7 @@ export async function settingsFor(manifest: PdfImportManifest): Promise<{ settin
   const stripNumber = (parts: string[]) => (parts.length > 1 && /^\d+$/.test(parts[parts.length - 1]!) ? parts.slice(0, -1) : parts);
   const headerText = stripNumber(headerParts);
   const footerText = stripNumber(footerParts);
+  const pageHeight = first?.height ?? 792;
   const settings = normalizeSettings({
     ...DEFAULT_SETTINGS,
     pageSetup,
@@ -161,10 +163,24 @@ export async function settingsFor(manifest: PdfImportManifest): Promise<{ settin
       // The first page has no header when the running header starts on page 2 (a title page).
       differentFirstPage: Boolean(header && !header.pages.includes(1) && manifest.pageCount > 1),
       ...(summary.headerRule ? { headerRule: true } : {}),
+      // The header and footer where the PDF has them: the editor sets them in 10pt text of the document's font.
+      ...(header ? { headerFrom: inches(header.y - lineMetrics(font.css).ascent * HEADER_PT) } : {}),
+      ...(() => {
+        const baseline = footer?.y ?? (numbers?.position === "footer" ? numbers.y : undefined);
+        return baseline !== undefined ? { footerFrom: inches(pageHeight - baseline - lineMetrics(font.css).descent * HEADER_PT) } : {};
+      })(),
     },
     pageNumbers: numbers ? { enabled: true, position: numbers.position, align: numbers.align, skipFirst: false } : DEFAULT_SETTINGS.pageNumbers,
   });
   return { settings, font };
+}
+
+/** The size the editor sets headers and footers in (app/styles/workspace.css). */
+const HEADER_PT = 10;
+
+/** Points as inches, kept within what the settings allow. */
+function inches(pt: number) {
+  return Math.round(Math.max(0, Math.min(3, pt / 72)) * 1000) / 1000;
 }
 
 // --- placeholders ------------------------------------------------------------------------

@@ -6,7 +6,8 @@ import { sameBorders } from "@/lib/doc/schema";
 /**
  * Neighbouring paragraphs with the same borders share one box, as in Word and
  * Google Docs: the top line is drawn above the first, the bottom line below
- * the last, and between them only a `between` line, if they have one.
+ * the last, and between them only a `between` line, if they have one. The
+ * space between them is inside the box, so its sides don't break.
  * Marks each paragraph that continues from the one before or into the one
  * after (document.css hides the shared lines).
  */
@@ -21,8 +22,17 @@ function joins(doc: PMNode) {
       const pos = start + offset;
       if (child.isTextblock && child.attrs.borders) {
         if (previous && sameBorders(previous.node.attrs.borders, child.attrs.borders)) {
-          decorations.push(Decoration.node(previous.pos, previous.pos + previous.node.nodeSize, { class: "border-join-next" }));
-          decorations.push(Decoration.node(pos, pos + child.nodeSize, { class: "border-join-prev" }));
+          // The space between them goes inside the box, so its sides run on unbroken (as Word draws it):
+          // the larger of the space below the first and above the second, as their margins would have been.
+          const after = previous.node.attrs.spaceAfter != null ? `${previous.node.attrs.spaceAfter}pt` : previous.node.type.name === "paragraph" ? "var(--para-space, 8pt)" : "0pt";
+          const before = child.attrs.spaceBefore != null ? `${child.attrs.spaceBefore}pt` : "0pt";
+          decorations.push(
+            Decoration.node(previous.pos, previous.pos + previous.node.nodeSize, {
+              class: "border-join-next",
+              style: `margin-bottom: 0 !important; padding-bottom: calc(max(${after}, ${before}) + var(--border-between-space, 0px)) !important`,
+            }),
+          );
+          decorations.push(Decoration.node(pos, pos + child.nodeSize, { class: "border-join-prev", style: "margin-top: 0 !important" }));
         }
         previous = { node: child, pos };
         return;

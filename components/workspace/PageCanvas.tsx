@@ -151,17 +151,26 @@ const Sheet = memo(function Sheet({
     paddingRight: geometry.marginRight,
     justifyContent: align === "left" ? "flex-start" : align === "right" ? "flex-end" : "center",
   });
-  const numberStyle = (align: string) =>
-    align === "left" ? { left: geometry.marginLeft } : align === "right" ? { right: geometry.marginRight } : { left: 0, right: 0, textAlign: "center" as const };
+  // A header or footer set a distance from the page's edge (an imported PDF's, Word's) sits there rather than by the margin.
+  const headerFrom = settings?.headerFooter.headerFrom;
+  const footerFrom = settings?.headerFooter.footerFrom;
+  const headerZone = headerFrom !== undefined ? { alignItems: "flex-start", paddingTop: `${headerFrom}in`, paddingBottom: 0 } : {};
+  const footerZone = footerFrom !== undefined ? { alignItems: "flex-end", paddingBottom: `${footerFrom}in`, paddingTop: 0 } : {};
+  const numberAt = (where: "header" | "footer") =>
+    where === "header" ? (headerFrom !== undefined ? { top: `${headerFrom}in`, bottom: "auto" } : {}) : footerFrom !== undefined ? { bottom: `${footerFrom}in`, top: "auto" } : {};
+  const numberStyle = (align: string, where: "header" | "footer") => ({
+    ...(align === "left" ? { left: geometry.marginLeft } : align === "right" ? { right: geometry.marginRight } : { left: 0, right: 0, textAlign: "center" as const }),
+    ...numberAt(where),
+  });
   return (
     <div className="sheet" style={{ top, height: geometry.pageHeight, width: geometry.pageWidth }} aria-hidden>
-      <div className="sheet-header" style={zoneStyle(geometry.marginTop, headerAlign)}>
+      <div className="sheet-header" style={{ ...zoneStyle(geometry.marginTop, headerAlign), ...headerZone }}>
         {header && zoneText(header, rule)}
-        {number?.where === "header" && <span className="sheet-number" style={numberStyle(number.align)}>{page}</span>}
+        {number?.where === "header" && <span className="sheet-number" style={numberStyle(number.align, "header")}>{page}</span>}
       </div>
-      <div className="sheet-footer" style={zoneStyle(geometry.marginBottom, footerAlign)}>
+      <div className="sheet-footer" style={{ ...zoneStyle(geometry.marginBottom, footerAlign), ...footerZone }}>
         {footer && zoneText(footer)}
-        {number?.where === "footer" && <span className="sheet-number" style={numberStyle(number.align)}>{page}</span>}
+        {number?.where === "footer" && <span className="sheet-number" style={numberStyle(number.align, "footer")}>{page}</span>}
       </div>
     </div>
   );

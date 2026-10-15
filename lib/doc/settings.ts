@@ -45,6 +45,13 @@ export type HeaderFooterSettings = {
   firstFooter: string;
   /** A rule under the header, as LaTeX's fancyhdr draws one. */
   headerRule?: boolean;
+  /**
+   * Inches from the top of the page to the top of the header text, and from
+   * the bottom of the page to the bottom of the footer text (Word's "header
+   * from top" and "footer from bottom"). Unset: just inside the margin.
+   */
+  headerFrom?: number;
+  footerFrom?: number;
 };
 
 export type PageNumberSettings = {
@@ -249,6 +256,15 @@ export function normalizeSettings(input: unknown, base: DocumentSettings = DEFAU
       firstHeader: str(hf.firstHeader, base.headerFooter.firstHeader),
       firstFooter: str(hf.firstFooter, base.headerFooter.firstFooter),
       ...((typeof hf.headerRule === "boolean" ? hf.headerRule : base.headerFooter.headerRule) ? { headerRule: true } : {}),
+      ...(() => {
+        const distance = (value: unknown, fallback: number | undefined) => {
+          const n = value === undefined ? fallback : value === null ? undefined : Number(value);
+          return typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 3 ? Math.round(n * 1000) / 1000 : undefined;
+        };
+        const headerFrom = distance(hf.headerFrom, base.headerFooter.headerFrom);
+        const footerFrom = distance(hf.footerFrom, base.headerFooter.footerFrom);
+        return { ...(headerFrom !== undefined ? { headerFrom } : {}), ...(footerFrom !== undefined ? { footerFrom } : {}) };
+      })(),
     },
     pageNumbers: {
       enabled: typeof pn.enabled === "boolean" ? pn.enabled : base.pageNumbers.enabled,
