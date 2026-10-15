@@ -35,6 +35,7 @@ import { invisiblesPlugin } from "@/lib/editor/invisibles";
 import { inMath, mathInputRules, mathPlugin } from "@/lib/editor/math";
 import { paginationPlugin, type PageGeometry, type PageLayout } from "@/lib/editor/pagination";
 import { bordersPlugin } from "@/lib/editor/borders";
+import { lineFitPlugin } from "@/lib/editor/lineFit";
 import { tabsPlugin } from "@/lib/editor/tabs";
 import { justifyPlugin } from "@/lib/editor/justify";
 import { placeholderPlugin } from "@/lib/editor/placeholder";
@@ -295,6 +296,8 @@ export function editorPlugins(options: EditorPluginOptions) {
     // Tabs are sized before pages are broken, since their widths can rewrap lines.
     tabsPlugin(options.tabStop ?? (() => DEFAULT_TAB_STOP)),
     justifyPlugin(options.fontLines ?? (() => false)),
+    // Lines kept from a PDF are spaced once tabs are sized, and before pages are broken.
+    lineFitPlugin(),
     paginationPlugin(options.geometry, options.onPages),
   ];
 }

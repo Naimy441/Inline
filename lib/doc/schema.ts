@@ -77,6 +77,8 @@ const blockAttrs = {
   /** Tab stops, in order; tabs past the last go to the document's default stops. */
   tabs: { default: null as TabStop[] | null },
   borders: { default: null as Borders | null },
+  /** Where the lines broke in the PDF the paragraph was rebuilt from, kept until its text changes (lib/doc/lineBreaks.ts). */
+  lineBreaks: { default: null as string | null },
 };
 
 const BORDER_SIDES = ["top", "bottom", "left", "right"] as const;
@@ -161,6 +163,7 @@ function blockDomAttrs(node: PMNode, extra: Record<string, string> = {}) {
   if (node.attrs.fontSize) attrs["data-font-size"] = String(node.attrs.fontSize);
   if (node.attrs.tabs) attrs["data-tabs"] = JSON.stringify(node.attrs.tabs);
   if (node.attrs.borders) attrs["data-borders"] = JSON.stringify(node.attrs.borders);
+  if (node.attrs.lineBreaks) attrs["data-line-breaks"] = String(node.attrs.lineBreaks);
   if (node.attrs.indent && !Number.isInteger(Number(node.attrs.indent))) attrs["data-indent"] = String(node.attrs.indent);
   const style = blockStyle(node);
   if (style) attrs.style = style;
@@ -217,6 +220,7 @@ function parseBlockAttrs(dom: HTMLElement) {
     dir: rtl ? ("rtl" as const) : null,
     fontSize: fontSize > 0 && fontSize <= 400 ? fontSize : null,
     tabs: jsonAttr<TabStop[]>(dom, "data-tabs", isTabs),
+    lineBreaks: dom.getAttribute("data-line-breaks") || null,
     borders: jsonAttr<Borders>(dom, "data-borders", isBorders),
   };
 }
