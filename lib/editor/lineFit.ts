@@ -171,13 +171,6 @@ function spacesBetween(node: PMNode, from: number, to: number) {
   return count;
 }
 
-/** The end of a line's text before the spaces it ends with. */
-function trimEnd(node: PMNode, from: number, to: number) {
-  let end = to;
-  while (end > from && /[  ]/.test(node.textBetween(end - 1, end, "￼", "￼"))) end -= 1;
-  return end;
-}
-
 function measureParagraph(view: EditorView, node: PMNode, pos: number, dom: HTMLElement, breaks: Array<{ at: number; hyphen: boolean }>): number[] | null {
   const start = pos + 1;
   const style = getComputedStyle(dom);
@@ -191,22 +184,18 @@ function measureParagraph(view: EditorView, node: PMNode, pos: number, dom: HTML
     const spacing: number[] = [];
     let from = 0;
     for (const item of breaks) {
-      const end = trimEnd(node, from, item.at);
+      // The space a line ends with counts: pages keep it on the line (white-space: break-spaces).
+      const end = item.at;
       const spaces = spacesBetween(node, from, end);
-      const range = document.createRange();
-      const a = view.domAtPos(start + from, 1);
-      const b = view.domAtPos(start + end, -1);
-      range.setStart(a.node, a.offset);
-      range.setEnd(b.node, b.offset);
-      let right = range.getBoundingClientRect().right;
+      // Where the line's text starts and ends, laid out unbroken: the edges of the letters at its ends.
+      const left = view.coordsAtPos(start + from, 1).left;
+      let right = view.coordsAtPos(start + end, -1).right;
       if (item.hyphen) {
-        const mark = dom.querySelectorAll(".lf-hyphen");
-        for (const el of Array.from(mark)) {
+        for (const el of Array.from(dom.querySelectorAll(".lf-hyphen"))) {
           const at = view.posAtDOM(el, 0);
           if (Math.abs(at - (start + item.at)) <= 1) right = Math.max(right, el.getBoundingClientRect().right);
         }
       }
-      const left = range.getBoundingClientRect().left;
       const natural = (right - left) / scale;
       const available = content - (from === 0 ? indent : 0);
       // Just short of full: the next word can't fit, and justification takes up the rest.

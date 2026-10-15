@@ -23,6 +23,8 @@ export type PdfTextRun = {
   italic: boolean;
   /** A big gap (a tab stop, a column) comes before this run. */
   gapBefore?: boolean;
+  /** How far its baseline is below the line's (negative: raised, a superscript), in points. */
+  dy?: number;
 };
 
 /** One line of text as it sits on the page. */

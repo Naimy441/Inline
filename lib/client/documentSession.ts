@@ -17,7 +17,7 @@ import type { PdfDocumentModel } from "@/lib/pdf/pdfWriter";
 import { fitLinesNow } from "@/lib/editor/lineFit";
 import { closestFace, documentFonts, ensureFonts, fontData, loadDocumentFonts, type DocumentFont } from "@/lib/client/fonts";
 import { lineMetrics, primaryFamily } from "@/lib/doc/fontMetrics";
-import { pageCount, relayout, type PageGeometry, type PageLayout } from "@/lib/editor/pagination";
+import { pageCount, pageStarts, relayout, type PageGeometry, type PageLayout } from "@/lib/editor/pagination";
 import { setPresence } from "@/lib/editor/presence";
 import { gotoHunk, mapHunksThrough, reviewHunkAtCursor, setHunks } from "@/lib/editor/review";
 import { editorPlugins } from "@/lib/editor/setup";
@@ -52,7 +52,7 @@ export type ClientCommand =
   | { kind: "download"; url: string; filename: string }
   | { kind: "dictionary"; words: string[] }
   /** Picture these pages (0-based) for Claude and post them to /api/documents/[id]/render (lib/server/renders.ts). */
-  | { kind: "render_pages"; requestId: string; pages: number[]; scale: number };
+  | { kind: "render_pages"; requestId: string; pages: number[]; scale: number; span?: { first: string; last: string } };
 
 type Snapshot = { meta: DocumentMeta; epoch?: string; doc: unknown; version: number; comments: DocComment[]; hunks: HunkJSON[]; activity: AgentActivity | null };
 
@@ -310,12 +310,25 @@ export class DocumentSession {
    * of text, for Claude to compare with an imported PDF's pages; posted to the
    * server, which is waiting for them (lib/server/renders.ts).
    */
-  async answerRender(command: { requestId: string; pages: number[]; scale: number }) {
-    const model = await this.pdfModel();
+  async answerRender(command: { requestId: string; pages: number[]; scale: number; span?: { first: string; last: string } }) {
+    // The pages a run of blocks takes, as laid out for the picture (fonts, pictures and kept lines settled): the first of them is pictured.
+    let span: { first: number; last: number } | null = null;
+    const blocks: Array<{ id: string; top: number; bottom: number; joined?: boolean; inside?: number }>[] = [];
+    const model = await this.pdfModel(() => {
+      if (command.span) span = this.pagesOf(command.span.first, command.span.last);
+      const wanted = span ? [span.first, ...command.pages] : command.pages;
+      for (const index of wanted) blocks[index] = this.blocksOnPage(index);
+    });
     const [{ buildPdf }, { openPdf }, { pageLines }] = await Promise.all([import("@/lib/pdf/pdfWriter"), import("@/lib/pdf/import/prepare"), import("@/lib/pdf/import/pageLines")]);
     const form = new FormData();
     form.append("requestId", command.requestId);
-    for (const index of command.pages) {
+    const pages = [...command.pages];
+    const measured = span as { first: number; last: number } | null;
+    if (measured) {
+      form.append("span", JSON.stringify(measured));
+      pages.unshift(measured.first);
+    }
+    for (const index of pages) {
       const page = model.pages[index];
       if (!page) continue;
       const { pdf, close } = await openPdf(buildPdf({ ...model, pages: [page] }));
@@ -330,7 +343,7 @@ export class DocumentSession {
         canvas.width = 0;
         if (png) form.append(`page-${index}`, png, `page-${index}.png`);
         form.append(`lines-${index}`, JSON.stringify(pageLines(page)));
-        form.append(`blocks-${index}`, JSON.stringify(this.blocksOnPage(index)));
+        form.append(`blocks-${index}`, JSON.stringify(blocks[index] ?? this.blocksOnPage(index)));
       } finally {
         close();
       }
@@ -343,6 +356,22 @@ export class DocumentSession {
    * page's top: its id, top and bottom, and whether it shares a box with the
    * block before it. For lining an imported PDF's pages up with the original.
    */
+  /** The pages (0-based) from the one where block `first` starts to the one where block `last` ends, from the page breaks as laid out. */
+  private pagesOf(first: string, last: string) {
+    const view = this.view;
+    if (!view) return null;
+    const starts = pageStarts(view.state);
+    let from: number | null = null;
+    let to: number | null = null;
+    view.state.doc.forEach((node, pos) => {
+      if (node.attrs.id === first) from = pos;
+      if (node.attrs.id === last) to = pos + node.nodeSize - 1;
+    });
+    if (from === null || to === null) return null;
+    const pageOf = (pos: number) => starts.filter((start) => start <= pos).length;
+    return { first: pageOf(from), last: pageOf(to) };
+  }
+
   private blocksOnPage(index: number) {
     const view = this.view;
     const sheet = view?.dom.closest(".page-stack")?.querySelectorAll<HTMLElement>(".sheet")[index];
@@ -368,7 +397,7 @@ export class DocumentSession {
   }
 
   /** The laid-out pages as a PDF page model, read from the screen without review marks. */
-  async pdfModel(): Promise<PdfDocumentModel> {
+  async pdfModel(inspect?: () => void): Promise<PdfDocumentModel> {
     const view = this.view;
     if (!view) throw new Error("The document isn't open yet.");
     await this.whenSaved();
@@ -389,6 +418,8 @@ export class DocumentSession {
       relayout(view);
       await settleLayout(() => pageCount(view.state));
       await imagesLoaded(root);
+      // The pages as they are laid out for the picture, for a caller to read.
+      inspect?.();
       const rasters = await rasterizeMath(root);
       // Text in a font the document brought (lib/client/fonts.ts) is drawn in that font, embedded in the PDF.
       const fonts = await documentFonts();

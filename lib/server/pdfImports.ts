@@ -38,11 +38,22 @@ export type PdfImportRecord = {
   source: string;
   manifest: PdfImportManifest;
   /** Per page (index 0 is page 1): the page without annotations at 3× and 2×, its annotations alone, and the placeholder picture. */
-  pages: Array<{ clean: string; view: string; ink: string | null; placeholder: string | null }>;
+  pages: Array<{
+    clean: string;
+    view: string;
+    ink: string | null;
+    placeholder: string | null;
+    /** The page's drawings, cut out as pictures for its draft (lib/server/pdfDrafts.ts). */
+    crops?: Array<{ box: PdfBox; url: string }>;
+    /** Equations the draft couldn't read back, cut out as pictures. */
+    equations?: Array<{ box: PdfBox; url: string }>;
+  }>;
   /** When Claude said the conversion was finished. */
   finishedAt?: number;
   /** The fonts the PDF carried, kept as document fonts: by the PDF's name for each, its family and style. */
   fonts?: Record<string, PdfFontFace>;
+  /** Each font's file (an upload), by the PDF's name for it, for the widths of its letters. */
+  fontFiles?: Record<string, string>;
 };
 
 /** A face of a document font: its family, and whether it's the bold or italic one. */
@@ -213,9 +224,15 @@ async function fallbackFor(name: string) {
  * used; letters it didn't use come from a stand-in (fallbackFor). Returns,
  * by the PDF's font name, the family and style to set its text in.
  */
-export async function keepPdfFonts(manifest: PdfImportManifest, files: ImportFiles): Promise<Record<string, PdfFontFace>> {
+export async function keepPdfFonts(manifest: PdfImportManifest, files: ImportFiles): Promise<{ faces: Record<string, PdfFontFace>; files: Record<string, string> }> {
+  // Every font's file is kept with the import, math fonts' too, for the widths of its letters when drafting pages.
+  const fontFiles: Record<string, string> = {};
+  for (const font of manifest.fonts ?? []) {
+    const data = files.get(font.field);
+    if (data && data.length >= 64) fontFiles[font.name] = await newUpload("otf", data);
+  }
   const fonts = (manifest.fonts ?? []).filter((font) => !TEX_MATH_FONT.test(font.name));
-  if (!fonts.length) return {};
+  if (!fonts.length) return { faces: {}, files: fontFiles };
   const stem = manifest.fileName.replace(/\.pdf$/i, "").replace(/[^A-Za-z0-9 _.-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 24) || "PDF";
   const faces = fonts
     .map((font) => ({ font, data: files.get(font.field), face: pdfFontFace(font.name) }))
@@ -248,7 +265,7 @@ export async function keepPdfFonts(manifest: PdfImportManifest, files: ImportFil
     const kept = Object.values(result).find((face) => face.family.startsWith(`${entry.face.base} (`));
     if (kept) result[entry.font.name] = { family: kept.family, bold: entry.face.bold, italic: entry.face.italic };
   }
-  return result;
+  return { faces: result, files: fontFiles };
 }
 
 /** A CSS font family list for a kept PDF family, with its stand-in after it. */
@@ -264,7 +281,8 @@ export async function settingsFor(manifest: PdfImportManifest, pdfFonts: Record<
   // The body text in the PDF's own font when it carries it, else the nearest Inline has.
   const own = pdfFonts[summary.bodyFont];
   const font: FontChoice = own ? { ...standIn, family: own.family, css: pdfFamilyCss(own, standIn.css) } : standIn;
-  const pageSetup = { ...paperFor(first?.width ?? 612, first?.height ?? 792), margins: summary.margins };
+  // A little more room at the bottom than the PDF's text used, so a page that runs a point longer in the editor still fits.
+  const pageSetup = { ...paperFor(first?.width ?? 612, first?.height ?? 792), margins: { ...summary.margins, bottom: Math.max(0.2, Math.round((summary.margins.bottom - 0.15) * 100) / 100) } };
   const header = summary.header;
   const footer = summary.footer;
   const numbers = summary.pageNumbers;
@@ -394,7 +412,7 @@ export async function settlePdfConversion(documentId: string, chatId: string) {
 
 // --- pictures ---------------------------------------------------------------------------
 
-async function readUpload(url: string) {
+export async function readUpload(url: string) {
   const id = /\/api\/uploads\/([A-Za-z0-9_-]+)\./.exec(url)?.[1];
   if (!id) return null;
   const upload = await findUpload(id);
@@ -451,7 +469,7 @@ export type ImportFiles = { get(name: string): Uint8Array | null };
 /** Keep an import's files and create its document. */
 export async function createPdfImport(input: { manifest: PdfImportManifest; source: Uint8Array; files: ImportFiles; folderId: string | null }): Promise<StoredImport> {
   const { manifest } = input;
-  const pdfFonts = await keepPdfFonts(manifest, input.files);
+  const { faces: pdfFonts, files: fontFiles } = await keepPdfFonts(manifest, input.files);
   const { settings, font } = await settingsFor(manifest, pdfFonts);
   if (font.computerModern || manifest.summary.fonts.some((item) => inlineFontName(item.name) && inlineFontName(item.name) !== "math")) await ensureComputerModern().catch((error) => log("warn", "the Computer Modern faces couldn't be kept", { error }));
   if (font.google) void keepGoogleFont(font.google).catch(() => undefined);
@@ -486,7 +504,7 @@ export async function createPdfImport(input: { manifest: PdfImportManifest; sour
     }
   }
   const title = manifest.title ?? (manifest.fileName.replace(/\.pdf$/i, "").trim() || "Imported PDF");
-  const record: PdfImportRecord = { version: 1, documentId: "", createdAt: Date.now(), fileName: manifest.fileName, source, manifest, pages, ...(Object.keys(pdfFonts).length ? { fonts: pdfFonts } : {}) };
+  const record: PdfImportRecord = { version: 1, documentId: "", createdAt: Date.now(), fileName: manifest.fileName, source, manifest, pages, ...(Object.keys(pdfFonts).length ? { fonts: pdfFonts } : {}), ...(Object.keys(fontFiles).length ? { fontFiles } : {}) };
   const doc = await documentHub().create({ title, doc: placeholderDoc(record).toJSON(), settings, folderId: input.folderId });
   record.documentId = doc.id;
   await writePdfImport(record);

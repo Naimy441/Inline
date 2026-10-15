@@ -38,5 +38,16 @@ export const POST = route(async (request, context: Context) => {
     }
     pages.push({ page: Number(match[1]), png, ...(lines ? { lines } : {}), ...(blocks ? { blocks } : {}) });
   }
-  return json({ delivered: deliverPageRenders(doc.id, requestId, pages.sort((a, b) => a.page - b.page)) });
+  // The pages a requested run of blocks takes, on the first page pictured.
+  const spanRaw = form!.get("span");
+  let span: { first: number; last: number } | null = null;
+  try {
+    const parsed = typeof spanRaw === "string" ? (JSON.parse(spanRaw) as { first?: unknown; last?: unknown }) : null;
+    if (parsed && Number.isInteger(parsed.first) && Number.isInteger(parsed.last)) span = { first: Number(parsed.first), last: Number(parsed.last) };
+  } catch {
+    span = null;
+  }
+  const ordered = span ? pages : pages.sort((a, b) => a.page - b.page);
+  if (span && ordered[0]) ordered[0] = { ...ordered[0], span };
+  return json({ delivered: deliverPageRenders(doc.id, requestId, ordered) });
 });

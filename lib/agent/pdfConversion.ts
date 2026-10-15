@@ -21,11 +21,14 @@ export function conversionRequest(record: PdfImportRecord, pages: number[]) {
   return `Convert the PDF I imported (“${record.fileName}”) into an editable document: rebuild ${which} in Inline's format, as close to the original as you can get it. Leave out the handwritten annotations; I can show those over the pages myself.`;
 }
 
+/** The model a conversion runs on: Opus, thinking at medium effort (reading equations off a page and judging layout pay for it). */
+export const CONVERSION_MODEL = { model: "opus", effort: "medium" } as const;
+
 /** Start (or restart) the conversion in a new chat on the document. Returns the chat's id. */
 export async function startPdfConversion(doc: LiveDocument, record: PdfImportRecord, options: { pages?: number[] } = {}) {
   const left = options.pages?.length ? options.pages : pagesLeft(doc.doc, record.manifest.pageCount);
   const pages = left.length ? left : record.manifest.pages.map((page) => page.page);
-  const chat = await agentRuntime().create({ documentId: doc.id, settings: { maxTurns: conversionMaxTurns(pages.length) } });
+  const chat = await agentRuntime().create({ documentId: doc.id, settings: { ...CONVERSION_MODEL, maxTurns: conversionMaxTurns(pages.length) } });
   doc.setPdfImport({ status: "converting", chatId: chat.state.id });
   void chat.send({ text: conversionRequest(record, pages), documentId: doc.id }).catch((error) => {
     log("warn", "the PDF conversion couldn't start", { documentId: doc.id, error });

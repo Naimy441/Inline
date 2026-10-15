@@ -35,9 +35,36 @@ export function fontStyle(name: string, flags: { bold?: boolean; italic?: boolea
  * are glyphs with no known letter.
  */
 function readable(text: string, font: string) {
+  const math = /^cmmi/i.test(font) ? "cmmi" : /^(cmsy|cmbsy)/i.test(font) ? "cmsy" : null;
+  // Letters Apple's PDF tools rename when they re-save a TeX PDF (annotating it): what they are.
+  const renamed = math ? RENAMED[math] : null;
+  if (renamed) text = text.replace(/[\u0000\u21e0-\u21e7\uf8ff]/g, (char) => renamed[char] ?? char);
+  // TeX's math symbols come through as the plain letters at their codes when the PDF lost their names.
+  // (Only digits and small letters: a symbol font never names a glyph so, while "|" and braces are its own.)
+  if (math === "cmsy") text = text.replace(/[0-9a-z]/g, (char) => OMS_HIGH[char.charCodeAt(0) - 0x30] ?? char);
+  // ... or as TeX's own codes below 32: read through the font's encoding.
+  const table = math === "cmmi" ? OML : math === "cmsy" ? OMS : /^cm(r|bx|b|ti|bxti|sl|ss|ssbx|ssi|csc|u|dunh)\d/i.test(font) ? OT1 : null;
+  if (table) text = text.replace(/[\u0001-\u001f]/g, (char) => table[char.charCodeAt(0)] || char);
   const symbols = /^(cmsy|lmmathsymbols|msam|cmex)/i.test(font);
   return text.replace(/\u0000/g, symbols ? "\u2212" : "").replace(/[\u0001-\u0008\u000b-\u001f]/g, "");
 }
+
+const RENAMED: Record<"cmmi" | "cmsy", Record<string, string>> = {
+  cmmi: { "\u0000": "σ", "\u21e1": "π" },
+  cmsy: { "\u21e0": "∼", "\u21e1": "≈", "\u21e4": "∗", "\uf8ff": "≤" },
+};
+
+/** TeX's math symbols (OMS) from code 0x30 up. */
+const OMS_HIGH: string[] = [..."′∞∈∋△▽\u0338↦∀∃¬∅ℜℑ⊤⊥ℵ", ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ", ..."∪∩⊎∧∨⊢⊣⌊⌋⌈⌉{}⟨⟩|‖↕⇕\\≀√⨿∇∫⊔⊓⊑⊒§†‡¶♣♢♡♠"];
+
+/** TeX's encodings below 32: text (OT1), math italic (OML), math symbols (OMS). */
+const GREEK_CAPITALS = [..."ΓΔΘΛΞΠΣΥΦΨΩ"];
+const OT1: string[] = [...GREEK_CAPITALS, "ﬀ", "ﬁ", "ﬂ", "ﬃ", "ﬄ", "ı", "ȷ", "`", "´", "ˇ", "˘", "¯", "˚", "¸", "ß", "æ", "œ", "ø", "Æ", "Œ", "Ø"];
+const OML: string[] = [...GREEK_CAPITALS, ..."αβγδϵζηθικλμνξπρστυϕχ"];
+const OMS: string[] = ["−", "·", "×", "∗", "÷", "⋄", "±", "∓", "⊕", "⊖", "⊗", "⊘", "⊙", "◯", "∘", "•", "≍", "≡", "⊆", "⊇", "≤", "≥", "⪯", "⪰", "∼", "≈", "⊂", "⊃", "≪", "≫", "≺", "≻"];
+
+/** A list item's label: "1.", "(a)", "iv)", a bullet. */
+const LABEL = /^(\(?(?:\d{1,2}|[a-zA-Z]|[ivxIVX]{1,4})[.)]|[•∙◦▪–])$/;
 
 type Piece = { text: string; x: number; right: number; baseline: number; size: number; font: FontInfo };
 
@@ -74,13 +101,14 @@ export function textLines(items: readonly TextItem[], viewport: readonly number[
   return lines.sort((a, b) => a.baseline - b.baseline || a.box.x - b.box.x);
 }
 
-function sameStyle(a: Piece, b: PdfTextRun) {
-  return a.font.name === b.font && a.font.bold === b.bold && a.font.italic === b.italic && Math.abs(a.size - b.size) < 0.6;
+function sameStyle(a: Piece, b: PdfTextRun, baseline: number) {
+  return a.font.name === b.font && a.font.bold === b.bold && a.font.italic === b.italic && Math.abs(a.size - b.size) < 0.6 && Math.abs(a.baseline - baseline) < 0.4;
 }
 
 function buildLine(pieces: Piece[]): PdfTextLine {
   pieces.sort((a, b) => a.x - b.x);
   const runs: PdfTextRun[] = [];
+  const runBaselines: number[] = [];
   let text = "";
   let previous = null as Piece | null;
   for (const piece of pieces) {
@@ -88,14 +116,18 @@ function buildLine(pieces: Piece[]): PdfTextLine {
     const em = Math.max(piece.size, previous?.size ?? 0);
     const tab = previous !== null && gap > em * 1.6;
     const space = previous !== null && !tab && gap > em * 0.12 && !/\s$/.test(text) && !/^\s/.test(piece.text);
-    const joiner = tab ? "\t" : space ? " " : "";
+    // A wide gap inside a line (TeX's quad after a section number) is an en or em space.
+    const joiner = tab ? "\t" : space ? (gap > em * 0.9 ? "\u2003" : gap > em * 0.7 ? "\u2002" : " ") : "";
     const last = runs[runs.length - 1];
-    if (last && !tab && sameStyle(piece, last)) {
+    // A run stops at a wide gap (something drawn there: a fraction) and after a list's label, so where the text resumes is exact.
+    const label = runs.length === 1 && last !== undefined && last.text === runs[0]!.text && LABEL.test(last.text.trim());
+    if (last && !tab && gap < em * 0.6 && !label && sameStyle(piece, last, runBaselines[runBaselines.length - 1]!)) {
       last.text += joiner + piece.text;
       last.width = piece.right - last.x;
     } else {
-      if (last && joiner === " ") last.text += " ";
+      if (last && joiner && joiner !== "\t") last.text += joiner;
       runs.push({ text: piece.text, x: piece.x, width: piece.right - piece.x, size: piece.size, font: piece.font.name, bold: piece.font.bold, italic: piece.font.italic, ...(tab ? { gapBefore: true } : {}) });
+      runBaselines.push(piece.baseline);
     }
     text += joiner + piece.text;
     previous = piece.right > (previous?.right ?? -Infinity) ? piece : previous;
@@ -123,7 +155,10 @@ function buildLine(pieces: Piece[]): PdfTextLine {
     font: main.font,
     bold: main.bold,
     italic: main.italic,
-    runs: runs.map((run) => ({ ...run, x: round(run.x), width: round(run.width) })),
+    runs: runs.map((run, index) => {
+      const dy = round(runBaselines[index]! - baseline);
+      return { ...run, x: round(run.x), width: round(run.width), ...(Math.abs(dy) >= 0.3 ? { dy } : {}) };
+    }),
   };
 }
 

@@ -168,6 +168,11 @@ export function pageCount(state: EditorState) {
   return pageKey.getState(state)?.pages ?? 1;
 }
 
+/** Where each page after the first starts, as document positions. */
+export function pageStarts(state: EditorState) {
+  return dedupe(pageKey.getState(state)?.breaks ?? []).map((item) => item.pos);
+}
+
 function sameBreaks(a: Break[], b: Break[]) {
   if (a.length !== b.length) return false;
   return a.every((item, i) => item.pos === b[i]!.pos && Math.abs(item.height - b[i]!.height) < 1 && item.inline === b[i]!.inline);

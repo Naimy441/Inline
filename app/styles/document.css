@@ -921,6 +921,12 @@ img.ProseMirror-separator {
   font-size: var(--math-size, 1.1em);
 }
 
+/* In a document made from a PDF, equations in a line leave its height alone, as TeX sets them
+   (only an equation taller than the line pushes it apart). */
+.from-pdf .doc-content .math-render .katex {
+  line-height: 0;
+}
+
 .doc-content .katex-error {
   color: var(--danger) !important;
   font-family: "Roboto Mono", var(--font-mono);

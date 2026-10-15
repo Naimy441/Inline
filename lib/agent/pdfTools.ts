@@ -23,6 +23,7 @@ import {
 } from "@/lib/server/pdfImports";
 import { RenderUnavailableError, requestPageRenders } from "@/lib/server/renders";
 import { lineBreaksFor } from "@/lib/agent/pdfLines";
+import { pageDraft } from "@/lib/server/pdfDrafts";
 import { compareLines, planAlignment, type BlockSpacing } from "@/lib/agent/pdfAlign";
 import { MATH_LANGUAGE, TEXTBLOCK_TYPES } from "@/lib/doc/schema";
 import { findUpload } from "@/lib/server/store";
@@ -50,11 +51,13 @@ export const PDF_CONVERSION_GUIDE = `## Converting an imported PDF
 
 The document was made from a PDF. It has one page per original page, separated by page breaks, and each page starts as a picture of the original (a placeholder). Your job is to rebuild every page as real, editable content in Inline's format, so that it looks like the original: same text, same structure, same fonts and sizes, same positions on the page. The user's handwriting, highlighting and other annotations were taken off the pictures you see; leave them out (the user can show them over the pages).
 
+Inline drafts each page for you from the PDF itself: its exact words, fonts and sizes, where every line sits, its frames and tab stops, and its equations read back from the glyphs TeX drew them with. The draft usually gets the text and layout right; what it can't be sure of it lists as concerns, and equations are its weak spot. Your job is to check each page against its picture and fix what the draft got wrong.
+
 Work one page at a time:
-1. read_pdf_page — the page as a picture, with its text lines (exact words, positions, fonts, sizes), rules and frames, pictures and drawings.
-2. write_pdf_page — the page's content as Markdown with layout attributes (below). It replaces that page (the placeholder, or what you wrote before). Don't write \\pagebreak: pages are kept apart for you. Write the whole page in one call.
-3. align_pdf_page — sets the space above and below every block so each one's first line lands at its height in the original, measuring in the editor until it matches. Leave vertical spacing to it rather than tuning before=/after= by hand; give blocks your best estimate when writing, and it does the rest.
-4. compare_pdf_page — the original next to your page as the editor lays it out, with how far each line sits from where it should. Fix what alignment can't (write_pdf_page again, then align_pdf_page again): different line breaks, wrong sizes, anything missing or extra, a page that runs onto a second one. Lines within ±3 pt of their original height are a match. An offset that grows within a block means its line spacing (line=) or size differs.
+1. read_pdf_page — the page as a picture, its text lines, and the draft with its concerns.
+2. write_pdf_page — the draft, corrected: fix every flagged equation (read it from the picture; replace any equation the draft placed as a picture with LaTeX), and anything else that differs from the picture (a misread symbol, a heading that should be one, a list, a missing rule). Keep the draft's layout attributes unless the picture shows they're off. If the draft needs no change, use_draft: true writes it as it is. Write the whole page in one call; don't write \\pagebreak.
+3. align_pdf_page — keeps the PDF's line breaks in every paragraph and sets the space around every block so each line lands at its height in the original, measuring in the editor until it matches. Leave vertical spacing to it.
+4. compare_pdf_page — the original next to your page as the editor lays it out, with how far each line sits from where it should. Fix what alignment can't (write_pdf_page again, then align_pdf_page again): wrong sizes, anything missing or extra, a page that runs onto a second one. Lines within ±3 pt of their original height are a match. An offset that grows within a block means its line spacing (line=) or size differs.
 Change a page only with write_pdf_page and align_pdf_page while converting: other editing tools mark their changes for the user to review, which a conversion shouldn't leave behind.
 Only then the next page: compare every page, and don't finish with pages you haven't compared. Plan the pages with TodoWrite for long documents. When every page is done and matches, call finish_pdf_import.
 If a tool says the editor hasn't laid the page out yet, it is busy (or reloading): call it again in a moment, more than once if needed, rather than skipping the check. Only when it keeps failing is the document closed; then say so to the user.
@@ -152,6 +155,24 @@ async function pagesTaken(doc: LiveDocument, range: PageRange) {
   return { first, last, count: last - first + 1, pages: layout.pages };
 }
 
+/** The ids of a page's first and last blocks, for the editor to say which pages they take. */
+function spanOf(range: PageRange) {
+  const first = range.nodes[0]?.attrs.id;
+  const last = range.nodes[range.nodes.length - 1]?.attrs.id;
+  return first && last ? { first: String(first), last: String(last) } : null;
+}
+
+/** How many pages a page's blocks take in the editor, measured once its layout has settled. */
+async function pagesUsedBy(doc: LiveDocument, range: PageRange) {
+  const span = spanOf(range);
+  if (span) {
+    const rendered = await requestPageRenders(doc, [], { scale: 0.5, span }).catch(() => null);
+    const measured = rendered?.[0]?.span;
+    if (measured) return measured.last - measured.first + 1;
+  }
+  return (await pagesTaken(doc, range))?.count ?? null;
+}
+
 function ranges(record: PdfImportRecord, doc: LiveDocument, page: number) {
   if (!Number.isInteger(page) || page < 1 || page > record.manifest.pageCount) throw new EditError(`The PDF has pages 1 to ${record.manifest.pageCount}.`);
   const all = pageRanges(doc.doc);
@@ -242,7 +263,16 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
         const image = await uploadBase64(assets.view);
         const area = textArea(doc);
         showActivity(ctx, doc, { chatId: ctx.author, status: "reading", label: `Reading page ${args.page} of the PDF`, ...(range ? { range: { from: range.from, to: range.to } } : {}) });
-        const text = describePage(page, record, area, range);
+        const draft = await pageDraft(doc, record, args.page);
+        const text = [
+          describePage(page, record, area, range),
+          "",
+          "Draft of this page, built from the PDF's text layer (text, fonts, sizes, indents, alignment, spacing, frames, tab stops; equations read back from their glyphs). Start from it: compare it with the picture, fix what differs, and write the page with write_pdf_page (use_draft: true writes it as it is).",
+          "<draft>",
+          draft.markdown,
+          "</draft>",
+          draft.concerns.length ? `Check these first:\n${draft.concerns.map((concern) => `- ${concern}`).join("\n")}` : "Nothing in particular was flagged; still check every equation against the picture.",
+        ].join("\n");
         return { text, ...(image ? { images: [{ data: image, mimeType: "image/png" }] } : {}) };
       },
     }),
@@ -304,14 +334,17 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
       shape: {
         document_id: documentId,
         page: z.number().int().min(1).describe("Page number in the PDF (1-based)."),
-        content: z.string().min(1).describe("The page's content as Markdown with layout attributes. No \\pagebreak."),
+        content: z.string().min(1).optional().describe("The page's content as Markdown with layout attributes. No \\pagebreak."),
+        use_draft: z.boolean().optional().describe("Write read_pdf_page's draft of the page as it is, instead of content."),
       },
       write: true,
       async handler(args, ctx) {
         const { doc, record } = await importOf(ctx, args.document_id);
         const { range } = ranges(record, doc, args.page);
         if (!range) return fail(`Page ${args.page} isn't in the document any more: it has fewer page breaks than the PDF has pages. Read the document and restore the page breaks first.`);
-        const blocks = parseMarkdown(args.content).filter((node) => node.type.name !== "page_break");
+        const content = args.use_draft ? (await pageDraft(doc, record, args.page)).markdown : args.content;
+        if (!content) return fail("Give the page's content, or use_draft: true to write its draft.");
+        const blocks = parseMarkdown(content).filter((node) => node.type.name !== "page_break");
         if (!blocks.length) return fail("The content parsed to nothing.");
         if (lockedBetween(doc.doc, range.from, range.to)) return fail("Part of this page is locked by the user, so it can't be replaced.");
         await ctx.beforeWrite?.(doc);
@@ -326,7 +359,10 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
         const meta = doc.meta.pdfImport;
         if (meta) doc.setPdfImport({ converted: [...meta.converted, args.page] });
         ctx.onChange?.({ documentId: doc.id, title: doc.meta.title, tool: "write_pdf_page", added: wordsIn(blocks), removed: 0 });
-        const taken = await pagesTaken(doc, written);
+        let taken = await pagesTaken(doc, written);
+        // Measured again once the editor has settled the page (fonts, pictures, kept line breaks).
+        const used = taken ? await pagesUsedBy(doc, written) : null;
+        if (taken && used !== null) taken = { ...taken, count: used, last: taken.first + used - 1 };
         const left = pagesLeft(doc.doc, record.manifest.pageCount);
         const fit = !taken
           ? "The editor hasn't measured it yet; compare_pdf_page will wait for it."
@@ -348,13 +384,19 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
         const { doc, record } = await importOf(ctx, args.document_id);
         const { range } = ranges(record, doc, args.page);
         if (!range) return fail(`Page ${args.page} isn't in the document any more.`);
-        const taken = await pagesTaken(doc, range);
+        let taken = await pagesTaken(doc, range);
         if (!taken) return fail("The editor hasn't laid the page out yet: it may be busy, or the document isn't open. Try again in a moment; if it keeps failing, ask the user to open the document in Inline.");
-        const wanted = taken.count > 1 ? [taken.first, taken.first + 1] : [taken.first];
         showActivity(ctx, doc, { chatId: ctx.author, status: "reading", label: `Comparing page ${args.page}`, range: { from: range.from, to: range.to } });
         let rendered;
         try {
-          rendered = await requestPageRenders(doc, wanted, { scale: 2 });
+          const span = spanOf(range);
+          rendered = await requestPageRenders(doc, span ? [] : [taken.first], { scale: 2, ...(span ? { span } : {}) });
+          const measured = rendered[0]?.span;
+          if (measured) {
+            taken = { ...taken, first: measured.first, last: measured.last, count: measured.last - measured.first + 1 };
+            // A page that runs over: the next sheet too, to show what spilled.
+            if (taken.count > 1) rendered = [rendered[0]!, ...(await requestPageRenders(doc, [measured.first + 1], { scale: 2 }))];
+          }
         } catch (error) {
           if (error instanceof RenderUnavailableError) return fail(error.message);
           throw error;
@@ -420,15 +462,16 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
           if (!range) return fail(`Page ${args.page} isn't in the document any more.`);
           const taken = await pagesTaken(doc, range);
           if (!taken) return fail("The editor hasn't laid the page out yet: it may be busy, or the document isn't open. Try again in a moment.");
-          pagesUsed = taken.count;
           let rendered;
           try {
-            rendered = await requestPageRenders(doc, [taken.first], { scale: 1 });
+            const span = spanOf(range);
+            rendered = await requestPageRenders(doc, span ? [] : [taken.first], { scale: 1, ...(span ? { span } : {}) });
           } catch (error) {
             if (error instanceof RenderUnavailableError) return fail(error.message);
             throw error;
           }
           const page = rendered[0];
+          pagesUsed = page?.span ? page.span.last - page.span.first + 1 : taken.count;
           if (!page?.blocks?.length || !page.lines) return fail("The editor didn't report where the page's blocks are.");
           // Only the blocks of this original page (a page that overflows starts the next one's blocks on the same sheet).
           const ids = new Set(range.nodes.map((node) => String(node.attrs.id ?? "")));
@@ -450,6 +493,21 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
           });
           if (!tr.docChanged) break;
           doc.applyTransform(tr, { kind: "system", label: "pdf-align" }, { hunks: mapHunks(doc.hunks, tr.mapping) });
+        }
+        // A page that still runs onto another: its larger gaps shrink until it fits (the original's text area is a little taller than the editor's).
+        for (let round = 0; pagesUsed > 1 && round < 8; round += 1) {
+          const { range } = ranges(record, doc, args.page);
+          if (!range) break;
+          const tr = new Transform(doc.doc);
+          doc.doc.nodesBetween(range.from, range.to, (node, pos) => {
+            if (node.isBlock && typeof node.attrs.spaceBefore === "number" && node.attrs.spaceBefore > 4) tr.setNodeAttribute(pos, "spaceBefore", Math.round(node.attrs.spaceBefore * 0.8 * 10) / 10);
+            return node.type.name !== "paragraph";
+          });
+          if (!tr.docChanged) break;
+          doc.applyTransform(tr, { kind: "system", label: "pdf-align" }, { hunks: mapHunks(doc.hunks, tr.mapping) });
+          const used = await pagesUsedBy(doc, pageRanges(doc.doc)[args.page - 1]!);
+          if (used === null) break;
+          pagesUsed = used;
         }
         if (!last) return fail("Nothing on the page could be matched with the original.");
         const offsets = last.offsets.map((row) => row.offset);
@@ -529,9 +587,10 @@ function describePage(page: PdfPageAnalysis, record: PdfImportRecord, area: Retu
     lines.length ? "Text lines (y, x, size, font: text):" : "No text lines.",
     ...lines,
   ];
-  if (page.rules.length) {
+  const rules = page.rules.filter((rule) => rule.kind !== "hline" || rule.box.width >= 12);
+  if (rules.length) {
     out.push("", "Rules and frames:");
-    for (const rule of page.rules) {
+    for (const rule of rules) {
       if (rule.kind === "frame") {
         const inside = page.lines.filter((line) => line.baseline > rule.box.y && line.baseline < rule.box.y + rule.box.height && line.box.x >= rule.box.x - 2);
         out.push(`- frame ${pointsBox(rule.box)}, ${rule.width} pt line${inside.length ? `, around the lines from y ${f(inside[0]!.baseline)} ("${inside[0]!.text.slice(0, 40)}") to y ${f(inside[inside.length - 1]!.baseline)}` : ""}`);

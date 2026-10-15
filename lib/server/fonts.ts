@@ -76,7 +76,8 @@ export async function saveFont(font: FontToSave): Promise<StoredFont | null> {
     await fs.mkdir(fontsDir(), { recursive: true });
     await fs.writeFile(path.join(fontsDir(), file), font.data);
     const parsed = parseTrueType(font.data);
-    const range = font.partial && parsed ? unicodeRange(parsed.codePoints()) : null;
+    // Not its space: a PDF's fonts often carry one of any width (TeX's spaces are gaps, not glyphs); the stand-in's is a word space.
+    const range = font.partial && parsed ? unicodeRange(parsed.codePoints().filter((code) => code !== 0x20 && code !== 0xa0)) : null;
     const stored: StoredFont = {
       id,
       family,

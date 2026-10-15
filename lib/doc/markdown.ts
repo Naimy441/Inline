@@ -987,7 +987,11 @@ export function layoutAttrs(spec: { classes: string[]; values: Record<string, st
     const style = (BORDER_STYLES as readonly string[]).includes(values["border-style"] ?? "") ? (values["border-style"] as BorderLine["style"]) : "solid";
     const line: BorderLine = { style, width: numberIn(values["border-width"], 0.1, 12) ?? 0.5, space: numberIn(values["border-space"], 0, 40) ?? 3, color: hexColor(values["border-color"]) };
     const borders: Borders = {};
-    for (const side of sides) borders[side as keyof Borders] = { ...line };
+    for (const side of sides) {
+      // A side can have its own space: border-space-top=1.5.
+      const own = numberIn(values[`border-space-${side}`], 0, 40);
+      borders[side as keyof Borders] = { ...line, ...(own !== null ? { space: own } : {}) };
+    }
     attrs.borders = borders;
   }
   if (values.tabs) {

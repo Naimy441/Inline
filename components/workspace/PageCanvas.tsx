@@ -55,7 +55,7 @@ export const PageCanvas = memo(function PageCanvas({
         ["--math-size" as string]: `${settings.mathSize ?? DEFAULT_MATH_SIZE}em`,
       }
     : undefined;
-  const lineModel = settings?.lineModel === "font" ? " font-lines" : "";
+  const lineModel = `${settings?.lineModel === "font" ? " font-lines" : ""}${meta?.pdfImport ? " from-pdf" : ""}`;
   // Zoom scales the laid-out pages rather than laying them out again (CSS zoom would): text
   // shaped at another size wraps differently, so the page count would change with the window.
   const scale = printing || flow ? 1 : zoom;

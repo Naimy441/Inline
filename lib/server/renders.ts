@@ -15,7 +15,7 @@ export type RenderedLine = { x: number; y: number; size: number; text: string };
 /** A top-level block on a rendered page: its id, and its top and bottom in points from the page's top. */
 export type RenderedBlock = { id: string; top: number; bottom: number; joined?: boolean; /** For a block sharing a box with the one before: the space between them, in points. */ inside?: number };
 
-export type RenderedPage = { page: number; png: Uint8Array; lines?: RenderedLine[]; blocks?: RenderedBlock[] };
+export type RenderedPage = { page: number; png: Uint8Array; lines?: RenderedLine[]; blocks?: RenderedBlock[]; /** For a request with a span: the pages (0-based) its blocks take. */ span?: { first: number; last: number } };
 
 type Waiting = { documentId: string; resolve: (pages: RenderedPage[]) => void; timer: ReturnType<typeof setTimeout> };
 
@@ -24,7 +24,7 @@ const waiting = new Map<string, Waiting>();
 export class RenderUnavailableError extends Error {}
 
 /** Ask the open editor for pictures of these pages (0-based), at `scale` pixels per point. */
-export function requestPageRenders(doc: LiveDocument, pages: number[], options: { scale?: number; timeoutMs?: number } = {}): Promise<RenderedPage[]> {
+export function requestPageRenders(doc: LiveDocument, pages: number[], options: { scale?: number; timeoutMs?: number; span?: { first: string; last: string } } = {}): Promise<RenderedPage[]> {
   const requestId = randomUUID();
   return new Promise<RenderedPage[]>((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -33,7 +33,7 @@ export function requestPageRenders(doc: LiveDocument, pages: number[], options: 
     }, options.timeoutMs ?? 45_000);
     timer.unref?.();
     waiting.set(requestId, { documentId: doc.id, resolve, timer });
-    const viewers = doc.sendCommand({ kind: "render_pages", requestId, pages, scale: options.scale ?? 2 });
+    const viewers = doc.sendCommand({ kind: "render_pages", requestId, pages, scale: options.scale ?? 2, ...(options.span ? { span: options.span } : {}) });
     if (!viewers) {
       clearTimeout(timer);
       waiting.delete(requestId);

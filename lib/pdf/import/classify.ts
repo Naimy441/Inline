@@ -429,7 +429,8 @@ export function findRules(page: Classification, pageWidth: number, pageHeight: n
     if (box.width > pageWidth * 0.97 && box.height > pageHeight * 0.97) continue;
     if (isWhite(record.color)) continue;
     const color = record.color ?? "#000000";
-    if (box.height <= 2.5 && box.width >= 12) rules.push({ kind: "hline", box, width: Math.max(0.3, record.stroke ? record.lineWidth : box.height), color });
+    // Short thin ones too: fraction bars, overlines, the bar of a root.
+    if (box.height <= 2.5 && (box.width >= 12 || (box.width >= 2.5 && box.height <= 1.2))) rules.push({ kind: "hline", box, width: Math.max(0.3, record.stroke ? record.lineWidth : box.height), color });
     else if (box.width <= 2.5 && box.height >= 12) rules.push({ kind: "vline", box, width: Math.max(0.3, record.stroke ? record.lineWidth : box.width), color });
     else if (record.stroke && record.segments >= 3 && record.segments <= 5 && box.width >= 24 && box.height >= 12) rules.push({ kind: "frame", box, width: Math.max(0.3, record.lineWidth), color });
   }
