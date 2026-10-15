@@ -14,6 +14,9 @@ export type TextItem = { str: string; transform: number[]; width: number; height
 export type FontInfo = { name: string; bold: boolean; italic: boolean };
 
 /** "AAAAAB+CMBX12" → "CMBX12". */
+/** TeX's math fonts: their text is part of an equation, written as LaTeX. */
+export const TEX_MATH_FONT = /^(cmmi|cmsy|cmex|msbm|msam|eufm|eurm|rsfs|cmbsy|lmmath|stixmath)/i;
+
 export function cleanFontName(name: string) {
   return name.replace(/^[A-Z]{6}\+/, "").trim();
 }

@@ -1,4 +1,4 @@
-import { lineMetrics, primaryFamily } from "@/lib/doc/fontMetrics";
+import { lineMetrics, primaryFamily, registerLineMetrics } from "@/lib/doc/fontMetrics";
 import { api } from "@/lib/client/api";
 import type { GoogleFont } from "@/lib/doc/settings";
 
@@ -8,7 +8,19 @@ import type { GoogleFont } from "@/lib/doc/settings";
  * from lib/doc/fontMetrics.ts), so lines and baselines fall where Google's do.
  */
 
-export type DocumentFont = { id: string; family: string; bold: boolean; italic: boolean; format: "truetype" | "opentype"; url: string };
+export type DocumentFont = {
+  id: string;
+  family: string;
+  bold: boolean;
+  italic: boolean;
+  format: "truetype" | "opentype";
+  url: string;
+  /** A font with only some letters (a PDF's): the ones it has, and the family the rest come from. */
+  unicodeRange?: string;
+  fallback?: string | null;
+  ascent?: number;
+  descent?: number;
+};
 
 let listing: Promise<DocumentFont[]> | null = null;
 const faces = new Map<string, FontFace>();
@@ -17,7 +29,10 @@ const faces = new Map<string, FontFace>();
 export function documentFonts(refresh = false): Promise<DocumentFont[]> {
   if (refresh || !listing) {
     listing = api<{ fonts: DocumentFont[] }>("/api/fonts")
-      .then((result) => result.fonts)
+      .then((result) => {
+        for (const font of result.fonts) if (font.ascent !== undefined && font.descent !== undefined) registerLineMetrics(font.family, { ascent: font.ascent, descent: font.descent });
+        return result.fonts;
+      })
       .catch(() => {
         listing = null;
         return [];
@@ -26,19 +41,37 @@ export function documentFonts(refresh = false): Promise<DocumentFont[]> {
   return listing;
 }
 
-function addFace(font: DocumentFont) {
+/** The face of `family` closest to this style. */
+export function closestFace<T extends { family: string; bold: boolean; italic: boolean }>(fonts: T[], family: string, bold: boolean, italic: boolean): T | null {
+  const candidates = fonts.filter((font) => font.family.toLowerCase() === family.toLowerCase());
+  return candidates.find((item) => item.bold === bold && item.italic === italic) ?? candidates.find((item) => item.bold === bold) ?? candidates.find((item) => !item.bold && !item.italic) ?? candidates[0] ?? null;
+}
+
+function addFace(font: DocumentFont, all: DocumentFont[]) {
   if (typeof FontFace === "undefined" || typeof document === "undefined") return null;
   const existing = faces.get(font.id);
   if (existing) return existing;
   const metrics = lineMetrics(font.family);
   const percent = (value: number) => `${(value * 100).toFixed(2)}%`;
-  const face = new FontFace(font.family, `url(${font.url})`, {
+  const descriptors = {
     weight: font.bold ? "700" : "400",
     style: font.italic ? "italic" : "normal",
     ascentOverride: percent(metrics.ascent),
     descentOverride: percent(metrics.descent),
     lineGapOverride: "0%",
-  });
+  };
+  // A font with only some letters: the others come from its stand-in, added under its family first,
+  // since of two faces that both have a letter the one added last draws it.
+  if (font.unicodeRange) {
+    const standIn = font.fallback ? closestFace(all, font.fallback, font.bold, font.italic) : null;
+    const source = standIn ? `url(${standIn.url})` : font.fallback ? `local("${font.fallback.replace(/"/g, "")}")` : null;
+    if (source) {
+      const rest = new FontFace(font.family, source, descriptors);
+      document.fonts.add(rest);
+      void rest.load().catch(() => undefined);
+    }
+  }
+  const face = new FontFace(font.family, `url(${font.url})`, font.unicodeRange ? { ...descriptors, unicodeRange: font.unicodeRange } : descriptors);
   document.fonts.add(face);
   faces.set(font.id, face);
   return face;
@@ -53,7 +86,7 @@ export async function loadDocumentFonts(used: string, refresh = false) {
   const lower = used.toLowerCase();
   const loading: Promise<unknown>[] = [];
   for (const font of fonts) {
-    const face = addFace(font);
+    const face = addFace(font, fonts);
     if (face && lower.includes(font.family.toLowerCase())) loading.push(face.load().catch(() => undefined));
   }
   if (!loading.length) return;

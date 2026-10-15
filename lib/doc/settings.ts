@@ -83,7 +83,12 @@ export type DocumentSettings = {
   lineModel?: "font";
   /** Points between the default tab stops, when not Google's and Word's half inch. */
   tabStop?: number;
+  /** Equations' size against their text, when not the usual 1.1 (a PDF made with LaTeX sets them at 1). */
+  mathSize?: number;
 };
+
+/** Equations' usual size against their text. */
+export const DEFAULT_MATH_SIZE = 1.1;
 
 export type DocumentMeta = {
   id: string;
@@ -288,6 +293,10 @@ export function normalizeSettings(input: unknown, base: DocumentSettings = DEFAU
       const stop = raw.tabStop === undefined ? base.tabStop : raw.tabStop;
       return typeof stop === "number" && Number.isFinite(stop) && stop >= 1 && stop <= 360 && stop !== DEFAULT_TAB_STOP ? { tabStop: stop } : {};
     })(),
+    ...(() => {
+      const size = raw.mathSize === undefined ? base.mathSize : raw.mathSize;
+      return typeof size === "number" && Number.isFinite(size) && size >= 0.5 && size <= 2 && size !== DEFAULT_MATH_SIZE ? { mathSize: Math.round(size * 100) / 100 } : {};
+    })(),
   };
 }
 
@@ -317,7 +326,7 @@ export function patchSettings(current: DocumentSettings, patch: unknown): Docume
 /** The settings that decide where pages break, as a string, so a page count measured under other settings isn't trusted. */
 export function layoutKey(settings: DocumentSettings) {
   const { paperSize, orientation, margins, customSize } = settings.pageSetup;
-  return [customSize ? `${customSize.width}x${customSize.height}` : paperSize, orientation, margins.top, margins.right, margins.bottom, margins.left, settings.fontFamily, settings.fontSize, settings.lineSpacing, settings.paragraphSpacing, ...(settings.lineModel ? [settings.lineModel] : []), ...(settings.tabStop ? [`tab ${settings.tabStop}`] : [])].join("|");
+  return [customSize ? `${customSize.width}x${customSize.height}` : paperSize, orientation, margins.top, margins.right, margins.bottom, margins.left, settings.fontFamily, settings.fontSize, settings.lineSpacing, settings.paragraphSpacing, ...(settings.lineModel ? [settings.lineModel] : []), ...(settings.tabStop ? [`tab ${settings.tabStop}`] : []), ...(settings.mathSize ? [`math ${settings.mathSize}`] : [])].join("|");
 }
 
 /** Page dimensions in inches, accounting for orientation. */

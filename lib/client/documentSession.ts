@@ -14,7 +14,8 @@ import { api, ApiError, del, patch, post, Store, uploadFile } from "@/lib/client
 import { setCommentState } from "@/lib/editor/comments";
 import { syncDomSelection } from "@/lib/editor/domSync";
 import type { PdfDocumentModel } from "@/lib/pdf/pdfWriter";
-import { documentFonts, ensureFonts, fontData, loadDocumentFonts, type DocumentFont } from "@/lib/client/fonts";
+import { fitLinesNow } from "@/lib/editor/lineFit";
+import { closestFace, documentFonts, ensureFonts, fontData, loadDocumentFonts, type DocumentFont } from "@/lib/client/fonts";
 import { lineMetrics, primaryFamily } from "@/lib/doc/fontMetrics";
 import { pageCount, relayout, type PageGeometry, type PageLayout } from "@/lib/editor/pagination";
 import { setPresence } from "@/lib/editor/presence";
@@ -383,6 +384,8 @@ export class DocumentSession {
         this.ui.set((ui) => ({ ...ui, exporting: true }));
         await nextFrames(2);
       }
+      // Lines kept from a PDF are spaced for the fonts as they are now, before the pages are read.
+      fitLinesNow(view);
       relayout(view);
       await settleLayout(() => pageCount(view.state));
       await imagesLoaded(root);
@@ -391,15 +394,16 @@ export class DocumentSession {
       const fonts = await documentFonts();
       const used = new Map<string, DocumentFont>();
       const choose = (style: { fontFamily: string; fontWeight: string; fontStyle: string }) => {
-        const family = primaryFamily(style.fontFamily).toLowerCase();
-        const candidates = fonts.filter((font) => font.family.toLowerCase() === family);
-        if (!candidates.length) return null;
         const bold = style.fontWeight === "bold" || Number(style.fontWeight) >= 600;
         const italic = /italic|oblique/.test(style.fontStyle);
-        const font = candidates.find((item) => item.bold === bold && item.italic === italic) ?? candidates.find((item) => item.bold === bold) ?? candidates.find((item) => !item.bold && !item.italic) ?? candidates[0]!;
+        const font = closestFace(fonts, primaryFamily(style.fontFamily), bold, italic);
+        if (!font) return null;
         used.set(font.id, font);
+        // A font with only some letters (a PDF's) has the rest drawn from its stand-in, as on the page.
+        const standIn = font.unicodeRange && font.fallback ? closestFace(fonts, font.fallback, bold, italic) : null;
+        if (standIn) used.set(standIn.id, standIn);
         const metrics = lineMetrics(font.family);
-        return { key: font.id, baseline: metrics.ascent / (metrics.ascent + metrics.descent) };
+        return { key: font.id, baseline: metrics.ascent / (metrics.ascent + metrics.descent), ...(standIn ? { fallback: standIn.id } : {}) };
       };
       const model = snapshotPages(root, title, domMeasurer(rasters, choose));
       const data = await Promise.all([...used.values()].map(async (font) => [font.id, await fontData(font)] as const));

@@ -1,7 +1,8 @@
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { ANNOTATIONS_ON_CANVAS, analyzePage, captureOperatorList, settleInk, summarize, type AnalyzedPage } from "@/lib/pdf/import/analyze";
 import { contentFilter, inkFilter } from "@/lib/pdf/import/classify";
-import type { PdfImportManifest } from "@/lib/pdf/import/types";
+import { cleanFontName, fontStyle, TEX_MATH_FONT } from "@/lib/pdf/import/text";
+import type { PdfEmbeddedFont, PdfImportManifest } from "@/lib/pdf/import/types";
 
 /**
  * Gets a PDF ready to import, in the browser: pdf.js reads it (in a worker),
@@ -136,6 +137,44 @@ function documentTitle(info: Record<string, unknown> | undefined, fileName: stri
 
 export class PdfImportError extends Error {}
 
+const MAX_FONT_BYTES = 4 * 1024 * 1024;
+const MAX_FONTS = 60;
+
+type LoadedFont = { name?: string; data?: Uint8Array; mimetype?: string; missingFile?: boolean; isType3Font?: boolean; bold?: boolean; black?: boolean; italic?: boolean };
+
+/**
+ * The fonts the PDF carries, as pdf.js made them for drawing its pages
+ * (OpenType, with each letter where Unicode has it), added to the form as
+ * "font-N": the text can then be set in its own letters, at its own widths.
+ * TeX's math fonts are left out (equations are written as LaTeX), and so are
+ * fonts the PDF only names (pdf.js stands others in for them).
+ */
+function embeddedFonts(pages: Array<AnalyzedPage & { proxy: PDFPageProxy }>, form: FormData): PdfEmbeddedFont[] {
+  const fonts: PdfEmbeddedFont[] = [];
+  const seen = new Set<string>();
+  for (const page of pages) {
+    for (const id of page.fontIds ?? []) {
+      if (fonts.length >= MAX_FONTS) return fonts;
+      let font: LoadedFont | null = null;
+      try {
+        font = page.proxy.commonObjs.has(id) ? (page.proxy.commonObjs.get(id) as LoadedFont) : null;
+      } catch {
+        font = null;
+      }
+      const name = cleanFontName(font?.name ?? "");
+      if (!font || !name || seen.has(name)) continue;
+      seen.add(name);
+      const data = font.data;
+      if (!data || font.missingFile || font.isType3Font || data.length < 64 || data.length > MAX_FONT_BYTES || TEX_MATH_FONT.test(name)) continue;
+      const field = `font-${fonts.length + 1}`;
+      form.append(field, new Blob([data.slice()], { type: font.mimetype || "font/opentype" }), `${field}.otf`);
+      const style = fontStyle(name, { bold: font.bold || font.black, italic: font.italic });
+      fonts.push({ name, field, bold: style.bold, italic: style.italic });
+    }
+  }
+  return fonts;
+}
+
 /** Read and draw a PDF for import. Returns the form to send to /api/documents/import/pdf. */
 export async function preparePdfImport(file: File, onProgress: (progress: PrepareProgress) => void = () => undefined): Promise<{ form: FormData; manifest: PdfImportManifest }> {
   onProgress({ stage: "reading" });
@@ -196,6 +235,7 @@ export async function preparePdfImport(file: File, onProgress: (progress: Prepar
       }
       page.proxy.cleanup();
     }
+    const fonts = embeddedFonts(pages, form);
     const metadata = await pdf.getMetadata().catch(() => null);
     const manifest: PdfImportManifest = {
       version: 1,
@@ -205,6 +245,7 @@ export async function preparePdfImport(file: File, onProgress: (progress: Prepar
       pages: pages.map((page) => page.analysis),
       summary: summarize(pages.map((page) => page.analysis)),
       renderScale: RENDER_SCALE,
+      ...(fonts.length ? { fonts } : {}),
     };
     form.append("manifest", new Blob([JSON.stringify(manifest)], { type: "application/json" }), "manifest.json");
     onProgress({ stage: "saving" });

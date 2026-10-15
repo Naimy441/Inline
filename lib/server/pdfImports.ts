@@ -1,13 +1,14 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Node as PMNode } from "prosemirror-model";
 import { ensureBlockIds } from "@/lib/doc/ids";
 import { schema } from "@/lib/doc/schema";
 import { DEFAULT_SETTINGS, FONT_FAMILIES, PAPER_SIZES, googleFontValue, normalizeSettings, type DocumentSettings, type PaperSize } from "@/lib/doc/settings";
+import { fontStyle, TEX_MATH_FONT } from "@/lib/pdf/import/text";
 import type { PdfBox, PdfImportManifest, PdfPageAnalysis } from "@/lib/pdf/import/types";
 import { lineMetrics } from "@/lib/doc/fontMetrics";
-import { saveFont } from "@/lib/server/fonts";
+import { listFonts, saveFont } from "@/lib/server/fonts";
 import { findGoogleFont, keepGoogleFont } from "@/lib/server/googleFonts";
 import { documentHub, type LiveDocument } from "@/lib/server/hub";
 import { log } from "@/lib/server/log";
@@ -40,7 +41,12 @@ export type PdfImportRecord = {
   pages: Array<{ clean: string; view: string; ink: string | null; placeholder: string | null }>;
   /** When Claude said the conversion was finished. */
   finishedAt?: number;
+  /** The fonts the PDF carried, kept as document fonts: by the PDF's name for each, its family and style. */
+  fonts?: Record<string, PdfFontFace>;
 };
+
+/** A face of a document font: its family, and whether it's the bold or italic one. */
+export type PdfFontFace = { family: string; bold: boolean; italic: boolean };
 
 export class PdfImportError extends Error {}
 
@@ -141,8 +147,7 @@ export async function ensureComputerModern() {
   }
 }
 
-/** TeX's math fonts: their text is part of an equation, written as LaTeX. */
-export const TEX_MATH_FONT = /^(cmmi|cmsy|cmex|msbm|msam|eufm|eurm|rsfs|cmbsy|lmmath|stixmath)/i;
+export { TEX_MATH_FONT };
 
 /** The Inline font to set a PDF font's text in, or "math" for TeX's math fonts (no lookup online). */
 export function inlineFontName(pdfFont: string): string {
@@ -154,11 +159,111 @@ export function inlineFontName(pdfFont: string): string {
   return "";
 }
 
+// --- the PDF's own fonts --------------------------------------------------------------------
+
+/** TeX's text fonts by series: the family a face belongs to (with its size), and its style. */
+const TEX_SERIES: Record<string, { family: string; bold?: boolean; italic?: boolean }> = {
+  r: { family: "R" },
+  bx: { family: "R", bold: true },
+  ti: { family: "R", italic: true },
+  bxti: { family: "R", bold: true, italic: true },
+  bi: { family: "R", bold: true, italic: true },
+  tt: { family: "TT" },
+  itt: { family: "TT", italic: true },
+  tti: { family: "TT", italic: true },
+  ss: { family: "SS" },
+  ssbx: { family: "SS", bold: true },
+  sx: { family: "SS", bold: true },
+  ssi: { family: "SS", italic: true },
+  si: { family: "SS", italic: true },
+};
+
+/**
+ * The family a PDF font is a face of, and which face: TeX's CMBX12 is the bold
+ * of CMR12, CMTI10 the italic of CMR10, SFBX1200 the bold of SFRM1200;
+ * "TimesNewRomanPS-BoldMT" the bold of TimesNewRomanPS.
+ */
+export function pdfFontFace(name: string): { base: string; bold: boolean; italic: boolean } {
+  const clean = name.replace(/^[A-Z]{6}\+/, "");
+  const tex = /^(cm|ec|tc|sf)([a-z]+?)(\d+)$/i.exec(clean);
+  if (tex) {
+    const prefix = tex[1]!.toUpperCase();
+    let series = tex[2]!.toLowerCase();
+    // cm-super's and the EC fonts' roman is "rm"; CM's is "r".
+    if (prefix !== "CM" && series === "rm") series = "r";
+    const known = TEX_SERIES[series];
+    if (known) return { base: `${prefix}${known.family === "R" && prefix !== "CM" ? "RM" : known.family}${tex[3]}`, bold: Boolean(known.bold), italic: Boolean(known.italic) };
+    return { base: clean.toUpperCase(), bold: false, italic: false };
+  }
+  const style = fontStyle(clean);
+  const base = clean.replace(/[-,].*$/, "").replace(/(MT|PS)$/g, "") || clean;
+  return { base, bold: style.bold, italic: style.italic };
+}
+
+/** The family letters missing from a PDF font are shown in: Computer Modern's for TeX's, else the nearest Inline has. */
+async function fallbackFor(name: string) {
+  const inline = inlineFontName(name);
+  if (inline && inline !== "math") return inline;
+  return (await fontFor(name, { lookupGoogle: false })).family;
+}
+
+/**
+ * Keep the fonts the PDF carried as document fonts, each face in its family
+ * (named after the PDF: "CMR12 (week8-2)"), with only the letters the PDF
+ * used; letters it didn't use come from a stand-in (fallbackFor). Returns,
+ * by the PDF's font name, the family and style to set its text in.
+ */
+export async function keepPdfFonts(manifest: PdfImportManifest, files: ImportFiles): Promise<Record<string, PdfFontFace>> {
+  const fonts = (manifest.fonts ?? []).filter((font) => !TEX_MATH_FONT.test(font.name));
+  if (!fonts.length) return {};
+  const stem = manifest.fileName.replace(/\.pdf$/i, "").replace(/[^A-Za-z0-9 _.-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 24) || "PDF";
+  const faces = fonts
+    .map((font) => ({ font, data: files.get(font.field), face: pdfFontFace(font.name) }))
+    .filter((entry): entry is typeof entry & { data: Uint8Array } => Boolean(entry.data && entry.data.length >= 64));
+  const families = new Map<string, typeof faces>();
+  for (const entry of faces) {
+    const group = families.get(entry.face.base) ?? [];
+    // One face per style: the first the PDF uses.
+    if (!group.some((other) => other.face.bold === entry.face.bold && other.face.italic === entry.face.italic)) group.push(entry);
+    families.set(entry.face.base, group);
+  }
+  const stored = await listFonts();
+  const result: Record<string, PdfFontFace> = {};
+  for (const [base, group] of families) {
+    // A family of this name kept from another PDF (other letters) gets a number.
+    const ids = new Set(group.map((entry) => createHash("sha256").update(entry.data).digest("hex").slice(0, 24)));
+    let family = `${base} (${stem})`;
+    for (let n = 2; stored.some((font) => font.family.toLowerCase() === family.toLowerCase() && !ids.has(font.id)) && n < 100; n += 1) family = `${base} (${stem} ${n})`;
+    for (const entry of group) {
+      const saved = await saveFont({ family, bold: entry.face.bold, italic: entry.face.italic, data: entry.data, partial: true, fallback: await fallbackFor(entry.font.name) }).catch((error) => {
+        log("warn", "a PDF's font couldn't be kept", { font: entry.font.name, error });
+        return null;
+      });
+      if (saved) result[entry.font.name] = { family: saved.family, bold: entry.face.bold, italic: entry.face.italic };
+    }
+  }
+  // Faces of the same style as one kept (another size's) are set in the kept one.
+  for (const entry of faces) {
+    if (result[entry.font.name]) continue;
+    const kept = Object.values(result).find((face) => face.family.startsWith(`${entry.face.base} (`));
+    if (kept) result[entry.font.name] = { family: kept.family, bold: entry.face.bold, italic: entry.face.italic };
+  }
+  return result;
+}
+
+/** A CSS font family list for a kept PDF family, with its stand-in after it. */
+export function pdfFamilyCss(face: PdfFontFace, fallback: string) {
+  return `"${face.family}", ${fallback}`;
+}
+
 /** The document's settings, from what the pages share. */
-export async function settingsFor(manifest: PdfImportManifest): Promise<{ settings: DocumentSettings; font: FontChoice }> {
+export async function settingsFor(manifest: PdfImportManifest, pdfFonts: Record<string, PdfFontFace> = {}): Promise<{ settings: DocumentSettings; font: FontChoice }> {
   const first = manifest.pages[0];
   const summary = manifest.summary;
-  const font = await fontFor(summary.bodyFont || "Helvetica");
+  const standIn = await fontFor(summary.bodyFont || "Helvetica");
+  // The body text in the PDF's own font when it carries it, else the nearest Inline has.
+  const own = pdfFonts[summary.bodyFont];
+  const font: FontChoice = own ? { ...standIn, family: own.family, css: pdfFamilyCss(own, standIn.css) } : standIn;
   const pageSetup = { ...paperFor(first?.width ?? 612, first?.height ?? 792), margins: summary.margins };
   const header = summary.header;
   const footer = summary.footer;
@@ -178,6 +283,8 @@ export async function settingsFor(manifest: PdfImportManifest): Promise<{ settin
     fontSize: Math.round(summary.bodySize * 2) / 2 || 11,
     lineSpacing: Math.max(0.8, Math.min(3, summary.lineSpacing || 1.2)),
     paragraphSpacing: Math.max(0, Math.min(36, summary.paragraphSpacing)),
+    // A PDF sets its equations at the size of their text.
+    mathSize: 1,
     headerFooter: {
       ...DEFAULT_SETTINGS.headerFooter,
       header: headerText.length === 2 ? `${headerText[0]}\t\t${headerText[1]}` : headerText.join("\t"),
@@ -344,7 +451,8 @@ export type ImportFiles = { get(name: string): Uint8Array | null };
 /** Keep an import's files and create its document. */
 export async function createPdfImport(input: { manifest: PdfImportManifest; source: Uint8Array; files: ImportFiles; folderId: string | null }): Promise<StoredImport> {
   const { manifest } = input;
-  const { settings, font } = await settingsFor(manifest);
+  const pdfFonts = await keepPdfFonts(manifest, input.files);
+  const { settings, font } = await settingsFor(manifest, pdfFonts);
   if (font.computerModern || manifest.summary.fonts.some((item) => inlineFontName(item.name) && inlineFontName(item.name) !== "math")) await ensureComputerModern().catch((error) => log("warn", "the Computer Modern faces couldn't be kept", { error }));
   if (font.google) void keepGoogleFont(font.google).catch(() => undefined);
   const source = await newUpload("pdf", input.source);
@@ -378,7 +486,7 @@ export async function createPdfImport(input: { manifest: PdfImportManifest; sour
     }
   }
   const title = manifest.title ?? (manifest.fileName.replace(/\.pdf$/i, "").trim() || "Imported PDF");
-  const record: PdfImportRecord = { version: 1, documentId: "", createdAt: Date.now(), fileName: manifest.fileName, source, manifest, pages };
+  const record: PdfImportRecord = { version: 1, documentId: "", createdAt: Date.now(), fileName: manifest.fileName, source, manifest, pages, ...(Object.keys(pdfFonts).length ? { fonts: pdfFonts } : {}) };
   const doc = await documentHub().create({ title, doc: placeholderDoc(record).toJSON(), settings, folderId: input.folderId });
   record.documentId = doc.id;
   await writePdfImport(record);

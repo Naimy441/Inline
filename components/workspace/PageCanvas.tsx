@@ -3,7 +3,7 @@
 import { memo, useEffect, useRef } from "react";
 import { geometryFor, type DocumentSession } from "@/lib/client/documentSession";
 import { lineFactor, lineMetrics } from "@/lib/doc/fontMetrics";
-import { DEFAULT_TAB_STOP, fillHeaderTokens, headerParts, type DocumentMeta } from "@/lib/doc/settings";
+import { DEFAULT_MATH_SIZE, DEFAULT_TAB_STOP, fillHeaderTokens, headerParts, type DocumentMeta } from "@/lib/doc/settings";
 import { PdfAnnotations } from "@/components/workspace/PdfAnnotations";
 
 /**
@@ -52,6 +52,7 @@ export const PageCanvas = memo(function PageCanvas({
         ["--font-lh" as string]: String(lineFactor(settings.fontFamily)),
         ["--font-lh-step" as string]: lineMetrics(settings.fontFamily).pixelRound ? "1px" : "0.01px",
         ["--tab-stop" as string]: `${settings.tabStop ?? DEFAULT_TAB_STOP}pt`,
+        ["--math-size" as string]: `${settings.mathSize ?? DEFAULT_MATH_SIZE}em`,
       }
     : undefined;
   const lineModel = settings?.lineModel === "font" ? " font-lines" : "";

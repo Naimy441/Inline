@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { EmbeddedFont } from "@/lib/doc/docxImport";
+import { parseTrueType } from "@/lib/pdf/truetype";
 import { dataDir } from "@/lib/server/store";
 
 /**
@@ -13,7 +14,28 @@ import { dataDir } from "@/lib/server/store";
  * document brought.
  */
 
-export type StoredFont = { id: string; family: string; bold: boolean; italic: boolean; format: "truetype" | "opentype"; file: string; size: number };
+export type StoredFont = {
+  id: string;
+  family: string;
+  bold: boolean;
+  italic: boolean;
+  format: "truetype" | "opentype";
+  file: string;
+  size: number;
+  /**
+   * For a font with only some letters (one a PDF carried, cut down to the
+   * letters it used): the code points it has, as a CSS unicode-range, and
+   * the family whose letters stand in for the rest.
+   */
+  unicodeRange?: string;
+  fallback?: string;
+  /** Its height above and below the baseline, in ems (for a font Inline has no figures for). */
+  ascent?: number;
+  descent?: number;
+};
+
+/** A font to keep: one a document brought, perhaps with only some letters. */
+export type FontToSave = EmbeddedFont & { fallback?: string; partial?: boolean };
 
 const MAX_FONT_BYTES = 20 * 1024 * 1024;
 
@@ -41,7 +63,7 @@ export async function listFonts(): Promise<StoredFont[]> {
 let writing: Promise<unknown> = Promise.resolve();
 
 /** Keep a font a document brought, unless one of its family and style is kept already. */
-export async function saveFont(font: EmbeddedFont): Promise<StoredFont | null> {
+export async function saveFont(font: FontToSave): Promise<StoredFont | null> {
   if (!font.family.trim() || font.data.length < 64 || font.data.length > MAX_FONT_BYTES) return null;
   const run = writing.catch(() => undefined).then(async () => {
     const fonts = await listFonts();
@@ -53,7 +75,19 @@ export async function saveFont(font: EmbeddedFont): Promise<StoredFont | null> {
     const file = `${id}.${format === "opentype" ? "otf" : "ttf"}`;
     await fs.mkdir(fontsDir(), { recursive: true });
     await fs.writeFile(path.join(fontsDir(), file), font.data);
-    const stored: StoredFont = { id, family, bold: font.bold, italic: font.italic, format, file, size: font.data.length };
+    const parsed = parseTrueType(font.data);
+    const range = font.partial && parsed ? unicodeRange(parsed.codePoints()) : null;
+    const stored: StoredFont = {
+      id,
+      family,
+      bold: font.bold,
+      italic: font.italic,
+      format,
+      file,
+      size: font.data.length,
+      ...(range ? { unicodeRange: range, ...(font.fallback ? { fallback: font.fallback } : {}) } : {}),
+      ...(parsed && parsed.unitsPerEm ? { ascent: Math.round((parsed.ascent / parsed.unitsPerEm) * 1000) / 1000, descent: Math.round((Math.abs(parsed.descent) / parsed.unitsPerEm) * 1000) / 1000 } : {}),
+    };
     const next = [...fonts, stored];
     const tmp = path.join(fontsDir(), `index.json.${process.pid}.${Date.now()}.tmp`);
     await fs.writeFile(tmp, JSON.stringify({ fonts: next }), "utf8");
@@ -63,6 +97,20 @@ export async function saveFont(font: EmbeddedFont): Promise<StoredFont | null> {
   });
   writing = run;
   return run;
+}
+
+/** Code points as a CSS unicode-range: U+41-5A, U+61, … */
+export function unicodeRange(codes: number[]) {
+  const sorted = [...new Set(codes)].sort((a, b) => a - b);
+  const parts: string[] = [];
+  for (let i = 0; i < sorted.length; ) {
+    let end = i;
+    while (end + 1 < sorted.length && sorted[end + 1] === sorted[end]! + 1) end += 1;
+    const hex = (code: number) => code.toString(16).toUpperCase();
+    parts.push(end > i ? `U+${hex(sorted[i]!)}-${hex(sorted[end]!)}` : `U+${hex(sorted[i]!)}`);
+    i = end + 1;
+  }
+  return parts.join(", ");
 }
 
 export async function readFont(id: string): Promise<{ font: StoredFont; data: Uint8Array } | null> {
@@ -83,5 +131,6 @@ export async function fontsForFamilies(families: Iterable<string>) {
 
 /** The kept fonts for a Word copy to carry (lib/doc/docx.ts). */
 export async function loadFontsForWord(families: string[]) {
-  return (await fontsForFamilies(families)).map(({ font, data }) => ({ family: font.family, bold: font.bold, italic: font.italic, data }));
+  // A font with only some letters would leave Word without the rest.
+  return (await fontsForFamilies(families)).filter(({ font }) => !font.unicodeRange).map(({ font, data }) => ({ family: font.family, bold: font.bold, italic: font.italic, data }));
 }

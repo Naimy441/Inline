@@ -26,7 +26,7 @@ import type { PdfBox, PdfDocumentSummary, PdfHeaderFooter, PdfImagePlacement, Pd
 /** pdf.js's annotation mode that draws annotations' appearances onto the page (AnnotationMode.ENABLE). */
 export const ANNOTATIONS_ON_CANVAS = 1;
 
-export type AnalyzedPage = { analysis: PdfPageAnalysis; classification: Classification };
+export type AnalyzedPage = { analysis: PdfPageAnalysis; classification: Classification; /** The page's fonts, by pdf.js id (in its commonObjs). */ fontIds?: string[] };
 
 type Annotation = AnnotationInfo & { url?: string; unsafeUrl?: string; dest?: unknown; contentsObj?: { str?: string }; titleObj?: { str?: string } };
 
@@ -135,7 +135,7 @@ export async function analyzePage(pdf: PDFDocumentProxy, page: PDFPageProxy, OPS
     ink: inkSummary(classification, notes),
     scanned: !lines.length && classification.paints.some((record) => record.kind === "image" && record.box && record.box.width * record.box.height > 0.5 * width * height),
   };
-  return { analysis, classification };
+  return { analysis, classification, fontIds: [...fonts.keys()] };
 }
 
 function inkSummary(classification: Classification, notes: PdfPageAnalysis["ink"]["notes"]): PdfPageAnalysis["ink"] {
@@ -312,9 +312,16 @@ export function summarize(pages: PdfPageAnalysis[]): PdfDocumentSummary {
   const lefts = new Map<number, number>();
   for (const { line } of body) lefts.set(Math.round(line.box.x), (lefts.get(Math.round(line.box.x)) ?? 0) + 1);
   const common = [...lefts].filter(([, count]) => count >= 3).map(([x]) => x);
-  const left = common.length ? Math.min(...common) : Math.min(...body.map(({ line }) => line.box.x), 72);
+  let left = common.length ? Math.min(...common) : Math.min(...body.map(({ line }) => line.box.x), 72);
   const widths = body.map(({ line }) => line.box.x + line.box.width);
   const textRight = widths.length ? percentile(widths, 0.95) : pages[0]!.width - 72;
+  // Text indented throughout (every paragraph a list item) leaves the margin to lines and rules that run the
+  // full width, out to the right margin: a header line, a rule under it.
+  const spans = [
+    ...pages.flatMap((page) => page.lines.filter((line) => line.box.width > page.width * 0.5).map((line) => line.box)),
+    ...pages.flatMap((page) => page.rules.filter((rule) => rule.kind === "hline" && rule.box.width > page.width * 0.5).map((rule) => rule.box)),
+  ].filter((box) => Math.abs(box.x + box.width - textRight) < 2.5 && box.x < left - 1.5 && box.x > 18);
+  if (spans.length) left = percentile(spans.map((box) => box.x), 0.5);
   const tops = pages.map((page) => Math.min(...[...page.lines.filter((line) => !chrome.has(line)).map((line) => line.box.y), ...page.images.map((image) => image.box.y)])).filter(Number.isFinite);
   const bottoms = pages.map((page) => Math.max(...[...page.lines.filter((line) => !chrome.has(line)).map((line) => line.box.y + line.box.height), ...page.images.map((image) => image.box.y + image.box.height)])).filter(Number.isFinite);
   const width = pages[0]?.width ?? 612;
@@ -322,7 +329,8 @@ export function summarize(pages: PdfPageAnalysis[]): PdfDocumentSummary {
   const inch = (pt: number) => Math.round(Math.max(0.25, Math.min(2.5, pt / 72)) * 100) / 100;
   const margins = {
     top: inch(tops.length ? Math.min(...tops) : 72),
-    bottom: inch(bottoms.length ? height - Math.max(...bottoms) : 72),
+    // A short PDF's text may stop well above the page number: the text area ends a line or two above it.
+    bottom: inch(Math.min(bottoms.length ? height - Math.max(...bottoms) : 72, ...numbers.filter((item) => item.position === "footer" && item.y !== undefined).map((item) => height - item.y! + 2.5 * bodySize))),
     left: inch(left),
     right: inch(width - textRight),
   };

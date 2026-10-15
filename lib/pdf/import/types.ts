@@ -110,6 +110,9 @@ export type PdfDocumentSummary = {
   headerRule: boolean;
 };
 
+/** A font the PDF carries, sent with the import as form field `field` (pdf.js's OpenType translation of it). */
+export type PdfEmbeddedFont = { name: string; field: string; bold: boolean; italic: boolean };
+
 export type PdfImportManifest = {
   version: 1;
   fileName: string;
@@ -119,6 +122,8 @@ export type PdfImportManifest = {
   summary: PdfDocumentSummary;
   /** Pixels per point of the stored page pictures. */
   renderScale: number;
+  /** The fonts the PDF carries, for its text to be set in them. */
+  fonts?: PdfEmbeddedFont[];
 };
 
 /** The pictures of one page the browser makes. */

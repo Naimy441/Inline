@@ -1015,9 +1015,15 @@ function blockMarks(spec: { values: Record<string, string> }): Mark[] {
 
 /** A font family name as a CSS family list (quoted, with a generic fallback). */
 function cssFamily(value: string | undefined) {
-  const name = (value ?? "").replace(/["';{}<>\\]/g, "").trim();
-  if (!name) return null;
-  return /,/.test(name) ? name : `"${name}", serif`;
+  const names = (value ?? "")
+    .replace(/[;{}<>\\]/g, "")
+    .split(",")
+    .map((name) => name.replace(/["']/g, "").trim())
+    .filter(Boolean);
+  if (!names.length) return null;
+  const generic = /^(serif|sans-serif|monospace|cursive|fantasy|system-ui)$/i;
+  if (names.length === 1) names.push("serif");
+  return names.map((name) => (generic.test(name) ? name : `"${name}"`)).join(", ");
 }
 
 /** Add marks to every piece of text (not equations or code, which can't take them). */
@@ -1056,7 +1062,7 @@ export function styleMarks(style: string): Mark[] {
       const pt = cssSizeToPt(value);
       if (pt) marks.push(schema.mark("font_size", { size: `${pt}pt` }));
     } else if (name === "font-family") {
-      const family = value.replace(/[;{}<>\\]/g, "").trim();
+      const family = cssFamily(value);
       if (family) marks.push(schema.mark("font_family", { family }));
     } else if (name === "font-weight" && /^(bold|[6-9]00)$/.test(value)) marks.push(schema.mark("bold"));
     else if (name === "font-style" && value === "italic") marks.push(schema.mark("italic"));

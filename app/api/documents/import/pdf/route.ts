@@ -40,6 +40,7 @@ const ManifestSchema = z
         paragraphSpacing: z.number(),
       })
       .passthrough(),
+    fonts: z.array(z.object({ name: z.string().min(1).max(200), field: z.string().regex(/^font-\d+$/), bold: z.boolean(), italic: z.boolean() })).max(100).optional(),
   })
   .passthrough();
 
@@ -71,7 +72,7 @@ export const POST = route(async (request) => {
   const files = new Map<string, Uint8Array>();
   for (const [name, value] of form!.entries()) {
     if (name === "file" || name === "manifest" || !(value instanceof Blob)) continue;
-    if (!/^(clean|view|ink)-\d+$|^image-\d+-\d+$/.test(name)) continue;
+    if (!/^(clean|view|ink)-\d+$|^image-\d+-\d+$|^font-\d+$/.test(name)) continue;
     files.set(name, new Uint8Array(await value.arrayBuffer()));
   }
   let created;

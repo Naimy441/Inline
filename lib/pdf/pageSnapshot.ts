@@ -60,7 +60,7 @@ export type PageMeasurer = {
   font?(style: SnapshotStyle): FontChoice | null;
 };
 
-export type FontChoice = { key: string; baseline: number };
+export type FontChoice = { key: string; baseline: number; /** The font for letters `key` lacks (one with only some letters). */ fallback?: string };
 
 const PX_TO_PT = 0.75;
 
@@ -196,11 +196,11 @@ export function snapshotPages(
         font: standardFont(marker.style),
         size: cssPx(marker.style.fontSize) * PX_TO_PT,
         color: markerColor,
-        ...(markerFont ? { embedded: markerFont.key, width } : {}),
+        ...(markerFont ? { embedded: markerFont.key, width, ...(markerFont.fallback ? { fallback: markerFont.fallback } : {}) } : {}),
       });
       marker = null;
     }
-    add(at.page, { kind: "text", x: at.x, y: baseline, text: transform(text, style.textTransform), font, size: sizePt, color, ...(own ? { embedded: own.key, width: at.width } : {}) });
+    add(at.page, { kind: "text", x: at.x, y: baseline, text: transform(text, style.textTransform), font, size: sizePt, color, ...(own ? { embedded: own.key, width: at.width, ...(own.fallback ? { fallback: own.fallback } : {}) } : {}) });
   };
 
   /** Underline and strike-through run across a whole line of the node, spaces included. */

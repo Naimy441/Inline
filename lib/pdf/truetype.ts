@@ -25,6 +25,8 @@ export type TrueTypeFont = {
   advance(glyph: number): number;
   /** The font with only these glyphs' outlines (and the outlines they're built from). */
   subset(glyphs: Iterable<number>): Uint8Array;
+  /** Every code point the font has a glyph for. */
+  codePoints(): number[];
 };
 
 export function parseTrueType(data: Uint8Array): TrueTypeFont | null {
@@ -232,7 +234,26 @@ function parse(data: Uint8Array): TrueTypeFont | null {
     return writeFont(kept);
   };
 
-  return { data, cff, unitsPerEm, ascent, descent, capHeight, italicAngle, bbox, postScriptName, bold, glyphFor, advance, subset };
+  const codePoints = () => {
+    const found: number[] = [];
+    if (format12 != null) {
+      const groups = view.getUint32(format12 + 12);
+      for (let i = 0; i < groups && found.length < 70000; i += 1) {
+        const at = format12 + 16 + i * 12;
+        for (let code = view.getUint32(at), end = view.getUint32(at + 4); code <= end && found.length < 70000; code += 1) if (glyphFor(code)) found.push(code);
+      }
+    } else if (format4 != null) {
+      const segments = view.getUint16(format4 + 6) / 2;
+      const ends = format4 + 14;
+      const starts = ends + segments * 2 + 2;
+      for (let i = 0; i < segments; i += 1) {
+        for (let code = view.getUint16(starts + i * 2), end = view.getUint16(ends + i * 2); code <= end && code < 0xffff; code += 1) if (glyphFor(code)) found.push(code);
+      }
+    }
+    return found;
+  };
+
+  return { data, cff, unitsPerEm, ascent, descent, capHeight, italicAngle, bbox, postScriptName, bold, glyphFor, advance, subset, codePoints };
 }
 
 function checksum(bytes: Uint8Array) {

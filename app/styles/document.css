@@ -270,6 +270,26 @@ img.ProseMirror-separator {
   letter-spacing: 0 !important;
 }
 
+/* Lines kept from a PDF (lib/editor/lineFit.ts): measured laid out unbroken, with plain spaces;
+   a break inside a word shows its hyphen there. */
+.doc-content .line-measure {
+  white-space: pre !important;
+  text-align: left !important;
+  word-spacing: normal !important;
+}
+
+.doc-content .line-measure [style*="word-spacing"] {
+  word-spacing: normal !important;
+}
+
+.doc-content .line-measure .page-gap {
+  display: none !important;
+}
+
+.doc-content .line-measure .lf-hyphen::after {
+  content: "-";
+}
+
 /* Tabs (lib/editor/tabs.ts): each is a box as wide as the way to its tab stop, and the tab
    character spans it (an inline tab-size). A narrow tab's character has no width; it sits at the
    box's end, so a cursor after the tab is drawn there, not at its start. */
@@ -898,7 +918,7 @@ img.ProseMirror-separator {
 }
 
 .doc-content .math-render .katex {
-  font-size: 1.1em;
+  font-size: var(--math-size, 1.1em);
 }
 
 .doc-content .katex-error {

@@ -22,6 +22,7 @@ import {
   type PdfImportRecord,
 } from "@/lib/server/pdfImports";
 import { RenderUnavailableError, requestPageRenders } from "@/lib/server/renders";
+import { lineBreaksFor } from "@/lib/agent/pdfLines";
 import { compareLines, planAlignment, type BlockSpacing } from "@/lib/agent/pdfAlign";
 import { MATH_LANGUAGE, TEXTBLOCK_TYPES } from "@/lib/doc/schema";
 import { findUpload } from "@/lib/server/store";
@@ -186,8 +187,15 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
         const area = textArea(doc);
         const fonts = summary.fonts
           .map((font) => {
+            const own = record.fonts?.[font.name];
             const inline = inlineFontName(font.name);
-            const set = inline === "math" ? "math (write it as LaTeX)" : inline ? `set in "${inline}"` : "";
+            const set = own
+              ? `set in "${own.family}"${own.bold ? " bold" : ""}${own.italic ? " italic" : ""} (the PDF's own font)`
+              : inline === "math"
+                ? "math (write it as LaTeX)"
+                : inline
+                  ? `set in "${inline}"`
+                  : "";
             return `${font.name}${font.bold ? " bold" : ""}${font.italic ? " italic" : ""} (${font.sizes.slice(0, 3).join("/")}pt, ${font.chars} letters${set ? `; ${set}` : ""})`;
           })
           .join("; ");
@@ -390,6 +398,18 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
         if (!analysis) return fail(`The PDF has pages 1 to ${record.manifest.pageCount}.`);
         await ctx.beforeWrite?.(doc);
         showActivity(ctx, doc, { chatId: ctx.author, status: "editing", label: `Lining up page ${args.page}` });
+        // First the paragraphs keep the PDF's line breaks, so every line holds the words it held there.
+        {
+          const { range } = ranges(record, doc, args.page);
+          if (range) {
+            const locked = lineBreaksFor(doc.doc, range.from, range.to, analysis.lines);
+            if (locked.length) {
+              const tr = new Transform(doc.doc);
+              for (const { pos, value } of locked) tr.setNodeAttribute(pos, "lineBreaks", value);
+              doc.applyTransform(tr, { kind: "system", label: "pdf-lines" }, { hunks: mapHunks(doc.hunks, tr.mapping) });
+            }
+          }
+        }
         // Measure, set the spacing, and measure again: a few rounds settle what one can't (lines that wrap differently).
         const MEASUREMENTS = 5;
         let measured = 0;

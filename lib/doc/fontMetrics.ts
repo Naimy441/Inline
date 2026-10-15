@@ -60,8 +60,19 @@ export function primaryFamily(family: string) {
   return (family.split(",")[0] ?? "").trim().replace(/^["']|["']$/g, "");
 }
 
+/** Figures for fonts known only once they're loaded (a font a PDF carried), by family. */
+const registered = new Map<string, LineMetrics>();
+
+export function registerLineMetrics(family: string, metrics: LineMetrics) {
+  registered.set(family.toLowerCase(), metrics);
+}
+
+/** A family kept from a PDF's TeX font ("CMR12 (notes)"), sized as Computer Modern. */
+const TEX_FAMILY = /^(cm|ec|sf|tc)[a-z]*\d+ \(|^lm[a-z]*\d* \(/i;
+
 export function lineMetrics(family: string): LineMetrics {
-  return KNOWN[primaryFamily(family).toLowerCase()] ?? DEFAULT;
+  const name = primaryFamily(family).toLowerCase();
+  return KNOWN[name] ?? (TEX_FAMILY.test(name) ? KNOWN["computer modern"]! : undefined) ?? registered.get(name) ?? DEFAULT;
 }
 
 /** A font's "single" line height, in ems. */

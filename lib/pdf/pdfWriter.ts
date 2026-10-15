@@ -27,7 +27,7 @@ export type RGB = [number, number, number];
  * stands in where it lacks a character); `width` is how wide the page set the
  * text, which it is fitted to (the page kerns and joins ligatures).
  */
-export type PdfText = { kind: "text"; x: number; y: number; text: string; font: StandardFont; size: number; color: RGB; embedded?: string; width?: number };
+export type PdfText = { kind: "text"; x: number; y: number; text: string; font: StandardFont; size: number; color: RGB; embedded?: string; width?: number; /** The font for letters `embedded` lacks. */ fallback?: string };
 export type PdfRect = { kind: "rect"; x: number; y: number; width: number; height: number; fill: RGB };
 export type PdfLine = { kind: "line"; x1: number; y1: number; x2: number; y2: number; width: number; color: RGB };
 export type PdfImage = {
@@ -176,6 +176,33 @@ export function buildPdf(model: PdfDocumentModel): Uint8Array<ArrayBuffer> {
         if (!item.text) continue;
         const entry = item.embedded ? embeddedFont(item.embedded) : null;
         const glyphs = entry ? shape(entry, item.text) : null;
+        const standIn = entry && !glyphs && item.fallback ? embeddedFont(item.fallback) : null;
+        if (entry && standIn) {
+          // Letters from two fonts: each run of them in its own, placed by the fonts' advances, spread to the page's width.
+          const pieces: Array<{ entry: Embedded; glyph: number; text: string }> = [];
+          for (const char of item.text.replace(INVISIBLE, "")) {
+            const code = char.codePointAt(0)!;
+            const own = entry.font.glyphFor(code);
+            const other = own ? 0 : standIn.font.glyphFor(code);
+            pieces.push(own ? { entry, glyph: own, text: char } : { entry: standIn, glyph: other, text: char });
+          }
+          const advance = (piece: (typeof pieces)[number]) => piece.entry.font.advance(piece.glyph) * (item.size / piece.entry.font.unitsPerEm);
+          const natural = pieces.reduce((sum, piece) => sum + advance(piece), 0);
+          const gap = item.width && pieces.length > 1 && Math.abs(item.width - natural) < natural * 0.25 ? (item.width - natural) / (pieces.length - 1) : 0;
+          let x = item.x;
+          for (let start = 0; start < pieces.length; ) {
+            let end = start;
+            while (end + 1 < pieces.length && pieces[end + 1]!.entry === pieces[start]!.entry) end += 1;
+            const run = pieces.slice(start, end + 1);
+            const font = run[0]!.entry;
+            for (const piece of run) if (!font.glyphs.has(piece.glyph)) font.glyphs.set(piece.glyph, piece.text);
+            const hex = run.map((piece) => piece.glyph.toString(16).padStart(4, "0")).join("");
+            ops.push(`q BT /${font.name} ${num(item.size)} Tf ${color(item.color)} rg ${gap.toFixed(4)} Tc 1 0 0 1 ${num(x)} ${num(flip(item.y))} Tm <${hex}> Tj ET Q`);
+            x += run.reduce((sum, piece) => sum + advance(piece) + gap, 0);
+            start = end + 1;
+          }
+          continue;
+        }
         if (entry && glyphs) {
           if (!glyphs.length) continue;
           for (const { glyph, text } of glyphs) if (!entry.glyphs.has(glyph)) entry.glyphs.set(glyph, text);
