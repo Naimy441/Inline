@@ -1,3 +1,5 @@
+import katex from "katex";
+
 /**
  * Equations read back from the glyphs a PDF draws them with. TeX sets math
  * in its own fonts (italic letters in CMMI, symbols in CMSY, big operators
@@ -12,7 +14,7 @@
 export type MathGlyph = { text: string; font: string; size: number; x: number; right: number; dy: number; bold?: boolean };
 
 /** A structure placed among the glyphs: a fraction, or limits over and under a big operator. */
-export type MathPart = { kind: "frac"; x: number; right: number; num: string; den: string } | { kind: "tex"; x: number; right: number; tex: string };
+export type MathPart = { kind: "frac"; x: number; right: number; num: string; den: string; /** Set at full size (\dfrac). */ display?: boolean } | { kind: "tex"; x: number; right: number; tex: string };
 
 /** A rule drawn over glyphs: an overline, or the bar of a root. */
 export type MathBar = { x: number; right: number };
@@ -166,7 +168,7 @@ export function mathTex(glyphs: MathGlyph[], base: number, parts: MathPart[] = [
       flushRoman();
       closeBar();
       const part = item.part;
-      emit(part.kind === "frac" ? `\\frac{${part.num}}{${part.den}}` : part.tex, "base");
+      emit(part.kind === "frac" ? `\\${part.display ? "d" : ""}frac{${part.num}}{${part.den}}` : part.tex, "base");
       if (part.kind === "frac") flags.add("a fraction");
       continue;
     }
@@ -186,7 +188,7 @@ export function mathTex(glyphs: MathGlyph[], base: number, parts: MathPart[] = [
           barIsRoot = true;
           continue;
         }
-        emit("\\surd", level);
+        emit("\\surd ", level);
         continue;
       }
       const bar = level === "base" ? barOf(glyph) : null;
@@ -224,5 +226,16 @@ export function mathTex(glyphs: MathGlyph[], base: number, parts: MathPart[] = [
     .replace(/ +(?=[^a-zA-Z]|$)/g, "")
     .replace(/\\mathrm\{([A-Za-z]{2,})\}(?=\()/g, "\\operatorname{$1}")
     .trim();
+  // TeX that doesn't typeset is no use as a draft: the equation is flagged, to be placed as a picture or written by Claude.
+  if (tex && !typesets(tex)) flags.add("TeX that doesn't typeset");
   return { tex, flags: [...flags] };
+}
+
+function typesets(tex: string) {
+  try {
+    katex.renderToString(tex, { throwOnError: true, displayMode: false, strict: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
 }

@@ -112,6 +112,8 @@ function inkExtent(katexEl: HTMLElement) {
   for (const part of [katexEl, ...Array.from(katexEl.querySelectorAll<Element>(".katex-html *"))]) {
     const rect = part.getBoundingClientRect();
     if (!rect.width || !rect.height) continue;
+    // A displayed equation's own box spans the line: only what's drawn in it counts.
+    if (part instanceof HTMLElement && getComputedStyle(part).display === "block") continue;
     top = Math.min(top, rect.top);
     bottom = Math.max(bottom, rect.bottom);
     if (part instanceof SVGElement || part.tagName === "svg") continue;

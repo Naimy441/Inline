@@ -315,6 +315,8 @@ export async function settingsFor(manifest: PdfImportManifest, pdfFonts: Record<
       // The header and footer where the PDF has them, in its size and in black, as the PDF prints them.
       size: headerSize,
       color: "#000000",
+      // Parts of the header in sizes of their own (the page number, dropped above, had the last).
+      ...(header?.partSizes && header.partSizes.length >= headerText.length ? { headerPartSizes: header.partSizes.slice(0, headerText.length) } : {}),
       ...(header ? { headerFrom: inches(header.y - lineMetrics(font.css).ascent * headerSize) } : {}),
       ...(() => {
         const baseline = footer?.y ?? (numbers?.position === "footer" ? numbers.y : undefined);

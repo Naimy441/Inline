@@ -134,15 +134,18 @@ const Sheet = memo(function Sheet({
   }
   const rule = Boolean(settings?.headerFooter.headerRule && header);
   /** A header or footer's text: one part set by its alignment, or parts split by tabs at the left, center and right. */
-  const zoneText = (text: string, ruled = false) => {
+  const zoneText = (text: string, ruled = false, sizes?: number[]) => {
     const parts = headerParts(text);
-    if (parts.length < 2) return <span className={ruled ? "sheet-ruled" : undefined}>{text}</span>;
+    const sized = (index: number) => (sizes?.[index] ? { fontSize: `${sizes[index]}pt` } : undefined);
+    if (parts.length < 2) return <span className={ruled ? "sheet-ruled" : undefined} style={sized(0)}>{text}</span>;
     const [left, center, right] = parts.length === 2 ? [parts[0], "", parts[1]] : parts;
+    // Sizes are given per written part: two parts are the left and right ones.
+    const [leftSize, centerSize, rightSize] = sizes ? (parts.length === 2 ? [0, -1, 1] : [0, 1, 2]) : [];
     return (
       <span className={`sheet-parts${ruled ? " sheet-ruled" : ""}`}>
-        <span>{left}</span>
-        <span>{center}</span>
-        <span>{right}</span>
+        <span style={leftSize !== undefined ? sized(leftSize) : undefined}>{left}</span>
+        <span style={centerSize !== undefined ? sized(centerSize) : undefined}>{center}</span>
+        <span style={rightSize !== undefined ? sized(rightSize) : undefined}>{right}</span>
       </span>
     );
   };
@@ -168,7 +171,7 @@ const Sheet = memo(function Sheet({
   return (
     <div className="sheet" style={{ top, height: geometry.pageHeight, width: geometry.pageWidth }} aria-hidden>
       <div className="sheet-header" style={{ ...zoneStyle(geometry.marginTop, headerAlign), ...headerZone }}>
-        {header && zoneText(header, rule)}
+        {header && zoneText(header, rule, settings?.headerFooter.headerPartSizes)}
         {number?.where === "header" && <span className="sheet-number" style={numberStyle(number.align, "header")}>{page}</span>}
       </div>
       <div className="sheet-footer" style={{ ...zoneStyle(geometry.marginBottom, footerAlign), ...footerZone }}>

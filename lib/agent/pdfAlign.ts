@@ -36,10 +36,13 @@ export function compareLines(original: PdfTextLine[], rendered: RenderedLine[]) 
   let floor = -Infinity;
   for (const line of original) {
     const own = words(line.text);
-    if (own.length < 3) continue;
+    if (!own.length) continue;
+    // A short line ("Question:") matches only a line of just its words.
+    const short = own.length < 3;
     let best: { line: RenderedLine; score: number } | null = null;
     for (const row of rows) {
       if (row.line.y < floor - 2) continue;
+      if (short && (row.words.size !== new Set(own).size || own.some((word) => !row.words.has(word)))) continue;
       const hits = own.filter((word) => row.words.has(word)).length;
       const score = hits / own.length;
       if (score >= 0.6 && (!best || score > best.score + 0.05 || (Math.abs(score - best.score) <= 0.05 && Math.abs(row.line.y - line.baseline) < Math.abs(best.line.y - line.baseline)))) best = { line: row.line, score };
@@ -58,7 +61,7 @@ const round = (value: number) => Math.round(value * 10) / 10;
  * them is inside the box (lib/editor/borders.ts) and set the same way; blocks
  * with no matched line (pictures, equations) move with the blocks around them.
  */
-export function planAlignment(original: PdfTextLine[], rendered: RenderedLine[], blocks: RenderedBlock[], spacing: (id: string) => BlockSpacing | null, tolerance = 0.75): AlignmentPlan {
+export function planAlignment(original: PdfTextLine[], rendered: RenderedLine[], blocks: RenderedBlock[], spacing: (id: string) => BlockSpacing | null, tolerance = 0.75, anchors: ReadonlyMap<string, number> = new Map()): AlignmentPlan {
   const matches = compareLines(original, rendered).filter((row) => row.rendered !== null);
   const sorted = [...blocks].sort((a, b) => a.top - b.top);
   const changes = new Map<string, SpacingChange>();
@@ -67,9 +70,11 @@ export function planAlignment(original: PdfTextLine[], rendered: RenderedLine[],
   let shift = 0;
   sorted.forEach((block, index) => {
     const match = matches.find((row) => row.rendered! >= block.top - 1 && row.rendered! <= block.bottom + 1);
-    if (!match) return;
-    const offset = match.rendered! - match.original;
-    offsets.push({ id: block.id, text: match.text, offset: round(offset) });
+    // A block with no text to match (a picture) may know where its top was.
+    const anchor = anchors.get(block.id);
+    if (!match && anchor === undefined) return;
+    const offset = match ? match.rendered! - match.original : block.top - anchor!;
+    offsets.push({ id: block.id, text: match ? match.text : "(picture)", offset: round(offset) });
     // A block sharing a box with the one before moves by the space inside the box, unless it isn't known.
     if (block.joined && block.inside === undefined) return;
     const effective = offset + shift;

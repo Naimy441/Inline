@@ -234,7 +234,14 @@ function runningLines(pages: PdfPageAnalysis[]): Repeated {
     const width = pages[0]?.width ?? 612;
     const center = sample.box.x + sample.box.width / 2;
     const align = Math.abs(center - width / 2) < width * 0.1 ? "center" : center < width / 2 ? "left" : "right";
-    return { text: sample.text, parts, y: sample.baseline, size: sample.size, pages: [...new Set(best.map((item) => item.page))], align };
+    // Each part's own size (a running header's middle part is often larger).
+    const groups: number[][] = [];
+    for (const run of sample.runs) {
+      if (run.gapBefore || !groups.length) groups.push([]);
+      if (run.text.trim()) groups[groups.length - 1]!.push(run.size);
+    }
+    const partSizes = groups.filter((sizes) => sizes.length).map((sizes) => Math.round(Math.max(...sizes) * 10) / 10);
+    return { text: sample.text, parts, y: sample.baseline, size: sample.size, pages: [...new Set(best.map((item) => item.page))], align, ...(partSizes.length === parts.length && new Set(partSizes).size > 1 ? { partSizes } : {}) };
   };
   const header = pick("top");
   const footer = pick("bottom");

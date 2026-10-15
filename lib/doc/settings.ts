@@ -55,6 +55,8 @@ export type HeaderFooterSettings = {
   /** The header and footer's text size in points and color (#rrggbb), when not the page's usual small grey. */
   size?: number;
   color?: string;
+  /** The running header's parts' sizes (left, center, right), when they differ. */
+  headerPartSizes?: number[];
 };
 
 export type PageNumberSettings = {
@@ -279,6 +281,10 @@ export function normalizeSettings(input: unknown, base: DocumentSettings = DEFAU
         return {
           ...(typeof size === "number" && size >= 4 && size <= 72 ? { size: Math.round(size * 10) / 10 } : {}),
           ...(typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color) ? { color: color.toLowerCase() } : {}),
+          ...(() => {
+            const sizes = hf.headerPartSizes === undefined ? base.headerFooter.headerPartSizes : hf.headerPartSizes;
+            return Array.isArray(sizes) && sizes.length <= 3 && sizes.every((item) => typeof item === "number" && item >= 4 && item <= 72) ? { headerPartSizes: sizes.map((item) => Math.round(item * 10) / 10) } : {};
+          })(),
         };
       })(),
     },

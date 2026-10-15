@@ -18,7 +18,7 @@ export type FontInfo = { name: string; bold: boolean; italic: boolean };
 export const TEX_MATH_FONT = /^(cmmi|cmsy|cmex|msbm|msam|eufm|eurm|rsfs|cmbsy|lmmath|stixmath)/i;
 
 export function cleanFontName(name: string) {
-  return name.replace(/^[A-Z]{6}\+/, "").trim();
+  return name.replace(/^([A-Z]{6}\+)+/, "").trim();
 }
 
 const BOLD = /bold|black|heavy|semibold|demi|^cmbx|^sfbx|^lmroman\d*-bold|^cmb\d|-bd\b|\bbd\b|^ec?bx|bx\d/i;

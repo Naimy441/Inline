@@ -90,7 +90,7 @@ export type PdfPageAnalysis = {
   scanned: boolean;
 };
 
-export type PdfHeaderFooter = { text: string; parts: string[]; y: number; size: number; pages: number[]; align: "left" | "center" | "right" };
+export type PdfHeaderFooter = { text: string; parts: string[]; y: number; size: number; pages: number[]; align: "left" | "center" | "right"; /** Each part's size, when they differ. */ partSizes?: number[] };
 
 /** What holds across the pages: margins, the main font, header and footer. */
 export type PdfDocumentSummary = {

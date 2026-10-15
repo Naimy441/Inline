@@ -155,6 +155,21 @@ async function pagesTaken(doc: LiveDocument, range: PageRange) {
   return { first, last, count: last - first + 1, pages: layout.pages };
 }
 
+/** Paragraphs that are just a picture from the PDF: where the picture's top was on the page, by block id. */
+function pictureAnchors(range: PageRange, record: PdfImportRecord, page: number) {
+  const tops = new Map<string, number>();
+  const assets = record.pages[page - 1];
+  for (const image of record.manifest.pages[page - 1]?.images ?? []) if (image.url) tops.set(image.url, image.box.y);
+  for (const item of [...(assets?.crops ?? []), ...(assets?.equations ?? [])]) tops.set(item.url, item.box.y);
+  const anchors = new Map<string, number>();
+  for (const node of range.nodes) {
+    if (!node.attrs.id || node.childCount !== 1 || node.firstChild?.type.name !== "image") continue;
+    const top = tops.get(String(node.firstChild.attrs.src ?? ""));
+    if (top !== undefined) anchors.set(String(node.attrs.id), top);
+  }
+  return anchors;
+}
+
 /** The ids of a page's first and last blocks, for the editor to say which pages they take. */
 function spanOf(range: PageRange) {
   const first = range.nodes[0]?.attrs.id;
@@ -453,8 +468,25 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
           }
         }
         // Measure, set the spacing, and measure again: a few rounds settle what one can't (lines that wrap differently).
-        const MEASUREMENTS = 5;
+        const MEASUREMENTS = 7;
         let measured = 0;
+        // A page that runs onto another first has its largest gap narrowed, a step at a time; then it is lined up again.
+        const shrinkLargestGap = () => {
+          const { range } = ranges(record, doc, args.page);
+          if (!range) return false;
+          let target: { pos: number; space: number } | null = null;
+          doc.doc.nodesBetween(range.from, range.to, (node, pos) => {
+            const space = node.attrs.spaceBefore;
+            if (node.isBlock && typeof space === "number" && space > 4 && (!target || space > target.space)) target = { pos, space };
+            return node.type.name !== "paragraph";
+          });
+          const found = target as { pos: number; space: number } | null;
+          if (!found) return false;
+          const tr = new Transform(doc.doc);
+          tr.setNodeAttribute(found.pos, "spaceBefore", Math.max(0, Math.round((found.space - Math.max(12, found.space * 0.25)) * 10) / 10));
+          doc.applyTransform(tr, { kind: "system", label: "pdf-align" }, { hunks: mapHunks(doc.hunks, tr.mapping) });
+          return true;
+        };
         let last: ReturnType<typeof planAlignment> | null = null;
         let pagesUsed = 1;
         while (measured < MEASUREMENTS) {
@@ -472,6 +504,10 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
           }
           const page = rendered[0];
           pagesUsed = page?.span ? page.span.last - page.span.first + 1 : taken.count;
+          if (pagesUsed > 1 && measured < MEASUREMENTS - 1 && shrinkLargestGap()) {
+            measured += 1;
+            continue;
+          }
           if (!page?.blocks?.length || !page.lines) return fail("The editor didn't report where the page's blocks are.");
           // Only the blocks of this original page (a page that overflows starts the next one's blocks on the same sheet).
           const ids = new Set(range.nodes.map((node) => String(node.attrs.id ?? "")));
@@ -483,7 +519,7 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
             const spaced = TEXTBLOCK_TYPES.has(node.type.name) || (node.type.name === "code_block" && node.attrs.language === MATH_LANGUAGE);
             return { spaceBefore: node.attrs.spaceBefore ?? null, spaceAfter: node.attrs.spaceAfter ?? null, canBefore: spaced, canAfter: spaced };
           };
-          last = planAlignment(analysis.lines, page.lines, blocks, spacing);
+          last = planAlignment(analysis.lines, page.lines, blocks, spacing, 0.75, pictureAnchors(range, record, args.page));
           measured += 1;
           if (!last.changes.size || measured === MEASUREMENTS) break;
           const tr = new Transform(doc.doc);
@@ -494,17 +530,9 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
           if (!tr.docChanged) break;
           doc.applyTransform(tr, { kind: "system", label: "pdf-align" }, { hunks: mapHunks(doc.hunks, tr.mapping) });
         }
-        // A page that still runs onto another: its larger gaps shrink until it fits (the original's text area is a little taller than the editor's).
+        // Still running onto another page once lined up: narrow its largest gaps until it fits.
         for (let round = 0; pagesUsed > 1 && round < 8; round += 1) {
-          const { range } = ranges(record, doc, args.page);
-          if (!range) break;
-          const tr = new Transform(doc.doc);
-          doc.doc.nodesBetween(range.from, range.to, (node, pos) => {
-            if (node.isBlock && typeof node.attrs.spaceBefore === "number" && node.attrs.spaceBefore > 4) tr.setNodeAttribute(pos, "spaceBefore", Math.round(node.attrs.spaceBefore * 0.8 * 10) / 10);
-            return node.type.name !== "paragraph";
-          });
-          if (!tr.docChanged) break;
-          doc.applyTransform(tr, { kind: "system", label: "pdf-align" }, { hunks: mapHunks(doc.hunks, tr.mapping) });
+          if (!shrinkLargestGap()) break;
           const used = await pagesUsedBy(doc, pageRanges(doc.doc)[args.page - 1]!);
           if (used === null) break;
           pagesUsed = used;

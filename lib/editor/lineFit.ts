@@ -171,6 +171,21 @@ function spacesBetween(node: PMNode, from: number, to: number) {
   return count;
 }
 
+/** The right edge of the character at a document position, when it's text on the page (not an equation's hidden source). */
+function rightOfChar(view: EditorView, pos: number) {
+  try {
+    const { node, offset } = view.domAtPos(pos, 1);
+    if (!(node instanceof Text) || offset >= node.data.length) return null;
+    const range = document.createRange();
+    range.setStart(node, offset);
+    range.setEnd(node, offset + 1);
+    const rect = range.getBoundingClientRect();
+    return rect.width || rect.height ? rect.right : null;
+  } catch {
+    return null;
+  }
+}
+
 function measureParagraph(view: EditorView, node: PMNode, pos: number, dom: HTMLElement, breaks: Array<{ at: number; hyphen: boolean }>): number[] | null {
   const start = pos + 1;
   const style = getComputedStyle(dom);
@@ -181,6 +196,9 @@ function measureParagraph(view: EditorView, node: PMNode, pos: number, dom: HTML
   const scale = dom.getBoundingClientRect().width / (dom.offsetWidth || 1) || 1;
   dom.classList.add("line-measure");
   try {
+    const box = dom.getBoundingClientRect();
+    const firstLeft = box.left + ((parseFloat(style.borderLeftWidth) || 0) + (parseFloat(style.paddingLeft) || 0) + indent) * scale;
+    let previousRight = firstLeft;
     const spacing: number[] = [];
     let from = 0;
     for (const item of breaks) {
@@ -188,14 +206,16 @@ function measureParagraph(view: EditorView, node: PMNode, pos: number, dom: HTML
       const end = item.at;
       const spaces = spacesBetween(node, from, end);
       // Where the line's text starts and ends, laid out unbroken: the edges of the letters at its ends.
-      const left = view.coordsAtPos(start + from, 1).left;
-      let right = view.coordsAtPos(start + end, -1).right;
+      // Laid out unbroken, a line starts where the one before it ended; the first, at the paragraph's text edge.
+      const left = from === 0 ? firstLeft : previousRight;
+      let right = rightOfChar(view, start + end - 1) ?? view.coordsAtPos(start + end, -1).right;
       if (item.hyphen) {
         for (const el of Array.from(dom.querySelectorAll(".lf-hyphen"))) {
           const at = view.posAtDOM(el, 0);
           if (Math.abs(at - (start + item.at)) <= 1) right = Math.max(right, el.getBoundingClientRect().right);
         }
       }
+      previousRight = right;
       const natural = (right - left) / scale;
       const available = content - (from === 0 ? indent : 0);
       // Just short of full: the next word can't fit, and justification takes up the rest.

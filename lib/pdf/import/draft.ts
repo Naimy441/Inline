@@ -47,7 +47,7 @@ const MARKER = /^(\(?(?:\d{1,2}|[a-z]|[ivx]{1,4}|[A-Z])[.)]|•|∙|◦|▪|–|
 
 type Token = { kind: "text"; run: PdfTextRun; text: string; x: number; right: number; tab: boolean } | { kind: "math"; glyphs: MathGlyph[]; parts: MathPart[]; x: number; right: number; tab: boolean };
 
-type Segment = { kind: "text"; run: PdfTextRun; text: string; x: number; right: number; tab: boolean } | { kind: "math"; tex: string; flags: string[]; x: number; right: number; tab: boolean };
+type Segment = { kind: "text"; run: PdfTextRun; text: string; x: number; right: number; tab: boolean } | { kind: "math"; tex: string; flags: string[]; /** Its letters as the PDF has them. */ plain?: string; x: number; right: number; tab: boolean };
 
 type Line = {
   source: PdfTextLine;
@@ -139,7 +139,8 @@ function findFractions(lines: PdfTextLine[], rules: PdfRule[]) {
       if (!host) continue;
       const num = mathTex(top.runs.flatMap((run) => glyphsOf(run)).map((glyph) => ({ ...glyph, dy: glyph.dy })), top.size, parts.get(top) ?? []).tex;
       const den = mathTex(bottom.runs.flatMap((run) => glyphsOf(run)), bottom.size, parts.get(bottom) ?? []).tex;
-      parts.set(host, [...(parts.get(host) ?? []), { kind: "frac", x: bar.box.x, right: bar.box.x + bar.box.width, num, den }]);
+      // Numerator and denominator at full size in a line of text: \dfrac.
+      parts.set(host, [...(parts.get(host) ?? []), { kind: "frac", x: bar.box.x, right: bar.box.x + bar.box.width, num, den, display: top.size >= host.size * 0.9 }]);
       used.add(top);
       used.add(bottom);
       break;
@@ -256,7 +257,7 @@ function segmentsOf(line: PdfTextLine, parts: MathPart[], bars: MathBar[], displ
     if (!open) return;
     if (open.glyphs.length || open.parts.length) {
       const result = mathTex(open.glyphs, line.size, open.parts, bars);
-      if (result.tex) segments.push({ kind: "math", tex: result.tex, flags: result.flags, x: open.x, right: open.right, tab: open.tab });
+      if (result.tex) segments.push({ kind: "math", tex: result.tex, flags: result.flags, plain: open.glyphs.map((glyph) => glyph.text).join(""), x: open.x, right: open.right, tab: open.tab });
     }
     open = null;
   };
@@ -446,7 +447,7 @@ export function draftPage(ctx: DraftContext): PageDraft {
         const letters = line.segments.filter((segment) => segment.kind === "text").map((segment) => (segment as { text: string }).text).join("").replace(/[^\p{L}]/gu, "");
         return words.length <= 1 && (math >= (line.right - line.x) * 0.5 || line.segments.some((segment) => segment.kind === "math") || (letters.length <= 2 && line.size < ctx.fontSize * 0.85));
       }));
-  const unreadable = (block: Block) => block.kind !== "picture" && block.lines.some((line) => line.segments.some((segment) => segment.kind === "math" && segment.flags.some((flag) => /couldn't read|misnames/.test(flag))));
+  const unreadable = (block: Block) => block.kind !== "picture" && block.lines.some((line) => line.segments.some((segment) => segment.kind === "math" && segment.flags.some((flag) => /couldn't read|misnames|doesn't typeset/.test(flag))));
   for (let i = 0; i < blocks.length; i += 1) {
     const start = blocks[i]!;
     if (!mathy(start) || start.kind === "picture") continue;
@@ -533,7 +534,7 @@ export function draftPage(ctx: DraftContext): PageDraft {
       const frame = block.frame ?? null;
       const left0 = frame ? Math.min(...lines.filter((line) => line.frame === frame).map((line) => line.x)) : area.left;
       const center = frame ? frame.box.x + frame.box.width / 2 : areaCenter;
-      const centered = Math.abs(block.box.x + block.box.width / 2 - center) < area.width * 0.04;
+      const centered = Math.abs(block.box.x + block.box.width / 2 - center) < 2;
       const before = lastBottom === null ? Math.max(0, block.box.y - area.top) : Math.max(0, block.box.y - lastBottom);
       // Its paragraph's text is tiny, so the line is no taller than the picture.
       const attrs = [centered ? "align=center" : block.box.x - left0 > 0.5 ? (frame ? `first-line=${inches(block.box.x - left0)}` : `left=${round1(block.box.x - left0)}`) : "", `before=${round1(before)}`, "after=0", "size=1", "line=1"];
@@ -568,9 +569,10 @@ export function draftPage(ctx: DraftContext): PageDraft {
       line.segments
         .map((segment) => {
           const tab = segment.tab ? "&#9;" : "";
-          if (segment.kind === "math") return `${tab}$${segment.tex}$`;
-          // TeX's bullets are math: \bullet, from its symbol font.
-          if (/^\s*[•∙]\s*$/.test(segment.text)) return `${tab}$\\bullet$${/\s$/.test(segment.text) ? " " : ""}`;
+          // An equation that wouldn't typeset is its letters, as text, until Claude writes it.
+          if (segment.kind === "math") return segment.flags.some((flag) => /doesn't typeset/.test(flag)) && segment.plain ? tab + escapeText(segment.plain) : `${tab}$${segment.tex}$`;
+          // TeX's bullet (\bullet) is the bullet operator, which the stand-in font has: text, not an equation.
+          if (/^\s*[•∙]\s*$/.test(segment.text)) return `${tab}∙${/\s$/.test(segment.text) ? " " : ""}`;
           let text = escapeText(segment.text);
           if (!text.trim()) return tab + text;
           const lead = /^\s*/.exec(text)![0];
@@ -593,6 +595,15 @@ export function draftPage(ctx: DraftContext): PageDraft {
         .join("")
         .replace(index === 0 ? /^\s+/ : /^$/, "");
 
+    // TeX centers a displayed equation in a list item over the item's text: so is it here, from that indent.
+    const displayIndent = block.kind === "display" ? Math.max(0, 2 * ((first.x + first.right) / 2 - (frame ? (left0 + (frame.box.x + frame.box.width - (left0 - frame.box.x))) / 2 : areaCenter))) : 0;
+    if (block.kind === "display" && !frame && displayIndent > 1.5) {
+      const tex = block.lines.map((line) => line.segments.map((segment) => (segment.kind === "math" ? segment.tex : /^[\s.,;:]*$/.test(segment.text) ? segment.text.trim() : `\\text{ ${segment.text.trim()} }`)).join(" ")).join(" \\\\ ");
+      out.push(`$\\displaystyle ${tex}$ {align=center left=${round1(displayIndent)} before=${round1(before)} after=0}`);
+      noteMath(block, concerns);
+      lastBottom = last.baseline;
+      continue;
+    }
     if (block.kind === "display" && !frame) {
       const tex = block.lines.map((line) => line.segments.map((segment) => (segment.kind === "math" ? segment.tex : /^[\s.,;:]*$/.test(segment.text) ? segment.text.trim() : `\\text{ ${segment.text.trim()} }`)).join(" ")).join(" \\\\ ");
       out.push(`$$\n${block.lines.length > 1 ? `\\begin{gathered}${tex}\\end{gathered}` : tex}\n$$ {before=${round1(before)} after=0}`);
@@ -661,7 +672,7 @@ export function draftPage(ctx: DraftContext): PageDraft {
     block.lines.forEach((line, index) => {
       let piece = content(line, index);
       if (index === 0 && markerTab !== null && line.marker) {
-        const escaped = /^[•∙]$/.test(line.marker) ? "$\\bullet$" : escapeText(line.marker);
+        const escaped = /^[•∙]$/.test(line.marker) ? "∙" : escapeText(line.marker);
         piece = piece.replace(new RegExp(`^(\\*\\*)?${escaped.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`), (whole, bold) => `${bold ?? ""}${escaped}&#9;`);
       }
       if (index === 0) text = piece;

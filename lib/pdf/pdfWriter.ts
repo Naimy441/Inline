@@ -304,7 +304,8 @@ function defineEmbeddedFont(
   const scale = 1000 / font.unitsPerEm;
   const used = [...glyphs.keys()].sort((a, b) => a - b);
   const prefix = Array.from({ length: 6 }, (_, i) => String.fromCharCode(65 + ((index * 7 + i * 3) % 26))).join("");
-  const baseName = `${prefix}+${font.postScriptName}`;
+  // One subset tag: a font that is already a subset (one a PDF carried) loses its own.
+  const baseName = `${prefix}+${font.postScriptName.replace(/^([A-Z]{6}\+)+/, "")}`;
   const program = font.subset(used);
   const fileId = reserve();
   const descriptorId = reserve();
