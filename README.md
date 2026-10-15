@@ -67,7 +67,7 @@ claude mcp add --transport http inline http://localhost:3000/api/mcp --header "A
 
 The token keeps other programs on your machine from editing your documents. Inline creates it on first run and keeps it in the data folder as `mcp-token`.
 
-The tools are `list_documents`, `open_document`, `create_document`, `read_document`, `get_outline`, `search_document`, `get_editor_context`, `edit_document`, `multi_edit_document`, `insert_content`, `write_document`, `format_text`, `set_paragraph_style`, `get_document_settings`, `update_document_settings`, `get_pending_changes`, `keep_changes`, `revert_changes`, `list_comments`, `add_comment`, `reply_to_comment`, `resolve_comment`, `list_versions`, `save_version`, `restore_version`, `analyze_writing`, `export_document`, and for organizing: `list_library`, `list_folders`, `move_documents`, `create_folder`, `update_folder` and `delete_folder`.
+The tools are `list_documents`, `open_document`, `create_document`, `read_document`, `get_outline`, `search_document`, `get_editor_context`, `edit_document`, `multi_edit_document`, `insert_content`, `write_document`, `format_text`, `set_paragraph_style`, `get_document_settings`, `update_document_settings`, `get_pending_changes`, `keep_changes`, `revert_changes`, `list_comments`, `add_comment`, `reply_to_comment`, `resolve_comment`, `list_versions`, `save_version`, `restore_version`, `analyze_writing`, `export_document`, for imported PDFs: `get_pdf_import`, `read_pdf_page`, `crop_pdf_region`, `write_pdf_page`, `align_pdf_page`, `compare_pdf_page`, `finish_pdf_import` and `show_pdf_annotations`, and for organizing: `list_library`, `list_folders`, `move_documents`, `create_folder`, `update_folder` and `delete_folder`.
 
 On the home page, **Organize with Claude** (or <kbd>Ctrl/⌘</kbd>+<kbd>J</kbd>) opens Claude to sort your documents into folders. It works from titles and the first few words of each document rather than reading every document, so sorting a large library uses little of your Claude usage.
 
@@ -76,6 +76,12 @@ On the home page, **Organize with Claude** (or <kbd>Ctrl/⌘</kbd>+<kbd>J</kbd>)
 Inline keeps a Word (.docx) copy of every document in a folder on your computer, `~/Documents/Inline` by default, arranged in the same folders as on the home page. Each copy is updated a couple of seconds after you stop typing and keeps everything the page shows: fonts, margins, page size, headers and footers, page numbers, images and tables. Renaming or moving a document moves its file, trashed documents go to an `Inline Trash` folder, and deleting one for good removes its file. Inline never overwrites a Word file it didn't write.
 
 Choose the folder, or turn copies off, with **On this computer** on the home page. **Show in Finder** (File Explorer on Windows) on any document or folder opens it there, and **Download all** gives you the same folder as a ZIP.
+
+### Importing PDFs
+
+Choose **Import files** on the home page with a PDF. Inline reads it in your browser, takes each page's handwriting, highlighting and other annotations off it, and makes a document with the PDF's page size, margins, fonts (TeX documents get Computer Modern), line spacing, running header and page numbers, showing each page as a picture of the original. Claude then rebuilds the pages one by one as editable text, with equations in LaTeX, boxes, tab-aligned text, tables and the PDF's own images, lining each page up with the original and checking it side by side. You can watch, stop or steer it in the Claude panel, or continue it later from **Tools › Convert PDF pages with Claude**.
+
+The annotations aren't lost: **View › Show PDF annotations** draws them over the pages where they were on the original. They are pictures of the original pages, so they don't move when you edit the text.
 
 ### Moving from Google Docs
 

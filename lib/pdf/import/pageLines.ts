@@ -8,12 +8,31 @@ import type { PdfPage } from "@/lib/pdf/pdfWriter";
 
 export type PageLine = { x: number; y: number; size: number; text: string };
 
+/**
+ * An equation's LaTeX as the words a PDF's text layer would have for it:
+ * "\\operatorname{Var}(aY + b)" reads "Var(aY + b)", "\\frac{1}{2}" "1 2".
+ */
+export function texText(tex: string) {
+  return tex
+    .replace(/\\(?:operatorname|mathrm|mathbf|mathit|mathbb|mathcal|mathsf|text|textbf|textit|boldsymbol)\s*\{([^{}]*)\}/g, "$1")
+    .replace(/\\(?:left|right|big|Big|bigg|Bigg)\b/g, "")
+    .replace(/\\[a-zA-Z]+/g, " ")
+    .replace(/[{}^_&\\]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+type Word = { x: number; y: number; size: number; text: string; width?: number };
+
 export function pageLines(page: PdfPage): PageLine[] {
-  const words = page.items
-    .filter((item) => item.kind === "text" && item.text.trim())
-    .map((item) => item as Extract<PdfPage["items"][number], { kind: "text" }>)
-    .sort((a, b) => a.y - b.y || a.x - b.x);
-  const lines: Array<{ y: number; size: number; words: typeof words }> = [];
+  const words: Word[] = [];
+  for (const item of page.items) {
+    if (item.kind === "text" && item.text.trim()) words.push({ x: item.x, y: item.y, size: item.size, text: item.text, width: item.width });
+    // An equation drawn as a picture stands in by its LaTeX, on the line it sits on (its baseline about a quarter up from its bottom).
+    else if (item.kind === "image" && item.tex) words.push({ x: item.x, y: item.y + item.height * 0.75, size: Math.min(24, item.height * 0.75), text: texText(item.tex), width: item.width });
+  }
+  words.sort((a, b) => a.y - b.y || a.x - b.x);
+  const lines: Array<{ y: number; size: number; words: Word[] }> = [];
   for (const word of words) {
     const line = lines.find((item) => Math.abs(item.y - word.y) <= Math.max(item.size, word.size) * 0.3);
     if (line) line.words.push(word);

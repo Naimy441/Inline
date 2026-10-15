@@ -338,9 +338,10 @@ export function snapshotPages(
     const raster = el.classList.contains("katex") ? measure.raster?.(el) : null;
     if (raster) {
       // An equation broken across lines comes as a picture per line.
+      const tex = el.querySelector('annotation[encoding="application/x-tex"]')?.textContent ?? undefined;
       for (const part of raster.parts ?? [raster]) {
         const at = place(part.box);
-        add(at.page, { kind: "image", x: at.x, y: at.y, width: at.width, height: at.height, jpeg: part.jpeg, pixelWidth: part.width, pixelHeight: part.height, ink: true });
+        add(at.page, { kind: "image", x: at.x, y: at.y, width: at.width, height: at.height, jpeg: part.jpeg, pixelWidth: part.width, pixelHeight: part.height, ink: true, ...(tex && !raster.parts ? { tex } : {}) });
       }
       return;
     }

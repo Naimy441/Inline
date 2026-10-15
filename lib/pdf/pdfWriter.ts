@@ -41,6 +41,8 @@ export type PdfImage = {
   pixelHeight: number;
   /** Black-on-white ink rendered as a picture (an equation), not a photo. */
   ink?: boolean;
+  /** An equation's LaTeX (not written into the PDF; for reading the page back, lib/pdf/import/pageLines.ts). */
+  tex?: string;
 };
 export type PdfLink = { kind: "link"; x: number; y: number; width: number; height: number; uri: string };
 export type PdfItem = PdfText | PdfRect | PdfLine | PdfImage | PdfLink;

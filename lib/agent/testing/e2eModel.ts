@@ -57,6 +57,23 @@ const model: FakeModel = async (turn, claude) => {
     return;
   }
 
+  // An imported PDF: rebuild its first page from the text lines read_pdf_page lists, then line it up and check it.
+  if (/^Convert the PDF I imported/.test(text)) {
+    await claude.call("get_pdf_import", { document_id: documentId });
+    const page = await claude.call("read_pdf_page", { document_id: documentId, page: 1 });
+    const lines = [...page.text.matchAll(/^\s*[\d.]+\s+[\d.]+\s+[\d.]+\s+[^:]+: (.+)$/gm)].map((match) => match[1]!.replace(/\*/g, ""));
+    const written = await claude.call("write_pdf_page", { document_id: documentId, page: 1, content: lines.join("\n\n") });
+    if (written.isError) {
+      claude.say(written.text);
+      return;
+    }
+    const aligned = await claude.call("align_pdf_page", { document_id: documentId, page: 1 });
+    const compared = await claude.call("compare_pdf_page", { document_id: documentId, page: 1 });
+    const finished = await claude.call("finish_pdf_import", { document_id: documentId });
+    claude.say([aligned.text, compared.text.split("\n")[1] ?? "", finished.text].join("\n\n"));
+    return;
+  }
+
   if (/take your time/i.test(text)) {
     claude.say("Starting a long review.");
     await claude.untilInterrupted();

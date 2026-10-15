@@ -3,46 +3,7 @@ import { describe, it } from "node:test";
 import { getDocument, OPS } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { analyzePage, settleInk, summarize, type AnalyzedPage } from "./analyze";
 import { classifyOperators, looksHandDrawn, pathShape } from "./classify";
-
-/**
- * A small PDF written by hand: each page's content stream as given, Helvetica
- * as the font, and optional annotations (with their own appearance streams).
- */
-function buildTestPdf(pages: Array<{ content: string; annots?: string[] }>) {
-  const objects: string[] = [];
-  const add = (body: string) => {
-    objects.push(body);
-    return objects.length;
-  };
-  const stream = (text: string, dict = "") => `<< ${dict} /Length ${Buffer.byteLength(text, "latin1")} >>\nstream\n${text}\nendstream`;
-  const catalog = add("");
-  const pagesId = add("");
-  const font = add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
-  const bold = add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>");
-  const gstate = add("<< /Type /ExtGState /ca 0.35 /CA 0.35 >>");
-  const kids: number[] = [];
-  for (const page of pages) {
-    const content = add(stream(page.content));
-    const annots = (page.annots ?? []).map((annot) => add(annot));
-    kids.push(
-      add(
-        `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 612 792] /Contents ${content} 0 R /Resources << /Font << /F1 ${font} 0 R /F2 ${bold} 0 R >> /ExtGState << /GS1 ${gstate} 0 R >> >>${annots.length ? ` /Annots [${annots.map((id) => `${id} 0 R`).join(" ")}]` : ""} >>`,
-      ),
-    );
-  }
-  objects[catalog - 1] = `<< /Type /Catalog /Pages ${pagesId} 0 R >>`;
-  objects[pagesId - 1] = `<< /Type /Pages /Kids [${kids.map((id) => `${id} 0 R`).join(" ")}] /Count ${kids.length} >>`;
-  let out = "%PDF-1.4\n";
-  const offsets: number[] = [];
-  objects.forEach((body, index) => {
-    offsets.push(Buffer.byteLength(out, "latin1"));
-    out += `${index + 1} 0 obj\n${body}\nendobj\n`;
-  });
-  const xref = Buffer.byteLength(out, "latin1");
-  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("")}`;
-  out += `trailer\n<< /Size ${objects.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
-  return new Uint8Array(Buffer.from(out, "latin1"));
-}
+import { buildTestPdf } from "./testPdf";
 
 const BODY = [
   "BT /F2 16 Tf 72 720 Td (Running header) Tj ET",

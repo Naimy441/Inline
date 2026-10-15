@@ -64,6 +64,7 @@ If a tool says the editor hasn't laid the page out yet, it is busy (or reloading
 - Keep the original's spacing inside lines: TeX leaves a wide gap after a section number ("1  Variance", "1.1  Standard Deviation"); write it with &ensp; or &emsp; so the text starts where it did.
 - Lists keep their markers: Markdown lists for bullets and 1. 2. numbering; write other markers ((a), (1), •) as text.
 - A frame around paragraphs (a definition or question box): \`{.box border-width=0.4 border-space=3}\` on each paragraph in the frame, including its heading line; neighbouring paragraphs with the same box share one frame, so two separate frames one after another need a paragraph between them: an empty one that also makes the gap, \`&nbsp; {size=1 after=40}\`. Displayed equations can't take a box; put them in a boxed paragraph as $\\displaystyle …$ with {align=center} when they belong inside a frame.
+- Inside a frame, indent with a tab stop or first-line=, not left=: a frame follows its paragraph's indent, so an indented paragraph gets a frame of its own.
 - A rule across the page: \`---\`, or border=bottom on the paragraph above it.
 - Text lined up at tab stops (a table of contents with page numbers at the right, two-column multiple choice): \`Text&#9;Page {tabs="470:right"}\`. Tab positions are points from the left margin (the PDF x minus the left margin).
 - Tables: Markdown tables for real tables of text. A table that is a picture in the PDF stays a picture.
@@ -132,8 +133,14 @@ function pageStatus(range: PageRange | undefined) {
 
 /** Pages of the document an original page takes, from the editor's measured layout (0-based), or null when not measured. */
 async function pagesTaken(doc: LiveDocument, range: PageRange) {
-  // The editor measures a change within a second or so; give a busy one longer.
-  const layout = await doc.currentLayout(12_000);
+  // The editor measures a change within a second or so; give a busy one longer, and one still opening
+  // (the document was just imported) time to connect.
+  const deadline = Date.now() + 20_000;
+  let layout = await doc.currentLayout(12_000);
+  while (!layout && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    layout = await doc.currentLayout(Math.max(0, deadline - Date.now()));
+  }
   if (!layout) return null;
   const starts = layout.starts;
   const pageOf = (pos: number) => starts.filter((start) => start <= pos).length;
