@@ -42,7 +42,9 @@ export function PdfAnnotations({ session, documentId, pageWidth, pageHeight, pit
       const breaks = [...root.children].filter((child) => child.classList.contains("page-break"));
       const next = [0];
       for (const item of breaks) {
-        const after = item.nextElementSibling;
+        // The page's first block, past the spacer pagination puts after a break (it sits on the page before).
+        let after = item.nextElementSibling;
+        while (after && (after.classList.contains("page-gap") || !after.getBoundingClientRect().height)) after = after.nextElementSibling;
         if (!after) break;
         next.push(Math.max(0, Math.floor((after.getBoundingClientRect().top - top) / scale / pitch + 0.001)));
       }

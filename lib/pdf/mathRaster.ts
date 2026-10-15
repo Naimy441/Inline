@@ -95,29 +95,38 @@ function toJpeg(canvas: HTMLCanvasElement) {
   return jpeg;
 }
 
-async function rasterize(katexEl: HTMLElement): Promise<MathRaster | null> {
-  const width = katexEl.offsetWidth;
-  const height = katexEl.offsetHeight;
-  const outer = katexEl.getBoundingClientRect();
-  if (!width || !height || !outer.width) return null;
-  const scale = outer.width / width;
-  // The ink's own extent: a displayed equation's box is as wide as the page, and
-  // fractions and limits reach above and below an inline equation's line box.
+/**
+ * Where hidden copies of an equation are laid out to be measured: beside the
+ * editor rather than in it (the editor watches its own DOM), in the same zoom.
+ */
+function scratchHost(katexEl: HTMLElement) {
+  return katexEl.closest<HTMLElement>(".page-stack") ?? document.body;
+}
+
+/** The extent of what an equation draws, from its parts' boxes (KaTeX's stretched SVGs count only for height: they are drawn wide and clipped). */
+function inkExtent(katexEl: HTMLElement) {
   let left = Infinity;
-  let top = outer.top;
+  let top = Infinity;
   let right = -Infinity;
-  let bottom = outer.bottom;
-  for (const part of Array.from(katexEl.querySelectorAll<HTMLElement>(".katex-html *"))) {
-    // KaTeX draws radicals and stretchy arrows as very wide SVGs clipped by their parent.
-    if (part instanceof SVGElement) continue;
+  let bottom = -Infinity;
+  for (const part of [katexEl, ...Array.from(katexEl.querySelectorAll<Element>(".katex-html *"))]) {
     const rect = part.getBoundingClientRect();
     if (!rect.width || !rect.height) continue;
-    left = Math.min(left, rect.left);
-    right = Math.max(right, rect.right);
     top = Math.min(top, rect.top);
     bottom = Math.max(bottom, rect.bottom);
+    if (part instanceof SVGElement || part.tagName === "svg") continue;
+    left = Math.min(left, rect.left);
+    right = Math.max(right, rect.right);
   }
-  if (!Number.isFinite(left)) return null;
+  return Number.isFinite(left) && Number.isFinite(top) ? { left, top, right, bottom } : null;
+}
+
+async function rasterize(katexEl: HTMLElement): Promise<MathRaster | null> {
+  const outer = katexEl.getBoundingClientRect();
+  if (!katexEl.offsetWidth || !katexEl.offsetHeight || !outer.width) return null;
+  const scale = outer.width / katexEl.offsetWidth;
+  const ink = inkExtent(katexEl);
+  if (!ink) return null;
   const families = new Set<string>();
   for (const el of [katexEl, ...Array.from(katexEl.querySelectorAll<HTMLElement>(".katex-html *"))]) {
     for (const family of getComputedStyle(el).fontFamily.split(",")) families.add(family.replace(/["']/g, "").trim());
@@ -128,23 +137,41 @@ async function rasterize(katexEl: HTMLElement): Promise<MathRaster | null> {
   clone.style.color = "#000";
   clone.style.display = style.display;
   clone.style.textAlign = style.textAlign;
-  clone.style.width = `${width}px`;
+  clone.style.width = `${katexEl.offsetWidth}px`;
   clone.style.margin = "0";
   // A line of a wrapped equation is drawn from a hidden, positioned copy (rasterizeLines).
   clone.style.visibility = "visible";
   clone.style.position = "static";
+  // The picture is laid out as the page lays the line out (its size and line height), first here, hidden, to
+  // measure where the ink lands in it: a tall equation pushes its line down, so it can't be worked out.
+  const wrapperStyle = `margin:0;padding:0;font-size:${style.fontSize};line-height:${style.lineHeight};white-space:nowrap`;
+  const probe = document.createElement("div");
+  probe.setAttribute("style", `${wrapperStyle};position:absolute;left:-100000px;top:0;visibility:hidden`);
+  const probeClone = clone.cloneNode(true) as HTMLElement;
+  probeClone.style.visibility = "hidden";
+  probe.append(probeClone);
+  scratchHost(katexEl).append(probe);
+  let measured: { box: DOMRect; ink: NonNullable<ReturnType<typeof inkExtent>>; outer: DOMRect } | null = null;
+  try {
+    const at = inkExtent(probeClone);
+    if (at) measured = { box: probe.getBoundingClientRect(), ink: at, outer: probeClone.getBoundingClientRect() };
+  } finally {
+    probe.remove();
+  }
+  if (!measured) return null;
+  // The probe sits in the page's zoom, like the equation: its measures are scaled back to layout pixels.
+  const unscale = (value: number) => value / scale;
+  const width = Math.ceil(unscale(measured.box.width));
+  const fullHeight = Math.ceil(unscale(Math.max(measured.box.height, measured.ink.bottom - measured.box.top))) + 1;
   const markup = new XMLSerializer().serializeToString(clone);
   const css = `${katexRules().rules}\n${await fontFaces(families)}`;
-  // Room above the line box for what reaches over it; the picture is cropped to the ink below.
-  const above = (outer.top - top) / scale;
-  const fullHeight = Math.ceil(above + (bottom - outer.top) / scale) + 1;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${fullHeight}"><foreignObject x="0" y="0" width="${width}" height="${fullHeight}"><div xmlns="http://www.w3.org/1999/xhtml" style="margin:0;padding:${above}px 0 0;line-height:${style.lineHeight};white-space:nowrap"><style>${css.replace(/<\/style/gi, "")}</style>${markup}</div></foreignObject></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${fullHeight}"><foreignObject x="0" y="0" width="${width}" height="${fullHeight}"><div xmlns="http://www.w3.org/1999/xhtml" style="${wrapperStyle}"><style>${css.replace(/<\/style/gi, "")}</style>${markup}</div></foreignObject></svg>`;
   const img = await load(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`);
   // Crop to the ink, in layout pixels.
-  const cropX = (left - outer.left) / scale;
-  const cropY = 0;
-  const cropW = Math.max(1, (right - left) / scale);
-  const cropH = Math.max(1, (bottom - top) / scale);
+  const cropX = unscale(measured.ink.left - measured.box.left);
+  const cropY = unscale(measured.ink.top - measured.box.top);
+  const cropW = Math.max(1, unscale(measured.ink.right - measured.ink.left));
+  const cropH = Math.max(1, unscale(measured.ink.bottom - measured.ink.top));
   const canvas = document.createElement("canvas");
   canvas.width = Math.ceil(cropW * SCALE);
   canvas.height = Math.ceil(cropH * SCALE);
@@ -153,7 +180,10 @@ async function rasterize(katexEl: HTMLElement): Promise<MathRaster | null> {
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, canvas.width, canvas.height);
-  return { jpeg: toJpeg(canvas), width: canvas.width, height: canvas.height, box: { left, top, width: right - left, height: bottom - top } };
+  // Where the ink is on the page: the same offset from the equation's own box as in the probe.
+  const left = outer.left + (measured.ink.left - measured.outer.left);
+  const top = outer.top + (measured.ink.top - measured.outer.top);
+  return { jpeg: toJpeg(canvas), width: canvas.width, height: canvas.height, box: { left, top, width: measured.ink.right - measured.ink.left, height: measured.ink.bottom - measured.ink.top } };
 }
 
 /**
@@ -182,11 +212,13 @@ async function rasterizeLines(katexEl: HTMLElement): Promise<MathRaster | null> 
     for (const part of group.parts) inner.appendChild(part.cloneNode(true));
     copy.appendChild(inner);
     copy.style.position = "absolute";
-    copy.style.left = "0";
+    copy.style.left = "-100000px";
     copy.style.top = "0";
     copy.style.visibility = "hidden";
     copy.style.whiteSpace = "nowrap";
-    katexEl.parentElement.appendChild(copy);
+    copy.style.fontSize = getComputedStyle(katexEl).fontSize;
+    copy.style.lineHeight = getComputedStyle(katexEl).lineHeight;
+    scratchHost(katexEl).appendChild(copy);
     try {
       const raster = await rasterize(copy);
       if (!raster) continue;
