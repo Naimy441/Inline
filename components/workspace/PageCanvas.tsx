@@ -147,6 +147,8 @@ const Sheet = memo(function Sheet({
   };
   const zoneStyle = (height: number, align: string) => ({
     height,
+    ...(settings?.headerFooter.size ? { fontSize: `${settings.headerFooter.size}pt` } : {}),
+    ...(settings?.headerFooter.color ? { color: settings.headerFooter.color } : {}),
     paddingLeft: geometry.marginLeft,
     paddingRight: geometry.marginRight,
     justifyContent: align === "left" ? "flex-start" : align === "right" ? "flex-end" : "center",

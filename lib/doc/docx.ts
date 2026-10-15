@@ -403,26 +403,27 @@ async function blockXml(node: PMNode, ctx: Context, list?: { numId: number; leve
   }
 }
 
-function headerFooterXml(kind: "hdr" | "ftr", text: string, align: string, pageNumber: { align: string } | null, options: { width?: number; rule?: boolean } = {}) {
+function headerFooterXml(kind: "hdr" | "ftr", text: string, align: string, pageNumber: { align: string } | null, options: { width?: number; rule?: boolean; size?: number; color?: string } = {}) {
   const runs: string[] = [];
+  const rPr = options.size || options.color ? `<w:rPr>${options.color ? `<w:color w:val="${options.color.slice(1)}"/>` : ""}${options.size ? `<w:sz w:val="${Math.round(options.size * 2)}"/>` : ""}</w:rPr>` : "";
   // Parts split by tabs sit at the left, center and right, at tab stops in the middle and at the right edge.
   const tabbed = text.includes("\t") && options.width;
   const parts = text.split(/(\{page\}|\{pages\}|\t)/i);
   for (const part of parts) {
     if (part === "\t") {
-      if (tabbed) runs.push("<w:r><w:tab/></w:r>");
-      else runs.push('<w:r><w:t xml:space="preserve">   </w:t></w:r>');
+      if (tabbed) runs.push(`<w:r>${rPr}<w:tab/></w:r>`);
+      else runs.push(`<w:r>${rPr}<w:t xml:space="preserve">   </w:t></w:r>`);
       continue;
     }
-    if (/^\{page\}$/i.test(part)) runs.push('<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>');
-    else if (/^\{pages\}$/i.test(part)) runs.push('<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> NUMPAGES </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>');
-    else if (part) runs.push(`<w:r><w:t xml:space="preserve">${xml(part)}</w:t></w:r>`);
+    if (/^\{page\}$/i.test(part)) runs.push(`<w:r>${rPr}<w:fldChar w:fldCharType="begin"/></w:r><w:r>${rPr}<w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r>${rPr}<w:fldChar w:fldCharType="separate"/></w:r><w:r>${rPr}<w:t>1</w:t></w:r><w:r>${rPr}<w:fldChar w:fldCharType="end"/></w:r>`);
+    else if (/^\{pages\}$/i.test(part)) runs.push(`<w:r>${rPr}<w:fldChar w:fldCharType="begin"/></w:r><w:r>${rPr}<w:instrText xml:space="preserve"> NUMPAGES </w:instrText></w:r><w:r>${rPr}<w:fldChar w:fldCharType="separate"/></w:r><w:r>${rPr}<w:t>1</w:t></w:r><w:r>${rPr}<w:fldChar w:fldCharType="end"/></w:r>`);
+    else if (part) runs.push(`<w:r>${rPr}<w:t xml:space="preserve">${xml(part)}</w:t></w:r>`);
   }
   const tabs = tabbed ? `<w:tabs><w:tab w:val="center" w:pos="${Math.round(options.width! / 2)}"/><w:tab w:val="right" w:pos="${Math.round(options.width!)}"/></w:tabs>` : "";
   const border = options.rule ? '<w:pBdr><w:bottom w:val="single" w:sz="4" w:space="1" w:color="auto"/></w:pBdr>' : "";
   let paragraphs = runs.length ? `<w:p><w:pPr>${border}${tabs}<w:jc w:val="${tabbed ? "left" : align}"/></w:pPr>${runs.join("")}</w:p>` : "";
   if (pageNumber) {
-    paragraphs += `<w:p><w:pPr><w:jc w:val="${pageNumber.align}"/></w:pPr><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>`;
+    paragraphs += `<w:p><w:pPr><w:jc w:val="${pageNumber.align}"/></w:pPr><w:r>${rPr}<w:fldChar w:fldCharType="begin"/></w:r><w:r>${rPr}<w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r>${rPr}<w:fldChar w:fldCharType="separate"/></w:r><w:r>${rPr}<w:t>1</w:t></w:r><w:r>${rPr}<w:fldChar w:fldCharType="end"/></w:r></w:p>`;
   }
   if (!paragraphs) paragraphs = "<w:p/>";
   const tag = kind === "hdr" ? "w:hdr" : "w:ftr";
@@ -689,12 +690,12 @@ export async function documentToDocx(content: PMNode | DocxTab[], meta: Document
           { name: "word/commentsExtended.xml", data: commentParts.extended },
         ]
       : []),
-    { name: "word/header1.xml", data: headerFooterXml("hdr", title(hf.header), hf.headerAlign, pageNumberIn("header"), { width: textWidth, rule: Boolean(hf.headerRule && hf.header) }) },
-    { name: "word/footer1.xml", data: headerFooterXml("ftr", title(hf.footer), hf.footerAlign, pageNumberIn("footer"), { width: textWidth }) },
+    { name: "word/header1.xml", data: headerFooterXml("hdr", title(hf.header), hf.headerAlign, pageNumberIn("header"), { width: textWidth, rule: Boolean(hf.headerRule && hf.header), size: hf.size, color: hf.color }) },
+    { name: "word/footer1.xml", data: headerFooterXml("ftr", title(hf.footer), hf.footerAlign, pageNumberIn("footer"), { width: textWidth, size: hf.size, color: hf.color }) },
     ...(firstPage
       ? [
-          { name: "word/header2.xml", data: headerFooterXml("hdr", title(firstHeaderText), hf.headerAlign, pn.skipFirst ? null : pageNumberIn("header"), { width: textWidth, rule: Boolean(hf.headerRule && firstHeaderText) }) },
-          { name: "word/footer2.xml", data: headerFooterXml("ftr", title(firstFooterText), hf.footerAlign, pn.skipFirst ? null : pageNumberIn("footer"), { width: textWidth }) },
+          { name: "word/header2.xml", data: headerFooterXml("hdr", title(firstHeaderText), hf.headerAlign, pn.skipFirst ? null : pageNumberIn("header"), { width: textWidth, rule: Boolean(hf.headerRule && firstHeaderText), size: hf.size, color: hf.color }) },
+          { name: "word/footer2.xml", data: headerFooterXml("ftr", title(firstFooterText), hf.footerAlign, pn.skipFirst ? null : pageNumberIn("footer"), { width: textWidth, size: hf.size, color: hf.color }) },
         ]
       : []),
     {

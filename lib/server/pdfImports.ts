@@ -115,20 +115,43 @@ export async function fontFor(pdfFont: string, options: { lookupGoogle?: boolean
   return /serif|roman|book|text|times|minion|garamond/i.test(name) && !/sans/i.test(name) ? known("Georgia") : known("Arial");
 }
 
-const KATEX_FACES: Array<{ file: string; bold: boolean; italic: boolean }> = [
-  { file: "KaTeX_Main-Regular.ttf", bold: false, italic: false },
-  { file: "KaTeX_Main-Bold.ttf", bold: true, italic: false },
-  { file: "KaTeX_Main-Italic.ttf", bold: false, italic: true },
-  { file: "KaTeX_Main-BoldItalic.ttf", bold: true, italic: true },
+export const COMPUTER_MODERN_TYPEWRITER = "Computer Modern Typewriter";
+export const COMPUTER_MODERN_SANS = "Computer Modern Sans";
+
+const KATEX_FACES: Array<{ family: string; file: string; bold: boolean; italic: boolean }> = [
+  { family: COMPUTER_MODERN, file: "KaTeX_Main-Regular.ttf", bold: false, italic: false },
+  { family: COMPUTER_MODERN, file: "KaTeX_Main-Bold.ttf", bold: true, italic: false },
+  { family: COMPUTER_MODERN, file: "KaTeX_Main-Italic.ttf", bold: false, italic: true },
+  { family: COMPUTER_MODERN, file: "KaTeX_Main-BoldItalic.ttf", bold: true, italic: true },
+  { family: COMPUTER_MODERN_TYPEWRITER, file: "KaTeX_Typewriter-Regular.ttf", bold: false, italic: false },
+  { family: COMPUTER_MODERN_SANS, file: "KaTeX_SansSerif-Regular.ttf", bold: false, italic: false },
+  { family: COMPUTER_MODERN_SANS, file: "KaTeX_SansSerif-Bold.ttf", bold: true, italic: false },
+  { family: COMPUTER_MODERN_SANS, file: "KaTeX_SansSerif-Italic.ttf", bold: false, italic: true },
 ];
 
-/** Keep KaTeX's Computer Modern faces as the "Computer Modern" document font (once), so TeX documents look like TeX. */
+/**
+ * Keep KaTeX's Computer Modern faces (roman, typewriter, sans) as document
+ * fonts (once), so TeX documents look like TeX.
+ */
 export async function ensureComputerModern() {
   const folder = path.join(/* turbopackIgnore: true */ process.cwd(), "node_modules", "katex", "dist", "fonts");
   for (const face of KATEX_FACES) {
     const data = await readFile(path.join(folder, face.file)).catch(() => null);
-    if (data) await saveFont({ family: COMPUTER_MODERN, bold: face.bold, italic: face.italic, data: new Uint8Array(data) });
+    if (data) await saveFont({ family: face.family, bold: face.bold, italic: face.italic, data: new Uint8Array(data) });
   }
+}
+
+/** TeX's math fonts: their text is part of an equation, written as LaTeX. */
+export const TEX_MATH_FONT = /^(cmmi|cmsy|cmex|msbm|msam|eufm|eurm|rsfs|cmbsy|lmmath|stixmath)/i;
+
+/** The Inline font to set a PDF font's text in, or "math" for TeX's math fonts (no lookup online). */
+export function inlineFontName(pdfFont: string): string {
+  const name = pdfFont.replace(/^[A-Z]{6}\+/, "");
+  if (TEX_MATH_FONT.test(name)) return "math";
+  if (/^(cmtt|sftt|lmmono|cmvtt|tctt|ectt)/i.test(name)) return COMPUTER_MODERN_TYPEWRITER;
+  if (/^(cmss|sfss|lmsans|ecss|tcss)/i.test(name)) return COMPUTER_MODERN_SANS;
+  if (TEX_FONT.test(name)) return COMPUTER_MODERN;
+  return "";
 }
 
 /** The document's settings, from what the pages share. */
@@ -147,6 +170,7 @@ export async function settingsFor(manifest: PdfImportManifest): Promise<{ settin
   const headerText = stripNumber(headerParts);
   const footerText = stripNumber(footerParts);
   const pageHeight = first?.height ?? 792;
+  const headerSize = Math.round((header?.size ?? footer?.size ?? HEADER_PT) * 10) / 10;
   const settings = normalizeSettings({
     ...DEFAULT_SETTINGS,
     pageSetup,
@@ -163,11 +187,13 @@ export async function settingsFor(manifest: PdfImportManifest): Promise<{ settin
       // The first page has no header when the running header starts on page 2 (a title page).
       differentFirstPage: Boolean(header && !header.pages.includes(1) && manifest.pageCount > 1),
       ...(summary.headerRule ? { headerRule: true } : {}),
-      // The header and footer where the PDF has them: the editor sets them in 10pt text of the document's font.
-      ...(header ? { headerFrom: inches(header.y - lineMetrics(font.css).ascent * HEADER_PT) } : {}),
+      // The header and footer where the PDF has them, in its size and in black, as the PDF prints them.
+      size: headerSize,
+      color: "#000000",
+      ...(header ? { headerFrom: inches(header.y - lineMetrics(font.css).ascent * headerSize) } : {}),
       ...(() => {
         const baseline = footer?.y ?? (numbers?.position === "footer" ? numbers.y : undefined);
-        return baseline !== undefined ? { footerFrom: inches(pageHeight - baseline - lineMetrics(font.css).descent * HEADER_PT) } : {};
+        return baseline !== undefined ? { footerFrom: inches(pageHeight - baseline - lineMetrics(font.css).descent * headerSize) } : {};
       })(),
     },
     pageNumbers: numbers ? { enabled: true, position: numbers.position, align: numbers.align, skipFirst: false } : DEFAULT_SETTINGS.pageNumbers,
@@ -175,7 +201,7 @@ export async function settingsFor(manifest: PdfImportManifest): Promise<{ settin
   return { settings, font };
 }
 
-/** The size the editor sets headers and footers in (app/styles/workspace.css). */
+/** The size the editor sets headers and footers in by default (app/styles/workspace.css). */
 const HEADER_PT = 10;
 
 /** Points as inches, kept within what the settings allow. */
@@ -319,7 +345,7 @@ export type ImportFiles = { get(name: string): Uint8Array | null };
 export async function createPdfImport(input: { manifest: PdfImportManifest; source: Uint8Array; files: ImportFiles; folderId: string | null }): Promise<StoredImport> {
   const { manifest } = input;
   const { settings, font } = await settingsFor(manifest);
-  if (font.computerModern) await ensureComputerModern().catch((error) => log("warn", "the Computer Modern faces couldn't be kept", { error }));
+  if (font.computerModern || manifest.summary.fonts.some((item) => inlineFontName(item.name) && inlineFontName(item.name) !== "math")) await ensureComputerModern().catch((error) => log("warn", "the Computer Modern faces couldn't be kept", { error }));
   if (font.google) void keepGoogleFont(font.google).catch(() => undefined);
   const source = await newUpload("pdf", input.source);
   const pages: PdfImportRecord["pages"] = [];

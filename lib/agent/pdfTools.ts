@@ -15,6 +15,7 @@ import {
   pageBitmap,
   pageRanges,
   pagesLeft,
+  inlineFontName,
   pdfImportFor,
   writePdfImport,
   type PageRange,
@@ -59,7 +60,7 @@ If a tool says the editor hasn't laid the page out yet, it is busy (or reloading
 
 ### Getting it right
 - Transcribe exactly: every word, number and symbol, in order, nothing added, nothing "fixed". Copy words from the text lines (they are exact); for math and symbols trust the picture, since the text layer often garbles them (minus signs, ∼, ∗, accents, superscripts).
-- Math is LaTeX: $…$ in text and $$…$$ for displayed equations (centered on their own line; the closing line can carry spacing, "$$ {before=6 after=6}"). Match the original's notation: \\mathbb{P}, \\operatorname{Var}, \\sqrt{}, \\frac{}{}, \\sum_{x}, \\int_{-\\infty}^{z}, \\mathcal{N}, \\sim, \\cdot. A derivation over several lines is one $$\\begin{aligned}…\\end{aligned}$$ block with & alignment. Put an equation's own punctuation inside it.
+- Math is LaTeX: $…$ in text and $$…$$ for displayed equations (centered on their own line; the closing line can carry spacing, "$$ {before=6 after=6}"). Match the original's notation: \\mathbb{P}, \\operatorname{Var}, \\sqrt{}, \\frac{}{}, \\sum_{x}, \\int_{-\\infty}^{z}, \\mathcal{N}, \\sim, \\cdot. A derivation over several lines is one $$\\begin{aligned}…\\end{aligned}$$ block with & alignment. Put an equation's own punctuation inside it. An equation number at the right margin ("(1)") is \\tag{1} inside the $$ block.
 - Paragraphs: one per paragraph of the original; join the PDF's lines (don't keep its line breaks). <br> only where the original breaks a line on purpose.
 - Headings: use # levels for the structure (the biggest section style as ##, the next ###, …; # only for a real document title), and match their look with **bold** and size= (Inline headings are otherwise light and gray): \`## **1 Variance and Standard Deviation (§3.3)** {size=14.3 before=18 after=8 color=#000000}\`.
 - Keep the original's spacing inside lines: TeX leaves a wide gap after a section number ("1  Variance", "1.1  Standard Deviation"); write it with &ensp; or &emsp; so the text starts where it did.
@@ -73,7 +74,7 @@ If a tool says the editor hasn't laid the page out yet, it is busy (or reloading
 - Drawings made of lines and curves (charts, diagrams, the drawing listed under "drawings") can't be rebuilt as text: crop_pdf_region cuts any region of the page out as a picture to place like the others. Crop generously; it trims white space. Also crop anything else that can't be expressed (a complex diagram, a picture with text drawn over it).
 - Links: [text](url) for web links. Links within the document (a table of contents) stay plain text.
 - Vertical space: match where blocks sit. The gap between two blocks is set with after= on the first or before= on the second, in points; blank space left on the page (room to write under a question) is kept with a large after=. The text lines' y values tell you the gaps: a gap of one line is normal paragraph flow; more is extra space.
-- Fonts and sizes: the document's font, size and line spacing were set from the PDF (see get_pdf_import); give a paragraph size= only when it differs, and use <span style="font-family: …">…</span> only for text in another font (code in Courier).
+- Fonts and sizes: the document's font, size and line spacing were set from the PDF (see get_pdf_import); give a paragraph size= only when it differs. Text in another of the PDF's fonts goes in the font get_pdf_import names for it, with <span style="font-family: …">…</span> (a URL in TeX's typewriter font: "Computer Modern Typewriter").
 - Color: color=#rrggbb on a paragraph, or <span style="color: #rrggbb">…</span>, for colored text.
 - The running header, footer and page numbers are document settings (already set): don't write them on the pages. If they're wrong, fix them with update_document_settings.
 - If a page overflows onto an extra page, tighten spacing (smaller before/after, line=) rather than leaving anything out. A page that ends a little short is fine.
@@ -183,7 +184,13 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
         const settings = doc.meta.settings;
         const size = pageSize(settings.pageSetup);
         const area = textArea(doc);
-        const fonts = summary.fonts.map((font) => `${font.name}${font.bold ? " bold" : ""}${font.italic ? " italic" : ""} (${font.sizes.slice(0, 3).join("/")}pt, ${font.chars} letters)`).join("; ");
+        const fonts = summary.fonts
+          .map((font) => {
+            const inline = inlineFontName(font.name);
+            const set = inline === "math" ? "math (write it as LaTeX)" : inline ? `set in "${inline}"` : "";
+            return `${font.name}${font.bold ? " bold" : ""}${font.italic ? " italic" : ""} (${font.sizes.slice(0, 3).join("/")}pt, ${font.chars} letters${set ? `; ${set}` : ""})`;
+          })
+          .join("; ");
         const header = summary.header ? `"${summary.header.parts.join(" | ")}" (${summary.header.size}pt) on pages ${compactPages(summary.header.pages)}${summary.headerRule ? ", with a rule under it" : ""}` : "none";
         const footer = summary.footer ? `"${summary.footer.parts.join(" | ")}" on pages ${compactPages(summary.footer.pages)}` : "none";
         const inkPages = manifest.pages.filter((page) => page.ink.count).map((page) => page.page);

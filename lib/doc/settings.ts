@@ -52,6 +52,9 @@ export type HeaderFooterSettings = {
    */
   headerFrom?: number;
   footerFrom?: number;
+  /** The header and footer's text size in points and color (#rrggbb), when not the page's usual small grey. */
+  size?: number;
+  color?: string;
 };
 
 export type PageNumberSettings = {
@@ -264,6 +267,14 @@ export function normalizeSettings(input: unknown, base: DocumentSettings = DEFAU
         const headerFrom = distance(hf.headerFrom, base.headerFooter.headerFrom);
         const footerFrom = distance(hf.footerFrom, base.headerFooter.footerFrom);
         return { ...(headerFrom !== undefined ? { headerFrom } : {}), ...(footerFrom !== undefined ? { footerFrom } : {}) };
+      })(),
+      ...(() => {
+        const size = hf.size === undefined ? base.headerFooter.size : hf.size === null ? undefined : Number(hf.size);
+        const color = hf.color === undefined ? base.headerFooter.color : hf.color === null ? undefined : String(hf.color);
+        return {
+          ...(typeof size === "number" && size >= 4 && size <= 72 ? { size: Math.round(size * 10) / 10 } : {}),
+          ...(typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color) ? { color: color.toLowerCase() } : {}),
+        };
       })(),
     },
     pageNumbers: {
