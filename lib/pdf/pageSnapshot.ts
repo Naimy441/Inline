@@ -7,6 +7,9 @@ import type { PdfDocumentModel, PdfItem, PdfPage, RGB, StandardFont } from "@/li
 
 export type Box = { left: number; top: number; width: number; height: number };
 
+/** A picture of an equation, or of each of its lines when it wraps (lib/pdf/mathRaster.ts). */
+export type Raster = { jpeg: Uint8Array; width: number; height: number; box: Box; parts?: Raster[] };
+
 export type SnapshotStyle = Pick<
   CSSStyleDeclaration,
   | "display"
@@ -50,7 +53,7 @@ export type PageMeasurer = {
   textWidth(text: string, style: SnapshotStyle): number;
   image(img: HTMLImageElement, width: number, height: number): { jpeg: Uint8Array; width: number; height: number } | null;
   /** A picture of a typeset equation (see mathRaster.ts), drawn instead of its text. */
-  raster?(el: Element): { jpeg: Uint8Array; width: number; height: number; box: Box } | null;
+  raster?(el: Element): Raster | null;
   /** The style of an element's ::before (a list's own bullet). */
   pseudo?(el: Element, which: "::before"): SnapshotStyle;
   /** A font the document carries for text in this style, and where the baseline sits in its text boxes (0-1). */
@@ -80,6 +83,8 @@ export const EDITOR_LAYOUT: SnapshotLayout = {
   pages: ".sheet",
   ink: ".doc-content",
   skip: [
+    // An imported PDF's annotations, drawn over the pages: transparent pictures the PDF can't carry as they look.
+    ".pdf-annotations",
     ".page-gap",
     ".page-break",
     ".review-delete",
@@ -332,8 +337,11 @@ export function snapshotPages(
 
     const raster = el.classList.contains("katex") ? measure.raster?.(el) : null;
     if (raster) {
-      const at = place(raster.box);
-      add(at.page, { kind: "image", x: at.x, y: at.y, width: at.width, height: at.height, jpeg: raster.jpeg, pixelWidth: raster.width, pixelHeight: raster.height, ink: true });
+      // An equation broken across lines comes as a picture per line.
+      for (const part of raster.parts ?? [raster]) {
+        const at = place(part.box);
+        add(at.page, { kind: "image", x: at.x, y: at.y, width: at.width, height: at.height, jpeg: part.jpeg, pixelWidth: part.width, pixelHeight: part.height, ink: true });
+      }
       return;
     }
 
@@ -527,7 +535,7 @@ function blend(color: ParsedColor): RGB {
   return color.rgb.map((channel) => channel * alpha + (1 - alpha)) as RGB;
 }
 
-export function domMeasurer(rasters?: ReadonlyMap<Element, { jpeg: Uint8Array; width: number; height: number; box: Box }>, font?: PageMeasurer["font"]): PageMeasurer {
+export function domMeasurer(rasters?: ReadonlyMap<Element, Raster>, font?: PageMeasurer["font"]): PageMeasurer {
   const toBox = (rect: DOMRect | DOMRectReadOnly): Box => ({ left: rect.left, top: rect.top, width: rect.width, height: rect.height });
   let canvas: HTMLCanvasElement | null = null;
   const context = () => {

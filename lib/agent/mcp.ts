@@ -1,6 +1,6 @@
 import { createSdkMcpServer, tool as sdkTool } from "@anthropic-ai/claude-agent-sdk";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { DOCUMENT_FORMAT_GUIDE, LIBRARY_GUIDE } from "@/lib/agent/prompt";
+import { DOCUMENT_FORMAT_GUIDE, LIBRARY_GUIDE, PDF_IMPORT_NOTE } from "@/lib/agent/prompt";
 import { TOOLS, runTool, type ToolContext, type ToolResult } from "@/lib/agent/tools";
 
 /**
@@ -17,7 +17,8 @@ const VERSION = "1.0.0";
 export const mcpToolName = (name: string) => `mcp__${MCP_SERVER_NAME}__${name}`;
 
 function toCallToolResult(result: ToolResult) {
-  return { content: [{ type: "text" as const, text: result.text }], isError: result.isError || undefined };
+  const images = (result.images ?? []).map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mimeType }));
+  return { content: [...images, { type: "text" as const, text: result.text }], isError: result.isError || undefined };
 }
 
 function annotations(tool: (typeof TOOLS)[number]) {
@@ -52,7 +53,7 @@ export function createInlineHttpServer(context: ToolContext) {
   const server = new McpServer(
     { name: MCP_SERVER_NAME, version: VERSION, title: "Inline" },
     {
-      instructions: `Inline is a document editor. These tools read and edit the user's Inline documents; the user sees changes live and can keep or undo each one.\n\n${DOCUMENT_FORMAT_GUIDE}\n\n${LIBRARY_GUIDE}`,
+      instructions: `Inline is a document editor. These tools read and edit the user's Inline documents; the user sees changes live and can keep or undo each one.\n\n${DOCUMENT_FORMAT_GUIDE}\n\n${PDF_IMPORT_NOTE}\n\n${LIBRARY_GUIDE}`,
     },
   );
   for (const definition of TOOLS) {

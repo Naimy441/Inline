@@ -38,6 +38,7 @@ import { describePageStarts, pageCount, pageCountNow } from "@/lib/agent/pages";
 import { FOLDER_COLORS } from "@/lib/doc/folders";
 import { createFolder, deleteFolder, FolderError, folderPathName, updateFolder } from "@/lib/server/folders";
 import { formatFolderTree, formatLibrary, library, MAX_EXCERPT_WORDS, moveDocuments, resolveFolder } from "@/lib/server/library";
+import { pdfTools } from "@/lib/agent/pdfTools";
 
 /**
  * The tools Claude uses to work in Inline documents. They are transport
@@ -66,7 +67,8 @@ export type ToolContext = {
   onChange?: (change: { documentId: string; title: string; tool: string; added: number; removed: number }) => void;
 };
 
-export type ToolResult = { text: string; isError?: boolean };
+/** A tool's answer: text, and pictures for Claude to see (a PDF page, a comparison). */
+export type ToolResult = { text: string; isError?: boolean; images?: Array<{ data: string; mimeType: string }> };
 
 type Shape = z.ZodRawShape;
 
@@ -535,7 +537,9 @@ export const TOOLS = [
       const settings = doc.meta.settings;
       const margins = settings.pageSetup.margins;
       const sameMargins = margins.top === margins.bottom && margins.left === margins.right && margins.top === margins.left;
-      const setup = `${PAPER_SIZES[settings.pageSetup.paperSize].label.replace(/\s*\(.*\)$/, "")} ${settings.pageSetup.orientation}, ${sameMargins ? `${inches(margins.top)} margins` : `margins ${inches(margins.top)} top, ${inches(margins.bottom)} bottom, ${inches(margins.left)} left, ${inches(margins.right)} right`}, ${settings.fontFamily.split(",")[0]!.replace(/["']/g, "").trim()} ${settings.fontSize}pt, line spacing ${settings.lineSpacing}`;
+      const custom = settings.pageSetup.customSize;
+      const paper = custom ? `${inches(custom.width)} × ${inches(custom.height)}` : PAPER_SIZES[settings.pageSetup.paperSize].label.replace(/\s*\(.*\)$/, "");
+      const setup = `${paper} ${settings.pageSetup.orientation}, ${sameMargins ? `${inches(margins.top)} margins` : `margins ${inches(margins.top)} top, ${inches(margins.bottom)} bottom, ${inches(margins.left)} left, ${inches(margins.right)} right`}, ${settings.fontFamily.split(",")[0]!.replace(/["']/g, "").trim()} ${settings.fontSize}pt, line spacing ${settings.lineSpacing}`;
       const words = docWordCount(doc.doc);
       const plural = count.pages === 1 ? "" : "s";
       const lines: string[] = [];
@@ -1428,6 +1432,8 @@ export const TOOLS = [
       return ok(`${viewers ? `Started the download of "${filename}" in the user's browser.` : "No editor is open to download into."} The file is available at ${url} on the Inline server.`);
     },
   }),
+  // Rebuilding an imported PDF as an editable document (lib/agent/pdfTools.ts).
+  ...pdfTools({ defineTool, ok, fail, resolveDocument, documentId, showActivity }),
 ];
 
 function clip(text: string, max = 160) {

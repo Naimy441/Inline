@@ -48,6 +48,8 @@ const KNOWN: Record<string, LineMetrics> = {
   lato: em(1974, 426, 0, 2000),
   roboto: em(1900, 558, 0, 2048),
   "crimson text": em(972, 257, 0, 1024, true),
+  // KaTeX's Computer Modern faces, kept for documents imported from TeX PDFs (lib/server/pdfImports.ts).
+  "computer modern": em(903, 272, 0, 1000),
 };
 
 /** What Google Docs uses for a font it has no figures for. */

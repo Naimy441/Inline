@@ -70,6 +70,11 @@ export type MenuActions = {
   toggleSpellcheck: () => void;
   substitutions: boolean;
   toggleSubstitutions: () => void;
+  /** For a document imported from a PDF with annotations: whether they're shown over the pages (null otherwise). */
+  pdfAnnotations: boolean | null;
+  togglePdfAnnotations: () => void;
+  /** For a document imported from a PDF: start Claude on converting the pages still left (null otherwise). */
+  convertPdf: (() => void) | null;
 };
 
 const MENU_TIPS: Record<string, string> = {
@@ -182,6 +187,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       { label: "Focus mode", hint: "Hide Claude while you write", checked: actions.focusMode, onSelect: actions.toggleFocusMode },
       { label: "Show non-printing characters", shortcut: `⌘⇧P`, checked: actions.showInvisibles, onSelect: actions.toggleInvisibles },
       { label: "Show spelling underlines", checked: actions.spellcheck, onSelect: actions.toggleSpellcheck },
+      ...(actions.pdfAnnotations === null ? [] : [{ label: "Show PDF annotations", hint: "As they were on the original pages", checked: actions.pdfAnnotations, onSelect: actions.togglePdfAnnotations }]),
       { label: "Dark theme", checked: actions.dark, onSelect: actions.toggleTheme },
       { label: "Full screen", onSelect: actions.fullScreen },
     ],
@@ -312,6 +318,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
                 ),
             },
             { label: "Check for AI-sounding writing", onSelect: () => actions.ask("Run analyze_writing on the document and point out any passages that sound generic or AI-written. Suggest fixes but don't edit yet.") },
+            ...(actions.convertPdf ? [{ label: "Convert PDF pages with Claude", hint: "Rebuild the pages that are still pictures", onSelect: actions.convertPdf }] : []),
           ] as MenuItem[])),
     ],
     Help: [

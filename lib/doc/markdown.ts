@@ -2,7 +2,7 @@ import MarkdownIt from "markdown-it";
 type Token = ReturnType<InstanceType<typeof MarkdownIt>["parse"]>[number];
 import markPlugin from "markdown-it-mark";
 import { Fragment, type Mark, type Node as PMNode } from "prosemirror-model";
-import { ALIGNMENTS, MARKDOWN_MARKS, MATH_LANGUAGE, MAX_INDENT, safeHref, schema, type Align } from "@/lib/doc/schema";
+import { ALIGNMENTS, MARKDOWN_MARKS, MATH_LANGUAGE, MAX_INDENT, cssSizeToPt, safeHref, schema, type Align, type BorderLine, type Borders, type TabStop } from "@/lib/doc/schema";
 
 /**
  * Markdown is the agent's view of a document. Each top-level block becomes one
@@ -17,6 +17,12 @@ import { ALIGNMENTS, MARKDOWN_MARKS, MATH_LANGUAGE, MAX_INDENT, safeHref, schema
  *   \pagebreak                       a page break
  *   ![alt](src){width=50%}           image size and alignment
  *   $x^2$   $$ … $$                  LaTeX equations, inline and displayed
+ *
+ * Layout that Markdown can't say can be written too, though it isn't shown
+ * when the document is read back (like fonts and colors): paragraph size,
+ * spacing, indent, borders and tab stops in the {…} suffix, and styled
+ * spans and sized pictures as HTML (see layoutAttrs and styleMarks). Imported
+ * PDFs are rebuilt with them (lib/agent/pdfTools.ts).
  *
  * Styling that Markdown can't express at all (colors, fonts, comments, locks)
  * is not shown; edits made through Markdown preserve it (see merge.ts).
@@ -796,6 +802,11 @@ class BlockBuilder {
     if (content.childCount === 1 && content.firstChild!.isText && /^ +$/.test(content.firstChild!.text ?? "")) {
       content = Fragment.empty;
     }
+    if (spec) {
+      Object.assign(nodeAttrs, layoutAttrs(spec));
+      const marks = blockMarks(spec);
+      if (marks.length) content = markText(content, marks);
+    }
     return schema.nodes[nodeType]!.create(nodeAttrs, content);
   }
 
@@ -815,6 +826,7 @@ class BlockBuilder {
         }
       }
     };
+    const spans: Array<{ added: Mark[]; replaced: Array<Mark | null> }> = [];
     const pushText = (text: string, extra: Mark[] = []) => {
       if (!text) return;
       let set = schema.text(text).marks;
@@ -880,13 +892,30 @@ class BlockBuilder {
           break;
         }
         case "html_inline": {
-          const tag = token.content.trim().toLowerCase();
+          const raw = token.content.trim();
+          const tag = raw.toLowerCase();
           const open = tag.match(/^<(u|ins|sup|sub|mark|s|del|strike|b|strong|i|em)(\s[^>]*)?>$/);
           const close = tag.match(/^<\/(u|ins|sup|sub|mark|s|del|strike|b|strong|i|em)\s*>$/);
           if (/^<br\s*\/?>$/.test(tag)) nodes.push(schema.node("hard_break"));
           else if (open) add(schema.mark(htmlMarkName(open[1]!)));
           else if (close) remove(htmlMarkName(close[1]!));
-          else pushText(token.content);
+          else if (/^<span(\s[^>]*)?>$/.test(tag)) {
+            // A styled span: its marks apply until </span>, and what they replaced comes back after.
+            const styled = styleMarks(htmlAttr(raw, "style") ?? "");
+            const replaced = styled.map((mark) => marks.find((item) => item.type === mark.type) ?? null);
+            for (const mark of styled) add(mark);
+            spans.push({ added: styled, replaced });
+          } else if (/^<\/span\s*>$/.test(tag)) {
+            const span = spans.pop();
+            span?.added.forEach((mark, index) => {
+              remove(mark.type.name);
+              const previous = span.replaced[index];
+              if (previous) add(previous);
+            });
+          } else if (/^<img\s/.test(tag)) {
+            const image = inlineImage(raw, marks);
+            if (image) nodes.push(image);
+          } else pushText(token.content);
           break;
         }
         default:
@@ -895,6 +924,155 @@ class BlockBuilder {
     }
     return Fragment.fromArray(mergeAdjacentText(nodes));
   }
+}
+
+// --- layout attributes -----------------------------------------------------------------
+
+const BORDER_STYLES = ["solid", "double", "dotted", "dashed"] as const;
+const TAB_ALIGNS = ["left", "center", "right", "decimal"] as const;
+const LEADERS = ["dot", "hyphen", "underscore", "middleDot"] as const;
+
+function numberIn(value: string | undefined, min: number, max: number): number | null {
+  if (value === undefined) return null;
+  const n = Number(value.replace(/pt$/, ""));
+  return Number.isFinite(n) && n >= min && n <= max ? n : null;
+}
+
+const COLOR = /^#[0-9a-f]{3}([0-9a-f]{3})?$|^[a-z]+$|^rgba?\([\d\s.,%]+\)$/i;
+
+/** "#abc" or "#aabbcc" as "#aabbcc"; null for anything else. */
+function hexColor(value: string | undefined) {
+  if (!value) return null;
+  if (/^#[0-9a-f]{6}$/i.test(value)) return value.toLowerCase();
+  if (/^#[0-9a-f]{3}$/i.test(value)) return `#${[...value.slice(1)].map((c) => c + c).join("")}`.toLowerCase();
+  return null;
+}
+
+/**
+ * Paragraph layout from a {…} suffix, beyond alignment and indent:
+ *   size=14            the paragraph's text size in points
+ *   before=12 after=6  space above and below, in points
+ *   line=1.2           line height, a multiple of the size
+ *   left=36            left indent in points
+ *   .box               a box around it (neighbours with the same box share it), or
+ *   border=bottom      some sides: border="top bottom", with border-width=0.5 (pt),
+ *                      border-color=#000, border-space=3 (pt from the text) and
+ *                      border-style=solid|double|dotted|dashed
+ *   tabs="234:center 470:right:dot"   tab stops in points from the left margin
+ */
+export function layoutAttrs(spec: { classes: string[]; values: Record<string, string> }): Record<string, unknown> {
+  const attrs: Record<string, unknown> = {};
+  const { values } = spec;
+  const size = numberIn(values.size, 1, 400);
+  if (size !== null) attrs.fontSize = Math.round(size * 10) / 10;
+  const before = numberIn(values.before, 0, 1000);
+  if (before !== null) attrs.spaceBefore = Math.round(before * 10) / 10;
+  const after = numberIn(values.after, 0, 1000);
+  if (after !== null) attrs.spaceAfter = Math.round(after * 10) / 10;
+  const line = numberIn(values.line, 0.5, 5);
+  if (line !== null) attrs.lineHeight = String(Math.round(line * 1000) / 1000);
+  const left = numberIn(values.left, 0, 576);
+  if (left !== null) attrs.indent = Math.min(MAX_INDENT, Math.round((left / 36) * 1000) / 1000);
+  const all = spec.classes.includes("box") || values.border === "box" || values.border === "all";
+  const sides = all ? ["top", "bottom", "left", "right"] : (values.border ?? "").split(/[\s,]+/).filter((side) => ["top", "bottom", "left", "right"].includes(side));
+  if (sides.length) {
+    const style = (BORDER_STYLES as readonly string[]).includes(values["border-style"] ?? "") ? (values["border-style"] as BorderLine["style"]) : "solid";
+    const line: BorderLine = { style, width: numberIn(values["border-width"], 0.1, 12) ?? 0.5, space: numberIn(values["border-space"], 0, 40) ?? 3, color: hexColor(values["border-color"]) };
+    const borders: Borders = {};
+    for (const side of sides) borders[side as keyof Borders] = { ...line };
+    attrs.borders = borders;
+  }
+  if (values.tabs) {
+    const tabs: TabStop[] = [];
+    for (const item of values.tabs.split(/[\s,]+/)) {
+      const [pos, align = "left", leader] = item.split(":");
+      const at = numberIn(pos, 0, 2000);
+      if (at === null || !(TAB_ALIGNS as readonly string[]).includes(align)) continue;
+      tabs.push({ pos: at, align: align as TabStop["align"], ...(leader && (LEADERS as readonly string[]).includes(leader) ? { leader: leader as TabStop["leader"] } : {}) });
+    }
+    if (tabs.length) attrs.tabs = tabs.sort((a, b) => a.pos - b.pos);
+  }
+  return attrs;
+}
+
+/** Text marks a {…} suffix gives the whole paragraph: color=#c00, font="Name", highlight=#ff0. */
+function blockMarks(spec: { values: Record<string, string> }): Mark[] {
+  const marks: Mark[] = [];
+  if (spec.values.color && COLOR.test(spec.values.color)) marks.push(schema.mark("text_color", { color: spec.values.color }));
+  const font = cssFamily(spec.values.font);
+  if (font) marks.push(schema.mark("font_family", { family: font }));
+  if (spec.values.highlight && COLOR.test(spec.values.highlight)) marks.push(schema.mark("highlight", { color: spec.values.highlight }));
+  return marks;
+}
+
+/** A font family name as a CSS family list (quoted, with a generic fallback). */
+function cssFamily(value: string | undefined) {
+  const name = (value ?? "").replace(/["';{}<>\\]/g, "").trim();
+  if (!name) return null;
+  return /,/.test(name) ? name : `"${name}", serif`;
+}
+
+/** Add marks to every piece of text (not equations or code, which can't take them). */
+function markText(content: Fragment, marks: Mark[]) {
+  const nodes: PMNode[] = [];
+  content.forEach((node) => {
+    if (!node.isText || node.marks.some((mark) => mark.type.name === "math" || mark.type.name === "code")) {
+      nodes.push(node);
+      return;
+    }
+    let set = node.marks;
+    for (const mark of marks) if (!set.some((item) => item.type === mark.type)) set = mark.addToSet(set);
+    nodes.push(node.mark(set));
+  });
+  return Fragment.fromArray(nodes);
+}
+
+/** An attribute of an HTML tag, unescaped. */
+function htmlAttr(tag: string, name: string): string | null {
+  const match = new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i").exec(tag);
+  if (!match) return null;
+  return (match[1] ?? match[2] ?? match[3] ?? "").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+}
+
+/** Marks for a span's CSS: color, background-color, font-size, font-family, font-weight, font-style, text-decoration, vertical-align. */
+export function styleMarks(style: string): Mark[] {
+  const marks: Mark[] = [];
+  for (const declaration of style.split(";")) {
+    const [rawName, ...rest] = declaration.split(":");
+    const name = rawName?.trim().toLowerCase();
+    const value = rest.join(":").trim();
+    if (!name || !value) continue;
+    if (name === "color" && COLOR.test(value)) marks.push(schema.mark("text_color", { color: value }));
+    else if ((name === "background-color" || name === "background") && COLOR.test(value)) marks.push(schema.mark("highlight", { color: value }));
+    else if (name === "font-size") {
+      const pt = cssSizeToPt(value);
+      if (pt) marks.push(schema.mark("font_size", { size: `${pt}pt` }));
+    } else if (name === "font-family") {
+      const family = value.replace(/[;{}<>\\]/g, "").trim();
+      if (family) marks.push(schema.mark("font_family", { family }));
+    } else if (name === "font-weight" && /^(bold|[6-9]00)$/.test(value)) marks.push(schema.mark("bold"));
+    else if (name === "font-style" && value === "italic") marks.push(schema.mark("italic"));
+    else if (name === "text-decoration" || name === "text-decoration-line") {
+      if (/underline/.test(value)) marks.push(schema.mark("underline"));
+      if (/line-through/.test(value)) marks.push(schema.mark("strike"));
+    } else if (name === "vertical-align") {
+      if (value === "super") marks.push(schema.mark("superscript"));
+      else if (value === "sub") marks.push(schema.mark("subscript"));
+    }
+  }
+  return marks;
+}
+
+/** <img src="…" width="120" height="80" alt="…"> in a line of text: a picture set in the line, sized in CSS pixels. */
+function inlineImage(tag: string, marks: Mark[]): PMNode | null {
+  const src = htmlAttr(tag, "src") ?? "";
+  if (!/^(https?:\/\/|\/api\/uploads\/)/i.test(src)) return null;
+  const size = (name: string) => {
+    const value = htmlAttr(tag, name);
+    const n = value ? Number(value.replace(/px$/, "")) : NaN;
+    return Number.isFinite(n) && n > 0 && n < 5000 ? Math.round(n * 100) / 100 : null;
+  };
+  return schema.nodes.inline_image!.create({ src, alt: htmlAttr(tag, "alt") ?? "", width: size("width"), height: size("height") }, null, marks.filter((mark) => mark.type.name === "link"));
 }
 
 function htmlMarkName(tag: string) {

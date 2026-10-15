@@ -39,6 +39,8 @@ import { chatFilePath, deleteChatFile, FileSummaryCache, findUpload, listChatIds
 import { isUserSuggestion } from "@/lib/doc/review";
 import { log } from "@/lib/server/log";
 import { attachmentText } from "@/lib/agent/attachments";
+import { pagesLeft, settlePdfConversion } from "@/lib/server/pdfImports";
+import { compactPages } from "@/lib/agent/pdfTools";
 
 /**
  * The in-app agent: each chat is a Claude Code session (via the Claude Agent
@@ -530,6 +532,15 @@ class ChatRuntime {
         const folders = new Map((await listFolders()).map((folder) => [folder.id, folder]));
         const where = folderPathName(folders, root.meta.folderId);
         if (where) context.push(`It is filed in the folder "${where}".`);
+      }
+      const pdf = doc.meta.pdfImport;
+      if (pdf) {
+        const left = pagesLeft(doc.doc, pdf.pages);
+        context.push(
+          left.length
+            ? `It was imported from a PDF (${pdf.pages} page${pdf.pages === 1 ? "" : "s"}). ${left.length === pdf.pages ? "No page is converted yet" : `Page${left.length === 1 ? "" : "s"} ${compactPages(left)} ${left.length === 1 ? "is" : "are"} still a picture of the original`}; the PDF tools (get_pdf_import first) convert them.`
+            : `It was imported from a PDF (${pdf.pages} page${pdf.pages === 1 ? "" : "s"}), now fully converted; get_pdf_import, read_pdf_page and compare_pdf_page still show the original.`,
+        );
       }
       const suggestions = doc.hunks.filter(isUserSuggestion).length;
       const pending = doc.hunks.length - suggestions;
@@ -1088,6 +1099,7 @@ class ChatRuntime {
     this.setStatus(null);
     this.setDocumentActivity("idle", "");
     void this.persistNow();
+    if (this.state.documentId && !this.state.queue.length) void settlePdfConversion(this.state.documentId, this.state.id).catch(() => undefined);
 
     const next = this.state.queue.shift();
     if (next) {

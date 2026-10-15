@@ -5,7 +5,8 @@
 
 import type { Box } from "@/lib/pdf/pageSnapshot";
 
-export type MathRaster = { jpeg: Uint8Array; width: number; height: number; box: Box };
+/** A picture of an equation; one that wraps onto more lines has a picture per line in `parts`. */
+export type MathRaster = { jpeg: Uint8Array; width: number; height: number; box: Box; parts?: MathRaster[] };
 
 const SCALE = 3;
 const fontCache = new Map<string, Promise<string>>();
@@ -153,6 +154,56 @@ async function rasterize(katexEl: HTMLElement): Promise<MathRaster | null> {
 }
 
 /**
+ * An inline equation broken across lines (KaTeX lets one break after a
+ * relation, as TeX does) is drawn a line at a time: one picture of it all
+ * would span both lines and the whole text width, covering the words beside
+ * it. Each line's pieces are copied into a hidden equation of their own,
+ * drawn, and placed where they are. Null when it is on one line.
+ */
+async function rasterizeLines(katexEl: HTMLElement): Promise<MathRaster | null> {
+  const html = katexEl.querySelector<HTMLElement>(":scope > .katex-html");
+  if (!html || !katexEl.parentElement) return null;
+  const groups: Array<{ top: number; parts: HTMLElement[] }> = [];
+  for (const part of Array.from(html.children) as HTMLElement[]) {
+    const rect = part.getBoundingClientRect();
+    if (!rect.width && !rect.height) continue;
+    const group = groups.find((item) => Math.abs(item.top - rect.top) < Math.max(2, rect.height / 2));
+    if (group) group.parts.push(part);
+    else groups.push({ top: rect.top, parts: [part] });
+  }
+  if (groups.length < 2) return null;
+  const parts: MathRaster[] = [];
+  for (const group of groups) {
+    const copy = katexEl.cloneNode(false) as HTMLElement;
+    const inner = html.cloneNode(false) as HTMLElement;
+    for (const part of group.parts) inner.appendChild(part.cloneNode(true));
+    copy.appendChild(inner);
+    copy.style.position = "absolute";
+    copy.style.left = "0";
+    copy.style.top = "0";
+    copy.style.visibility = "hidden";
+    copy.style.whiteSpace = "nowrap";
+    katexEl.parentElement.appendChild(copy);
+    try {
+      const raster = await rasterize(copy);
+      if (!raster) continue;
+      // Move the picture from the hidden copy to where this line's pieces are.
+      const from = (inner.firstElementChild as HTMLElement).getBoundingClientRect();
+      const to = group.parts[0]!.getBoundingClientRect();
+      parts.push({ ...raster, box: { ...raster.box, left: raster.box.left + to.left - from.left, top: raster.box.top + to.top - from.top } });
+    } finally {
+      copy.remove();
+    }
+  }
+  if (!parts.length) return null;
+  const left = Math.min(...parts.map((part) => part.box.left));
+  const top = Math.min(...parts.map((part) => part.box.top));
+  const right = Math.max(...parts.map((part) => part.box.left + part.box.width));
+  const bottom = Math.max(...parts.map((part) => part.box.top + part.box.height));
+  return { ...parts[0]!, box: { left, top, width: right - left, height: bottom - top }, parts };
+}
+
+/**
  * A picture of every typeset equation under `root`, keyed by its .katex
  * element. Equations that can't be drawn (a browser that won't read back an
  * SVG with HTML in it) are left out, and the snapshot falls back to their text.
@@ -164,7 +215,7 @@ export async function rasterizeMath(root: HTMLElement): Promise<Map<Element, Mat
   await document.fonts?.ready;
   for (const el of equations) {
     try {
-      const raster = await rasterize(el);
+      const raster = (await rasterizeLines(el)) ?? (await rasterize(el));
       if (raster) out.set(el, raster);
     } catch {
       // Leave it to the text fallback.

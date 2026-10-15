@@ -1,8 +1,9 @@
 "use client";
 
-import { ArrowDown, ArrowUp, CloudOff, Sparkles } from "lucide-react";
+import { ArrowDown, ArrowUp, CloudOff, FileText, PenLine, Sparkles, X } from "lucide-react";
 import type { EditorState } from "prosemirror-state";
 import { useEffect, useState, type RefObject } from "react";
+import type { PdfImportMeta } from "@/lib/doc/settings";
 
 /**
  * Shown at the top of the canvas while the document's connection is down.
@@ -79,5 +80,59 @@ export function AgentLocator({ canvas, state, active, label }: { canvas: RefObje
       <span className="agent-locator-text">{label || "Claude is working"}</span>
       {where.side === "above" ? <ArrowUp size={13} /> : <ArrowDown size={13} />}
     </button>
+  );
+}
+
+/**
+ * For a document imported from a PDF: how far Claude is with rebuilding its
+ * pages as text, a way to start or continue that, and the switch for the
+ * original annotations. Gone once the conversion is done (the View menu
+ * keeps the switch).
+ */
+export function PdfImportNotice({ pdf, working, onConvert, onShowChat, onToggleAnnotations }: { pdf: PdfImportMeta; working: boolean; onConvert: () => void; onShowChat: () => void; onToggleAnnotations: () => void }) {
+  const [hidden, setHidden] = useState(false);
+  if (pdf.status === "done" || hidden) return null;
+  const done = Math.min(pdf.pages, pdf.converted.length);
+  const converting = pdf.status === "converting";
+  const annotations = pdf.inkPages.length > 0;
+  return (
+    <div className="canvas-notice">
+      <div className="pdf-notice" role="status">
+        {converting ? <Sparkles size={15} className={working ? "pulse" : undefined} /> : <FileText size={15} />}
+        <span className="pdf-notice-text">
+          {converting ? (
+            <>
+              <strong>Claude is converting this PDF</strong> into editable text: {done} of {pdf.pages} page{pdf.pages === 1 ? "" : "s"} done.
+            </>
+          ) : (
+            <>
+              <strong>
+                {pdf.pages - done} of {pdf.pages} page{pdf.pages === 1 ? " is" : "s are"} still {pdf.pages - done === 1 ? "a picture" : "pictures"} of the PDF.
+              </strong>{" "}
+              Claude can rebuild {pdf.pages - done === 1 ? "it" : "them"} as editable text.
+            </>
+          )}
+        </span>
+        {converting ? (
+          <button type="button" className="pdf-notice-action" onClick={onShowChat}>
+            Show progress
+          </button>
+        ) : (
+          <button type="button" className="pdf-notice-action is-primary" onClick={onConvert}>
+            {done ? "Continue converting" : "Convert with Claude"}
+          </button>
+        )}
+        {annotations && (
+          <button type="button" className={`pdf-notice-action${pdf.showAnnotations ? " is-on" : ""}`} onClick={onToggleAnnotations} title="Show the handwriting and markup the PDF had, where it was on the original pages">
+            <PenLine size={13} /> {pdf.showAnnotations ? "Hide annotations" : "Show annotations"}
+          </button>
+        )}
+        {!converting && (
+          <button type="button" className="pdf-notice-close" aria-label="Dismiss" onClick={() => setHidden(true)}>
+            <X size={13} />
+          </button>
+        )}
+      </div>
+    </div>
   );
 }

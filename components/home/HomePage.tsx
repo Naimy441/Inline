@@ -8,6 +8,8 @@ import { dismissLegacyDocuments, hasLegacyDocuments, htmlToDocJSON, importLegacy
 import { currentRevealLabel, loadServerPlatform, revealOnDisk } from "@/lib/client/fileManager";
 import { useShortcut } from "@/lib/client/platform";
 import { useTheme } from "@/lib/client/theme";
+import { useAgentStatus } from "@/lib/client/agentStatus";
+import { rememberChat } from "@/lib/client/chatSession";
 import { canMoveFolder, documentFolder, folderPath, summarizeFolders, type Folder, type FolderColor } from "@/lib/doc/folders";
 import type { DocumentMeta } from "@/lib/doc/settings";
 import { documentTemplates, type DocumentTemplate } from "@/lib/doc/templates";
@@ -85,6 +87,9 @@ export function HomePage() {
   const [moving, setMoving] = useState<MoveTarget | null>(null);
   const [adding, setAdding] = useState<Folder | null>(null);
   const [importing, setImporting] = useState(false);
+  /** What a PDF import is doing ("Reading page 3 of 7…"), while the browser reads and draws it. */
+  const [importLabel, setImportLabel] = useState<string | null>(null);
+  const { status: agentStatus } = useAgentStatus();
   const [agentOpen, setAgentOpen] = useState(false);
   const [mirrorOpen, setMirrorOpen] = useState(false);
   const [selected, setSelected] = useState<DragItem[]>([]);
@@ -221,8 +226,30 @@ export function HomePage() {
     return form;
   };
 
+  /**
+   * A PDF is read and drawn here in the browser (lib/pdf/import/prepare.ts),
+   * then kept as a document showing its original pages, and Claude starts
+   * rebuilding them as editable text unless it isn't signed in.
+   */
+  const importPdf = async (file: File) => {
+    const { preparePdfImport } = await import("@/lib/pdf/import/prepare");
+    try {
+      const { form } = await preparePdfImport(file, (progress) =>
+        setImportLabel(progress.stage === "saving" ? "Saving the PDF…" : progress.page ? `${progress.stage === "reading" ? "Reading" : "Drawing"} page ${progress.page} of ${progress.pages}…` : "Opening the PDF…"),
+      );
+      if (targetFolder) form.append("folderId", targetFolder);
+      if (!agentStatus || agentStatus.state === "ready") form.append("convert", "1");
+      const { document, chatId } = await api<{ document: Snapshot; chatId: string | null }>("/api/documents/import/pdf", { method: "POST", body: form });
+      if (chatId) rememberChat(document.meta.id, chatId);
+      return document.meta.id;
+    } finally {
+      setImportLabel(null);
+    }
+  };
+
   /** Create one document from a file without opening it. Returns its id. */
   const importOne = async (file: File) => {
+    if (/\.pdf$/i.test(file.name) || file.type === "application/pdf") return importPdf(file);
     if (/\.docx$/i.test(file.name)) {
       const { document } = await api<{ document: Snapshot }>("/api/documents/import", { method: "POST", body: uploadForm(file) });
       return document.meta.id;
@@ -241,10 +268,13 @@ export function HomePage() {
    */
   const importFiles = async (files: File[]) => {
     if (files.length === 1 && !/\.zip$/i.test(files[0]!.name)) {
+      setImporting(true);
       try {
         open(await importOne(files[0]!));
       } catch (error) {
         toast(error instanceof Error ? error.message : "Couldn't import that file.", { tone: "error" });
+      } finally {
+        setImporting(false);
       }
       return;
     }
@@ -625,8 +655,8 @@ export function HomePage() {
                 </span>
               )}
             </h2>
-            <Button size="sm" variant="ghost" icon={<FileUp size={15} />} loading={importing} onClick={() => fileInput.current?.click()} title="Word, Markdown, HTML or text files, or a ZIP of Word files such as a Google Takeout export">
-              {importing ? "Importing…" : "Import files"}
+            <Button size="sm" variant="ghost" icon={<FileUp size={15} />} loading={importing} onClick={() => fileInput.current?.click()} title="PDF, Word, Markdown, HTML or text files, or a ZIP of Word files such as a Google Takeout export">
+              {importing ? (importLabel ?? "Importing…") : "Import files"}
             </Button>
             <Button size="sm" variant="ghost" icon={<Download size={15} />} onClick={() => window.location.assign("/api/documents/backup")}>
               Download all
@@ -637,7 +667,7 @@ export function HomePage() {
             <input
               ref={fileInput}
               type="file"
-              accept=".docx,.zip,.md,.markdown,.txt,.html,.htm"
+              accept=".pdf,application/pdf,.docx,.zip,.md,.markdown,.txt,.html,.htm"
               multiple
               hidden
               onChange={(event) => {

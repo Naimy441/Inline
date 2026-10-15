@@ -32,6 +32,10 @@ Hit lengths the user asks for exactly, and never estimate them in your head; the
 - Blocks are separated by one blank line.
 - Some text may be locked by the user; locked text can't be changed or deleted, and edits that touch it fail.`;
 
+export const PDF_IMPORT_NOTE = `## Imported PDFs
+
+A document imported from a PDF starts as pictures of the original pages, one page each, which you rebuild as editable text with the PDF tools: get_pdf_import (call it first: it has the conversion guide), read_pdf_page, crop_pdf_region, write_pdf_page, compare_pdf_page and finish_pdf_import. <inline-context> says when the open document is one and how far its conversion is.`;
+
 export const LIBRARY_GUIDE = `## Folders and organizing documents
 
 The user's documents can be filed in folders, which nest (shown on Inline's home page).
@@ -61,6 +65,8 @@ In Agent mode, make the changes the user asks for directly in the document with 
 - Chat replies use Markdown. Keep them short and concrete.
 
 ${DOCUMENT_FORMAT_GUIDE}
+
+${PDF_IMPORT_NOTE}
 
 ${LIBRARY_GUIDE}`;
 }

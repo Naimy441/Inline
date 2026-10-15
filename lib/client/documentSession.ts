@@ -49,7 +49,9 @@ export type ClientCommand =
   | { kind: "open_document"; documentId: string }
   | { kind: "scroll_to"; from: number; to: number; version: number }
   | { kind: "download"; url: string; filename: string }
-  | { kind: "dictionary"; words: string[] };
+  | { kind: "dictionary"; words: string[] }
+  /** Picture these pages (0-based) for Claude and post them to /api/documents/[id]/render (lib/server/renders.ts). */
+  | { kind: "render_pages"; requestId: string; pages: number[]; scale: number };
 
 type Snapshot = { meta: DocumentMeta; epoch?: string; doc: unknown; version: number; comments: DocComment[]; hunks: HunkJSON[]; activity: AgentActivity | null };
 
@@ -300,6 +302,38 @@ export class DocumentSession {
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  }
+
+  /**
+   * Pictures of pages (0-based) exactly as they would export, with their lines
+   * of text, for Claude to compare with an imported PDF's pages; posted to the
+   * server, which is waiting for them (lib/server/renders.ts).
+   */
+  async answerRender(command: { requestId: string; pages: number[]; scale: number }) {
+    const model = await this.pdfModel();
+    const [{ buildPdf }, { openPdf }, { pageLines }] = await Promise.all([import("@/lib/pdf/pdfWriter"), import("@/lib/pdf/import/prepare"), import("@/lib/pdf/import/pageLines")]);
+    const form = new FormData();
+    form.append("requestId", command.requestId);
+    for (const index of command.pages) {
+      const page = model.pages[index];
+      if (!page) continue;
+      const { pdf, close } = await openPdf(buildPdf({ ...model, pages: [page] }));
+      try {
+        const proxy = await pdf.getPage(1);
+        const viewport = proxy.getViewport({ scale: Math.max(0.5, Math.min(4, command.scale || 2)) });
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.ceil(viewport.width);
+        canvas.height = Math.ceil(viewport.height);
+        await proxy.render({ canvasContext: canvas.getContext("2d")!, canvas, viewport, background: "#ffffff" } as Parameters<typeof proxy.render>[0]).promise;
+        const png = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+        canvas.width = 0;
+        if (png) form.append(`page-${index}`, png, `page-${index}.png`);
+        form.append(`lines-${index}`, JSON.stringify(pageLines(page)));
+      } finally {
+        close();
+      }
+    }
+    await fetch(`/api/documents/${this.id}/render`, { method: "POST", body: form });
   }
 
   /** The laid-out pages as a PDF page model, read from the screen without review marks. */

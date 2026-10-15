@@ -99,7 +99,18 @@ export function PageSetupDialog({
         <div className="form-grid">
           <label className="field">
             <span>Paper size</span>
-            <select className="input" value={page.paperSize} onChange={(event) => setPage({ paperSize: event.target.value as DocumentSettings["pageSetup"]["paperSize"] })}>
+            <select
+              className="input"
+              value={page.customSize ? "custom" : page.paperSize}
+              onChange={(event) => {
+                if (event.target.value !== "custom") setPage({ paperSize: event.target.value as DocumentSettings["pageSetup"]["paperSize"], customSize: undefined });
+              }}
+            >
+              {page.customSize && (
+                <option value="custom">
+                  Original ({Number(page.customSize.width.toFixed(2))}&quot; × {Number(page.customSize.height.toFixed(2))}&quot;)
+                </option>
+              )}
               {Object.entries(PAPER_SIZES).map(([key, paper]) => (
                 <option key={key} value={key}>
                   {paper.label}

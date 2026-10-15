@@ -18,6 +18,8 @@ import {
   type DocumentTab,
   type TabHeading,
   type DocumentSettings,
+  normalizePdfImportMeta,
+  type PdfImportMeta,
 } from "@/lib/doc/settings";
 import { libraryChanged } from "@/lib/server/changes";
 import { log } from "@/lib/server/log";
@@ -64,7 +66,9 @@ export type ClientCommand =
   | { kind: "open_document"; documentId: string }
   | { kind: "scroll_to"; from: number; to: number; version: number }
   | { kind: "download"; url: string; filename: string }
-  | { kind: "dictionary"; words: string[] };
+  | { kind: "dictionary"; words: string[] }
+  /** Picture these pages (0-based) for Claude and post them to /api/documents/[id]/render (lib/server/renders.ts). */
+  | { kind: "render_pages"; requestId: string; pages: number[]; scale: number };
 
 export type HubEvent =
   | { type: "steps"; version: number; steps: unknown[]; clientIDs: string[]; hunks?: HunkJSON[] }
@@ -328,6 +332,16 @@ export class LiveDocument {
     this.meta = { ...this.meta, ...patch };
     this.emit({ type: "meta", meta: this.meta });
     this.schedulePersist();
+  }
+
+  /** What a PDF import shows and how far its conversion is (DocumentMeta.pdfImport). */
+  setPdfImport(patch: Partial<PdfImportMeta> | null) {
+    const next = patch === null ? null : normalizePdfImportMeta({ ...this.meta.pdfImport, ...patch });
+    const { pdfImport: _previous, ...rest } = this.meta;
+    this.meta = next ? { ...rest, pdfImport: next } : rest;
+    this.emit({ type: "meta", meta: this.meta });
+    this.schedulePersist();
+    return this.meta.pdfImport ?? null;
   }
 
   /** A new first-page thumbnail was saved. */
@@ -969,6 +983,10 @@ function normalizeFile(file: StoredDocumentFile): StoredDocumentFile {
       ...(typeof meta.tabTitle === "string" && meta.tabTitle.trim() ? { tabTitle: meta.tabTitle } : {}),
       ...(typeof meta.folderId === "string" && meta.folderId ? { folderId: meta.folderId } : {}),
       ...(typeof meta.thumbnailAt === "number" ? { thumbnailAt: meta.thumbnailAt, thumbnailKey: String(meta.thumbnailKey ?? "") } : {}),
+      ...(() => {
+        const pdfImport = normalizePdfImportMeta(meta.pdfImport);
+        return pdfImport ? { pdfImport } : {};
+      })(),
     },
     doc: file.doc,
     comments: Array.isArray(file.comments) ? file.comments : [],

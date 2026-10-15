@@ -3,7 +3,8 @@
 import { memo, useEffect, useRef } from "react";
 import { geometryFor, type DocumentSession } from "@/lib/client/documentSession";
 import { lineFactor, lineMetrics } from "@/lib/doc/fontMetrics";
-import { DEFAULT_TAB_STOP, fillHeaderTokens, type DocumentMeta } from "@/lib/doc/settings";
+import { DEFAULT_TAB_STOP, fillHeaderTokens, headerParts, type DocumentMeta } from "@/lib/doc/settings";
+import { PdfAnnotations } from "@/components/workspace/PdfAnnotations";
 
 /**
  * The page stack: paper sheets with headers, footers and page numbers drawn
@@ -89,6 +90,7 @@ export const PageCanvas = memo(function PageCanvas({
           >
             <div ref={mount} className="editor-mount" />
           </div>
+          {!flow && meta?.pdfImport?.showAnnotations && <PdfAnnotations session={session} documentId={meta.id} pageWidth={geometry.pageWidth} pageHeight={geometry.pageHeight} pitch={pitch} pages={pages} />}
         </div>
       </div>
     </div>
@@ -129,6 +131,20 @@ const Sheet = memo(function Sheet({
     if (header) header = fillHeaderTokens(header, context);
     if (footer) footer = fillHeaderTokens(footer, context);
   }
+  const rule = Boolean(settings?.headerFooter.headerRule && header);
+  /** A header or footer's text: one part set by its alignment, or parts split by tabs at the left, center and right. */
+  const zoneText = (text: string, ruled = false) => {
+    const parts = headerParts(text);
+    if (parts.length < 2) return <span className={ruled ? "sheet-ruled" : undefined}>{text}</span>;
+    const [left, center, right] = parts.length === 2 ? [parts[0], "", parts[1]] : parts;
+    return (
+      <span className={`sheet-parts${ruled ? " sheet-ruled" : ""}`}>
+        <span>{left}</span>
+        <span>{center}</span>
+        <span>{right}</span>
+      </span>
+    );
+  };
   const zoneStyle = (height: number, align: string) => ({
     height,
     paddingLeft: geometry.marginLeft,
@@ -140,11 +156,11 @@ const Sheet = memo(function Sheet({
   return (
     <div className="sheet" style={{ top, height: geometry.pageHeight, width: geometry.pageWidth }} aria-hidden>
       <div className="sheet-header" style={zoneStyle(geometry.marginTop, headerAlign)}>
-        {header && <span>{header}</span>}
+        {header && zoneText(header, rule)}
         {number?.where === "header" && <span className="sheet-number" style={numberStyle(number.align)}>{page}</span>}
       </div>
       <div className="sheet-footer" style={zoneStyle(geometry.marginBottom, footerAlign)}>
-        {footer && <span>{footer}</span>}
+        {footer && zoneText(footer)}
         {number?.where === "footer" && <span className="sheet-number" style={numberStyle(number.align)}>{page}</span>}
       </div>
     </div>

@@ -27,7 +27,7 @@ import { CommentMargin, marginFits } from "@/components/workspace/CommentMargin"
 import { FindBar } from "@/components/workspace/FindBar";
 import { HistoryPanel, VersionPreview, type VersionSummary } from "@/components/workspace/HistoryPanel";
 import { prefetchVersions } from "@/lib/client/versions";
-import { acquireChat, releaseChat, rememberedChat } from "@/lib/client/chatSession";
+import { acquireChat, releaseChat, rememberChat, rememberedChat } from "@/lib/client/chatSession";
 import { addTab, rememberedRoot, takeScroll, useTabs } from "@/lib/client/tabs";
 import { documentMenus, MenuBar, type MenuActions } from "@/components/workspace/MenuBar";
 import { OutlinePanel } from "@/components/workspace/OutlinePanel";
@@ -40,7 +40,7 @@ import { DEFAULT_PREFERENCES, preferences, setPreference } from "@/lib/client/pr
 import { SelectionBubble } from "@/components/workspace/SelectionBubble";
 import { ShortcutsDialog } from "@/components/workspace/ShortcutsDialog";
 import { ContextMenu } from "@/components/workspace/ContextMenu";
-import { AgentLocator, OfflineNotice } from "@/components/workspace/CanvasNotices";
+import { AgentLocator, OfflineNotice, PdfImportNotice } from "@/components/workspace/CanvasNotices";
 import { SpecialCharactersDialog } from "@/components/workspace/SpecialCharactersDialog";
 import { Toolbar } from "@/components/workspace/Toolbar";
 
@@ -199,6 +199,14 @@ export function Workspace({ documentId }: { documentId: string }) {
     return () => releaseChat(chat);
   }, [chatKey]);
 
+  // A PDF being converted shows Claude's conversion chat in a browser that has no chat open for the document yet.
+  const conversionChat = meta?.pdfImport?.status === "converting" ? meta.pdfImport.chatId : undefined;
+  useEffect(() => {
+    if (!conversionChat || rememberedChat(chatKey)) return;
+    rememberChat(chatKey, conversionChat);
+    agentRef.current?.openChat(conversionChat);
+  }, [conversionChat, chatKey]);
+
   const canvasPad = canvasWidth && canvasWidth < 900 ? 16 : 40;
   const pageWidth = geometryFor(meta).pageWidth;
   const fitZoom = canvasWidth ? Math.max(0.25, Math.min(1, Math.floor(((canvasWidth - canvasPad * 2) / pageWidth) * 100) / 100)) : 1;
@@ -350,6 +358,7 @@ export function Workspace({ documentId }: { documentId: string }) {
     } else if (command.kind === "open_document" && command.documentId !== documentId) {
       toast("Claude opened another document.", { action: { label: "Open", run: () => router.push(`/d/${command.documentId}`) } });
     } else if (command.kind === "scroll_to") session.scrollTo(command.from, command.to);
+    else if (command.kind === "render_pages") void session.answerRender(command).catch(() => undefined);
   };
 
   // App-level shortcuts that work even when the editor isn't focused.
@@ -492,6 +501,9 @@ export function Workspace({ documentId }: { documentId: string }) {
       setPreference("substitutions", !prefs.substitutions);
       toast(prefs.substitutions ? "Automatic substitutions off." : "Automatic substitutions on.");
     },
+    pdfAnnotations: meta?.pdfImport?.inkPages.length ? meta.pdfImport.showAnnotations : null,
+    togglePdfAnnotations: () => void togglePdfAnnotations(),
+    convertPdf: meta?.pdfImport && meta.pdfImport.status !== "done" && !focusMode ? () => void convertPdf() : null,
     checkSpelling,
     ask: (prompt) => {
       setPanel("agent");
@@ -514,6 +526,32 @@ export function Workspace({ documentId }: { documentId: string }) {
 
   const openComments = ui.comments.filter((comment) => !comment.resolved).length;
   const working = Boolean(ui.activity && ui.activity.status !== "idle");
+
+  /** Show a chat in the Claude panel (the one converting an imported PDF). */
+  const openChat = (chatId: string) => {
+    rememberChat(chatKey, chatId);
+    setPanel("agent");
+    requestAnimationFrame(() => agentRef.current?.openChat(chatId));
+  };
+
+  /** Start Claude on the pages of an imported PDF that are still pictures. */
+  const convertPdf = async () => {
+    try {
+      const { chatId } = await post<{ chatId: string }>(`/api/documents/${documentId}/pdf`, {});
+      openChat(chatId);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Couldn't start the conversion.", { tone: "error" });
+    }
+  };
+
+  const togglePdfAnnotations = async () => {
+    const show = !meta?.pdfImport?.showAnnotations;
+    try {
+      await patch(`/api/documents/${documentId}/pdf`, { showAnnotations: show });
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Couldn't change the annotations.", { tone: "error" });
+    }
+  };
   const formats = (scope: "all" | "tab"): MenuItem[] => [
     { label: "Word (.docx)", onSelect: () => void download("docx", undefined, scope) },
     { label: "PDF (.pdf)", onSelect: () => void download("pdf", undefined, scope) },
@@ -666,6 +704,17 @@ export function Workspace({ documentId }: { documentId: string }) {
         >
           {find && <WithEditorState session={session}>{(state) => <FindBar session={session} state={state} replace={find.replace} onClose={() => setFind(null)} />}</WithEditorState>}
           <OfflineNotice offline={ui.status === "ready" && (ui.connection === "reconnecting" || ui.sync === "error")} />
+          {meta?.pdfImport && !focusMode && (
+            <PdfImportNotice
+              pdf={meta.pdfImport}
+              working={working}
+              onConvert={() => void convertPdf()}
+              onShowChat={() => {
+                if (meta.pdfImport?.chatId) openChat(meta.pdfImport.chatId);
+              }}
+              onToggleAnnotations={() => void togglePdfAnnotations()}
+            />
+          )}
           <WithEditorState session={session}>{(state) => <AgentLocator canvas={canvasRef} state={state} active={working && !focusMode} label={ui.activity?.label ?? ""} />}</WithEditorState>
           {ui.status === "loading" && (
             <div className="canvas-loading">

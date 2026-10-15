@@ -140,6 +140,7 @@ export async function deleteDocumentFile(id: string) {
   await removeFile(dir("documents", `${assertSafeId(id)}.json`));
   await removeFile(dir("thumbnails", `${id}.img`));
   await removeFile(dir("thumbnails", `${id}.dark.img`));
+  await removeFile(dir("pdf-imports", `${id}.json`));
   await fs.rm(dir("versions", assertSafeId(id)), { recursive: true, force: true });
 }
 
@@ -275,6 +276,17 @@ export async function deleteChatFile(id: string) {
 
 export async function listChatIds() {
   return listJson(dir("chats"));
+}
+
+// --- PDF imports ------------------------------------------------------------
+
+/** What a PDF import kept for Claude and the annotation overlay (lib/server/pdfImports.ts), one file per document. */
+export async function readPdfImportFile<T>(documentId: string) {
+  return readJson<T>(dir("pdf-imports", `${assertSafeId(documentId)}.json`));
+}
+
+export async function writePdfImportFile(documentId: string, value: unknown) {
+  await writeJsonAtomic(dir("pdf-imports", `${assertSafeId(documentId)}.json`), value);
 }
 
 // --- settings ---------------------------------------------------------------

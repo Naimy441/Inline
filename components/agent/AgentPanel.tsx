@@ -23,6 +23,8 @@ export type AgentPanelHandle = {
   send: (selection: SelectionContext | null, text: string) => Promise<void>;
   /** The user is about to send something: start Claude Code now. */
   warm: () => void;
+  /** Show a chat that was started elsewhere (Claude converting an imported PDF). */
+  openChat: (chatId: string) => void;
 };
 
 const NO_HUNKS: ReadonlyArray<TurnHunk> = [];
@@ -147,6 +149,7 @@ export const AgentPanel = forwardRef<
     },
     send: (selected, text) => send({ text, attachments: [], selected }),
     warm,
+    openChat: (id) => setChatId(id),
   }));
 
   useEffect(() => {

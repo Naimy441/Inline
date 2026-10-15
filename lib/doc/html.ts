@@ -1,7 +1,7 @@
 import katex from "katex";
 import type { DOMOutputSpec, Mark, Node as PMNode } from "prosemirror-model";
 import { MATH_LANGUAGE } from "@/lib/doc/schema";
-import { fillHeaderTokens, pageSize, type DocumentMeta } from "@/lib/doc/settings";
+import { fillHeaderTokens, headerParts, pageSize, type DocumentMeta } from "@/lib/doc/settings";
 
 /**
  * DOM-free HTML rendering of documents, driven by the schema's own `toDOM`
@@ -75,6 +75,13 @@ export function fragmentToHtml(doc: PMNode): string {
   return out;
 }
 
+/** A header's text, its tab-separated parts set at the left, center and right. */
+function headerHtml(text: string) {
+  const parts = headerParts(text);
+  if (parts.length < 2) return escapeHtml(text);
+  return `<div class="header-parts">${parts.map((part) => `<span>${escapeHtml(part)}</span>`).join("")}</div>`;
+}
+
 /** A standalone HTML file with print styles matching the document's page setup. */
 export function documentHtmlFile(doc: PMNode, meta: DocumentMeta): string {
   const settings = meta.settings;
@@ -113,12 +120,14 @@ mark { padding: 0 1px; }
 math { font-size: 1.1em; }
 .doc-header, .doc-footer { color: #5f6368; font-size: 9pt; }
 .doc-header { text-align: ${settings.headerFooter.headerAlign}; margin-bottom: 18pt; }
+.doc-header.ruled { border-bottom: 0.5pt solid currentColor; padding-bottom: 2pt; }
+.header-parts { display: flex; justify-content: space-between; gap: 12pt; }
 .doc-footer { text-align: ${settings.headerFooter.footerAlign}; margin-top: 18pt; }
 </style>
 </head>
 <body>
-${header ? `<div class="doc-header">${escapeHtml(header)}</div>\n` : ""}${fragmentToHtml(doc)}
-${footer ? `<div class="doc-footer">${escapeHtml(footer)}</div>\n` : ""}</body>
+${header ? `<div class="doc-header${settings.headerFooter.headerRule ? " ruled" : ""}">${headerHtml(header)}</div>\n` : ""}${fragmentToHtml(doc)}
+${footer ? `<div class="doc-footer">${headerHtml(footer)}</div>\n` : ""}</body>
 </html>
 `;
 }

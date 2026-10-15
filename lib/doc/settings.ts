@@ -22,10 +22,20 @@ export type PageSetup = {
   orientation: Orientation;
   /** Inches. */
   margins: Margins;
+  /**
+   * An exact page size in inches (portrait: width ≤ height), for pages none of
+   * the paper sizes fit, such as an imported PDF of slides. `paperSize` is then
+   * the nearest one, and choosing a paper size clears this.
+   */
+  customSize?: { width: number; height: number };
 };
 
 export type HeaderFooterSettings = {
-  /** Plain text; supports {page}, {pages}, {title} and {date}. */
+  /**
+   * Plain text; supports {page}, {pages}, {title} and {date}. Tabs split it in
+   * two or three parts set at the left, (center) and right, as Word's header
+   * tab stops do: "Course\tWeek 7\tPage {page}".
+   */
   header: string;
   footer: string;
   headerAlign: HorizontalAlign;
@@ -33,6 +43,8 @@ export type HeaderFooterSettings = {
   differentFirstPage: boolean;
   firstHeader: string;
   firstFooter: string;
+  /** A rule under the header, as LaTeX's fancyhdr draws one. */
+  headerRule?: boolean;
 };
 
 export type PageNumberSettings = {
@@ -86,7 +98,44 @@ export type DocumentMeta = {
   /** When the first-page thumbnail was last saved, and what it showed (a hash), so it's redrawn only when the page changes. */
   thumbnailAt?: number;
   thumbnailKey?: string;
+  /** Set on a document imported from a PDF (lib/server/pdfImports.ts). */
+  pdfImport?: PdfImportMeta;
 };
+
+/**
+ * A document imported from a PDF: its original pages, which of them had
+ * annotations (handwriting, highlighting, notes) that were left out, whether
+ * they are shown over the pages as they were, and how far Claude is with
+ * rebuilding the pages as editable text.
+ */
+export type PdfImportMeta = {
+  pages: number;
+  /** Original pages (1-based) that had annotations. */
+  inkPages: number[];
+  showAnnotations: boolean;
+  /** "pending": the pages are still pictures; "converting": Claude is on it; "done": every page is text. */
+  status: "pending" | "converting" | "done";
+  /** Pages Claude has rebuilt so far. */
+  converted: number[];
+  /** The chat converting it. */
+  chatId?: string;
+};
+
+export function normalizePdfImportMeta(value: unknown): PdfImportMeta | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Partial<PdfImportMeta>;
+  const pages = Number(raw.pages);
+  if (!Number.isInteger(pages) || pages < 1) return null;
+  const list = (input: unknown) => (Array.isArray(input) ? [...new Set(input.map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= pages))].sort((a, b) => a - b) : []);
+  return {
+    pages,
+    inkPages: list(raw.inkPages),
+    showAnnotations: raw.showAnnotations === true,
+    status: raw.status === "converting" || raw.status === "done" ? raw.status : "pending",
+    converted: list(raw.converted),
+    ...(typeof raw.chatId === "string" && raw.chatId ? { chatId: raw.chatId } : {}),
+  };
+}
 
 /** One tab of a document, as the tabs list shows it. */
 export type DocumentTab = { id: string; title: string; root?: boolean; outline?: TabHeading[] };
@@ -177,6 +226,14 @@ export function normalizeSettings(input: unknown, base: DocumentSettings = DEFAU
         bottom: num(margins.bottom, base.pageSetup.margins.bottom, 0, 3),
         left: num(margins.left, base.pageSetup.margins.left, 0, 3),
       },
+      ...(() => {
+        const custom = (page.customSize === undefined ? base.pageSetup.customSize : page.customSize) as { width?: unknown; height?: unknown } | null | undefined;
+        if (!custom || typeof custom !== "object") return {};
+        const width = Number(custom.width);
+        const height = Number(custom.height);
+        if (!(width >= 1 && width <= 48 && height >= 1 && height <= 48)) return {};
+        return { customSize: { width: Math.min(width, height), height: Math.max(width, height) } };
+      })(),
     },
     // A CSS font-family list; it is written into style sheets on export, so nothing that could end the declaration.
     fontFamily: str(raw.fontFamily, base.fontFamily, 200).replace(/[;{}<>\\]/g, "").trim() || base.fontFamily,
@@ -191,6 +248,7 @@ export function normalizeSettings(input: unknown, base: DocumentSettings = DEFAU
       differentFirstPage: typeof hf.differentFirstPage === "boolean" ? hf.differentFirstPage : base.headerFooter.differentFirstPage,
       firstHeader: str(hf.firstHeader, base.headerFooter.firstHeader),
       firstFooter: str(hf.firstFooter, base.headerFooter.firstFooter),
+      ...((typeof hf.headerRule === "boolean" ? hf.headerRule : base.headerFooter.headerRule) ? { headerRule: true } : {}),
     },
     pageNumbers: {
       enabled: typeof pn.enabled === "boolean" ? pn.enabled : base.pageNumbers.enabled,
@@ -218,6 +276,8 @@ export function patchSettings(current: DocumentSettings, patch: unknown): Docume
     ...p,
     pageSetup: {
       ...current.pageSetup,
+      // Choosing a paper size gives up an imported page's own size.
+      ...((p.pageSetup as { paperSize?: unknown })?.paperSize !== undefined && (p.pageSetup as { customSize?: unknown }).customSize === undefined ? { customSize: null } : {}),
       ...((p.pageSetup as object) ?? {}),
       margins: { ...current.pageSetup.margins, ...(((p.pageSetup as { margins?: object })?.margins) ?? {}) },
     },
@@ -229,13 +289,13 @@ export function patchSettings(current: DocumentSettings, patch: unknown): Docume
 
 /** The settings that decide where pages break, as a string, so a page count measured under other settings isn't trusted. */
 export function layoutKey(settings: DocumentSettings) {
-  const { paperSize, orientation, margins } = settings.pageSetup;
-  return [paperSize, orientation, margins.top, margins.right, margins.bottom, margins.left, settings.fontFamily, settings.fontSize, settings.lineSpacing, settings.paragraphSpacing, ...(settings.lineModel ? [settings.lineModel] : []), ...(settings.tabStop ? [`tab ${settings.tabStop}`] : [])].join("|");
+  const { paperSize, orientation, margins, customSize } = settings.pageSetup;
+  return [customSize ? `${customSize.width}x${customSize.height}` : paperSize, orientation, margins.top, margins.right, margins.bottom, margins.left, settings.fontFamily, settings.fontSize, settings.lineSpacing, settings.paragraphSpacing, ...(settings.lineModel ? [settings.lineModel] : []), ...(settings.tabStop ? [`tab ${settings.tabStop}`] : [])].join("|");
 }
 
 /** Page dimensions in inches, accounting for orientation. */
 export function pageSize(setup: PageSetup) {
-  const paper = PAPER_SIZES[setup.paperSize];
+  const paper = setup.customSize ?? PAPER_SIZES[setup.paperSize];
   return setup.orientation === "landscape" ? { width: paper.height, height: paper.width } : { width: paper.width, height: paper.height };
 }
 
@@ -253,6 +313,11 @@ export function titleFromText(firstLine: string) {
   const cut = line.slice(0, 80);
   const space = cut.lastIndexOf(" ");
   return `${(space > 40 ? cut.slice(0, space) : cut).replace(/[\s,;:.-]+$/, "")}…`;
+}
+
+/** A header or footer's parts: one (set by its alignment), or two or three split by tabs (left, center, right). */
+export function headerParts(text: string): string[] {
+  return text.split("\t").map((part) => part.trim());
 }
 
 export function fillHeaderTokens(text: string, context: { page: number; pages: number; title: string; date?: Date }) {
