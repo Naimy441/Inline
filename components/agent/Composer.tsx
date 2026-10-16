@@ -10,6 +10,7 @@ import { expandSlashCommand, matchCommands, matchDocuments, type SlashCommand } 
 import { toast } from "@/components/ui/Toast";
 import { Shortcut } from "@/components/ui/Button";
 import { loadDraft, saveDraft } from "@/lib/client/drafts";
+import { recallPrompt, type PromptCursor } from "@/lib/client/promptHistory";
 
 /** Titles of the user's other documents, for @-mentions (loaded once per panel). */
 function useDocumentTitles(exclude: string | null) {
@@ -47,10 +48,14 @@ export const Composer = forwardRef<
     onSend: (input: { text: string; attachments: Attachment[]; mentions: DocumentMention[] }) => Promise<void> | void;
     onStop: () => void;
     onSettings: (patch: Partial<ChatSettings>) => void;
+    /** Prompts already sent in this chat, oldest first. Arrow keys recall them when the draft is empty. */
+    prompts?: string[];
+    /** The open chat. Recall starts again from the newest prompt when it changes. */
+    historyKey?: string | null;
     /** The user is writing a message: a chance to start Claude Code before it's sent. */
     onWarm?: () => void;
   }
->(function Composer({ running, disabled, disabledReason, settings, models, meter, selection, documentId, onClearSelection, onSend, onStop, onSettings, onWarm }, ref) {
+>(function Composer({ running, disabled, disabledReason, settings, models, meter, selection, documentId, onClearSelection, onSend, onStop, onSettings, onWarm, prompts = [], historyKey = null }, ref) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(0);
@@ -111,6 +116,15 @@ export const Composer = forwardRef<
   };
   const textarea = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const promptsRef = useRef(prompts);
+  promptsRef.current = prompts;
+  // Where the empty draft sits in prompt history. Null is the blank after the newest prompt.
+  const cursorRef = useRef<PromptCursor>(null);
+  const historyKeyRef = useRef(historyKey);
+  if (historyKeyRef.current !== historyKey) {
+    historyKeyRef.current = historyKey;
+    cursorRef.current = null;
+  }
 
   // Text set from outside (a suggestion) puts the caret at its end as soon as it's on screen,
   // not a frame later, when it could undo a selection the user (or a test) has just made.
@@ -278,6 +292,8 @@ export const Composer = forwardRef<
         disabled={disabled}
         onFocus={() => onWarm?.()}
         onChange={(event) => {
+          // Editing a draft abandons the recall walk. Clearing it does not, so the next arrow can step further.
+          if (event.target.value) cursorRef.current = null;
           if (event.target.value.trim()) onWarm?.();
           setText(event.target.value);
           setCaret(event.target.selectionStart ?? event.target.value.length);
@@ -309,6 +325,24 @@ export const Composer = forwardRef<
             if (event.key === "Escape") {
               event.preventDefault();
               setCommandsHidden(true);
+              return;
+            }
+          }
+          // Prompt history only while the draft is empty. A draft the user is editing keeps normal arrow keys.
+          if ((event.key === "ArrowUp" || event.key === "ArrowDown") && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey && !event.nativeEvent.isComposing) {
+            const recall = recallPrompt(promptsRef.current, cursorRef.current, event.key, text);
+            if (recall.handled) {
+              event.preventDefault();
+              cursorRef.current = recall.cursor;
+              if (recall.text === text) {
+                placeCaretAtEnd();
+              } else {
+                caretToEnd.current = true;
+                setText(recall.text);
+                setCaret(recall.text.length);
+                setCommandIndex(0);
+                setCommandsHidden(false);
+              }
               return;
             }
           }

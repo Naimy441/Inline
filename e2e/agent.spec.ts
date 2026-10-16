@@ -243,6 +243,57 @@ test("an error explains itself and Retry runs the message again", async ({ page,
   await expect(page.locator(".msg-assistant")).toHaveCount(1);
 });
 
+test("arrow keys recall the previous prompt only while the draft is empty", async ({ page, request }) => {
+  await openWithClaude(page, request, "Text.");
+  await ask(page, "First prompt");
+  await expect(lastReply(page)).toContainText("You said: First prompt");
+  await ask(page, "Second prompt");
+  await expect(lastReply(page)).toContainText("You said: Second prompt");
+
+  const composer = page.getByLabel("Message Claude");
+  await composer.focus();
+  await composer.press("ArrowUp");
+  await expect(composer).toHaveValue("Second prompt");
+  // The recalled prompt is a draft now: arrows move the caret and leave the text alone.
+  await composer.press("ArrowUp");
+  await expect(composer).toHaveValue("Second prompt");
+  await composer.press("ArrowDown");
+  await expect(composer).toHaveValue("Second prompt");
+
+  await composer.fill("");
+  await composer.press("ArrowUp");
+  await expect(composer).toHaveValue("First prompt");
+  await composer.fill("");
+  await composer.press("ArrowDown");
+  await expect(composer).toHaveValue("Second prompt");
+
+  await composer.fill("Still writing\nacross lines");
+  await composer.press("ArrowUp");
+  await expect(composer).toHaveValue("Still writing\nacross lines");
+  await composer.press("ArrowDown");
+  await expect(composer).toHaveValue("Still writing\nacross lines");
+
+  // A fresh empty draft: ArrowDown loads the previous prompt too.
+  await composer.fill("");
+  await composer.press("ArrowDown");
+  await expect(composer).toHaveValue("Second prompt");
+});
+
+test("copy prompt and copy response are separate", async ({ page, request, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await openWithClaude(page, request, "The meeting is on Tuesday.");
+  await ask(page, 'replace "Tuesday" with "Thursday"');
+  await expect(lastReply(page)).toContainText("Replaced Tuesday with Thursday.");
+
+  await page.locator(".msg-user").getByRole("button", { name: "Copy prompt" }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('replace "Tuesday" with "Thursday"');
+
+  await lastReply(page).getByRole("button", { name: "Copy response" }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("Replaced Tuesday with Thursday.");
+  await expect(lastReply(page).getByRole("button", { name: "Copy prompt" })).toHaveCount(0);
+  await expect(page.locator(".msg-user").getByRole("button", { name: "Copy response" })).toHaveCount(0);
+});
+
 test("the conversation survives a reload", async ({ page, request }) => {
   await openWithClaude(page, request, "Text.");
   await ask(page, "Remember this message");

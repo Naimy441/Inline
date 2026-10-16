@@ -98,6 +98,14 @@
   font-variant-numeric: tabular-nums;
 }
 
+.msg-actions {
+  display: flex;
+}
+
+.msg-user .msg-actions {
+  margin-top: -2px;
+}
+
 /* Rendered Markdown in replies */
 
 .md {
@@ -1206,7 +1214,8 @@
     height: 32px;
   }
 
-  .composer .icon-btn-sm {
+  .composer .icon-btn-sm,
+  .msg-actions .icon-btn-sm {
     min-width: 36px;
     height: 36px;
   }

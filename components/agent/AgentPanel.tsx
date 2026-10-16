@@ -16,6 +16,7 @@ import { Dialog } from "@/components/ui/Dialog";
 import { toast } from "@/components/ui/Toast";
 import { api, post } from "@/lib/client/api";
 import { loadDraftSelection, saveDraftSelection } from "@/lib/client/drafts";
+import { promptTexts } from "@/lib/client/promptHistory";
 
 export type AgentPanelHandle = {
   ask: (selection: SelectionContext | null, text?: string) => void;
@@ -360,6 +361,8 @@ export const AgentPanel = forwardRef<
           onStop={() => void session?.interrupt()}
           onSettings={updateSettings}
           onWarm={warm}
+          prompts={promptTexts(chat?.messages ?? [], chat?.queue ?? [])}
+          historyKey={chat?.id ?? chatId}
         />
       </div>
       <Dialog
