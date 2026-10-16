@@ -414,6 +414,60 @@ select.input {
   background: var(--border);
 }
 
+.menu-widget {
+  padding: 2px;
+}
+
+.table-size {
+  padding: 4px 6px 2px;
+}
+
+.table-size-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 18px);
+  gap: 3px;
+  width: max-content;
+  touch-action: none;
+}
+
+.table-size-grid button {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 2px;
+  background: transparent;
+}
+
+.table-size-grid button.is-on {
+  background: color-mix(in srgb, var(--focus) 28%, transparent);
+  border-color: var(--focus);
+}
+
+.table-size-label {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.table-size-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.menu-sheet .table-size-grid {
+  grid-template-columns: repeat(8, 28px);
+  gap: 4px;
+}
+
+.menu-sheet .table-size-grid button {
+  width: 28px;
+  height: 28px;
+}
+
 .menu-label {
   padding: 6px 8px 4px;
   color: var(--muted);

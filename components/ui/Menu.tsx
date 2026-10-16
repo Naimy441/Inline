@@ -23,7 +23,9 @@ export type MenuItem =
       hint?: string;
     }
   | { kind: "separator" }
-  | { kind: "label"; label: string };
+  | { kind: "label"; label: string }
+  /** Custom content, such as the table-size grid. `close` dismisses the menu. */
+  | { kind: "widget"; render: (close: () => void) => ReactNode };
 
 type MenuProps = {
   open: boolean;
@@ -60,7 +62,7 @@ function MenuPopup({
 
   const choose = useCallback(
     (item: MenuItem, element?: HTMLElement | null) => {
-      if (item.kind === "separator" || item.kind === "label") return;
+      if (item.kind === "separator" || item.kind === "label" || item.kind === "widget") return;
       const entry = item;
       if (entry.submenu && element) {
         setSub({ index: items.indexOf(item), rect: element.getBoundingClientRect() });
@@ -135,6 +137,7 @@ function MenuPopup({
         {items.map((item, index) => {
           if (item.kind === "separator") return <div key={index} className="menu-sep" role="separator" />;
           if (item.kind === "label") return <div key={index} className="menu-label">{item.label}</div>;
+          if (item.kind === "widget") return <div key={index} className="menu-widget">{item.render(onClose)}</div>;
           return (
             <button
               key={index}
@@ -217,6 +220,7 @@ function MenuSheet({ open, onClose, items, className, title }: MenuProps) {
           {list.map((item, index) => {
             if (item.kind === "separator") return <div key={index} className="menu-sep" role="separator" />;
             if (item.kind === "label") return <div key={index} className="menu-label">{item.label}</div>;
+            if (item.kind === "widget") return <div key={index} className="menu-widget">{item.render(onClose)}</div>;
             return (
               <button
                 key={`${stack.length}-${index}`}

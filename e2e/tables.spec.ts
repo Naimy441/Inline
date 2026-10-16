@@ -68,3 +68,27 @@ test("a table can be merged, split, bordered, sized, summed, and repeat its head
   await expect(page.locator('.doc-content td[data-formula="SUM(ABOVE)"]')).toHaveText("5");
   await expect(page.locator("tr.page-gap .repeated-header")).toContainText("Item");
 });
+
+test("a table can be a size that is not one of the presets", async ({ page, request }) => {
+  await openDocument(page, await createDocument(request, "Custom table", "Notes"));
+  const doc = page.locator(".doc-content");
+  await doc.click();
+  await page.keyboard.press("Control+End");
+
+  await page.locator(".menubar-item", { hasText: "Insert" }).click();
+  await page.getByRole("menuitem", { name: "Table", exact: true }).click();
+  await page.getByRole("gridcell", { name: "2 × 6" }).click();
+  const dragged = page.locator(".doc-content .tableWrapper > table").first();
+  await expect(dragged.locator("tr")).toHaveCount(2);
+  await expect(dragged.locator("tr").first().locator("th")).toHaveCount(6);
+
+  await page.keyboard.press("Control+End");
+  await menu(page, "Insert", "Table", "Custom size…");
+  const dialog = page.getByRole("dialog", { name: "Insert table" });
+  await dialog.getByLabel("Rows").fill("2");
+  await dialog.getByLabel("Columns").fill("11");
+  await dialog.getByRole("button", { name: "Insert" }).click();
+  const typed = page.locator(".doc-content .tableWrapper > table").nth(1);
+  await expect(typed.locator("tr")).toHaveCount(2);
+  await expect(typed.locator("tr").first().locator("th")).toHaveCount(11);
+});
