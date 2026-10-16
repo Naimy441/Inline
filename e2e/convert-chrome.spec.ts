@@ -34,6 +34,16 @@ async function chipBoxes(page: Page) {
   });
 }
 
+function stacked(boxes: { notice: { x: number; y: number; width: number; height: number } | null; chip: { x: number; y: number; width: number; height: number } | null; progress: { x: number; y: number; width: number; height: number } | null }) {
+  return Boolean(
+    boxes.notice &&
+      boxes.chip &&
+      !overlap(boxes.notice, boxes.chip) &&
+      boxes.chip.y >= boxes.notice.y + boxes.notice.height - 1 &&
+      !(boxes.progress && overlap(boxes.progress, boxes.chip)),
+  );
+}
+
 test("conversion chips stack, and Show progress hides while chat is open", async ({ page }) => {
   test.setTimeout(120_000);
   await page.goto("/");
@@ -45,32 +55,40 @@ test("conversion chips stack, and Show progress hides while chat is open", async
   await page.waitForURL(/\/d\//, { timeout: 60_000 });
 
   const notice = page.locator(".pdf-notice");
-  await expect(notice).toContainText("Claude is converting this PDF", { timeout: 30_000 });
-  await expect(page.locator(".claude-toggle")).toHaveClass(/is-active/);
-  await expect(page.getByRole("button", { name: "Show progress" })).toHaveCount(0);
-
-  // The caret is on the page being read; scroll away so the locator chip appears beside the notice.
-  const canvas = page.locator(".canvas");
-  await canvas.evaluate((element) => element.scrollTo(0, element.scrollHeight));
-  const chip = page.locator(".agent-locator");
-  await expect(chip).toBeVisible({ timeout: 90_000 });
-  await expect(chip).toContainText(/page/i);
-
-  const open = await chipBoxes(page);
-  expect(open.notice && open.chip && !overlap(open.notice, open.chip)).toBe(true);
-  expect(open.chip!.y).toBeGreaterThanOrEqual(open.notice!.y + open.notice!.height - 1);
-
-  await page.locator(".claude-toggle").click();
+  const toggle = page.locator(".claude-toggle");
   const progress = page.getByRole("button", { name: "Show progress" });
-  await expect(progress).toBeVisible();
-  const closed = await chipBoxes(page);
-  expect(closed.notice && closed.chip && !overlap(closed.notice, closed.chip)).toBe(true);
-  if (closed.progress && closed.chip) expect(overlap(closed.progress, closed.chip)).toBe(false);
-  // The progress words stay inside the notice, not loose on the page.
-  await expect(notice).toContainText("pages done.");
-
-  await page.locator(".claude-toggle").click();
+  await expect(notice).toContainText("Claude is converting this PDF", { timeout: 30_000 });
+  await expect(toggle).toHaveClass(/is-active/);
   await expect(progress).toHaveCount(0);
+
+  // The scripted conversion leaves pages unfinished and keeps the turn open, so the
+  // caret stays. Wait until its edits have stopped, then leave that page.
+  await expect(page.locator(".msg-assistant").last()).toContainText("Lined up page 1", { timeout: 90_000 });
+  await expect(page.locator(".doc-content .agent-caret")).toBeAttached();
+  await page.waitForTimeout(800);
+  const canvas = page.locator(".canvas");
+  await canvas.hover();
+  for (let step = 0; step < 40; step += 1) {
+    const atBottom = await canvas.evaluate((element) => element.scrollTop + element.clientHeight >= element.scrollHeight - 4);
+    if (atBottom) break;
+    await page.mouse.wheel(0, 900);
+  }
+
+  const chip = page.locator(".agent-locator");
+  await expect(chip).toBeVisible();
+  await expect(chip).toContainText(/page/i);
+  expect(stacked(await chipBoxes(page))).toBe(true);
+
+  await toggle.click();
+  await expect(progress).toBeVisible();
+  await expect(chip).toBeVisible();
+  await expect(notice).toContainText("pages done.");
+  expect(stacked(await chipBoxes(page))).toBe(true);
+
+  await toggle.click();
+  await expect(toggle).toHaveClass(/is-active/);
+  await expect(progress).toHaveCount(0);
+  await page.getByRole("button", { name: "Stop" }).click();
 });
 
 test("an agent edit keeps the scroll position when that page is already on screen", async ({ page, request }) => {
