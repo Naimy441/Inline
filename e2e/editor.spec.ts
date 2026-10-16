@@ -91,7 +91,7 @@ test("long documents flow onto a second page", async ({ page }) => {
   }
   await expect(page.locator(".sheet")).toHaveCount(2);
   await expect(page.locator(".page-gap")).toHaveCount(1);
-  await expect(page.locator(".statusbar")).toContainText("2 pages");
+  await expect(page.locator(".status-corner")).toContainText("2 pages");
 });
 
 test("comments attach to the selected text", async ({ page }) => {

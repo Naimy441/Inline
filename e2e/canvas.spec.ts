@@ -23,7 +23,7 @@ test("create a canvas, edit it with Claude and by hand, run a cell, and export a
   const id = await createCanvas(request);
   await page.goto(`/d/${id}`);
   await showClaude(page);
-  await expect(page.locator(".statusbar")).toContainText("Canvas");
+  await expect(page.locator(".status-corner")).toContainText("Canvas");
   await expect(page.locator(".doc-content")).toBeHidden();
 
   const composer = page.getByLabel("Message Claude");
