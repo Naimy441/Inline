@@ -13,7 +13,7 @@ import { stylesOf } from "@/lib/doc/styles";
 import { setTabs } from "@/lib/client/tabs";
 import { api, ApiError, del, patch, post, Store, uploadFile } from "@/lib/client/api";
 import { setCommentState } from "@/lib/editor/comments";
-import { syncDomSelection } from "@/lib/editor/domSync";
+import { keepVisibleSelection, syncDomSelection, visibleTextSelection } from "@/lib/editor/domSync";
 import type { PdfDocumentModel, PdfImage } from "@/lib/pdf/pdfWriter";
 import { APPEARANCE_PAPER, screenshotPage, type PageAppearance } from "@/lib/pdf/screenAppearance";
 import { fitLinesNow } from "@/lib/editor/lineFit";
@@ -318,6 +318,9 @@ export class DocumentSession {
   private gestureTimer: ReturnType<typeof setTimeout> | null = null;
   private inflight = false;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A range a toolbar press must format, held across the click that would drop it. */
+  private heldSelection: { from: number; to: number } | null = null;
+  private selectionHoldTimer: ReturnType<typeof setTimeout> | null = null;
   private selectionTimer: ReturnType<typeof setTimeout> | null = null;
   private layoutTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingLayout: PageLayout | null = null;
@@ -647,9 +650,10 @@ export class DocumentSession {
     this.destroyed = true;
     window.removeEventListener("beforeunload", this.onBeforeUnload);
     this.source?.close();
-    for (const timer of [this.retryTimer, this.selectionTimer, this.layoutTimer, this.reconnectTimer, this.thumbnailTimer, this.holdTimer, this.gestureTimer]) if (timer) clearTimeout(timer);
+    for (const timer of [this.retryTimer, this.selectionTimer, this.layoutTimer, this.reconnectTimer, this.thumbnailTimer, this.holdTimer, this.gestureTimer, this.selectionHoldTimer]) if (timer) clearTimeout(timer);
     this.holdTimer = null;
     this.gestureTimer = null;
+    this.selectionHoldTimer = null;
     this.releaseHold(false);
     this.unbindScrollPin();
     this.view?.destroy();
@@ -729,6 +733,9 @@ export class DocumentSession {
     if (this.heldScroll && tr.scrolledIntoView) this.releaseHold(false);
     const holding = Boolean(this.heldScroll);
     if (holding) this.pinningScroll = true;
+    // Spelling and page layout dispatch without meaning to move the caret. A
+    // range the browser has and the state does not would otherwise be painted away.
+    tr = keepVisibleSelection(view, tr);
     const state = view.state.apply(tr);
     view.updateState(state);
     this.editor.set(state);
@@ -1202,6 +1209,35 @@ export class DocumentSession {
     if (this.view) syncDomSelection(this.view);
   }
 
+  /**
+   * Remember the range a toolbar button is about to format. The press can move
+   * focus and collapse the selection before the click runs the command, and a
+   * selectionchange for Shift+End may not have arrived yet.
+   */
+  holdDomSelection() {
+    const view = this.view;
+    if (!view) return;
+    syncDomSelection(view);
+    const visible = visibleTextSelection(view);
+    const selection = visible ?? (view.state.selection.empty ? null : view.state.selection);
+    this.heldSelection = selection ? { from: selection.from, to: selection.to } : null;
+    if (this.selectionHoldTimer) clearTimeout(this.selectionHoldTimer);
+    this.selectionHoldTimer = this.heldSelection
+      ? setTimeout(() => {
+          this.heldSelection = null;
+          this.selectionHoldTimer = null;
+        }, 1000)
+      : null;
+  }
+
+  private takeHeldSelection() {
+    const held = this.heldSelection;
+    this.heldSelection = null;
+    if (this.selectionHoldTimer) clearTimeout(this.selectionHoldTimer);
+    this.selectionHoldTimer = null;
+    return held;
+  }
+
   run(command: Command) {
     const view = this.view;
     if (!view) return false;
@@ -1209,6 +1245,10 @@ export class DocumentSession {
     // waiting returns without reading; force it. If a button took focus first,
     // the range is already gone. Those buttons keep it (see Toolbar).
     syncDomSelection(view);
+    const held = this.takeHeldSelection();
+    if (view.state.selection.empty && held && held.from < held.to && held.to <= view.state.doc.content.size) {
+      this.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, held.from, held.to)));
+    }
     const result = command(view.state, (tr) => this.dispatch(tr), view);
     view.focus();
     return result;
