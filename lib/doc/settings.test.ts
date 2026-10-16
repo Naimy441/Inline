@@ -48,14 +48,32 @@ describe("titles", () => {
     assert.equal(cleanTitle("x".repeat(500)).length, 200);
   });
 
-  it("derives a title from the first line, cut at a word boundary", () => {
+  it("derives a short title from the first line while it is still being typed", () => {
     assert.equal(titleFromText("   "), null);
     assert.equal(titleFromText("Meeting notes"), "Meeting notes");
-    const long = "This opening sentence keeps going well past the point where a title would still be readable in a list";
-    const title = titleFromText(long)!;
-    assert.ok(title.endsWith("…"));
-    assert.ok(title.length <= 81);
-    assert.ok(long.startsWith(title.slice(0, -1)), "the cut lands between words");
+    assert.equal(titleFromText("Meet"), "Meet");
+
+    const sentence = "This opening sentence keeps going well past the point where a title would still be readable in a list";
+    let settled = "";
+    for (let i = 1; i <= sentence.length; i += 1) {
+      const title = titleFromText(sentence.slice(0, i))!;
+      assert.ok(title.length <= 49, title);
+      const stem = title.endsWith("…") ? title.slice(0, -1) : title;
+      assert.ok(sentence.startsWith(stem), title);
+      if (title.endsWith("…")) {
+        const next = sentence[stem.length];
+        assert.ok(next === undefined || next === " " || ",;:.-".includes(next), `cut inside a word: ${title}`);
+        if (settled) assert.equal(title, settled, "the shortened title stays put as typing continues");
+        else settled = title;
+      } else if (settled) {
+        assert.fail(`title grew again after it was shortened: ${title}`);
+      }
+    }
+    assert.equal(settled, "This opening sentence keeps going well past the…");
+
+    // A short word followed by a long token is cut at the word, not through the token.
+    assert.equal(titleFromText(`Hi ${"x".repeat(80)}`), "Hi…");
+    assert.equal(titleFromText("x".repeat(60)), `${"x".repeat(48)}…`);
   });
 });
 

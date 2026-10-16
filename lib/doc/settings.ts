@@ -347,14 +347,27 @@ export function cleanTitle(value: unknown) {
   return title || "Untitled document";
 }
 
-/** A title from the document's first non-empty line, cut at a word boundary. */
+/**
+ * How long a title that follows the first line may grow. Long enough to tell
+ * documents apart, short enough for the title bar while the line is still being typed.
+ */
+const LIVE_TITLE_MAX = 48;
+
+/**
+ * A title from the document's first non-empty line.
+ * A short line is kept whole, including the word being typed. A longer line is
+ * cut on a word boundary and marked with an ellipsis. The cut is a prefix of
+ * the line, so once the title settles it stays put as more is typed: it does
+ * not jump around or end in the middle of a word.
+ */
 export function titleFromText(firstLine: string) {
   const line = firstLine.replace(/\s+/g, " ").trim();
   if (!line) return null;
-  if (line.length <= 80) return line;
-  const cut = line.slice(0, 80);
+  if (line.length <= LIVE_TITLE_MAX) return line;
+  const cut = line.slice(0, LIVE_TITLE_MAX);
   const space = cut.lastIndexOf(" ");
-  return `${(space > 40 ? cut.slice(0, space) : cut).replace(/[\s,;:.-]+$/, "")}…`;
+  const shortened = (space > 0 ? cut.slice(0, space) : cut).replace(/[\s,;:.-]+$/, "");
+  return `${shortened || cut.slice(0, LIVE_TITLE_MAX)}…`;
 }
 
 /** A header or footer's parts: one (set by its alignment), or two or three split by tabs (left, center, right). */
