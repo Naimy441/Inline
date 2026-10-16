@@ -1392,8 +1392,14 @@ export class DocumentSession {
 
   async updateMeta(patch: { title?: string; settings?: Record<string, unknown> }) {
     const result = await api<{ meta: DocumentMeta }>(`/api/documents/${this.id}`, { method: "PATCH", json: patch });
-    this.ui.set((ui) => ({ ...ui, meta: result.meta }));
-    if (patch.settings && this.view) relayout(this.view);
+    // The stream may already have applied a newer save (this response was built before it).
+    let applied = false;
+    this.ui.set((ui) => {
+      if (ui.meta && result.meta.updatedAt < ui.meta.updatedAt) return ui;
+      applied = true;
+      return { ...ui, meta: result.meta };
+    });
+    if (applied && patch.settings && this.view) relayout(this.view);
     return result.meta;
   }
 

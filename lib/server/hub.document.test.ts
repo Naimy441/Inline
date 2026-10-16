@@ -366,10 +366,15 @@ describe("collab steps", () => {
   it("updateMeta patches settings without dropping others", () => {
     const live = makeLive();
     const before = live.meta.settings;
+    const first = live.meta.updatedAt;
     live.updateMeta({ settings: { fontSize: 15 } });
     assert.equal(live.meta.settings.fontSize, 15);
     assert.equal(live.meta.settings.fontFamily, before.fontFamily);
     assert.equal(live.meta.title, "Test");
+    const second = live.meta.updatedAt;
+    live.updateMeta({ settings: { fontSize: 16 } });
+    assert.ok(second > first);
+    assert.ok(live.meta.updatedAt > second);
   });
 });
 

@@ -580,7 +580,21 @@
   font-family: var(--doc-font, Arial, sans-serif);
   white-space: pre;
   overflow: hidden;
-  /* Above the page text, so a margin click reaches the header or footer. */
+  /* Above the page text, so a double-click in the text column reaches the header
+     or footer. The side margins stay click-through: Keep and Undo sit there. */
+  pointer-events: none;
+}
+
+/* The clickable part of a header or footer: the text column, not the side margins. */
+.sheet-hit {
+  display: flex;
+  align-items: inherit;
+  justify-content: inherit;
+  flex: 1 0 auto;
+  align-self: stretch;
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
   pointer-events: auto;
 }
 

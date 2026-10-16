@@ -276,19 +276,23 @@ const Sheet = memo(function Sheet({
   return (
     <div className="sheet" style={{ top, height: geometry.pageHeight, width: geometry.pageWidth }} aria-hidden={editing ? undefined : true}>
       <div className="sheet-header" style={{ ...zoneStyle(geometry.marginTop, headerAlign), ...headerZone }} onMouseDown={keepCaret} onDoubleClick={open("header")}>
-        {editing === "header" ? (
-          <ZoneField label="Header" value={raw("header")} align={headerAlign} ruled={Boolean(hf?.headerRule)} onCommit={(value) => onCommit(index, "header", value)} onClose={() => onClose(index, "header")} />
-        ) : (
-          header && zoneText(header, headerAlign, rule, hf?.headerPartSizes)
-        )}
+        <div className="sheet-hit">
+          {editing === "header" ? (
+            <ZoneField label="Header" value={raw("header")} align={headerAlign} ruled={Boolean(hf?.headerRule)} onCommit={(value) => onCommit(index, "header", value)} onClose={() => onClose(index, "header")} />
+          ) : (
+            header && zoneText(header, headerAlign, rule, hf?.headerPartSizes)
+          )}
+        </div>
         {number?.where === "header" && <span className="sheet-number" style={numberStyle(number.align, "header")}>{page}</span>}
       </div>
       <div className="sheet-footer" style={{ ...zoneStyle(geometry.marginBottom, footerAlign), ...footerZone }} onMouseDown={keepCaret} onDoubleClick={open("footer")}>
-        {editing === "footer" ? (
-          <ZoneField label="Footer" value={raw("footer")} align={footerAlign} ruled={false} onCommit={(value) => onCommit(index, "footer", value)} onClose={() => onClose(index, "footer")} />
-        ) : (
-          footer && zoneText(footer, footerAlign)
-        )}
+        <div className="sheet-hit">
+          {editing === "footer" ? (
+            <ZoneField label="Footer" value={raw("footer")} align={footerAlign} ruled={false} onCommit={(value) => onCommit(index, "footer", value)} onClose={() => onClose(index, "footer")} />
+          ) : (
+            footer && zoneText(footer, footerAlign)
+          )}
+        </div>
         {number?.where === "footer" && <span className="sheet-number" style={numberStyle(number.align, "footer")}>{page}</span>}
       </div>
     </div>
