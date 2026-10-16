@@ -14,8 +14,6 @@ const CreateBody = z.object({
   doc: z.unknown().optional(),
   settings: z.unknown().optional(),
   folderId: z.string().max(80).nullable().optional(),
-  kind: z.enum(["page", "canvas"]).optional(),
-  html: z.string().max(1_000_000).optional(),
 });
 
 /** DELETE ?trashed=1 empties the trash: every trashed document is deleted forever. */

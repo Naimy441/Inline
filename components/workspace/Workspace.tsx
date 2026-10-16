@@ -33,7 +33,6 @@ import { acquireChat, releaseChat, rememberChat, rememberedChat } from "@/lib/cl
 import { addTab, rememberedRoot, takeScroll, useTabs } from "@/lib/client/tabs";
 import { documentMenus, MenuBar, type MenuActions } from "@/components/workspace/MenuBar";
 import { OutlinePanel } from "@/components/workspace/OutlinePanel";
-import { CanvasDocument } from "@/components/workspace/CanvasDocument";
 import { PageCanvas } from "@/components/workspace/PageCanvas";
 import { PageSetupDialog } from "@/components/workspace/PageSetupDialog";
 import { ReviewBar } from "@/components/workspace/ReviewBar";
@@ -595,11 +594,6 @@ export function Workspace({ documentId }: { documentId: string }) {
       const { document } = await post<{ document: { meta: DocumentMeta } }>(`/api/documents/${documentId}/duplicate`);
       toast(`Created "${document.meta.title}".`, { action: { label: "Open", run: () => router.push(`/d/${document.meta.id}`) } });
     },
-    canvas: meta?.kind === "canvas",
-    convertKind: () => {
-      const next = meta?.kind === "canvas" ? "page" : "canvas";
-      void session.setKind(next).catch((error: Error) => toast(error.message, { tone: "error" }));
-    },
     download: (format) => void download(format),
     print: () => void session.print(),
     reveal: () => void session.whenSaved().then(() => revealOnDisk({ documentId })),
@@ -709,14 +703,9 @@ export function Workspace({ documentId }: { documentId: string }) {
   }
 
   const openComments = ui.comments.filter((comment) => !comment.resolved).length;
-  const isCanvas = meta?.kind === "canvas";
   // Keep the floating counters in the margin to the left of the text.
   const textLeft = (() => {
     if (!canvasWidth) return 200;
-    if (isCanvas) {
-      const docWidth = Math.min(820, Math.max(0, canvasWidth - 48));
-      return Math.max(24, (canvasWidth - docWidth) / 2 + 40);
-    }
     const pageLeft = Math.max(canvasPad, (canvasWidth - pageWidth * effectiveZoom) / 2);
     return pageLeft + geometry.marginLeft * effectiveZoom;
   })();
@@ -771,7 +760,7 @@ export function Workspace({ documentId }: { documentId: string }) {
   ];
 
   return (
-    <div className={`workspace${shownPanel ? " has-panel" : ""}${focusMode ? " is-focus" : ""}${isCanvas ? " is-canvas" : ""} is-${ui.mode}`} style={{ ["--panel-width" as string]: `${panelWidth}px` }}>
+    <div className={`workspace${shownPanel ? " has-panel" : ""}${focusMode ? " is-focus" : ""} is-${ui.mode}`} style={{ ["--panel-width" as string]: `${panelWidth}px` }}>
       <header ref={titlebarRef} className={`titlebar${compact ? " is-compact" : ""}`}>
         <button type="button" className="home-btn" aria-label="All documents" data-tip="All documents" onClick={() => router.push("/")}>
           <InlineLogo />
@@ -903,7 +892,7 @@ export function Workspace({ documentId }: { documentId: string }) {
             void insertImageFile(file);
           }}
         >
-          {find && !isCanvas && <WithEditorState session={session}>{(state) => <FindBar session={session} state={state} replace={find.replace} onClose={() => setFind(null)} />}</WithEditorState>}
+          {find && <WithEditorState session={session}>{(state) => <FindBar session={session} state={state} replace={find.replace} onClose={() => setFind(null)} />}</WithEditorState>}
           <OfflineNotice offline={ui.status === "ready" && (ui.connection === "reconnecting" || ui.sync === "error")} />
           {meta?.pdfImport && !focusMode && (
             <PdfImportNotice
@@ -916,7 +905,7 @@ export function Workspace({ documentId }: { documentId: string }) {
               onToggleAnnotations={() => void togglePdfAnnotations()}
             />
           )}
-          {!isCanvas && <WithEditorState session={session}>{(state) => <AgentLocator canvas={canvasRef} state={state} active={working && !focusMode} label={ui.activity?.label ?? ""} />}</WithEditorState>}
+          <WithEditorState session={session}>{(state) => <AgentLocator canvas={canvasRef} state={state} active={working && !focusMode} label={ui.activity?.label ?? ""} />}</WithEditorState>
           {ui.status === "loading" && (
             <div className="canvas-loading">
               <Loader2 size={18} className="spin" />
@@ -926,25 +915,24 @@ export function Workspace({ documentId }: { documentId: string }) {
             <DraftBanner session={session} words={ui.draft.words} previewing={draftPreview} onPreview={() => setDraftPreview((current) => !current)} onClosePreview={() => setDraftPreview(false)} />
           )}
           {versionShown && shownPanel === "history" && <VersionPreview key={versionShown.id} session={session} version={versionShown} onClose={() => setVersionShown(null)} />}
-          {draftPreview && ui.draft && !versionShown && !isCanvas && <DraftPreview session={session} />}
-          <div className={`page-stack-slot${isCanvas ? " is-canvas-hidden" : ""}`}>
+          {draftPreview && ui.draft && !versionShown && <DraftPreview session={session} />}
+          <div className="page-stack-slot">
             <PageCanvas session={session} meta={meta} pages={ui.pages} zoom={effectiveZoom} printing={ui.printing} flow={false} zoomCommit={zoomCommit} />
           </div>
-          {isCanvas && ui.canvasHtml && <CanvasDocument session={session} html={ui.canvasHtml} outputs={ui.canvasOutputs} readOnly={ui.mode === "viewing"} />}
-          {!isCanvas && !shownPanel && (
+          {!shownPanel && (
             <WithEditorState session={session}>
               {(state) => <CommentMargin session={session} state={state} canvas={canvasRef} comments={ui.comments} active={ui.activeComment} draft={draftComment} onDraftDone={endDraft} onAskClaude={askAboutComment} hideAskClaude={focusMode} />}
             </WithEditorState>
           )}
-          {!isCanvas && <ReviewBar session={session} hunks={ui.hunks} hideClaude={focusMode} />}
-          {!isCanvas && <WithEditorState session={session}>{(state) => <SelectionBubble session={session} state={state} linkEditing={linkEditing} onLinkEditing={setLinkEditing} prompting={prompting && !focusMode} onPrompting={setPrompting} onInlineAsk={inlineAsk} hideAi={focusMode} />}</WithEditorState>}
-          {!isCanvas && <WithEditorState session={session}>{(state) => <PictureBar session={session} state={state} />}</WithEditorState>}
+          <ReviewBar session={session} hunks={ui.hunks} hideClaude={focusMode} />
+          <WithEditorState session={session}>{(state) => <SelectionBubble session={session} state={state} linkEditing={linkEditing} onLinkEditing={setLinkEditing} prompting={prompting && !focusMode} onPrompting={setPrompting} onInlineAsk={inlineAsk} hideAi={focusMode} />}</WithEditorState>
+          <WithEditorState session={session}>{(state) => <PictureBar session={session} state={state} />}</WithEditorState>
         </main>
         <footer className="status-corner">
           <button type="button" className="status-item" onClick={() => setCounting(true)}>
             <WithEditorState session={session}>{(state) => <>{(state ? docWordCount(state.doc) : (meta?.wordCount ?? 0)).toLocaleString()} words</>}</WithEditorState>
           </button>
-          <span className="status-item">{isCanvas ? "Canvas" : `${ui.pages} page${ui.pages === 1 ? "" : "s"}`}</span>
+          <span className="status-item">{`${ui.pages} page${ui.pages === 1 ? "" : "s"}`}</span>
           <TabStatus documentId={documentId} open={outline} onToggle={toggleOutline} />
           {ui.hunks.length > 0 && <span className="status-item is-accent">{ui.hunks.length} pending</span>}
           {ui.mode !== "editing" && (

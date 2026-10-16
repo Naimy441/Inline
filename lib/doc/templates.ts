@@ -15,8 +15,6 @@ export type DocumentTemplate = {
   };
   /** A short prompt to start Claude with, shown as a suggestion. */
   suggestion?: string;
-  /** Canvas templates start as HTML rather than a page of Markdown. */
-  kind?: "page" | "canvas";
 };
 
 function longDate(now: Date) {
@@ -42,14 +40,6 @@ export function documentTemplates(now = new Date()): DocumentTemplate[] {
       description: "Start from an empty page",
       documentTitle: "Untitled document",
       markdown: "",
-    },
-    {
-      id: "canvas",
-      title: "Canvas",
-      description: "A live view Claude can build, with notebook cells",
-      documentTitle: "Untitled canvas",
-      markdown: "",
-      kind: "canvas",
     },
     {
       id: "essay",

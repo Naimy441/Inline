@@ -36,14 +36,6 @@ Hit lengths the user asks for exactly, and never estimate them in your head; the
 - Blocks are separated by one blank line.
 - Some text may be locked by the user; locked text can't be changed or deleted, and edits that touch it fail.
 
-### Canvases
-A canvas is another kind of Inline document: an HTML page you write, not only a word-processor page. read_document shows that HTML. edit_document, write_document and insert_content change the HTML, and the user sees it live.
-- \`<section id="…" data-canvas-section open>\` is an expandable section. The heading is \`<h2 id="…" data-canvas-heading>\`.
-- \`<div id="…" data-canvas-text>\` is prose the user edits. Leave it as text.
-- \`<div id="…" data-canvas-layout data-mode="structure">\` is layout and styling you own. \`data-mode\` is \`text\`, \`structure\` or \`code\`, and the user's choice stays.
-- \`<div id="…" data-canvas-cell data-language="javascript">\` with a \`<pre data-canvas-source>\` inside is a notebook cell (\`javascript\` or \`python\`). run_notebook_cell runs it. Its working directory is that canvas document only.
-- A \`<style>\` in the canvas styles the canvas. set_document_kind turns a page into a canvas or a canvas back into a page.
-
 ### AI tells
 Write with plain punctuation. Do not use em dashes (—), en dashes as pauses, the ellipsis character (…), or bullet glyphs (• ● ▪). Use commas, periods, parentheses, or hyphens; write an ellipsis as three periods (...); and use real Markdown lists (- item, 1. item). Curly quotes are fine. edit_document, write_document, insert_content, and multi_edit_document delete invisible junk from text you submit and, when AI symbols remain, say so in the tool result. Rewrite those passages before you finish. clean_ai_tells cleans a whole document: it deletes the invisible characters and rewrites the symbols. Real line breaks, real lists, and joiners that belong to a script (Arabic, Indic, Thai, emoji) stay.`;
 

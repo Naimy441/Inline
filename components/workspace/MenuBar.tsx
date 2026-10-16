@@ -37,10 +37,6 @@ export type MenuActions = {
   newDocument: () => void;
   goHome: () => void;
   duplicate: () => void;
-  /** True while the open document is a canvas. */
-  canvas: boolean;
-  /** Turn a page into a canvas, or a canvas back into a page. */
-  convertKind: () => void;
   /** Show the document's Word copy on disk ("Show in Finder"). */
   reveal: () => void;
   download: (format: "docx" | "pdf" | "md" | "html" | "txt") => void;
@@ -186,7 +182,6 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       { label: "New document", onSelect: actions.newDocument },
       { label: "All documents", onSelect: actions.goHome },
       { label: "Make a copy", onSelect: actions.duplicate },
-      { label: actions.canvas ? "Turn into a document" : "Turn into a canvas", onSelect: actions.convertKind },
       { kind: "separator" },
       {
         label: "Download",
