@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { HunkJSON } from "@/lib/doc/review";
@@ -32,6 +33,9 @@ export class UnsavedChangesError extends Error {
     super("This document has changes that aren't saved as a version. Save a version first, or restore and discard them.");
   }
 }
+
+/** A version has no files to open, or the requested file is not one of them. */
+export class VersionFilesError extends Error {}
 
 export type VersionAuthor = "user" | "claude";
 
@@ -497,6 +501,95 @@ export async function listWorkspaceFiles(documentId: string): Promise<WorkspaceF
   const files: WorkspaceFile[] = [];
   await walk(root, root, files);
   return files.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/**
+ * Where a version's files are on disk, and one of those files when `userPath`
+ * is set. The current version is the document folder. A saved version is
+ * copied out of that commit, so opening it does not show edits made later.
+ */
+export async function versionArtifacts(documentId: string, versionId: string | null, userPath?: string): Promise<{ folder: string; file?: string }> {
+  return withLock(documentId, async () => {
+    await ensureDocumentRepo(documentId);
+    if (versionId === null) return currentArtifacts(documentId, userPath);
+    if (!SHA.test(versionId)) throw new VersionFilesError("Version not found.");
+    const kind = await gitResult(documentId, ["cat-file", "-t", versionId]);
+    if (kind.code !== 0 || kind.stdout.trim() !== "commit") throw new VersionFilesError("Version not found.");
+    const names = await filesAt(documentId, versionId);
+    if (!names.length) throw new VersionFilesError("This version has no files to open.");
+    const folder = await exportVersionFiles(documentId, versionId);
+    if (!userPath) return { folder };
+    if (!names.includes(userPath)) throw new VersionFilesError("That file isn't in this version.");
+    return { folder, file: await fileInside(folder, userPath) };
+  });
+}
+
+async function currentArtifacts(documentId: string, userPath?: string): Promise<{ folder: string; file?: string }> {
+  const folder = await fs.realpath(documentRepoPath(documentId));
+  const names = (await listWorkspaceFiles(documentId)).map((file) => file.path);
+  if (!names.length) throw new VersionFilesError("This version has no files to open.");
+  if (!userPath) return { folder };
+  if (!names.includes(userPath)) throw new VersionFilesError("That file isn't in this version.");
+  try {
+    return { folder, file: await resolveInside(documentId, userPath) };
+  } catch (error) {
+    throw new VersionFilesError(error instanceof Error ? error.message : "That file isn't in this version.");
+  }
+}
+
+/** Checkout a commit's files (not the document itself) into a stable folder. The commit never changes, so the folder is reused. */
+async function exportVersionFiles(id: string, sha: string): Promise<string> {
+  const parent = path.join(dataDir(), "version-files", id);
+  const dest = path.join(parent, sha);
+  const marker = path.join(parent, `${sha}.ready`);
+  if ((await fs.stat(marker).catch(() => null)) && (await fs.stat(dest).catch(() => null))?.isDirectory()) return fs.realpath(dest);
+  await fs.rm(dest, { recursive: true, force: true });
+  await fs.rm(marker, { force: true });
+  await fs.mkdir(dest, { recursive: true });
+  const index = path.join(os.tmpdir(), `inline-${id}-${sha}.index`);
+  try {
+    await git(id, ["read-tree", sha], { env: { GIT_INDEX_FILE: index } });
+    await git(id, ["checkout-index", "-f", "-a", `--prefix=${dest}${path.sep}`], { env: { GIT_INDEX_FILE: index } });
+    await fs.rm(path.join(dest, "document.json"), { force: true });
+    await dropOutsideLinks(dest);
+    await fs.writeFile(marker, "");
+  } catch (error) {
+    await fs.rm(dest, { recursive: true, force: true });
+    await fs.rm(marker, { force: true });
+    throw error;
+  } finally {
+    await fs.rm(index, { force: true });
+  }
+  return fs.realpath(dest);
+}
+
+/** A symlink saved into a version must not point at something outside the exported folder. */
+async function dropOutsideLinks(root: string) {
+  const realRoot = await fs.realpath(root);
+  const walk = async (dir: string) => {
+    for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        const real = await fs.realpath(full).catch(() => null);
+        if (!real || !inside(realRoot, real)) await fs.rm(full);
+        continue;
+      }
+      if (entry.isDirectory()) await walk(full);
+    }
+  };
+  await walk(realRoot);
+}
+
+async function fileInside(root: string, userPath: string): Promise<string> {
+  if (userPath.includes("\0") || path.isAbsolute(userPath) || /^[A-Za-z]:[\\/]/.test(userPath)) throw new VersionFilesError("That file isn't in this version.");
+  const parts = userPath.split("/");
+  if (!parts.length || parts.some((part) => !part || part === "." || part === "..")) throw new VersionFilesError("That file isn't in this version.");
+  const full = path.join(root, ...parts);
+  const stat = await fs.lstat(full).catch(() => null);
+  if (!stat || stat.isDirectory()) throw new VersionFilesError("That file isn't in this version.");
+  const real = await fs.realpath(full).catch(() => null);
+  if (!real || !inside(root, real) || !(await fs.stat(real).catch(() => null))?.isFile()) throw new VersionFilesError("That file isn't in this version.");
+  return real;
 }
 
 export async function readWorkspaceBytes(documentId: string, userPath: string) {

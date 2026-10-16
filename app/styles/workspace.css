@@ -1349,10 +1349,50 @@
   padding: 0 6px 16px;
 }
 
+.history-files-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 12px 10px 4px;
+  background: var(--surface);
+}
+
+.history-files-bar .version-day {
+  position: static;
+  padding: 0;
+  background: transparent;
+}
+
 .history-files ul {
   list-style: none;
   margin: 0;
   padding: 0 6px;
+}
+
+.history-file-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.history-file-row .history-file {
+  flex: 1;
+  min-width: 0;
+}
+
+.history-file-row .history-file span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-folder,
+.history-file-open {
+  flex: none;
 }
 
 .history-file {
