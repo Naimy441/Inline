@@ -152,6 +152,58 @@ test.describe("editing", () => {
       .toMatchObject({ content: expect.arrayContaining([expect.objectContaining({ type: "image", attrs: expect.objectContaining({ width: expect.stringMatching(/^3\d\dpx$/) }) })]) });
   });
 
+  test("clicking off a photo clears the selection", async ({ page, request }) => {
+    await openDocument(page, await createDocument(request, "Photo", "Before the photo."));
+    await page.locator(".doc-content").click();
+    await paste(page, { png: true });
+    const image = page.locator(".doc-content .doc-image img");
+    await expect(image).toHaveAttribute("src", /^\/api\/uploads\//);
+    await image.evaluate((img) => ((img as HTMLImageElement).style.width = "160px"));
+    const selected = page.locator(".doc-content .doc-image.ProseMirror-selectednode");
+
+    await image.click();
+    await expect(selected).toHaveCount(1);
+
+    // The gray area around the page.
+    await page.locator(".canvas").click({ position: { x: 12, y: 12 } });
+    await expect(selected).toHaveCount(0);
+
+    await image.click();
+    await expect(selected).toHaveCount(1);
+
+    // The paper margin, outside the text.
+    const sheet = await page.locator(".sheet").first().boundingBox();
+    expect(sheet).toBeTruthy();
+    await page.mouse.click(sheet!.x + 12, sheet!.y + 12);
+    await expect(selected).toHaveCount(0);
+
+    await image.click();
+    await expect(selected).toHaveCount(1);
+
+    // The block around the photo is not the photo.
+    const figure = await page.locator(".doc-content .doc-image").boundingBox();
+    expect(figure).toBeTruthy();
+    await page.mouse.click(figure!.x + 8, figure!.y + figure!.height / 2);
+    await expect(selected).toHaveCount(0);
+    await page.mouse.click(figure!.x + 8, figure!.y + figure!.height / 2);
+    await expect(selected).toHaveCount(0);
+
+    await image.click();
+    await expect(selected).toHaveCount(1);
+
+    // Clicking the text still places the caret, and a keyboard selection still works.
+    const paragraph = page.locator(".doc-content p").first();
+    await paragraph.click();
+    await expect(selected).toHaveCount(0);
+    await page.keyboard.press("Home");
+    await page.keyboard.type("Hi ");
+    await expect(paragraph).toContainText("Hi Before the photo.");
+    await expect(image).toHaveCount(1);
+    await page.keyboard.press("Home");
+    await page.keyboard.press("Shift+End");
+    expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toContain("Hi Before the photo.");
+  });
+
   test("undo and redo", async ({ page, request }) => {
     await openDocument(page, await createDocument(request, "Undo", "Start"));
     const doc = page.locator(".doc-content");
