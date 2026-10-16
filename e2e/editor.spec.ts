@@ -263,6 +263,19 @@ test("an untitled document takes its title from the first line", async ({ page }
   await expect(page.locator(".title-input")).toHaveValue("Quarterly planning notes", { timeout: 10_000 });
 });
 
+test("a long first line stays a short title while it is typed", async ({ page }) => {
+  await newBlankDocument(page);
+  await page.locator(".doc-content").click();
+  const title = page.locator(".title-input");
+  await expect(title).toHaveValue("Untitled document");
+  await page.keyboard.type("This opening sentence keeps");
+  await expect(title).toHaveValue("This opening sentence keeps");
+  await page.keyboard.type(" going well past the point where a title would still be readable in a list");
+  await expect(title).toHaveValue("This opening sentence keeps going well past the…");
+  await page.keyboard.type(" and then some more words after that");
+  await expect(title).toHaveValue("This opening sentence keeps going well past the…");
+});
+
 test("right-click opens the editor menu", async ({ page }) => {
   await newBlankDocument(page);
   await page.locator(".doc-content").click();

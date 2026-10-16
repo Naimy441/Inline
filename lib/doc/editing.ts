@@ -130,6 +130,20 @@ const blockWords = new WeakMap<PMNode, number>();
  * node. Blocks an edit didn't touch are the same objects in the new document,
  * so a keystroke recounts one paragraph instead of the whole document.
  */
+/** The first non-empty text block, trimmed. Blank lines at the top don't become the title. */
+export function openingLine(doc: PMNode): string {
+  let line = "";
+  doc.descendants((node) => {
+    if (line) return false;
+    if (node.isTextblock) {
+      line = node.textContent.trim();
+      return false;
+    }
+    return true;
+  });
+  return line;
+}
+
 export function docWordCount(doc: PMNode): number {
   let total = 0;
   doc.forEach((child) => {

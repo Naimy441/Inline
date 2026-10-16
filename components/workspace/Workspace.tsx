@@ -9,8 +9,8 @@ import { api, patch, post, uploadFile } from "@/lib/client/api";
 import { DocumentSession, geometryFor, type ClientCommand, type DocumentUiState, type EditorMode } from "@/lib/client/documentSession";
 import { useTheme } from "@/lib/client/theme";
 import { useShortcut } from "@/lib/client/platform";
-import { docPlainText, docWordCount, wordCount } from "@/lib/doc/editing";
-import type { DocComment, DocumentMeta } from "@/lib/doc/settings";
+import { docPlainText, docWordCount, openingLine, wordCount } from "@/lib/doc/editing";
+import { titleFromText, type DocComment, type DocumentMeta } from "@/lib/doc/settings";
 import { insertImage, insertText } from "@/lib/editor/commands";
 import { AgentPanel, type AgentPanelHandle } from "@/components/agent/AgentPanel";
 import { Spark } from "@/components/agent/Activity";
@@ -221,10 +221,6 @@ export function Workspace({ documentId }: { documentId: string }) {
   const pageWidth = geometryFor(meta).pageWidth;
   const fitZoom = canvasWidth ? Math.max(0.25, Math.min(1, Math.floor(((canvasWidth - canvasPad * 2) / pageWidth) * 100) / 100)) : 1;
   const effectiveZoom = zoom === "fit" ? fitZoom : zoom;
-
-  useEffect(() => {
-    if (meta) document.title = `${meta.title} · Inline`;
-  }, [meta]);
 
   // Edits that couldn't be merged after the server's copy changed (e.g. a server restart).
   const unmerged = ui.unmerged;
@@ -614,7 +610,7 @@ export function Workspace({ documentId }: { documentId: string }) {
           <InlineLogo />
         </button>
         <div className="title-stack">
-          <TitleInput meta={meta} onRename={(title) => void session.updateMeta({ title })} />
+          <TitleInput meta={meta} session={session} onRename={(title) => void session.updateMeta({ title })} />
           <MenuBar session={session} actions={actions} zoom={effectiveZoom} hunks={ui.hunks.length} />
         </div>
         <div className="titlebar-status">
@@ -887,9 +883,16 @@ function WithEditorState({ session, children }: { session: DocumentSession; chil
   return <>{children(state)}</>;
 }
 
-function TitleInput({ meta, onRename }: { meta: DocumentMeta | null; onRename: (title: string) => void }) {
+function TitleInput({ meta, session, onRename }: { meta: DocumentMeta | null; session: DocumentSession; onRename: (title: string) => void }) {
+  const editorState = useSyncExternalStore(session.editor.subscribe, session.editor.get, session.editor.get);
+  // Follow the first line as it is typed. The saved title arrives a moment later and matches this.
+  const live = meta?.autoTitle && editorState ? titleFromText(openingLine(editorState.doc)) : null;
+  const shown = live ?? meta?.title ?? "";
   const [draft, setDraft] = useState<string | null>(null);
-  const value = draft ?? meta?.title ?? "";
+  const value = draft ?? shown;
+  useLayoutEffect(() => {
+    if (draft == null && shown) document.title = `${shown} · Inline`;
+  }, [draft, shown]);
   return (
     <input
       className="title-input"
@@ -898,12 +901,12 @@ function TitleInput({ meta, onRename }: { meta: DocumentMeta | null; onRename: (
       value={value}
       size={Math.max(8, Math.min(60, value.length + 1))}
       onFocus={(event) => {
-        setDraft(meta?.title ?? "");
+        setDraft(shown);
         event.target.select();
       }}
       onChange={(event) => setDraft(event.target.value)}
       onBlur={() => {
-        if (draft != null && draft.trim() && draft.trim() !== meta?.title) onRename(draft.trim());
+        if (draft != null && draft.trim() && draft.trim() !== shown) onRename(draft.trim());
         setDraft(null);
       }}
       onKeyDown={(event) => {
