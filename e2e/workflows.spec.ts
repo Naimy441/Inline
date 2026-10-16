@@ -195,9 +195,14 @@ test.describe("editing", () => {
 
   test("comments take replies and can be resolved", async ({ page, request }) => {
     await openDocument(page, await createDocument(request, "Comments", "A claim without a source."));
-    await page.locator(".doc-content p").first().click();
-    await page.keyboard.press("Home");
-    await page.keyboard.press("Shift+End");
+    // Select the line once the editor holds it: a selection made while the document is still loading is lost.
+    const addComment = page.getByRole("button", { name: "Add comment" });
+    await expect(async () => {
+      await page.locator(".doc-content p").first().click();
+      await page.keyboard.press("Home");
+      await page.keyboard.press("Shift+End");
+      await expect(addComment).toBeEnabled({ timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
     await page.keyboard.press("Control+Alt+m");
     await page.keyboard.type("Which source?");
     await page.keyboard.press("Control+Enter");
