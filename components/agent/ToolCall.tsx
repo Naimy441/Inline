@@ -11,6 +11,7 @@ import {
   ChevronRight,
   CircleAlert,
   Download,
+  FileCode,
   FilePlus2,
   FileSearch,
   FileText,
@@ -33,7 +34,9 @@ import {
   Settings2,
   Shrink,
   SpellCheck,
+  FolderOpen,
   Sparkles,
+  Terminal,
   TextCursorInput,
   Undo2,
 } from "lucide-react";
@@ -205,6 +208,25 @@ export function describeTool(part: ToolPart): Described {
       return { icon: <FilePlus2 size={14} />, verb: "Created", target: str(field("title"), 40) ?? "a document", live: "Creating" };
     case "open_document":
       return { icon: <FileText size={14} />, verb: "Opened", target: "a document", live: "Opening" };
+    case "list_files":
+      return { icon: <FolderOpen size={14} />, verb: "Listed", target: "files", live: "Listing files" };
+    case "read_file":
+      return { icon: <FileText size={14} />, verb: "Read", target: str(field("path"), 40) || "a file", live: "Reading" };
+    case "write_file":
+      return { icon: <FileCode size={14} />, verb: "Wrote", target: str(field("path"), 40) || "a file", live: "Writing" };
+    case "edit_file":
+      return { icon: <FileCode size={14} />, verb: "Edited", target: str(field("path"), 40) || "a file", live: "Editing" };
+    case "delete_file":
+      return { icon: <FileText size={14} />, verb: "Deleted", target: str(field("path"), 40) || "a file", live: "Deleting" };
+    case "run_command":
+      return { icon: <Terminal size={14} />, verb: "Ran", target: str(field("command"), 48) ? `“${str(field("command"), 48)}”` : "a command", live: "Running" };
+    case "read_draft":
+      return { icon: <FileText size={14} />, verb: "Read", target: "the revision", live: "Reading" };
+    case "edit_draft":
+    case "write_draft":
+      return { icon: <FileCode size={14} />, verb: "Prepared", target: "a revision", live: "Preparing" };
+    case "discard_draft":
+      return { icon: <Undo2 size={14} />, verb: "Discarded", target: "the revision", live: "Discarding" };
     case "save_version":
       return { icon: <History size={14} />, verb: "Saved", target: "a version", live: "Saving" };
     case "list_versions":

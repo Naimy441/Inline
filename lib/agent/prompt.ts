@@ -51,6 +51,14 @@ export const PDF_IMPORT_NOTE = `## Imported PDFs
 
 A document imported from a PDF starts as pictures of the original pages, one page each, which you rebuild as editable text with the PDF tools: get_pdf_import (call it first: it has the conversion guide), read_pdf_page, crop_pdf_region, write_pdf_page, edit_pdf_page, align_pdf_page, compare_pdf_page and finish_pdf_import. <inline-context> says when the open document is one and how far its conversion is.`;
 
+export const DOCUMENT_FOLDER_GUIDE = `## This document's folder
+
+Every document has a private folder, like a small git repo, that only that document can use.
+- list_files, read_file, write_file, edit_file and delete_file work only inside it. run_command runs there too, and nowhere else: no other documents, no network, and not the rest of the computer. Python 3's standard library is available.
+- A chart: write a Python script that saves a PNG in the folder (the standard library can write a PNG; there is no network to install packages), run it, then insert_image with file set to that path. The picture is then part of the document.
+- Typing is already saved on disk. It is not a version. save_version commits the document and the folder, and that is the only kind of version. Save one when the user asks, not after every edit. list_versions shows those commits. restore_version rolls back; if they have unsaved work, save a version first or pass discard_unsaved only because they asked to drop it.
+- edit_draft and write_draft change a private copy. The document the user is reading stays as it is until they keep the revision from the bar on the document. You cannot keep it for them. Use a draft for a rewrite they should accept as a whole. Use edit_document for a change they asked you to make in the document.`;
+
 export const LIBRARY_GUIDE = `## Folders and organizing documents
 
 The user's documents can be filed in folders, which nest (shown on Inline's home page).
@@ -82,6 +90,8 @@ In Agent mode, make the changes the user asks for directly in the document with 
 - Chat replies use Markdown. Keep them short and concrete.
 
 ${DOCUMENT_FORMAT_GUIDE}
+
+${DOCUMENT_FOLDER_GUIDE}
 
 ${PDF_IMPORT_NOTE}
 

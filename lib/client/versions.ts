@@ -3,7 +3,17 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { api, Store } from "@/lib/client/api";
 
-export type VersionSummary = { id: string; documentId: string; label: string; author: "user" | "claude" | "auto"; createdAt: number; wordCount?: number; pendingChanges?: number };
+export type VersionSummary = {
+  id: string;
+  documentId: string;
+  label: string;
+  author: "user" | "claude";
+  createdAt: number;
+  wordCount?: number;
+  pendingChanges?: number;
+  /** Other files in the folder that this version committed. */
+  files?: string[];
+};
 
 /**
  * Version lists and version contents, cached per document so the history

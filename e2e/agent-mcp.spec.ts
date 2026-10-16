@@ -630,10 +630,12 @@ test.describe("documents and settings", () => {
     await mcp.ok("keep_changes", { document_id: id, all: true });
 
     expect(await mcp.ok("list_versions", { document_id: id })).toContain(`${versionId}: "Before rewrite" · claude`);
-    expect(await mcp.ok("restore_version", { document_id: id, version_id: versionId })).toContain('to "Before rewrite"');
+    expect(await mcp.ok("restore_version", { document_id: id, version_id: versionId, discard_unsaved: true })).toContain('to "Before rewrite"');
     await expect.poll(() => readableParagraphs(page)).toEqual(["Version one text."]);
     await expect(page.locator(".review-bar")).toHaveCount(0);
-    expect(await mcp.ok("list_versions", { document_id: id })).toContain("Before restoring a version");
+    const after = await mcp.ok("list_versions", { document_id: id });
+    expect(after).toContain(`${versionId}: "Before rewrite" · claude`);
+    expect(after).not.toContain("Before restoring");
   });
 });
 

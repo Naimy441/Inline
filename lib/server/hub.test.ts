@@ -258,11 +258,13 @@ describe("versions", () => {
     const saved = await doc.saveVersion("First draft", "user");
     doc.receiveClientSteps(0, [insertStep(textPos(doc, "one"), "number ")], "tab");
     assert.equal(doc.doc.textContent, "Version number one.");
-    await doc.restoreVersion(saved.id);
+    await assert.rejects(doc.restoreVersion(saved.id), /aren't saved/);
+    await doc.restoreVersion(saved.id, { discard: true });
     assert.equal(doc.doc.textContent, "Version one.");
-    const labels = (await doc.versions()).map((version) => version.label);
-    assert.ok(labels.includes("First draft"));
-    assert.ok(labels.includes("Before restoring a version"));
+    assert.deepEqual(
+      (await doc.versions()).map((version) => version.label),
+      ["First draft"],
+    );
     await assert.rejects(doc.restoreVersion("nope"), /not found/i);
   });
 });

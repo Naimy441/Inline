@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { ImageLoader } from "@/lib/doc/docx";
+import { readWorkspaceBytes } from "@/lib/server/repo";
 import { findUpload, mimeForExtension } from "@/lib/server/store";
 
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
@@ -12,6 +13,12 @@ export const loadImage: ImageLoader = async (src) => {
       if (!match) return null;
       const data = match[2] ? Buffer.from(match[3]!, "base64") : Buffer.from(decodeURIComponent(match[3]!), "utf8");
       return { data: new Uint8Array(data), mime: match[1]! };
+    }
+    const workspace = /^\/api\/documents\/([A-Za-z0-9_-]+)\/files\/(.+)$/.exec(src);
+    if (workspace) {
+      const found = await readWorkspaceBytes(workspace[1]!, decodeURIComponent(workspace[2]!)).catch(() => null);
+      if (!found || !found.mime.startsWith("image/")) return null;
+      return found.data.byteLength > MAX_IMAGE_BYTES ? null : { data: new Uint8Array(found.data), mime: found.mime };
     }
     const upload = /^\/api\/uploads\/([A-Za-z0-9_-]+)(?:\.\w+)?$/.exec(src);
     if (upload) {

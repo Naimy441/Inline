@@ -203,11 +203,12 @@ describe("recovering from mistakes", () => {
   test("a rewrite can be rolled back from the checkpoint the in-app agent takes", async () => {
     const original = "Keep this exact wording.\n\nAnd this.";
     const { live, browser } = await openInBrowser(original);
+    let checkpoint = "";
     const chat = await connectInProcess(() => ({
       author: "chat-undo",
       documentId: live.id,
       beforeWrite: async (doc) => {
-        await doc.checkpoint("Before Claude's edits");
+        checkpoint = await doc.checkpoint("Before Claude's edits");
       },
     }));
     await chat.call("write_document", { content: "Completely different." });
@@ -215,9 +216,9 @@ describe("recovering from mistakes", () => {
     assert.equal(docToMarkdown(live.doc), "Completely different.");
 
     const versions = await chat.call("list_versions");
-    const id = versions.text.match(/^- (\S+): "Before Claude's edits"/m)?.[1];
-    assert.ok(id, versions.text);
-    await chat.call("restore_version", { version_id: id });
+    assert.equal(versions.text.includes("Before Claude's edits"), false);
+    assert.match(checkpoint, /^[0-9a-f]{40}$/);
+    await chat.call("restore_version", { version_id: checkpoint, discard_unsaved: true });
     assert.equal(docToMarkdown(live.doc), original);
     assert.equal(browser.markdown, original, "the browser follows the restore");
     await chat.close();

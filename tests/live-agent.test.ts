@@ -69,7 +69,10 @@ describe("live Claude Code", { skip: LIVE ? false : "set INLINE_LIVE_AGENT=1 to 
     assert.ok(tools.some((name) => /^mcp__inline__(edit_document|multi_edit_document|write_document)$/.test(name)), tools.join(", "));
     assert.ok(message.changes?.some((change) => change.documentId === doc.id));
     const versions = await doc.versions();
-    assert.ok(versions.some((version) => version.label === "Before Claude's edits"));
+    assert.equal(versions.some((version) => version.label === "Before Claude's edits"), false);
+    const checkpoint = message.changes?.find((change) => change.documentId === doc.id)?.checkpoint;
+    assert.ok(checkpoint);
+    assert.equal(versions.some((version) => version.id === checkpoint), false);
   });
 
   test("in Ask mode Claude answers without changing the document", async () => {

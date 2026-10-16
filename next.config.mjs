@@ -47,7 +47,18 @@ const nextConfig = {
     proxyClientMaxBodySize: "1gb",
   },
   async headers() {
-    return [{ source: "/:path*", headers: securityHeaders }];
+    return [
+      { source: "/:path*", headers: securityHeaders },
+      {
+        // A file from a document folder is not an app page. The general policy
+        // allows inline script, which an SVG opened from that folder must not get.
+        source: "/api/documents/:id/files/:path*",
+        headers: [
+          { key: "Content-Security-Policy", value: "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+        ],
+      },
+    ];
   },
 };
 

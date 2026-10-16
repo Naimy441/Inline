@@ -19,7 +19,7 @@ export const POST = route(async (request, context: ChatContext) => {
   if (body.versionId && !doc) throw notFound("Document not found.");
   const removed = await chat.rewind(body.messageId);
   if (doc && body.versionId) {
-    const version = await doc.restoreVersion(body.versionId);
+    const version = await doc.restoreVersion(body.versionId, { discard: true });
     doc.noteUserEvent(`restored the document to "${version.label}" and rewound this chat to before that reply`);
   }
   return json({ text: removed?.text ?? "" });

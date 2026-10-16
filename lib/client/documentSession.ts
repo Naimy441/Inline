@@ -72,6 +72,7 @@ type ServerEvent =
   | { type: "activity"; activity: AgentActivity | null }
   | { type: "command"; command: ClientCommand }
   | { type: "tabs"; tabs: DocumentTab[] }
+  | { type: "draft"; draft: { updatedAt: number; words: number } | null }
   | { type: "canvas"; html: string; outputs: Record<string, CanvasOutput> }
   | { type: "deleted" };
 
@@ -99,6 +100,8 @@ export type DocumentUiState = {
   flow: boolean;
   /** Editing changes the document directly; suggesting records edits for review; viewing is read-only. */
   mode: EditorMode;
+  /** A revision Claude prepared. The document itself is unchanged until the user keeps it. */
+  draft: { updatedAt: number; words: number } | null;
   /** Canvas HTML, when this document is a canvas. */
   canvasHtml: string | null;
   canvasOutputs: Record<string, CanvasOutput>;
@@ -244,6 +247,7 @@ export class DocumentSession {
     exporting: false,
     flow: false,
     mode: "editing",
+    draft: null,
     canvasHtml: null,
     canvasOutputs: {},
   });
@@ -913,6 +917,9 @@ export class DocumentSession {
         return;
       case "tabs":
         setTabs(event.tabs);
+        return;
+      case "draft":
+        this.ui.set((ui) => ({ ...ui, draft: event.draft }));
         return;
       case "canvas":
         this.ui.set((ui) => ({ ...ui, canvasHtml: event.html, canvasOutputs: event.outputs }));

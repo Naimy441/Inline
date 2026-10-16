@@ -125,7 +125,7 @@ describe("agent work over MCP", () => {
     const versions = await call("list_versions", { document_id: id });
     const versionId = versions.text.match(/^- (\S+): "Before cuts"/m)?.[1];
     assert.ok(versionId, versions.text);
-    assert.equal((await call("restore_version", { document_id: id, version_id: versionId })).isError, false);
+    assert.equal((await call("restore_version", { document_id: id, version_id: versionId, discard_unsaved: true })).isError, false);
     const read = await call("read_document", { document_id: id });
     assert.match(read.text, /We ship in May/);
     assert.match(read.text, /Hiring is slow/);

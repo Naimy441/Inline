@@ -6,8 +6,9 @@ import type { DocComment, DocumentMeta } from "@/lib/doc/settings";
 
 /**
  * File-backed persistence. Inline runs next to the user's Claude Code, so its
- * data lives on the local disk: one JSON file per document, chat and saved
- * version, written atomically (temp file + rename) through a per-file queue.
+ * data lives on the local disk: one git repository per document, plus chats,
+ * written atomically (temp file + rename) through a per-file queue. A version
+ * of a document is a commit in that repository, not a separate snapshot.
  *
  * Location: $INLINE_DATA_DIR, or ./.inline in the working directory.
  */
@@ -22,23 +23,6 @@ export type StoredDocumentFile = {
   /** Set when the document is, or has been, a canvas. */
   canvas?: CanvasFile;
 };
-
-export type StoredVersion = {
-  id: string;
-  documentId: string;
-  label: string;
-  createdAt: number;
-  author: "user" | "claude" | "auto";
-  title: string;
-  doc: unknown;
-  wordCount: number;
-  /** Changes that were still pending review when the version was saved; restored with it. */
-  hunks?: HunkJSON[];
-  /** The canvas HTML at this version, when the document was a canvas. */
-  canvas?: CanvasFile;
-};
-
-export type VersionSummary = Omit<StoredVersion, "doc" | "hunks" | "canvas"> & { pendingChanges?: number };
 
 export function dataDir() {
   return path.resolve(process.env.INLINE_DATA_DIR || path.join(/* turbopackIgnore: true */ process.cwd(), ".inline"));
@@ -78,7 +62,7 @@ export class FileSummaryCache<T> {
 }
 
 export function documentFilePath(id: string) {
-  return dir("documents", `${assertSafeId(id)}.json`);
+  return dir("repos", assertSafeId(id), "document.json");
 }
 
 export function chatFilePath(id: string) {
@@ -134,19 +118,37 @@ async function listJson(folder: string): Promise<string[]> {
 // --- documents --------------------------------------------------------------
 
 export async function readDocumentFile(id: string) {
-  return readJson<StoredDocumentFile>(dir("documents", `${assertSafeId(id)}.json`));
+  assertSafeId(id);
+  const primary = await readJson<StoredDocumentFile>(documentFilePath(id));
+  if (primary) return primary;
+  const legacy = await readJson<StoredDocumentFile>(dir("documents", `${id}.json`));
+  if (!legacy) return null;
+  const { migrateLegacyDocument } = await import("@/lib/server/repo");
+  await migrateLegacyDocument(id);
+  return readJson<StoredDocumentFile>(documentFilePath(id));
 }
 
 export async function writeDocumentFile(file: StoredDocumentFile) {
-  await writeJsonAtomic(dir("documents", `${assertSafeId(file.meta.id)}.json`), file);
+  // Enqueue before the first await so parallel writes land in call order.
+  const target = documentFilePath(file.meta.id);
+  await serialized(target, async () => {
+    const { ensureDocumentRepo } = await import("@/lib/server/repo");
+    await ensureDocumentRepo(file.meta.id);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
+    await fs.writeFile(tmp, JSON.stringify(file), "utf8");
+    await fs.rename(tmp, target);
+  });
 }
 
 export async function deleteDocumentFile(id: string) {
-  await removeFile(dir("documents", `${assertSafeId(id)}.json`));
+  assertSafeId(id);
+  await removeFile(dir("documents", `${id}.json`));
   await removeFile(dir("thumbnails", `${id}.img`));
   await removeFile(dir("thumbnails", `${id}.dark.img`));
   await removeFile(dir("pdf-imports", `${id}.json`));
-  await fs.rm(dir("versions", assertSafeId(id)), { recursive: true, force: true });
+  await fs.rm(dir("repos", id), { recursive: true, force: true });
+  await fs.rm(dir("versions", id), { recursive: true, force: true });
 }
 
 export type ThumbnailTheme = "light" | "dark";
@@ -173,96 +175,17 @@ export async function readThumbnail(id: string, theme: ThumbnailTheme = "light")
 }
 
 export async function listDocumentIds() {
-  return listJson(dir("documents"));
-}
-
-// --- versions ---------------------------------------------------------------
-// Each version is its own file; versions/<doc>/index.json lists their summaries
-// so listing history doesn't read every full snapshot. A missing or damaged
-// index is rebuilt from the files.
-
-const INDEX = "index";
-
-function summarize(version: StoredVersion): VersionSummary {
-  const { doc: _doc, hunks, canvas: _canvas, ...summary } = version;
-  return hunks?.length ? { ...summary, pendingChanges: hunks.length } : summary;
-}
-
-async function rebuildIndex(documentId: string): Promise<VersionSummary[]> {
-  const ids = (await listJson(dir("versions", assertSafeId(documentId)))).filter((id) => id !== INDEX);
-  const versions = await Promise.all(ids.map((id) => readVersion(documentId, id).catch(() => null)));
-  const summaries = versions.filter((version): version is StoredVersion => Boolean(version)).map(summarize);
-  await writeJsonAtomic(dir("versions", documentId, `${INDEX}.json`), summaries);
-  return summaries;
-}
-
-const indexLocks = new Map<string, Promise<unknown>>();
-
-/** Read-modify-write the version index one change at a time per document. */
-async function updateIndex(documentId: string, change: (summaries: VersionSummary[]) => VersionSummary[]) {
-  const previous = indexLocks.get(documentId) ?? Promise.resolve();
-  const next = previous.catch(() => undefined).then(async () => {
-    const current = (await readJson<VersionSummary[]>(dir("versions", documentId, `${INDEX}.json`)).catch(() => null)) ?? (await rebuildIndex(documentId));
-    await writeJsonAtomic(dir("versions", documentId, `${INDEX}.json`), change(Array.isArray(current) ? current : []));
-  });
-  indexLocks.set(documentId, next);
+  const ids = new Set<string>();
   try {
-    await next;
-  } finally {
-    if (indexLocks.get(documentId) === next) indexLocks.delete(documentId);
+    for (const name of await fs.readdir(dir("repos"))) {
+      if (!SAFE_ID.test(name)) continue;
+      if (await fs.stat(dir("repos", name, "document.json")).catch(() => null)) ids.add(name);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-}
-
-export async function writeVersion(version: StoredVersion) {
-  assertSafeId(version.documentId);
-  assertSafeId(version.id);
-  await writeJsonAtomic(dir("versions", version.documentId, `${version.id}.json`), version);
-  await updateIndex(version.documentId, (summaries) => [...summaries.filter((item) => item.id !== version.id), summarize(version)]);
-}
-
-export async function readVersion(documentId: string, id: string) {
-  if (id === INDEX) return null;
-  return readJson<StoredVersion>(dir("versions", assertSafeId(documentId), `${assertSafeId(id)}.json`));
-}
-
-export async function listVersions(documentId: string): Promise<VersionSummary[]> {
-  assertSafeId(documentId);
-  let summaries = await readJson<VersionSummary[]>(dir("versions", documentId, `${INDEX}.json`)).catch(() => null);
-  if (!Array.isArray(summaries)) summaries = (await listJson(dir("versions", documentId))).length ? await rebuildIndex(documentId) : [];
-  return [...summaries].sort((a, b) => b.createdAt - a.createdAt);
-}
-
-export async function deleteVersion(documentId: string, id: string) {
-  await removeFile(dir("versions", assertSafeId(documentId), `${assertSafeId(id)}.json`));
-  await updateIndex(documentId, (summaries) => summaries.filter((item) => item.id !== id));
-}
-
-/**
- * Which automatic versions to drop. Named versions (saved by the user or
- * Claude) are always kept; automatic ones (autosaves, checkpoints before
- * Claude's edits) are kept for the last day, then one per day for a month,
- * then one per week.
- */
-export function versionsToPrune(versions: readonly VersionSummary[], now = Date.now()): string[] {
-  const DAY = 24 * 60 * 60 * 1000;
-  const seen = new Set<string>();
-  const drop: string[] = [];
-  for (const version of [...versions].sort((a, b) => b.createdAt - a.createdAt)) {
-    if (version.author !== "auto") continue;
-    const age = now - version.createdAt;
-    if (age < DAY) continue;
-    const bucket = age < 30 * DAY ? `d${Math.floor(version.createdAt / DAY)}` : `w${Math.floor(version.createdAt / (7 * DAY))}`;
-    if (seen.has(bucket)) drop.push(version.id);
-    else seen.add(bucket);
-  }
-  return drop;
-}
-
-export async function pruneVersions(documentId: string, now = Date.now()) {
-  const drop = versionsToPrune(await listVersions(documentId), now);
-  for (const id of drop) await removeFile(dir("versions", assertSafeId(documentId), `${assertSafeId(id)}.json`));
-  if (drop.length) await updateIndex(documentId, (summaries) => summaries.filter((item) => !drop.includes(item.id)));
-  return drop.length;
+  for (const id of await listJson(dir("documents"))) ids.add(id);
+  return [...ids];
 }
 
 // --- chats ------------------------------------------------------------------

@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { EditError } from "@/lib/doc/editing";
 import { LockedContentError } from "@/lib/doc/merge";
+import { StaleEpochError, StepConflictError } from "@/lib/server/hub";
 import { log, referenceId } from "@/lib/server/log";
 import { rememberServerOrigin } from "@/lib/server/origin";
-import { StaleEpochError, StepConflictError } from "@/lib/server/hub";
+import { UnsavedChangesError } from "@/lib/server/repo";
 
 /** Small helpers shared by the API route handlers. */
 
@@ -49,6 +50,7 @@ export function route<C>(handler: Handler<C>): Handler<C> {
       if (error instanceof HttpError) return json({ error: error.message, ...error.extra }, { status: error.status });
       if (error instanceof StaleEpochError) return json({ error: error.message, stale: true, epoch: error.epoch }, { status: 409 });
       if (error instanceof StepConflictError) return json({ error: "Version conflict.", version: error.version }, { status: 409 });
+      if (error instanceof UnsavedChangesError) return json({ error: error.message, unsaved: true }, { status: 409 });
       if (error instanceof EditError || error instanceof LockedContentError) return json({ error: error.message }, { status: 422 });
       if (error instanceof Error && error.message === "Invalid id.") return json({ error: "Invalid id." }, { status: 400 });
       const reference = referenceId();

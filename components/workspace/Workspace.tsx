@@ -26,6 +26,7 @@ import { InlineLogo } from "@/components/ui/Logo";
 import { CommentsPanel } from "@/components/workspace/CommentsPanel";
 import { CommentMargin, marginFits } from "@/components/workspace/CommentMargin";
 import { FindBar } from "@/components/workspace/FindBar";
+import { DraftBanner, DraftPreview } from "@/components/workspace/DraftBar";
 import { HistoryPanel, VersionPreview, type VersionSummary } from "@/components/workspace/HistoryPanel";
 import { prefetchVersions } from "@/lib/client/versions";
 import { acquireChat, releaseChat, rememberChat, rememberedChat } from "@/lib/client/chatSession";
@@ -110,6 +111,7 @@ export function Workspace({ documentId }: { documentId: string }) {
   const [draftComment, setDraftComment] = useState<{ from: number; to: number } | null>(null);
   /** A saved version shown in place of the document, from version history. */
   const [versionShown, setVersionShown] = useState<VersionSummary | null>(null);
+  const [draftPreview, setDraftPreview] = useState(false);
   const [setup, setSetup] = useState<{ tab: "page" | "text" | "header" } | null>(null);
   const [styleEditor, setStyleEditor] = useState<{ id: string | null } | null>(null);
   const [shortcuts, setShortcuts] = useState(false);
@@ -185,6 +187,21 @@ export function Workspace({ documentId }: { documentId: string }) {
   const ui = useWorkspaceUi(session);
   // Warm version history once the document is open, so the panel opens with its list.
   const ready = ui.status === "ready";
+  useEffect(() => {
+    if (!ready) return;
+    let cancelled = false;
+    api<{ draft: { updatedAt: number; words: number } | null }>(`/api/documents/${documentId}/draft`)
+      .then((result) => {
+        if (!cancelled) session.ui.set((current) => ({ ...current, draft: result.draft }));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [ready, documentId, session]);
+  useEffect(() => {
+    if (!ui.draft) setDraftPreview(false);
+  }, [ui.draft]);
   useEffect(() => {
     if (!ready) return;
     const timer = setTimeout(() => prefetchVersions(documentId), 2500);
@@ -847,7 +864,7 @@ export function Workspace({ documentId }: { documentId: string }) {
         )}
         <main
           ref={canvasRef}
-          className={`canvas${versionShown && shownPanel === "history" ? " is-previewing" : ""}${!shownPanel && (draftComment || ui.comments.some((comment) => !comment.resolved)) && marginFits(canvasRef.current) ? " with-comments" : ""}`}
+          className={`canvas${(versionShown && shownPanel === "history") || draftPreview ? " is-previewing" : ""}${!shownPanel && (draftComment || ui.comments.some((comment) => !comment.resolved)) && marginFits(canvasRef.current) ? " with-comments" : ""}`}
           style={{ ["--canvas-pad" as string]: `${canvasPad}px` }}
           onDragOver={(event) => {
             if (event.dataTransfer.types.includes("Files")) event.preventDefault();
@@ -893,7 +910,11 @@ export function Workspace({ documentId }: { documentId: string }) {
               <Loader2 size={18} className="spin" />
             </div>
           )}
+          {ui.draft && !versionShown && (
+            <DraftBanner session={session} words={ui.draft.words} previewing={draftPreview} onPreview={() => setDraftPreview((current) => !current)} onClosePreview={() => setDraftPreview(false)} />
+          )}
           {versionShown && shownPanel === "history" && <VersionPreview key={versionShown.id} session={session} version={versionShown} onClose={() => setVersionShown(null)} />}
+          {draftPreview && ui.draft && !versionShown && !isCanvas && <DraftPreview session={session} />}
           <div className={`page-stack-slot${isCanvas ? " is-canvas-hidden" : ""}`}>
             <PageCanvas session={session} meta={meta} pages={ui.pages} zoom={effectiveZoom} printing={ui.printing} flow={false} zoomCommit={zoomCommit} />
           </div>

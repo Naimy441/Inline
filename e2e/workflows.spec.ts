@@ -372,6 +372,8 @@ test.describe("editing", () => {
     await page.locator(".version-row", { hasText: "Checkpoint" }).click();
     await expect(page.locator(".version-page")).toContainText("The original wording.");
     await page.getByRole("button", { name: "Restore", exact: true }).click();
+    await expect(page.getByText("changes that are not a saved version")).toBeVisible();
+    await page.getByRole("button", { name: "Restore anyway" }).click();
     await expect(doc).toContainText("The original wording.");
     await expect(doc).not.toContainText("Rewritten entirely.");
   });

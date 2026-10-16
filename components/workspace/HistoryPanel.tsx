@@ -1,9 +1,9 @@
 "use client";
 
-import { ChevronDown, ChevronUp, History, RotateCcw, Save, Sparkles, X } from "lucide-react";
+import { ChevronDown, ChevronUp, FileText, History, RotateCcw, Save, Sparkles, X } from "lucide-react";
 import { DOMSerializer, Node as PMNode } from "prosemirror-model";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { post } from "@/lib/client/api";
+import { ApiError, api, post } from "@/lib/client/api";
 import type { DocumentSession } from "@/lib/client/documentSession";
 import { refreshVersions, useVersions, versionDoc, type VersionSummary } from "@/lib/client/versions";
 import { schema } from "@/lib/doc/schema";
@@ -31,7 +31,7 @@ function dayLabel(at: number) {
   return date.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", ...(date.getFullYear() === today.getFullYear() ? {} : { year: "numeric" }) });
 }
 
-const AUTHORS = { user: "You", claude: "Claude", auto: "Autosave" } as const;
+const AUTHORS = { user: "You", claude: "Claude" } as const;
 
 /** The version list. Picking one shows it in place of the document (see VersionPreview). */
 export function HistoryPanel({
@@ -51,7 +51,22 @@ export function HistoryPanel({
   const versions = useVersions(session.id);
   const [label, setLabel] = useState("");
   const [saving, setSaving] = useState(false);
+  const [files, setFiles] = useState<Array<{ path: string; kind: string; size: number }> | null>(null);
   const list = useRef<HTMLUListElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api<{ files: Array<{ path: string; kind: string; size: number }> }>(`/api/documents/${session.id}/files`)
+      .then((result) => {
+        if (!cancelled) setFiles(result.files);
+      })
+      .catch(() => {
+        if (!cancelled) setFiles([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session.id, versions]);
 
   const groups = useMemo(() => {
     const result: Array<{ day: string; versions: VersionSummary[] }> = [];
@@ -128,7 +143,7 @@ export function HistoryPanel({
         ) : versions.length === 0 ? (
           <div className="panel-empty small">
             <History size={20} />
-            <p>{hideAi ? "Versions are saved automatically as you work, so you can always go back." : "Versions are saved automatically as you work and before Claude edits, so you can always go back."}</p>
+            <p>Nothing is saved as a version yet. What you type is kept on this computer. Save names a version you can come back to, including files made for this document.</p>
           </div>
         ) : (
           <ul className="version-list" ref={list}>
@@ -156,6 +171,7 @@ export function HistoryPanel({
                             </span>
                           )}
                           {version.wordCount != null && <span>{version.wordCount.toLocaleString()} words</span>}
+                          {version.files && version.files.length > 0 && <span>{version.files.length === 1 ? version.files[0] : `${version.files.length} files`}</span>}
                         </span>
                       </button>
                     </li>
@@ -164,6 +180,28 @@ export function HistoryPanel({
               </li>
             ))}
           </ul>
+        )}
+        {files && files.length > 0 && (
+          <div className="history-files">
+            <div className="version-day">Files</div>
+            <ul>
+              {files.map((file) => (
+                <li key={file.path}>
+                  {file.kind === "image" ? (
+                    <a className="history-file" href={`/api/documents/${session.id}/files/${file.path.split("/").map(encodeURIComponent).join("/")}`} target="_blank" rel="noreferrer">
+                      <img src={`/api/documents/${session.id}/files/${file.path.split("/").map(encodeURIComponent).join("/")}`} alt="" />
+                      <span>{file.path}</span>
+                    </a>
+                  ) : (
+                    <span className="history-file">
+                      <FileText size={14} />
+                      <span>{file.path}</span>
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
       </div>
     </aside>
@@ -193,6 +231,7 @@ export function VersionPreview({ session, version, onClose }: { session: Documen
   const [before, setBefore] = useState<PMNode | null>(null);
   const [failed, setFailed] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
   const [view, setView] = useState<View>("version");
   const [current, setCurrent] = useState(-1);
   const comparing = view !== "version";
@@ -286,16 +325,19 @@ export function VersionPreview({ session, version, onClose }: { session: Documen
     return () => document.removeEventListener("keydown", onKey);
   });
 
-  const restore = async () => {
+  const restore = async (discard: boolean) => {
     setRestoring(true);
     try {
       await session.whenSaved();
-      const hadPending = session.ui.get().hunks.length > 0;
-      await post(`/api/documents/${session.id}/versions/${version.id}/restore`);
-      toast(hadPending ? "Version restored. The text before, with its pending changes, is saved in history." : "Version restored. The text before is saved in history.", { tone: "success" });
+      await post(`/api/documents/${session.id}/versions/${version.id}/restore`, { discard });
+      toast(discard ? "Version restored. Changes since the last saved version were dropped." : "Version restored.", { tone: "success" });
       void refreshVersions(session.id);
       onClose();
     } catch (error) {
+      if (error instanceof ApiError && error.status === 409 && error.body.unsaved) {
+        setDiscarding(true);
+        return;
+      }
       toast(error instanceof Error ? error.message : "Couldn't restore that version.", { tone: "error" });
     } finally {
       setRestoring(false);
@@ -344,11 +386,18 @@ export function VersionPreview({ session, version, onClose }: { session: Documen
           <Button variant="ghost" onClick={onClose}>
             Back to current
           </Button>
-          <Button variant="primary" icon={<RotateCcw size={14} />} loading={restoring} onClick={() => void restore()}>
-            Restore
-          </Button>
+          {discarding ? (
+            <Button variant="primary" icon={<RotateCcw size={14} />} loading={restoring} onClick={() => void restore(true)}>
+              Restore anyway
+            </Button>
+          ) : (
+            <Button variant="primary" icon={<RotateCcw size={14} />} loading={restoring} onClick={() => void restore(false)}>
+              Restore
+            </Button>
+          )}
         </div>
       </div>
+      {discarding && <div className="version-stats">This document has changes that are not a saved version. Restore anyway drops them. Save a version first if you want to keep them.</div>}
       {comparison && (
         <div className="version-stats">
           {comparison.added + comparison.removed === 0 ? (
