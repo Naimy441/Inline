@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { EditorState, TextSelection, type Command } from "prosemirror-state";
 import { ensureBlockIds } from "../doc/ids";
 import { docToMarkdown, markdownToDoc } from "../doc/markdown";
-import { blockPosById, changeCase, insertTab, insertTableOfContents } from "./commands";
+import { blockPosById, changeCase, goToDocumentEdge, insertTab, insertTableOfContents } from "./commands";
 
 function stateFor(markdown: string) {
   return EditorState.create({ doc: ensureBlockIds(markdownToDoc(markdown)) });
@@ -18,6 +18,14 @@ function run(state: EditorState, command: Command) {
   const ok = command(state, (tr) => (next = state.apply(tr)));
   return { ok, state: next };
 }
+
+describe("goToDocumentEdge", () => {
+  it("puts the caret at the end of the last paragraph", () => {
+    const { state } = run(stateFor("Before.\n\nAfter."), goToDocumentEdge("end"));
+    assert.equal(state.selection.$from.parent.textContent, "After.");
+    assert.equal(state.selection.$from.parentOffset, "After.".length);
+  });
+});
 
 describe("changeCase", () => {
   const text = "the **quick** brown fox. it jumps";

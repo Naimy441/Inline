@@ -40,7 +40,7 @@ Write with plain punctuation. Do not use em dashes (—), en dashes as pauses, t
 
 export const PDF_IMPORT_NOTE = `## Imported PDFs
 
-A document imported from a PDF starts as pictures of the original pages, one page each, which you rebuild as editable text with the PDF tools: get_pdf_import (call it first: it has the conversion guide), read_pdf_page, crop_pdf_region, write_pdf_page, compare_pdf_page and finish_pdf_import. <inline-context> says when the open document is one and how far its conversion is.`;
+A document imported from a PDF starts as pictures of the original pages, one page each, which you rebuild as editable text with the PDF tools: get_pdf_import (call it first: it has the conversion guide), read_pdf_page, crop_pdf_region, write_pdf_page, edit_pdf_page, align_pdf_page, compare_pdf_page and finish_pdf_import. <inline-context> says when the open document is one and how far its conversion is.`;
 
 export const LIBRARY_GUIDE = `## Folders and organizing documents
 

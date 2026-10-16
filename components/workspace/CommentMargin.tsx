@@ -115,7 +115,13 @@ export function CommentMargin({
 
   if (!open.length && !draft) return null;
   const hidden = !layout;
-  const place = (id: string) => (layout && layout.tops[id] !== undefined ? { top: layout.tops[id], left: layout.left } : { visibility: "hidden" as const });
+  const place = (id: string) => {
+    if (layout && layout.tops[id] !== undefined) return { top: layout.tops[id], left: layout.left };
+    // The draft has to accept typing on the first frame. visibility:hidden cannot
+    // be focused, so the shortcut's next letter would land in the document instead.
+    if (id === "draft") return { top: 24, left: 24 };
+    return { visibility: "hidden" as const };
+  };
   void width;
   return (
     <div className={`comment-margin${hidden ? " is-hidden" : ""}`} aria-label="Comments">

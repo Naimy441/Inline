@@ -15,7 +15,16 @@ export type RenderedLine = { x: number; y: number; size: number; text: string };
 /** A top-level block on a rendered page: its id, and its top and bottom in points from the page's top. */
 export type RenderedBlock = { id: string; top: number; bottom: number; joined?: boolean; /** For a block sharing a box with the one before: the space between them, in points. */ inside?: number };
 
-export type RenderedPage = { page: number; png: Uint8Array; lines?: RenderedLine[]; blocks?: RenderedBlock[]; /** For a request with a span: the pages (0-based) its blocks take. */ span?: { first: number; last: number } };
+export type RenderedPage = {
+  page: number;
+  png: Uint8Array;
+  lines?: RenderedLine[];
+  blocks?: RenderedBlock[];
+  /** For a request with a span: the pages (0-based) its blocks take, */
+  span?: { first: number; last: number };
+  /** and the blocks on each of them (the first few). */
+  spanBlocks?: Array<{ page: number; blocks: RenderedBlock[] }>;
+};
 
 type Waiting = { documentId: string; resolve: (pages: RenderedPage[]) => void; timer: ReturnType<typeof setTimeout> };
 

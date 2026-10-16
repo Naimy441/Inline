@@ -9,6 +9,7 @@ import { EditorView } from "prosemirror-view";
 import type { HunkJSON } from "@/lib/doc/review";
 import { schema } from "@/lib/doc/schema";
 import { DEFAULT_TAB_STOP, layoutKey, pageSize, type DocComment, type DocumentMeta, type DocumentTab } from "@/lib/doc/settings";
+import { stylesOf } from "@/lib/doc/styles";
 import { setTabs } from "@/lib/client/tabs";
 import { api, ApiError, del, patch, post, Store, uploadFile } from "@/lib/client/api";
 import { setCommentState } from "@/lib/editor/comments";
@@ -183,6 +184,28 @@ function settleLayout(pages: () => number) {
   });
 }
 
+/** One page of a laid-out model, drawn the same way an open editor answers a screenshot. */
+async function rasterizeModelPage(model: PdfDocumentModel, index: number, scale: number): Promise<Blob | null> {
+  const page = model.pages[index];
+  if (!page) return null;
+  const [{ buildPdf }, { openPdf }] = await Promise.all([import("@/lib/pdf/pdfWriter"), import("@/lib/pdf/import/prepare")]);
+  const { pdf, close } = await openPdf(buildPdf({ ...model, pages: [page] }));
+  try {
+    const proxy = await pdf.getPage(1);
+    const viewport = proxy.getViewport({ scale: Math.max(0.5, Math.min(4, scale || 2)) });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    await proxy.render({ canvasContext: canvas.getContext("2d")!, canvas, viewport, background: "#ffffff" } as Parameters<typeof proxy.render>[0]).promise;
+    const png = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+    canvas.width = 0;
+    canvas.height = 0;
+    return png;
+  } finally {
+    close();
+  }
+}
+
 function randomClientId() {
   const bytes = new Uint8Array(9);
   crypto.getRandomValues(bytes);
@@ -316,39 +339,43 @@ export class DocumentSession {
     const blocks: Array<{ id: string; top: number; bottom: number; joined?: boolean; inside?: number }>[] = [];
     const model = await this.pdfModel(() => {
       if (command.span) span = this.pagesOf(command.span.first, command.span.last);
-      const wanted = span ? [span.first, ...command.pages] : command.pages;
+      const measured = span as { first: number; last: number } | null;
+      const wanted = measured ? [...Array.from({ length: Math.min(measured.last, measured.first + 4) - measured.first + 1 }, (_, k) => measured.first + k), ...command.pages] : command.pages;
       for (const index of wanted) blocks[index] = this.blocksOnPage(index);
     });
-    const [{ buildPdf }, { openPdf }, { pageLines }] = await Promise.all([import("@/lib/pdf/pdfWriter"), import("@/lib/pdf/import/prepare"), import("@/lib/pdf/import/pageLines")]);
+    const { pageLines } = await import("@/lib/pdf/import/pageLines");
     const form = new FormData();
     form.append("requestId", command.requestId);
     const pages = [...command.pages];
     const measured = span as { first: number; last: number } | null;
     if (measured) {
       form.append("span", JSON.stringify(measured));
+      // Where the blocks are on every page the run takes, to say what ran over and by how much.
+      const sheets: Array<{ page: number; blocks: (typeof blocks)[number] }> = [];
+      for (let index = measured.first; index <= Math.min(measured.last, measured.first + 4); index += 1) sheets.push({ page: index, blocks: blocks[index] ?? [] });
+      form.append("span-blocks", JSON.stringify(sheets));
       pages.unshift(measured.first);
     }
     for (const index of pages) {
       const page = model.pages[index];
       if (!page) continue;
-      const { pdf, close } = await openPdf(buildPdf({ ...model, pages: [page] }));
-      try {
-        const proxy = await pdf.getPage(1);
-        const viewport = proxy.getViewport({ scale: Math.max(0.5, Math.min(4, command.scale || 2)) });
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.ceil(viewport.width);
-        canvas.height = Math.ceil(viewport.height);
-        await proxy.render({ canvasContext: canvas.getContext("2d")!, canvas, viewport, background: "#ffffff" } as Parameters<typeof proxy.render>[0]).promise;
-        const png = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
-        canvas.width = 0;
-        if (png) form.append(`page-${index}`, png, `page-${index}.png`);
-        form.append(`lines-${index}`, JSON.stringify(pageLines(page)));
-        form.append(`blocks-${index}`, JSON.stringify(blocks[index] ?? this.blocksOnPage(index)));
-      } finally {
-        close();
-      }
+      const png = await rasterizeModelPage(model, index, command.scale);
+      if (png) form.append(`page-${index}`, png, `page-${index}.png`);
+      form.append(`lines-${index}`, JSON.stringify(pageLines(page)));
+      form.append(`blocks-${index}`, JSON.stringify(blocks[index] ?? this.blocksOnPage(index)));
     }
     await fetch(`/api/documents/${this.id}/render`, { method: "POST", body: form });
+  }
+
+  /**
+   * One page (0-based) as a PNG from the editor's own layout. `pages` is how
+   * many pages that layout produced; `png` is null when `index` is past the end.
+   */
+  async picturePage(index: number, scale = 1.5): Promise<{ pages: number; png: Blob | null }> {
+    const model = await this.pdfModel();
+    const pages = model.pages.length;
+    if (index < 0 || index >= pages) return { pages, png: null };
+    return { pages, png: await rasterizeModelPage(model, index, scale) };
   }
 
   /**
@@ -533,6 +560,7 @@ export class DocumentSession {
         geometry: () => this.geometry(),
         tabStop: () => this.meta?.settings.tabStop ?? DEFAULT_TAB_STOP,
         fontLines: () => (this.meta ?? snapshot.meta)?.settings.lineModel === "font",
+        styles: () => stylesOf((this.meta ?? snapshot.meta)?.settings ?? {}),
         onPages: (layout) => {
           this.latestLayout = layout;
           this.ui.set((ui) => (ui.pages === layout.pages ? ui : { ...ui, pages: layout.pages }));

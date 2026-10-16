@@ -3,6 +3,7 @@
 import { Check, CloudOff, Download, History, ListTree, Loader2, MessageSquare, Moon, MoreHorizontal, PanelRight, Sparkles, Sun } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { flushSync } from "react-dom";
 import type { EditorState } from "prosemirror-state";
 import type { SelectionContext } from "@/lib/agent/types";
 import { api, patch, post, uploadFile } from "@/lib/client/api";
@@ -44,7 +45,9 @@ import { ShortcutsDialog } from "@/components/workspace/ShortcutsDialog";
 import { ContextMenu } from "@/components/workspace/ContextMenu";
 import { AgentLocator, OfflineNotice, PdfImportNotice } from "@/components/workspace/CanvasNotices";
 import { SpecialCharactersDialog } from "@/components/workspace/SpecialCharactersDialog";
+import { StyleDialog } from "@/components/workspace/StyleDialog";
 import { Toolbar } from "@/components/workspace/Toolbar";
+import { themeChoice } from "@/lib/doc/styles";
 
 type Panel = "agent" | "comments" | "history" | null;
 type Zoom = number | "fit";
@@ -107,6 +110,7 @@ export function Workspace({ documentId }: { documentId: string }) {
   /** A saved version shown in place of the document, from version history. */
   const [versionShown, setVersionShown] = useState<VersionSummary | null>(null);
   const [setup, setSetup] = useState<{ tab: "page" | "text" | "header" } | null>(null);
+  const [styleEditor, setStyleEditor] = useState<{ id: string | null } | null>(null);
   const [shortcuts, setShortcuts] = useState(false);
   const [counting, setCounting] = useState(false);
   const [charmap, setCharmap] = useState(false);
@@ -417,8 +421,13 @@ export function Workspace({ documentId }: { documentId: string }) {
     const { from, to } = session.view.state.selection;
     // With no side panel open and room beside the page, the comment is written in the margin next to its text.
     const sidePanel = focusRef.current && panel === "agent" ? null : panel;
-    if (sidePanel !== null || !marginFits(canvasRef.current)) setPanel("comments");
-    setDraftComment({ from, to });
+    // Paint the field before this shortcut returns. The next key is already waiting,
+    // and it has to land in the comment, not replace the selected text.
+    flushSync(() => {
+      if (sidePanel !== null || !marginFits(canvasRef.current)) setPanel("comments");
+      setDraftComment({ from, to });
+    });
+    document.querySelector<HTMLTextAreaElement>(".comment-card.is-draft .comment-input")?.focus({ preventScroll: true });
     session.setCommentDraft({ from, to });
   }, [session, setPanel, panel]);
   const endDraft = useCallback(() => {
@@ -570,6 +579,13 @@ export function Workspace({ documentId }: { documentId: string }) {
     print: () => void session.print(),
     reveal: () => void session.whenSaved().then(() => revealOnDisk({ documentId })),
     pageSetup: (tab = "page") => setSetup({ tab }),
+    editStyle: (styleId) => setStyleEditor({ id: styleId }),
+    applyTheme: (themeId) => {
+      if (!meta) return;
+      const choice = themeChoice(themeId);
+      void session.updateMeta({ settings: { ...meta.settings, theme: choice.theme, fontFamily: choice.fontFamily } as unknown as Record<string, unknown> }).catch((error: Error) => toast(error.message, { tone: "error" }));
+    },
+    settings: meta?.settings,
     history: () => setPanel("history"),
     trash: async () => {
       await patch(`/api/documents/${documentId}`, { trashed: true });
@@ -797,6 +813,7 @@ export function Workspace({ documentId }: { documentId: string }) {
         onLink={() => setLinkEditing(true)}
         onComment={startComment}
         onImage={() => imageInput.current?.click()}
+        onEditStyle={(styleId) => setStyleEditor({ id: styleId })}
         mode={ui.mode}
       />
         )}
@@ -939,6 +956,7 @@ export function Workspace({ documentId }: { documentId: string }) {
       </footer>
 
       <PageSetupDialog open={Boolean(setup)} initialTab={setup?.tab} session={session} settings={meta?.settings} onClose={() => setSetup(null)} />
+      <StyleDialog open={styleEditor !== null} styleId={styleEditor?.id ?? null} session={session} settings={meta?.settings} onClose={() => setStyleEditor(null)} />
       <ShortcutsDialog open={shortcuts} onClose={() => setShortcuts(false)} hideAi={focusMode} />
       <Dialog
         open={exporting !== null}

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { EditError } from "@/lib/doc/editing";
 import { LockedContentError } from "@/lib/doc/merge";
 import { log, referenceId } from "@/lib/server/log";
+import { rememberServerOrigin } from "@/lib/server/origin";
 import { StaleEpochError, StepConflictError } from "@/lib/server/hub";
 
 /** Small helpers shared by the API route handlers. */
@@ -41,6 +42,7 @@ type Handler<C> = (request: Request, context: C) => Promise<Response>;
 /** Wrap a route handler so thrown errors become JSON responses. */
 export function route<C>(handler: Handler<C>): Handler<C> {
   return async (request, context) => {
+    rememberServerOrigin(request);
     try {
       return await handler(request, context);
     } catch (error) {

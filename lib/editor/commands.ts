@@ -1,10 +1,11 @@
-import { lift, setBlockType, toggleMark, wrapIn } from "prosemirror-commands";
+import { chainCommands, lift, setBlockType, splitBlock, toggleMark, wrapIn } from "prosemirror-commands";
 import { Fragment, type Attrs, type MarkType, type Node as PMNode, type NodeType } from "prosemirror-model";
 import { liftListItem, sinkListItem, wrapInList } from "prosemirror-schema-list";
 import { NodeSelection, TextSelection, type Command, type EditorState } from "prosemirror-state";
 import { isInTable } from "prosemirror-tables";
 import { pictureCrop, pictureRotate, pictureWrap, type PictureCrop, type PictureWrap } from "@/lib/doc/picture";
 import { fileLinkHref, MAX_INDENT, safeHref, schema, type Align } from "@/lib/doc/schema";
+import { findStyle, nodeStyleId, resolveStyle, storedStyleId, structuralRole, type ParagraphStyle, type StyleRole } from "@/lib/doc/styles";
 
 const CITATION_PLACEHOLDER = "(Author, Year)";
 const BIBLIOGRAPHY_PLACEHOLDER = "Author. Title. Publisher, Year.";
@@ -125,6 +126,173 @@ export function setBlock(kind: BlockKind): Command {
     });
     if (applied) dispatch(tr.scrollIntoView());
     return applied;
+  };
+}
+
+/** The style of every selected text block, or null when they disagree. */
+export function currentStyleId(state: EditorState): string | null {
+  const { $from } = state.selection;
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    if ($from.node(depth).type === nodes.blockquote) return nodeStyleId($from.node(depth));
+  }
+  const blocks = textblocksInSelection(state);
+  if (!blocks.length) return $from.parent.isTextblock ? nodeStyleId($from.parent) : null;
+  const ids = new Set(blocks.map(({ node }) => nodeStyleId(node)));
+  return ids.size === 1 ? [...ids][0]! : null;
+}
+
+function typeForRole(role: StyleRole) {
+  switch (role) {
+    case "title":
+      return nodes.title!;
+    case "subtitle":
+      return nodes.subtitle!;
+    case "heading":
+      return nodes.heading!;
+    case "code":
+      return nodes.code_block!;
+    default:
+      return nodes.paragraph!;
+  }
+}
+
+/** Direct formatting stays; only the style (and the block type it implies) changes. */
+function attrsForStyle(node: PMNode, type: NodeType, styleId: string, role: { role: StyleRole; level: number }) {
+  const spec = type.spec.attrs ?? {};
+  const attrs: Record<string, unknown> = {};
+  for (const key of Object.keys(spec)) {
+    if (key === "style" || key === "level") continue;
+    if (key in node.attrs) attrs[key] = node.attrs[key];
+  }
+  attrs.style = storedStyleId(styleId, role);
+  if (role.role === "heading") attrs.level = role.level;
+  return attrs;
+}
+
+function applyStyleToBlock(tr: import("prosemirror-state").Transaction, pos: number, node: PMNode, styleId: string, sheet: readonly ParagraphStyle[]) {
+  const role = structuralRole(sheet, styleId);
+  if (role.role === "quote") return false;
+  const type = typeForRole(role.role);
+  const mapped = tr.mapping.map(pos);
+  const attrs = attrsForStyle(node, type, styleId, role);
+  try {
+    if (type === nodes.code_block || node.type === nodes.code_block) tr.setBlockType(mapped, mapped + node.nodeSize, type, attrs);
+    else tr.setNodeMarkup(mapped, type, attrs);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Paragraphs that use `fromId` take `toId` instead. Used when a style is deleted,
+ * so the text keeps a style and does not keep a private copy of the old one.
+ */
+export function replaceStyleUses(fromId: string, toId: string, sheet: readonly ParagraphStyle[]): Command {
+  if (!findStyle(sheet, toId)) return () => false;
+  return (state, dispatch) => {
+    const hits: number[] = [];
+    state.doc.descendants((node, pos) => {
+      if ((node.isTextblock || node.type === nodes.blockquote) && nodeStyleId(node) === fromId) hits.push(pos);
+    });
+    if (!hits.length) return false;
+    if (!dispatch) return true;
+    const tr = state.tr;
+    const role = structuralRole(sheet, toId);
+    for (const pos of hits.reverse()) {
+      const mapped = tr.mapping.map(pos);
+      const node = tr.doc.nodeAt(mapped);
+      if (!node) continue;
+      if (node.type === nodes.blockquote) {
+        if (role.role === "quote") tr.setNodeMarkup(mapped, undefined, { ...node.attrs, style: storedStyleId(toId, role) });
+        continue;
+      }
+      if (role.role !== "quote") applyStyleToBlock(tr, pos, node, toId, sheet);
+    }
+    dispatch(tr.scrollIntoView());
+    return true;
+  };
+}
+
+/** Apply a named style. The paragraph keeps its own size, spacing and character formatting. */
+export function applyStyle(styleId: string, sheet: readonly ParagraphStyle[]): Command {
+  if (!findStyle(sheet, styleId)) return () => false;
+  const role = structuralRole(sheet, styleId);
+  return (state, dispatch) => {
+    if (role.role === "quote") return applyQuoteStyle(styleId, role)(state, dispatch);
+    const insideQuote = quoteDepth(state) > 0;
+    const apply: Command = (current, currentDispatch) => {
+      const { from, to } = current.selection;
+      if (!currentDispatch) return true;
+      const tr = current.tr;
+      let applied = false;
+      current.doc.nodesBetween(from, to, (node, pos) => {
+        if (!node.isTextblock) return true;
+        applied = applyStyleToBlock(tr, pos, node, styleId, sheet) || applied;
+        return false;
+      });
+      if (applied) currentDispatch(tr.scrollIntoView());
+      return applied;
+    };
+    return insideQuote ? chainCommands(lift, apply)(state, dispatch) : apply(state, dispatch);
+  };
+}
+
+function quoteDepth(state: EditorState) {
+  const { $from } = state.selection;
+  for (let depth = $from.depth; depth > 0; depth -= 1) if ($from.node(depth).type === nodes.blockquote) return depth;
+  return 0;
+}
+
+function applyQuoteStyle(styleId: string, role: { role: StyleRole; level: number }): Command {
+  return (state, dispatch) => {
+    const depth = quoteDepth(state);
+    if (depth) {
+      if (!dispatch) return true;
+      const pos = state.selection.$from.before(depth);
+      const node = state.selection.$from.node(depth);
+      dispatch(state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, style: storedStyleId(styleId, role) }).scrollIntoView());
+      return true;
+    }
+    let tr: import("prosemirror-state").Transaction | undefined;
+    if (!wrapIn(nodes.blockquote!)(state, (next) => { tr = next; })) return false;
+    if (!dispatch || !tr) return true;
+    const stored = storedStyleId(styleId, role);
+    if (stored) {
+      const $pos = tr.selection.$from;
+      for (let level = $pos.depth; level > 0; level -= 1) {
+        if ($pos.node(level).type === nodes.blockquote) {
+          tr.setNodeMarkup($pos.before(level), undefined, { style: stored });
+          break;
+        }
+      }
+    }
+    dispatch(tr.scrollIntoView());
+    return true;
+  };
+}
+
+/**
+ * Enter keeps the first paragraph's style and gives the new one the style
+ * that style names as next (a heading's next style is Normal).
+ */
+export function splitWithNextStyle(sheet: () => readonly ParagraphStyle[]): Command {
+  return (state, dispatch, view) => {
+    const parent = state.selection.$from.parent;
+    if (!parent.isTextblock) return false;
+    const styles = sheet();
+    const nextId = resolveStyle(styles, nodeStyleId(parent))?.next;
+    if (!nextId || nextId === nodeStyleId(parent) || !findStyle(styles, nextId)) return splitBlock(state, dispatch, view);
+    return splitBlock(
+      state,
+      dispatch &&
+        ((tr) => {
+          const $pos = tr.selection.$from;
+          if ($pos.parent.isTextblock) applyStyleToBlock(tr, $pos.before($pos.depth), $pos.parent, nextId, styles);
+          dispatch(tr.scrollIntoView());
+        }),
+      view,
+    );
   };
 }
 
@@ -285,6 +453,15 @@ function insertBlock(node: PMNode, enter = false): Command {
     cursor = enter ? after + 1 : Math.min(cursor + 1, tr.doc.content.size);
     tr.setSelection(TextSelection.near(tr.doc.resolve(cursor)));
     dispatch(tr.scrollIntoView());
+    return true;
+  };
+}
+
+/** Caret to the start or end of the document. Always handled, so the browser doesn't move it on its own. */
+export function goToDocumentEdge(edge: "start" | "end"): Command {
+  return (state, dispatch) => {
+    const selection = edge === "end" ? TextSelection.atEnd(state.doc) : TextSelection.atStart(state.doc);
+    if (!state.selection.eq(selection)) dispatch?.(state.tr.setSelection(selection).scrollIntoView());
     return true;
   };
 }

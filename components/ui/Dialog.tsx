@@ -1,7 +1,7 @@
 "use client";
 
 import { X } from "lucide-react";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 export function Dialog({
@@ -22,29 +22,32 @@ export function Dialog({
   width?: number;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  // Focus and the Escape listener follow `open` only. `onClose` is a fresh function on many
+  // parent renders (autosave, for one). Restarting this work then pulls focus back to the
+  // first field while someone is typing in another, and the keystrokes never land.
+  useLayoutEffect(() => {
     if (!open) return;
     const previous = document.activeElement as HTMLElement | null;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.stopPropagation();
-        onClose();
+        onCloseRef.current();
       }
     };
     document.addEventListener("keydown", onKey, true);
-    requestAnimationFrame(() => {
-      // Prefer a field over tabs or buttons, so opening a form doesn't land focus on its first tab.
-      const first =
-        ref.current?.querySelector<HTMLElement>("[autofocus]") ??
-        ref.current?.querySelector<HTMLElement>("input:not([type=hidden]), textarea, select") ??
-        ref.current?.querySelector<HTMLElement>("button:not(.dialog-close)");
-      first?.focus();
-    });
+    // Prefer a field over tabs or buttons, so opening a form doesn't land focus on its first tab.
+    const first =
+      ref.current?.querySelector<HTMLElement>("[autofocus]") ??
+      ref.current?.querySelector<HTMLElement>("input:not([type=hidden]), textarea, select") ??
+      ref.current?.querySelector<HTMLElement>("button:not(.dialog-close)");
+    first?.focus();
     return () => {
       document.removeEventListener("keydown", onKey, true);
       previous?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
   if (!open || typeof document === "undefined") return null;
   return createPortal(
     <div className="dialog-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>

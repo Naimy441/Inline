@@ -25,7 +25,7 @@ const nextConfig = {
   // The Agent SDK launches the Claude Code CLI that ships inside the package,
   // so it has to be loaded from node_modules rather than bundled. The spelling
   // dictionary reads its Hunspell files from its package folder the same way.
-  serverExternalPackages: ["@anthropic-ai/claude-agent-sdk", "nspell", "dictionary-en"],
+  serverExternalPackages: ["@anthropic-ai/claude-agent-sdk", "nspell", "dictionary-en", "playwright", "playwright-core"],
   // Files read from node_modules at run time, kept in the desktop app's server:
   // pdf.js's data for importing PDFs, and the Computer Modern faces (KaTeX's)
   // that documents typeset in TeX are shown in.

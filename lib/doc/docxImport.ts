@@ -1,9 +1,10 @@
 import type { Mark, Node as PMNode } from "prosemirror-model";
 import { newId } from "@/lib/doc/ids";
 import { pictureCrop, pictureWrap, rotateFromWord, srcRectToCrop, type PictureCrop, type PictureWrap } from "@/lib/doc/picture";
-import { defaultListNumbering, safeHref, sameBorders, schema, type Align, type BorderLine, type Borders, type ListMarker, type ListNumbering, type TabStop } from "@/lib/doc/schema";
+import { defaultListNumbering, normalizeFormula, safeHref, sameBorders, schema, type Align, type BorderLine, type Borders, type CellBorders, type ListMarker, type ListNumbering, type TableBorders, type TableLine, type TabStop } from "@/lib/doc/schema";
 import { primaryFamily } from "@/lib/doc/fontMetrics";
 import { DEFAULT_SETTINGS, DEFAULT_TAB_STOP, FONT_FAMILIES, PAPER_SIZES, type CommentAuthor, type DocComment, type DocumentSettings, type HorizontalAlign, type PaperSize } from "@/lib/doc/settings";
+import { activeTheme, findStyle, firstFontName, parseThemeXml, resolveStyle, resolvedColorHex, resolvedFontFamily, storedStyleId, stylesFromWord, stylesOf, themesLookEqual, type StyleRole, type WordStyleSnapshot } from "@/lib/doc/styles";
 
 /**
  * Reads a Word document (.docx, already unzipped into its parts) into Inline
@@ -289,7 +290,7 @@ function layeredBorders(layers: ParaProps[]): Borders | null {
 // --- styles, numbering, relationships ------------------------------------------------
 
 type Kind = "title" | "subtitle" | "heading" | "code" | "quote" | null;
-type StyleInfo = { kind: Kind; level?: number; basedOn?: string; numId?: string; run: RunProps; para: ParaProps; type: string; isDefault: boolean; code?: boolean };
+type StyleInfo = { kind: Kind; level?: number; basedOn?: string; next?: string; numId?: string; run: RunProps; para: ParaProps; type: string; isDefault: boolean; code?: boolean; fontTheme?: "major" | "minor" | null; colorTheme?: string | null };
 
 /** `abstract` is the definition the level comes from. */
 type NumberingLevel = { bullet: boolean; start: number; para: ParaProps; numbering: ListNumbering; text: string; run: RunProps; abstract?: string };
@@ -316,6 +317,8 @@ type Context = {
   activeComments: Set<string>;
   /** The text each Inline comment covers. */
   commentQuotes: Map<string, string>;
+  /** The paragraph style being read, so its font and spacing aren't copied on as direct formatting. */
+  paragraphStyle?: string;
   /**
    * Written by Google Docs (its Normal style is named "normal"). Google's
    * export doesn't always describe what Google draws, so for these files two
@@ -415,19 +418,24 @@ function readStyles(parts: DocxParts) {
     const name = val(child(style, "w:name")) ?? id;
     const level = /heading\s*(\d)/i.exec(`${id} ${name}`)?.[1];
     const pPr = child(style, "w:pPr");
+    const rPr = child(style, "w:rPr");
     const outline = val(child(pPr, "w:outlineLvl"));
     let kind = type === "paragraph" ? classifyStyle(id, name) : null;
     if (type === "paragraph" && !kind && outline != null && Number(outline) < 6) kind = "heading";
+    const themeFont = child(rPr, "w:rFonts")?.attrs["w:asciiTheme"] ?? "";
     styles.set(id, {
       type,
       isDefault: style.attrs["w:default"] === "1" || style.attrs["w:default"] === "true",
       kind,
       level: level ? Number(level) : outline != null ? Number(outline) + 1 : undefined,
-      run: readRunProps(child(style, "w:rPr")),
+      run: readRunProps(rPr),
       para: readParaProps(pPr),
       basedOn: val(child(style, "w:basedOn")),
+      next: val(child(style, "w:next")),
       numId: val(child(child(pPr, "w:numPr"), "w:numId")),
       code: type === "character" && /^(html code|inline code|inlinecode)$/i.test(name),
+      fontTheme: /major/i.test(themeFont) ? "major" : /minor/i.test(themeFont) ? "minor" : null,
+      colorTheme: child(rPr, "w:color")?.attrs["w:themeColor"] ?? null,
     });
   }
   return { styles, defaults };
@@ -658,7 +666,40 @@ function readSettings(parts: DocxParts, body: XmlElement, styles: Map<string, St
     firstHeader: firstHeader?.text ?? "",
     firstFooter: firstFooter?.text ?? "",
   };
+  if (origin.ours) adoptInlineDesign(parts, styles, settings);
   return settings;
+}
+
+/** Keep a theme or a changed stylesheet from a file Inline wrote. A file that still has the built-in styles comes back without either. */
+function adoptInlineDesign(parts: DocxParts, styles: Map<string, StyleInfo>, settings: DocumentSettings) {
+  const xml = readPart(parts, "word/theme/theme1.xml");
+  const parsed = xml ? parseThemeXml(xml, cssFontFamily) : null;
+  if (parsed && !themesLookEqual(parsed, activeTheme(settings))) {
+    settings.theme = parsed;
+    settings.fontFamily = parsed.bodyFont;
+  }
+  const snapshots: WordStyleSnapshot[] = [];
+  for (const [id, style] of styles) {
+    if (style.type !== "paragraph" || id === "TableHeading") continue;
+    const line = style.para.line && (style.para.lineRule ?? "auto") === "auto" ? style.para.line / 240 : null;
+    snapshots.push({
+      id,
+      name: id,
+      basedOn: style.basedOn ?? null,
+      next: style.next ?? null,
+      fontTheme: style.fontTheme ?? null,
+      fontFamily: style.run.font ? cssFontFamily(style.run.font) : null,
+      size: style.run.size ?? null,
+      colorTheme: style.colorTheme ?? null,
+      colorHex: style.run.color ?? null,
+      spaceBefore: style.para.before != null ? style.para.before / 20 : null,
+      spaceAfter: style.para.after != null ? style.para.after / 20 : null,
+      line,
+      italic: style.run.italic ?? null,
+    });
+  }
+  const adopted = stylesFromWord(snapshots, { fontLines: settings.lineModel === "font", theme: activeTheme(settings) });
+  if (adopted) settings.styles = adopted;
 }
 
 // --- what Inline shows without any marks ------------------------------------------------
@@ -670,7 +711,39 @@ type BlockKind = "paragraph" | "title" | "subtitle" | "heading" | "list" | "quot
  * The formatting Inline's page gives each kind of block (app/styles/document.css),
  * which marks only need to differ from. `size` is the paragraph's own text size, when it has one.
  */
+/** The style being read, when this file kept a theme or a changed stylesheet. Otherwise the page's own look stays the baseline. */
+function resolvedParagraphStyle(ctx: Context) {
+  if (!ctx.paragraphStyle || (!ctx.settings.styles && !ctx.settings.theme)) return null;
+  return resolveStyle(stylesOf(ctx.settings), ctx.paragraphStyle);
+}
+
+/** Stored on the block only when the style isn't the one its type already means. */
+function paragraphStyleAttrs(ctx: Context, styleId: string | undefined, kind: BlockKind, level: number): { style?: string } {
+  if (!styleId || kind === "cell" || kind === "header" || (!ctx.settings.styles && !ctx.settings.theme)) return {};
+  if (!findStyle(stylesOf(ctx.settings), styleId)) return {};
+  const role: StyleRole = kind === "title" ? "title" : kind === "subtitle" ? "subtitle" : kind === "heading" ? "heading" : kind === "quote" ? "quote" : kind === "code" ? "code" : "paragraph";
+  const stored = storedStyleId(styleId, { role, level: role === "heading" ? level : 1 });
+  return stored ? { style: stored } : {};
+}
+
 function baseline(ctx: Context, kind: BlockKind, level = 1, size?: number | null): Required<Omit<RunProps, "vertAlign" | "color" | "highlight">> & { color: string | null } {
+  const resolved = resolvedParagraphStyle(ctx);
+  if (resolved) {
+    const theme = activeTheme(ctx.settings);
+    const family = resolvedFontFamily(resolved.font, theme);
+    // A theme font is not written as a name; Word's defaults name the body font on the run.
+    const named = resolved.font && "family" in resolved.font && family ? firstFontName(family) : ctx.bodyFont;
+    const color = resolvedColorHex(resolved.color, theme);
+    return {
+      bold: kind === "header",
+      italic: resolved.italic,
+      underline: false,
+      strike: false,
+      color: color ? color.slice(1).toUpperCase() : null,
+      size: size ?? resolved.size ?? ctx.settings.fontSize,
+      font: named,
+    };
+  }
   const body = { bold: false, italic: false, underline: false, strike: false, color: null as string | null, size: size ?? ctx.settings.fontSize, font: ctx.bodyFont };
   if (kind === "title") return { ...body, size: 26 };
   if (kind === "subtitle") return { ...body, size: 15, color: "666666" };
@@ -688,6 +761,17 @@ function spacingBaseline(ctx: Context, kind: BlockKind, level = 1) {
   // Laid out as Word and Google Docs do, every kind of block takes the document's line spacing.
   const fontLines = ctx.settings.lineModel === "font";
   const line = ctx.settings.lineSpacing;
+  // Lists, cells and headers keep the spacing their kind has. A stored style still supplies font and color.
+  if (kind !== "list" && kind !== "cell" && kind !== "header") {
+    const resolved = resolvedParagraphStyle(ctx);
+    if (resolved) {
+      return {
+        before: resolved.spaceBefore ?? 0,
+        after: resolved.spaceAfter ?? ctx.settings.paragraphSpacing,
+        line: fontLines ? line : (resolved.lineHeight ?? line),
+      };
+    }
+  }
   if (kind === "title") return { before: 0, after: 3, line: fontLines ? line : 1.15 };
   if (kind === "subtitle") return { before: 0, after: 16, line };
   if (kind === "heading") {
@@ -973,6 +1057,9 @@ async function readParagraph(p: XmlElement, ctx: Context, cell: "cell" | "header
   const para = merge(...layers);
   const runBase = merge(ctx.defaults.run, ...chain.map((item) => item.run));
 
+  const previousStyle = ctx.paragraphStyle;
+  ctx.paragraphStyle = styleId;
+  try {
   // The paragraph's own size: its mark's (all an empty paragraph has), but no larger than its largest text, since
   // a line is as tall as the largest text on it (the page sizes lines from it). Headings keep the size of their kind.
   let size: number | null = null;
@@ -990,6 +1077,9 @@ async function readParagraph(p: XmlElement, ctx: Context, cell: "cell" | "header
     // Only a paragraph that would otherwise be too tall (empty, or all its text smaller than the document's)
     // needs a size of its own; the text's own sizes say the rest.
     if (own < ctx.settings.fontSize - 0.01 || (largest === -Infinity && Math.abs(own - ctx.settings.fontSize) > 0.01)) size = own;
+    // That size is the style's own, not the paragraph's. Leaving it on the paragraph would freeze it when the style changes.
+    const styled = resolvedParagraphStyle(ctx);
+    if (size != null && styled?.size != null && Math.abs(size - styled.size) < 0.2) size = null;
   } else {
     forEachRun(p, (run) => {
       if (runText(run).trim()) hasText = true;
@@ -1012,6 +1102,7 @@ async function readParagraph(p: XmlElement, ctx: Context, cell: "cell" | "header
   // Pictures sit where their paragraph aligns them.
   const placed = content.blocks.map((block) => (block.type === schema.nodes.image ? block.type.create({ ...block.attrs, align: align === "justify" ? "left" : align }) : block));
   const layout = blockLayout(ctx, para, kind, headingLevel, isList || kind === "quote");
+  const look = paragraphStyleAttrs(ctx, styleId, kind, headingLevel);
   const own = { ...(size ? { fontSize: size } : {}), ...(tabs ? { tabs } : {}), ...(borders && !boxed ? { borders } : {}) };
   let inline = content.inline;
   // A checklist item, as Inline writes one.
@@ -1043,15 +1134,15 @@ async function readParagraph(p: XmlElement, ctx: Context, cell: "cell" | "header
         list: { numId: numId!, level, bullet: numbering!.bullet, start: number, numbering: numbering!.numbering },
         layout: { left: para.left ?? 0, hanging, marker, plain },
         checked,
-        paragraph: schema.nodes.paragraph!.create({ align, ...layout, ...own }, inline),
+        paragraph: schema.nodes.paragraph!.create({ align, ...layout, ...own, ...look }, inline),
       });
-    } else if (kind === "title") blocks.push(schema.nodes.title!.create({ align, ...layout, ...own }, inline));
-    else if (kind === "subtitle") blocks.push(schema.nodes.subtitle!.create({ align, ...layout, ...own }, inline));
-    else if (kind === "heading") blocks.push(schema.nodes.heading!.create({ align, ...layout, ...own, level: headingLevel }, inline));
-    else if (kind === "code") blocks.push(schema.nodes.code_block!.create(null, inline.length ? schema.text(inline.map((item) => item.textContent || "\n").join("")) : undefined));
-    else if (kind === "quote") blocks.push(schema.nodes.blockquote!.create(null, schema.nodes.paragraph!.create({ align, ...layout, ...own }, inline)));
+    } else if (kind === "title") blocks.push(schema.nodes.title!.create({ align, ...layout, ...own, ...look }, inline));
+    else if (kind === "subtitle") blocks.push(schema.nodes.subtitle!.create({ align, ...layout, ...own, ...look }, inline));
+    else if (kind === "heading") blocks.push(schema.nodes.heading!.create({ align, ...layout, ...own, ...look, level: headingLevel }, inline));
+    else if (kind === "code") blocks.push(schema.nodes.code_block!.create(Object.keys(look).length ? look : null, inline.length ? schema.text(inline.map((item) => item.textContent || "\n").join("")) : undefined));
+    else if (kind === "quote") blocks.push(schema.nodes.blockquote!.create(Object.keys(look).length ? look : null, schema.nodes.paragraph!.create({ align, ...layout, ...own }, inline)));
     else {
-      const paragraph = schema.nodes.paragraph!.create({ align, ...layout, ...own }, inline);
+      const paragraph = schema.nodes.paragraph!.create({ align, ...layout, ...own, ...look }, inline);
       if (!inline.length && !content.blocks.length && borders?.bottom && !borders.top && !borders.left && !borders.right) ruleCandidates.add(paragraph);
       blocks.push(paragraph);
     }
@@ -1059,6 +1150,9 @@ async function readParagraph(p: XmlElement, ctx: Context, cell: "cell" | "header
   blocks.push(...rest);
   if (boxed && !isList && !cell) return [{ boxed: blocks.filter((block): block is PMNode => !("list" in block) && !("boxed" in block)) }];
   return blocks;
+  } finally {
+    ctx.paragraphStyle = previousStyle;
+  }
 }
 
 const HEADER_FILL = "#f3f4f6";
@@ -1068,9 +1162,66 @@ function cellShading(tcPr: XmlElement | undefined) {
   return fill && fill !== "FFFFFF" ? `#${fill.toLowerCase()}` : null;
 }
 
+/** A Word table edge. Inline's own grey grid is left unset, so a plain table round-trips without extra borders. */
+function tableEdge(line: XmlElement | undefined): TableLine | null {
+  if (!line) return null;
+  const kind = val(line) ?? "single";
+  if (kind === "nil" || kind === "none") return { style: "nil", width: 0, color: null };
+  const size = numAttr(line, "w:sz") ?? 4;
+  const color = hex(line.attrs["w:color"]);
+  const style: TableLine["style"] = kind === "double" ? "double" : /dot/i.test(kind) ? "dotted" : /dash/i.test(kind) ? "dashed" : "solid";
+  return { style, width: Math.max(0.25, size / 8), color: color ? `#${color.toLowerCase()}` : null };
+}
+
+function isDefaultGrid(borders: TableBorders) {
+  const sides = ["top", "left", "bottom", "right", "insideH", "insideV"] as const;
+  return sides.every((side) => {
+    const line = borders[side];
+    return line?.style === "solid" && Math.abs(line.width - 0.5) < 0.02 && line.color === "#bfbfbf";
+  });
+}
+
+function readTableBorders(tbl: XmlElement): TableBorders | null {
+  const tblBorders = child(child(tbl, "w:tblPr"), "w:tblBorders");
+  if (!tblBorders) return null;
+  const borders: TableBorders = {};
+  for (const side of ["top", "left", "bottom", "right", "insideH", "insideV"] as const) {
+    const line = tableEdge(child(tblBorders, `w:${side}`));
+    if (line) borders[side] = line;
+  }
+  if (!Object.keys(borders).length || isDefaultGrid(borders)) return null;
+  return borders;
+}
+
+function readCellBorders(tcPr: XmlElement | undefined): CellBorders | null {
+  const tcBorders = child(tcPr, "w:tcBorders");
+  if (!tcBorders) return null;
+  const borders: CellBorders = {};
+  for (const side of ["top", "left", "bottom", "right"] as const) {
+    const line = tableEdge(child(tcBorders, `w:${side}`));
+    if (line) borders[side] = line;
+  }
+  return Object.keys(borders).length ? borders : null;
+}
+
+/** The first formula in the cell, `SUM(A1:B2)` or `SUM(ABOVE)`. */
+function readCellFormula(tc: XmlElement): string | null {
+  const chunks: string[] = [];
+  const walk = (node: XmlElement) => {
+    for (const item of elements(node)) {
+      if (item.name === "w:instrText") chunks.push(textOf({ ...item, name: "w:t" }));
+      else if (item.name === "w:fldSimple" && item.attrs["w:instr"]) chunks.push(item.attrs["w:instr"]);
+      else walk(item);
+    }
+  };
+  walk(tc);
+  return normalizeFormula(chunks.join(" "));
+}
+
 async function readTable(tbl: XmlElement, ctx: Context): Promise<PMNode | null> {
-  type Cell = { col: number; colspan: number; rowspan: number; background: string | null; blocks: PMNode[]; header: boolean };
+  type Cell = { col: number; colspan: number; rowspan: number; background: string | null; borders: CellBorders | null; formula: string | null; blocks: PMNode[]; header: boolean };
   const rows: Cell[][] = [];
+  const rowHeights: Array<{ height: number; rule: "atLeast" | "exact" } | null> = [];
   const rowElements = elements(tbl, "w:tr");
   // The cell that starts each column's vertical merge, by grid column.
   const merging = new Map<number, Cell>();
@@ -1081,6 +1232,9 @@ async function readTable(tbl: XmlElement, ctx: Context): Promise<PMNode | null> 
   for (const [index, tr] of rowElements.entries()) {
     const cells: Cell[] = [];
     const header = index < headerRows;
+    const trHeight = child(child(tr, "w:trPr"), "w:trHeight");
+    const twips = numAttr(trHeight, "w:val");
+    rowHeights.push(twips ? { height: Math.round((twips / 20) * 100) / 100, rule: trHeight?.attrs["w:hRule"] === "exact" ? "exact" : "atLeast" } : null);
     let col = Number(val(child(child(tr, "w:trPr"), "w:gridBefore")) ?? 0) || 0;
     for (const tc of elements(tr, "w:tc")) {
       const tcPr = child(tc, "w:tcPr");
@@ -1094,7 +1248,7 @@ async function readTable(tbl: XmlElement, ctx: Context): Promise<PMNode | null> 
       const blocks = groupLists(await readBlocks(tc, ctx, header ? "header" : "cell")).filter((block) => block.type !== schema.nodes.page_break);
       // Inline writes header cells with their light grey; that's how a header cell looks anyway.
       const shading = cellShading(tcPr);
-      const cell: Cell = { col, colspan, rowspan: 1, background: header && shading === HEADER_FILL ? null : shading, blocks, header };
+      const cell: Cell = { col, colspan, rowspan: 1, background: header && shading === HEADER_FILL ? null : shading, borders: readCellBorders(tcPr), formula: readCellFormula(tc), blocks, header };
       if (vMerge) merging.set(col, cell);
       else merging.delete(col);
       cells.push(cell);
@@ -1109,18 +1263,44 @@ async function readTable(tbl: XmlElement, ctx: Context): Promise<PMNode | null> 
     for (let k = 0; k < cell.rowspan && r + k < rows.length; k += 1) occupied[r + k]! += cell.colspan;
   }));
   const width = Math.max(...occupied);
+  const grid = readGridColumns(tbl, width);
   const nodes: PMNode[] = [];
   rows.forEach((cells, r) => {
     const made = cells.map((cell) =>
       (cell.header ? schema.nodes.table_header! : schema.nodes.table_cell!).create(
-        { colspan: cell.colspan, rowspan: Math.min(cell.rowspan, rows.length - r), background: cell.background },
+        {
+          colspan: cell.colspan,
+          rowspan: Math.min(cell.rowspan, rows.length - r),
+          background: cell.background,
+          ...(cell.borders ? { borders: cell.borders } : {}),
+          ...(cell.formula ? { formula: cell.formula } : {}),
+          ...(grid ? { colwidth: grid.slice(cell.col, cell.col + cell.colspan) } : {}),
+        },
         cell.blocks.length ? cell.blocks : [schema.nodes.paragraph!.create()],
       ),
     );
-    for (let i = occupied[r]!; i < width; i += 1) made.push(schema.nodes.table_cell!.create(null, schema.nodes.paragraph!.create()));
-    if (made.length) nodes.push(schema.nodes.table_row!.create(null, made));
+    for (let i = occupied[r]!; i < width; i += 1) made.push(schema.nodes.table_cell!.create(grid ? { colwidth: [grid[i] ?? grid[0]!] } : null, schema.nodes.paragraph!.create()));
+    if (made.length) nodes.push(schema.nodes.table_row!.create(rowHeights[r] ? { height: rowHeights[r]!.height, heightRule: rowHeights[r]!.rule } : null, made));
   });
-  return nodes.length ? schema.nodes.table!.create(null, nodes) : null;
+  const borders = readTableBorders(tbl);
+  return nodes.length ? schema.nodes.table!.create(borders ? { borders } : null, nodes) : null;
+}
+
+/**
+ * Column widths in CSS pixels, or null when the file's columns are the equal
+ * percentage grid Inline writes for a table the user hasn't sized.
+ */
+function readGridColumns(tbl: XmlElement, columns: number): number[] | null {
+  const grid = child(tbl, "w:tblGrid");
+  if (!grid) return null;
+  const cols = elements(grid, "w:gridCol").map((col) => numAttr(col, "w:w") ?? 0).filter((width) => width > 0);
+  if (cols.length < columns) return null;
+  const used = cols.slice(0, columns);
+  const tblW = child(child(tbl, "w:tblPr"), "w:tblW");
+  const pct = !tblW || tblW.attrs["w:type"] === "pct" || val(tblW) === "pct";
+  const equal = used.every((width) => Math.abs(width - used[0]!) <= 1);
+  if (pct && equal) return null;
+  return used.map((width) => Math.max(1, Math.round(width / 15)));
 }
 
 async function readBlocks(container: XmlElement, ctx: Context, cell: "cell" | "header" | null = null, items = elements(container)): Promise<Block[]> {

@@ -17,13 +17,18 @@ import {
   insertTableOfContents,
   insertPageBreak,
   insertTable,
+  applyStyle,
+  currentStyleId,
   setAlign,
-  setBlock,
   toggle,
-  toggleBlockquote,
   toggleList,
 } from "@/lib/editor/commands";
+import { FONT_FAMILIES, type DocumentSettings } from "@/lib/doc/settings";
+import { DOCUMENT_THEMES, activeTheme, chosenThemeId, resolveStyle, stylePreview, stylesOf } from "@/lib/doc/styles";
 import { addColumnAfter, addColumnBefore, addRowAfter, addRowBefore, deleteColumn, deleteRow, deleteTable, isInTable, toggleHeaderRow } from "prosemirror-tables";
+import { textToTable } from "@/lib/editor/tables";
+import { tableFormatItems, TABLE_ASK, type TableAsk } from "@/components/workspace/tableMenu";
+import { TableDialog } from "@/components/workspace/TableDialog";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { insertEquation } from "@/lib/editor/math";
 import { BUILTIN_COMMANDS } from "@/lib/agent/commands";
@@ -37,6 +42,10 @@ export type MenuActions = {
   download: (format: "docx" | "pdf" | "md" | "html" | "txt") => void;
   print: () => void;
   pageSetup: (tab?: "page" | "text" | "header") => void;
+  /** Open the style dialog. Null starts a new style. */
+  editStyle: (styleId: string | null) => void;
+  applyTheme: (themeId: string) => void;
+  settings: DocumentSettings | undefined;
   history: () => void;
   trash: () => void;
   find: (replace: boolean) => void;
@@ -103,6 +112,12 @@ function menuTip(name: string, focusMode: boolean) {
 
 export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSession; actions: MenuActions; zoom: number; hunks: number }) {
   const [open, setOpen] = useState<string | null>(null);
+  const [tableAsk, setTableAsk] = useState<TableAsk | null>(null);
+  useEffect(() => {
+    const onAsk = (event: Event) => setTableAsk((event as CustomEvent<TableAsk>).detail);
+    document.addEventListener(TABLE_ASK, onAsk);
+    return () => document.removeEventListener(TABLE_ASK, onAsk);
+  }, []);
   const anchors = useRef<Record<string, RefObject<HTMLButtonElement | null>>>({});
   const anchor = (name: string) => (anchors.current[name] ??= createRef<HTMLButtonElement>());
   const menus = documentMenus(session, actions, zoom, hunks);
@@ -147,6 +162,7 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
           <Menu open={open === name} onClose={() => setOpen((value) => (value === name ? null : value))} anchor={anchor(name)} items={items} />
         </span>
       ))}
+      <TableDialog key={tableAsk ?? "closed"} kind={tableAsk} session={session} onClose={() => setTableAsk(null)} notice={actions.notice} />
     </nav>
   );
 }
@@ -155,6 +171,10 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
 export function documentMenus(session: DocumentSession, actions: MenuActions, zoom: number, hunks: number): Record<string, MenuItem[]> {
   const run = session.run.bind(session);
   const inTable = session.view ? isInTable(session.view.state) : false;
+  const sheet = stylesOf(actions.settings ?? {});
+  const theme = activeTheme(actions.settings ?? { fontFamily: FONT_FAMILIES[0].value });
+  const currentStyle = session.view ? currentStyleId(session.view.state) : null;
+  const styleShortcut = (id: string) => (id === "Normal" ? "⌘⌥0" : id === "Heading1" ? "⌘⌥1" : id === "Heading2" ? "⌘⌥2" : id === "Heading3" ? "⌘⌥3" : id === "Heading4" ? "⌘⌥4" : undefined);
 
   const menus: Record<string, MenuItem[]> = {
     File: [
@@ -230,7 +250,11 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       { label: "Tab", onSelect: actions.addTab },
       {
         label: "Table",
-        submenu: [2, 3, 4, 5].map((size) => ({ label: `${size} × ${size}`, onSelect: () => run(insertTable(size, size)) })),
+        submenu: [
+          ...[2, 3, 4, 5].map((size) => ({ label: `${size} × ${size}`, onSelect: () => run(insertTable(size, size)) })),
+          { kind: "separator" },
+          { label: "Text to table", onSelect: () => !run(textToTable) && actions.notice("Select the lines to turn into a table. Separate cells with tabs.") },
+        ],
       },
       { label: "Link", shortcut: `⌘K`, onSelect: actions.link },
       { label: "Comment", shortcut: `⌘⌥M`, onSelect: actions.comment },
@@ -288,15 +312,28 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       {
         label: "Paragraph styles",
         submenu: [
-          { label: "Normal text", onSelect: () => run(setBlock("paragraph")) },
-          { label: "Title", onSelect: () => run(setBlock("title")) },
-          { label: "Subtitle", onSelect: () => run(setBlock("subtitle")) },
-          { label: "Heading 1", onSelect: () => run(setBlock("h1")) },
-          { label: "Heading 2", onSelect: () => run(setBlock("h2")) },
-          { label: "Heading 3", onSelect: () => run(setBlock("h3")) },
-          { label: "Quote", onSelect: () => run(toggleBlockquote) },
-          { label: "Code block", onSelect: () => run(setBlock("code")) },
+          ...sheet.map((item) => {
+            const resolved = resolveStyle(sheet, item.id);
+            return {
+              label: item.name,
+              checked: currentStyle === item.id,
+              shortcut: styleShortcut(item.id),
+              labelStyle: resolved ? stylePreview(resolved, theme) : undefined,
+              onSelect: () => run(applyStyle(item.id, sheet)),
+            };
+          }),
+          { kind: "separator" as const },
+          { label: "New style…", onSelect: () => actions.editStyle(null) },
+          { label: "Modify style…", disabled: !currentStyle, onSelect: () => currentStyle && actions.editStyle(currentStyle) },
         ],
+      },
+      {
+        label: "Theme",
+        submenu: DOCUMENT_THEMES.map((item) => ({
+          label: item.name,
+          checked: chosenThemeId(actions.settings ?? {}) === item.id,
+          onSelect: () => actions.applyTheme(item.id),
+        })),
       },
       {
         label: "Align",
@@ -329,6 +366,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
           { label: "Delete row", onSelect: () => run(deleteRow) },
           { label: "Delete column", onSelect: () => run(deleteColumn) },
           { label: "Delete table", danger: true, onSelect: () => run(deleteTable) },
+          ...tableFormatItems(session, actions.notice),
         ],
       },
       { kind: "separator" },

@@ -2,6 +2,7 @@ import { Schema, type DOMOutputSpec, type Mark, type Node as PMNode, type NodeSp
 import { tableNodes } from "prosemirror-tables";
 import { lineVars } from "@/lib/doc/fontMetrics";
 import { cropToken, parseCropToken, pictureCrop, pictureRotate, pictureWrap, type PictureCrop, type PictureWrap } from "@/lib/doc/picture";
+import { nodeStyleId, safeStyleId } from "@/lib/doc/styles";
 
 /**
  * The Inline document schema. It is shared by the browser editor, the server
@@ -90,6 +91,13 @@ export type BorderLine = { style: "solid" | "double" | "dotted" | "dashed"; widt
 /** `between` is drawn between neighbouring paragraphs with the same borders, which otherwise share one box. */
 export type Borders = Partial<Record<"top" | "bottom" | "left" | "right" | "between", BorderLine>>;
 
+/** A table or cell edge. `nil` is an edge the user turned off. Width is in points; color is `#rrggbb` or null for the text's. */
+export type TableLineStyle = "solid" | "double" | "dotted" | "dashed" | "nil";
+export type TableLine = { style: TableLineStyle; width: number; color: string | null };
+export type TableBorders = Partial<Record<"top" | "left" | "bottom" | "right" | "insideH" | "insideV", TableLine>>;
+export type CellBorders = Partial<Record<"top" | "right" | "bottom" | "left", TableLine>>;
+export type RowHeightRule = "atLeast" | "exact";
+
 /** The smallest text Google Docs draws (3px); smaller sizes are drawn at this size. */
 export const MIN_FONT_PT = 2.25;
 
@@ -124,9 +132,67 @@ const blockAttrs = {
   borders: { default: null as Borders | null },
   /** Where the lines broke in the PDF the paragraph was rebuilt from, kept until its text changes (lib/doc/lineBreaks.ts). */
   lineBreaks: { default: null as string | null },
+  /**
+   * Named paragraph style (lib/doc/styles.ts). Null means the style the block
+   * type already is: Normal, Title, a heading, Quote or Code.
+   */
+  style: { default: null as string | null },
 };
 
 const BORDER_SIDES = ["top", "bottom", "left", "right"] as const;
+
+const TABLE_LINE_STYLES = new Set<TableLineStyle>(["solid", "double", "dotted", "dashed", "nil"]);
+
+function tableLineFrom(value: unknown): TableLine | null {
+  if (!value || typeof value !== "object") return null;
+  const line = value as TableLine;
+  if (!TABLE_LINE_STYLES.has(line.style)) return null;
+  const width = Number(line.width);
+  if (!Number.isFinite(width) || width < 0 || width > 48) return null;
+  if (line.color != null && (typeof line.color !== "string" || !/^#[0-9a-f]{6}$/i.test(line.color))) return null;
+  return { style: line.style, width, color: line.color ? line.color.toLowerCase() : null };
+}
+
+function linesFrom<K extends string>(value: unknown, sides: readonly K[]): Partial<Record<K, TableLine>> | null {
+  if (!value || typeof value !== "object") return null;
+  const out: Partial<Record<K, TableLine>> = {};
+  for (const side of sides) {
+    if (!(side in (value as object))) continue;
+    const line = tableLineFrom((value as Record<string, unknown>)[side]);
+    if (!line) return null;
+    out[side] = line;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+export function tableBordersFrom(value: unknown): TableBorders | null {
+  return linesFrom(value, ["top", "left", "bottom", "right", "insideH", "insideV"]);
+}
+
+export function cellBordersFrom(value: unknown): CellBorders | null {
+  return linesFrom(value, ["top", "right", "bottom", "left"]);
+}
+
+/** A table edge as CSS. `nil` draws nothing; a hairline is still a pixel, as the page draws paragraph borders. */
+export function tableLineCss(line: TableLine | undefined): string {
+  if (!line || line.style === "nil") return "none";
+  const px = Math.max(1, Math.round((line.width * 96) / 72));
+  return `${px}px ${line.style} ${line.color ?? "currentColor"}`;
+}
+
+export function cellBorderCss(borders: CellBorders): string {
+  return (["top", "right", "bottom", "left"] as const)
+    .filter((side) => borders[side])
+    .map((side) => `border-${side}: ${tableLineCss(borders[side])}`)
+    .join("; ");
+}
+
+/** A formula Inline evaluates in a table cell: SUM of a rectangle or of the cells above, below, left or right. */
+export function normalizeFormula(raw: string): string | null {
+  const match = /^\s*=?\s*SUM\s*\(\s*([A-Za-z]+\d+\s*:\s*[A-Za-z]+\d+|[A-Za-z]+\d+|above|below|left|right)\s*\)\s*$/i.exec(raw.trim());
+  if (!match) return null;
+  return `SUM(${match[1]!.toUpperCase().replace(/\s+/g, "")})`;
+}
 
 /** A border as CSS: whole pixels, as Google Docs draws them, at least one wide. */
 function borderCss(line: BorderLine) {
@@ -206,6 +272,7 @@ function blockDomAttrs(node: PMNode, extra: Record<string, string> = {}) {
   if (classes.length) attrs.class = classes.join(" ");
   if (node.attrs.footnote) attrs["data-footnote"] = String(node.attrs.footnote);
   if (node.attrs.id) attrs["data-id"] = node.attrs.id;
+  attrs["data-style"] = nodeStyleId(node);
   if (node.attrs.dir === "rtl") attrs.dir = "rtl";
   // What a style can't say exactly travels with the paragraph when it is copied and pasted.
   if (node.attrs.fontSize) attrs["data-font-size"] = String(node.attrs.fontSize);
@@ -242,6 +309,14 @@ export function parseTextIndent(value: string): number | null {
   return Number.isFinite(rounded) && rounded !== 0 ? rounded : null;
 }
 
+/** Space above or below a block given in points ("12pt", as Google Docs, Word and Inline's own copies write it); null otherwise. */
+function parseSpace(value: string | undefined): number | null {
+  const match = value?.trim().match(/^([\d.]+)pt$/);
+  if (!match) return null;
+  const pt = Number(match[1]);
+  return Number.isFinite(pt) && pt <= 400 ? pt : null;
+}
+
 function parseBlockAttrs(dom: HTMLElement) {
   const style = dom.style;
   const rtl = dom.getAttribute("dir") === "rtl";
@@ -262,8 +337,8 @@ function parseBlockAttrs(dom: HTMLElement) {
     align: ALIGNMENTS.includes(align) ? align : "left",
     indent: Math.max(0, Math.min(MAX_INDENT, indent)),
     lineHeight: style?.lineHeight && /^[\d.]+$/.test(style.lineHeight) ? style.lineHeight : null,
-    spaceBefore: null,
-    spaceAfter: null,
+    spaceBefore: parseSpace(style?.marginTop),
+    spaceAfter: parseSpace(style?.marginBottom),
     textIndent: parseTextIndent(style?.textIndent || ""),
     dir: rtl ? ("rtl" as const) : null,
     fontSize: fontSize > 0 && fontSize <= 400 ? fontSize : null,
@@ -272,7 +347,17 @@ function parseBlockAttrs(dom: HTMLElement) {
     borders: jsonAttr<Borders>(dom, "data-borders", isBorders),
     bibliography: (typeof dom.className === "string" ? dom.className : "").split(/\s+/).includes("doc-bibliography"),
     footnote: footnoteLabel(dom.getAttribute("data-footnote")),
+    style: storedStyleFromDom(dom),
   };
+}
+
+/** A style id worth storing: not the one the element type already implies. */
+function storedStyleFromDom(dom: HTMLElement) {
+  const id = safeStyleId(dom.getAttribute("data-style") ?? "");
+  if (!id) return null;
+  const tag = dom.tagName;
+  const implied = tag === "P" && dom.classList.contains("doc-title") ? "Title" : tag === "P" && dom.classList.contains("doc-subtitle") ? "Subtitle" : /^H[1-6]$/.test(tag) ? `Heading${tag.slice(1)}` : tag === "BLOCKQUOTE" ? "Quote" : tag === "PRE" ? "Code" : "Normal";
+  return id === implied ? null : id;
 }
 
 /**
@@ -431,9 +516,9 @@ const nodes: Record<string, NodeSpec> = {
     content: "block+",
     group: "block",
     defining: true,
-    attrs: { id: { default: null } },
-    parseDOM: [{ tag: "blockquote" }],
-    toDOM: (node): DOMOutputSpec => ["blockquote", node.attrs.id ? { "data-id": node.attrs.id } : {}, 0],
+    attrs: { id: { default: null }, style: { default: null as string | null } },
+    parseDOM: [{ tag: "blockquote", getAttrs: (dom) => ({ style: storedStyleFromDom(dom as HTMLElement) }) }],
+    toDOM: (node): DOMOutputSpec => ["blockquote", { ...(node.attrs.id ? { "data-id": node.attrs.id } : {}), "data-style": nodeStyleId(node) }, 0],
   },
 
   code_block: {
@@ -443,17 +528,17 @@ const nodes: Record<string, NodeSpec> = {
     code: true,
     defining: true,
     /** Space above and below in points, when not the usual (a displayed equation placed as in an imported PDF). */
-    attrs: { id: { default: null }, language: { default: "" }, spaceBefore: { default: null as number | null }, spaceAfter: { default: null as number | null } },
+    attrs: { id: { default: null }, language: { default: "" }, spaceBefore: { default: null as number | null }, spaceAfter: { default: null as number | null }, style: { default: null as string | null } },
     parseDOM: [
       {
         tag: "pre",
         preserveWhitespace: "full",
-        getAttrs: (dom) => ({ language: (dom as HTMLElement).getAttribute("data-language") || "" }),
+        getAttrs: (dom) => ({ language: (dom as HTMLElement).getAttribute("data-language") || "", style: storedStyleFromDom(dom as HTMLElement) }),
       },
     ],
     toDOM: (node): DOMOutputSpec => [
       "pre",
-      { ...(node.attrs.id ? { "data-id": node.attrs.id } : {}), "data-language": node.attrs.language || "", ...(blockSpacing(node) ? { style: blockSpacing(node) } : {}) },
+      { ...(node.attrs.id ? { "data-id": node.attrs.id } : {}), "data-language": node.attrs.language || "", "data-style": nodeStyleId(node), ...(blockSpacing(node) ? { style: blockSpacing(node) } : {}) },
       ["code", 0],
     ],
   },
@@ -599,6 +684,35 @@ const nodes: Record<string, NodeSpec> = {
           if (value) attrs.style = `${attrs.style || ""}background-color: ${value};`;
         },
       },
+      /** Edges of this cell, when they aren't the table's. */
+      borders: {
+        default: null as CellBorders | null,
+        getFromDOM: (dom) => {
+          const raw = (dom as HTMLElement).getAttribute("data-cell-borders");
+          if (!raw) return null;
+          try {
+            return cellBordersFrom(JSON.parse(raw));
+          } catch {
+            return null;
+          }
+        },
+        setDOMAttr: (value, attrs) => {
+          const borders = cellBordersFrom(value);
+          if (!borders) return;
+          attrs["data-cell-borders"] = JSON.stringify(borders);
+          const css = cellBorderCss(borders);
+          if (css) attrs.style = attrs.style ? `${attrs.style}; ${css}` : css;
+        },
+      },
+      /** `SUM(A1:B2)` or `SUM(ABOVE)`. The cell's text is the result. */
+      formula: {
+        default: null as string | null,
+        getFromDOM: (dom) => normalizeFormula((dom as HTMLElement).getAttribute("data-formula") ?? "") ?? null,
+        setDOMAttr: (value, attrs) => {
+          const formula = typeof value === "string" ? normalizeFormula(value) : null;
+          if (formula) attrs["data-formula"] = formula;
+        },
+      },
     },
   }),
 
@@ -722,11 +836,59 @@ const nodes: Record<string, NodeSpec> = {
   },
 };
 
-// prosemirror-tables' table node has no id attribute; add one so tables are addressable blocks.
+// prosemirror-tables' table has no id, and its rows have no height. Both are addressable here:
+// borders live on the table (Word's tblBorders), a row's height in points, an id so the table is a block.
 nodes.table = {
   ...nodes.table,
-  attrs: { ...(nodes.table.attrs ?? {}), id: { default: null } },
-  toDOM: (node): DOMOutputSpec => ["table", node.attrs.id ? { "data-id": node.attrs.id } : {}, ["tbody", 0]],
+  attrs: { ...(nodes.table.attrs ?? {}), id: { default: null }, borders: { default: null as TableBorders | null } },
+  parseDOM: [
+    {
+      tag: "table",
+      getAttrs: (dom) => {
+        const el = dom as HTMLElement;
+        const raw = el.getAttribute("data-borders");
+        let borders: TableBorders | null = null;
+        if (raw) {
+          try {
+            borders = tableBordersFrom(JSON.parse(raw));
+          } catch {
+            borders = null;
+          }
+        }
+        return { id: el.getAttribute("data-id"), borders };
+      },
+    },
+  ],
+  toDOM: (node): DOMOutputSpec => {
+    const attrs: Record<string, string> = {};
+    if (node.attrs.id) attrs["data-id"] = node.attrs.id;
+    if (node.attrs.borders) attrs["data-borders"] = JSON.stringify(node.attrs.borders);
+    return ["table", attrs, ["tbody", 0]];
+  },
+};
+
+nodes.table_row = {
+  ...nodes.table_row,
+  attrs: { height: { default: null as number | null }, heightRule: { default: null as RowHeightRule | null } },
+  parseDOM: [
+    {
+      tag: "tr",
+      getAttrs: (dom) => {
+        const el = dom as HTMLElement;
+        const raw = el.style.height;
+        const px = raw.endsWith("px") ? Number.parseFloat(raw) : raw.endsWith("pt") ? (Number.parseFloat(raw) * 96) / 72 : Number.NaN;
+        const points = Number.isFinite(px) && px > 0 ? Math.round(((px * 72) / 96) * 100) / 100 : null;
+        const rule = el.getAttribute("data-height-rule");
+        return { height: points, heightRule: rule === "exact" || rule === "atLeast" ? rule : points ? "atLeast" : null };
+      },
+    },
+  ],
+  toDOM: (node): DOMOutputSpec => {
+    const height = Number(node.attrs.height);
+    const rule = node.attrs.heightRule === "exact" ? "exact" : node.attrs.heightRule === "atLeast" ? "atLeast" : null;
+    if (!height || height <= 0) return ["tr", 0];
+    return ["tr", { style: `height: ${height}pt`, "data-height-rule": rule ?? "atLeast" }, 0];
+  },
 };
 
 const marks: Record<string, MarkSpec> = {
@@ -829,7 +991,8 @@ const marks: Record<string, MarkSpec> = {
   text_color: {
     attrs: { color: {} },
     parseDOM: [{ style: "color", getAttrs: (value) => (value && value !== "inherit" ? { color: value } : false) }],
-    toDOM: (mark): DOMOutputSpec => ["span", { style: `color: ${mark.attrs.color}` }, 0],
+    // Black is the page's own text color, so it turns light with the page in dark mode (document.css).
+    toDOM: (mark): DOMOutputSpec => ["span", { style: `color: ${mark.attrs.color}`, ...(isBlack(mark.attrs.color) ? { class: "text-black" } : {}) }, 0],
   },
 
   font_family: {
@@ -898,6 +1061,12 @@ export const TEXTBLOCK_TYPES = new Set(["paragraph", "heading", "title", "subtit
 
 export function isTextblockType(name: string) {
   return TEXTBLOCK_TYPES.has(name);
+}
+
+/** Whether a CSS color is plain black (#000, #000000, rgb(0, 0, 0), black), as Google Docs and Word color default text. */
+export function isBlack(color: unknown) {
+  if (typeof color !== "string") return false;
+  return /^(#(000f?|000000(ff)?)|black|windowtext|rgba?\(0,0,0(,(1|1\.0*|100%))?\))$/.test(color.toLowerCase().replace(/\s+/g, ""));
 }
 
 export function cssSizeToPt(value: string | null | undefined): number | null {

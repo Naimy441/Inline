@@ -2,6 +2,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { createInlineHttpServer } from "@/lib/agent/mcp";
 import type { LiveDocument } from "@/lib/server/hub";
 import { mcpAuthorized } from "@/lib/server/mcpToken";
+import { rememberServerOrigin } from "@/lib/server/origin";
 
 /**
  * Inline's MCP endpoint (Streamable HTTP, stateless). Clients must send the
@@ -10,6 +11,7 @@ import { mcpAuthorized } from "@/lib/server/mcpToken";
  * Changes made through it show up live in the editor for the user to review.
  */
 async function handle(request: Request) {
+  rememberServerOrigin(request);
   if (!(await mcpAuthorized(request))) {
     return Response.json(
       { jsonrpc: "2.0", error: { code: -32001, message: "Missing or wrong Inline MCP token. In Inline, open Help > Connect Claude Code for the command to run." }, id: null },
