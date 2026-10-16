@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import type { DocumentSession } from "@/lib/client/documentSession";
 import { currentStyleId, replaceStyleUses } from "@/lib/editor/commands";
 import { FONT_FAMILIES, type DocumentSettings } from "@/lib/doc/settings";
@@ -58,6 +58,17 @@ function colorFrom(value: string, hex: string): ColorRef | null {
   return /^#[0-9a-f]{6}$/i.test(hex) ? { hex: hex.toLowerCase() } : null;
 }
 
+function openedDraft(styleId: string | null, settings: DocumentSettings, session: DocumentSession): { draft: ParagraphStyle; hex: string } {
+  const sheet = stylesOf(settings);
+  if (styleId) {
+    const found = findStyle(sheet, styleId);
+    if (found) return { draft: { ...found }, hex: found.color && "hex" in found.color ? found.color.hex : "#202124" };
+  }
+  const current = session.view ? currentStyleId(session.view.state) : null;
+  const base = current && findStyle(sheet, current) ? current : "Normal";
+  return { draft: blank(newStyleId(), base, resolveStyle(sheet, base)?.next ?? "Normal"), hex: "#202124" };
+}
+
 const blank = (id: string, basedOn: string, next: string): ParagraphStyle => ({
   id,
   name: "New style",
@@ -95,29 +106,18 @@ export function StyleDialog({
   const [hex, setHex] = useState("#202124");
   const [saving, setSaving] = useState(false);
   const creating = !styleId;
-  const settingsRef = useRef(settings);
-  settingsRef.current = settings;
-
-  // Start from the saved style when the dialog opens. Later saves (the document
-  // autosaving, or this dialog itself) must not wipe what is being typed.
-  useEffect(() => {
-    if (!open) return;
-    const currentSettings = settingsRef.current;
-    if (!currentSettings) return;
-    const sheet = stylesOf(currentSettings);
-    if (styleId) {
-      const found = findStyle(sheet, styleId);
-      if (found) {
-        setDraft({ ...found });
-        if (found.color && "hex" in found.color) setHex(found.color.hex);
-      }
-      return;
+  // Load the style while rendering the open, before the fields can be typed in.
+  // An effect would run after that and put the saved size back over what was just entered.
+  const opening = open ? (styleId ?? "new") : null;
+  const [openedAs, setOpenedAs] = useState<string | null>(null);
+  if (opening !== openedAs && (opening === null || settings)) {
+    setOpenedAs(opening);
+    if (opening && settings) {
+      const next = openedDraft(styleId, settings, session);
+      setDraft(next.draft);
+      setHex(next.hex);
     }
-    const current = session.view ? currentStyleId(session.view.state) : null;
-    const base = current && findStyle(sheet, current) ? current : "Normal";
-    setDraft(blank(newStyleId(), base, resolveStyle(sheet, base)?.next ?? "Normal"));
-    setHex("#202124");
-  }, [open, styleId, session]);
+  }
 
   if (!settings) return null;
   const sheet = stylesOf(settings);

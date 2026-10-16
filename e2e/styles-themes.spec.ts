@@ -54,7 +54,10 @@ test("a shared style updates every use, and a theme follows a reload", async ({ 
   await expect(doc.locator("p").first()).toHaveText("Alpha");
   await page.getByRole("button", { name: "Paragraph style" }).click();
   await page.getByRole("menuitem", { name: "Modify style…" }).click();
-  await modify.getByLabel("Size").fill("24");
+  const sizeField = modify.getByLabel("Size");
+  await expect(sizeField).toHaveValue("22");
+  await sizeField.fill("24");
+  await expect(sizeField).toHaveValue("24");
   await modify.getByRole("button", { name: "Save" }).click();
   await expect.poll(css).toContain("font-size: 24pt");
   await expect(doc.locator('[data-style="Callout"]').first().locator("span").first()).toHaveAttribute("style", /font-size:\s*16pt/);
