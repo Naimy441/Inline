@@ -57,8 +57,8 @@ export type ClientCommand =
   | { kind: "dictionary"; words: string[] }
   /** Picture these pages (0-based) for Claude and post them to /api/documents/[id]/render (lib/server/renders.ts). */
   | { kind: "render_pages"; requestId: string; pages: number[]; scale: number; span?: { first: string; last: string } }
-  /** Measure pages for a fit and post them to /api/documents/[id]/fit (lib/server/fitMeasure.ts). */
-  | { kind: "measure_fit"; requestId: string; fit: "half" | "page" };
+  /** Measure a page range and post it to /api/documents/[id]/fit (lib/server/fitMeasure.ts). */
+  | { kind: "measure_fit"; requestId: string; fromPage: number; toPage: number };
 
 type Snapshot = { meta: DocumentMeta; epoch?: string; doc: unknown; version: number; comments: DocComment[]; hunks: HunkJSON[]; activity: AgentActivity | null; canvas?: { html: string; outputs: Record<string, CanvasOutput> } | null };
 
@@ -436,7 +436,7 @@ export class DocumentSession {
    * Measure the pages a fit will squeeze, as they are laid out now, and post
    * that measurement to the server (lib/server/fitMeasure.ts).
    */
-  async answerFit(command: { requestId: string; fit: "half" | "page" }) {
+  async answerFit(command: { requestId: string; fromPage: number; toPage: number }) {
     const fail = (error: string) => post(`/api/documents/${this.id}/fit`, { requestId: command.requestId, error });
     const view = this.view;
     const meta = this.meta;
@@ -451,7 +451,7 @@ export class DocumentSession {
     try {
       relayout(view);
       await settleLayout(() => pageCount(view.state));
-      const measurement = measurePageFit(view, geometryFor(meta), meta.settings, command.fit);
+      const measurement = measurePageFit(view, geometryFor(meta), meta.settings, { fromPage: command.fromPage, toPage: command.toPage });
       await post(`/api/documents/${this.id}/fit`, { requestId: command.requestId, measurement });
     } catch (error) {
       await fail(error instanceof Error ? error.message : "Couldn't measure the pages.");

@@ -14,8 +14,6 @@ import { schema } from "@/lib/doc/schema";
  * and neither is text outside the range.
  */
 
-export type FitKind = "half" | "page";
-
 export type FitWord = { width: number; gap: number; breakBefore?: boolean };
 
 export type FitMark = { from: number; to: number; size: number };
@@ -49,8 +47,16 @@ export type FitUnit = {
 
 export type FitMeasurement = {
   version: number;
-  kind: FitKind;
-  /** One page's content box, px. The top half is half of this. */
+  /** First page of the measured range, 1-based. */
+  fromPage: number;
+  /** Last page of the measured range, 1-based and inclusive. */
+  toPage: number;
+  /**
+   * How many pages that range should occupy. A fraction is part of one page
+   * (0.5 is the top half). The editor does not choose this; the caller does.
+   */
+  targetPages: number;
+  /** One page's content box, px. */
   pageContentHeight: number;
   /** Document body size, for the numbers reported to the user. */
   bodyFontSize: number;
@@ -116,7 +122,7 @@ export function countLines(words: readonly FitWord[], width: number, indent = 0)
 }
 
 function targetOf(measurement: FitMeasurement) {
-  return measurement.kind === "half" ? measurement.pageContentHeight / 2 : measurement.pageContentHeight;
+  return measurement.pageContentHeight * measurement.targetPages;
 }
 
 function textUnits(units: readonly FitUnit[]) {
@@ -203,24 +209,27 @@ function formatPt(value: number) {
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
-function rangeLabel(kind: FitKind) {
-  return kind === "half" ? "Page 1" : "Pages 1 and 2";
+function pageSpan(fromPage: number, toPage: number) {
+  return fromPage === toPage ? `Page ${fromPage}` : `Pages ${fromPage}–${toPage}`;
 }
 
-function targetLabel(kind: FitKind) {
-  return kind === "half" ? "the top half of page 1" : "a single page";
+function targetLabel(pages: number) {
+  const rounded = round2(pages);
+  const text = Number.isInteger(rounded) ? String(rounded) : String(rounded);
+  return `${text} page${rounded === 1 ? "" : "s"}`;
 }
 
 function fillPhrase(measurement: FitMeasurement, occupied: number) {
   const pages = occupied / measurement.pageContentHeight;
-  if (measurement.kind === "half") return `Page 1 is ${Math.round(pages * 100)}% full`;
-  const rounded = Math.round(pages * 100) / 100;
-  return `Pages 1 and 2 fill ${rounded} page${rounded === 1 ? "" : "s"}`;
+  const span = pageSpan(measurement.fromPage, measurement.toPage);
+  if (measurement.fromPage === measurement.toPage) return `${span} is ${Math.round(pages * 100)}% full`;
+  const rounded = round2(pages);
+  return `${span} fill ${rounded} page${rounded === 1 ? "" : "s"}`;
 }
 
 function summaryFor(measurement: FitMeasurement, solution: Omit<FitSolution, "summary">): string {
-  const where = targetLabel(measurement.kind);
-  const source = rangeLabel(measurement.kind);
+  const where = targetLabel(measurement.targetPages);
+  const source = pageSpan(measurement.fromPage, measurement.toPage);
   if (solution.blocked) return solution.blocked;
   if (solution.unchanged) return `${fillPhrase(measurement, solution.height)}, which already fits in ${where}. Nothing was changed.`;
   const parts = [
@@ -287,7 +296,7 @@ export function solveFit(measurement: FitMeasurement): FitSolution {
     return finish({
       ...base,
       unchanged: true,
-      blocked: `A page break in ${measurement.kind === "half" ? "page 1" : "the first two pages"} keeps the pages apart. Font size and spacing can't remove it, so nothing was changed.`,
+      blocked: `A page break in ${pageSpan(measurement.fromPage, measurement.toPage).toLowerCase()} keeps the pages apart. Font size and spacing can't remove it, so nothing was changed.`,
     });
   }
   if (occupied <= target + 0.5) return finish({ ...base, unchanged: true, blocked: null });
@@ -312,7 +321,7 @@ export function solveFit(measurement: FitMeasurement): FitSolution {
           lineScale,
           spacingScale: 0,
           unchanged: true,
-          blocked: `The content is still taller than ${targetLabel(measurement.kind)} at ${formatPt(MIN_FONT)}pt, line spacing ${MIN_LEADING}, and no paragraph spacing. Nothing was changed.`,
+          blocked: `The content is still taller than ${targetLabel(measurement.targetPages)} at ${formatPt(MIN_FONT)}pt, line spacing ${MIN_LEADING}, and no paragraph spacing. Nothing was changed.`,
         });
       }
       spacingScale = spacing;

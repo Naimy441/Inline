@@ -1,25 +1,30 @@
 import type { Node as PMNode } from "prosemirror-model";
 import { getVersion } from "prosemirror-collab";
-import type { EditorState, Transaction } from "prosemirror-state";
+import type { EditorState } from "prosemirror-state";
 import type { EditorView } from "prosemirror-view";
 import type { DocumentSettings } from "@/lib/doc/settings";
 import { nodeStyleId, resolveStyle, stylesOf } from "@/lib/doc/styles";
 import { cssSizeToPt } from "@/lib/doc/schema";
-import { LockedContentError } from "@/lib/doc/merge";
-import { applyFit, solveFit, type FitKind, type FitMark, type FitMeasurement, type FitUnit, type FitWord } from "@/lib/doc/pageFit";
+import type { FitMark, FitMeasurement, FitUnit, FitWord } from "@/lib/doc/pageFit";
 import { pageStarts, type PageGeometry } from "@/lib/editor/pagination";
 
 /**
- * Measure the pages the user can see and fit them. The same solver the agent
- * tools use (`solveFit`) turns one measurement into font size and line spacing.
+ * Measure a page range as it is laid out. `solveFit` turns that measurement
+ * and a target height into font size and line spacing.
  */
+
+export type FitPageRange = { fromPage: number; toPage: number };
 
 const round1 = (value: number) => Math.round(value * 10) / 10;
 
-function rangeEnd(state: EditorState, kind: FitKind) {
+function rangeBounds(state: EditorState, range: FitPageRange) {
   const starts = pageStarts(state);
-  if (kind === "half") return starts[0] ?? state.doc.content.size;
-  return starts[1] ?? state.doc.content.size;
+  const pages = starts.length + 1;
+  if (range.fromPage > pages) return null;
+  const toPage = Math.min(range.toPage, pages);
+  const from = range.fromPage <= 1 ? 0 : starts[range.fromPage - 2]!;
+  const end = toPage >= pages ? state.doc.content.size : (starts[toPage - 1] ?? state.doc.content.size);
+  return { from, end, toPage };
 }
 
 function frameOf(view: EditorView) {
@@ -147,21 +152,23 @@ function marksIn(node: PMNode): FitMark[] {
   return marks;
 }
 
-/** The laid-out height of the pages a fit will squeeze, in CSS px at 100% zoom. */
-export function measurePageFit(view: EditorView, geometry: PageGeometry, settings: DocumentSettings, kind: FitKind): FitMeasurement {
+/** The laid-out height of a page range, in CSS px at 100% zoom. `targetPages` is left for the caller. */
+export function measurePageFit(view: EditorView, geometry: PageGeometry, settings: DocumentSettings, range: FitPageRange): Omit<FitMeasurement, "targetPages"> {
   const root = view.dom as HTMLElement;
   if (!root.isConnected || !root.offsetWidth) throw new Error("The page isn't laid out yet.");
-  const end = rangeEnd(view.state, kind);
+  const bounds = rangeBounds(view.state, range);
+  if (!bounds) throw new Error(`The document doesn't have page ${range.fromPage}.`);
+  const { from, end, toPage } = bounds;
   const frame = frameOf(view);
-  const units: FitUnit[] = [];
-  let cursor = 0;
+  const found: Array<FitUnit & { top: number; bottom: number }> = [];
   const visit = (node: PMNode, pos: number) => {
+    if (pos >= end || pos + node.nodeSize <= from) return;
     if (node.type.name === "page_break") {
-      if (pos < end) units.push({ pos, kind: "break", gapBefore: 0, gapScales: false });
+      if (pos >= from) found.push({ pos, kind: "break", gapBefore: 0, gapScales: false, top: 0, bottom: 0 });
       return;
     }
     if (node.isTextblock) {
-      if (pos >= end) return;
+      if (pos < from) return;
       const dom = view.nodeDOM(pos);
       if (!(dom instanceof HTMLElement)) return;
       const boxes = lineBoxes(dom, frame);
@@ -174,10 +181,10 @@ export function measurePageFit(view: EditorView, geometry: PageGeometry, setting
       const lines = Math.max(1, boxes.length);
       const padLeft = parseFloat(style.paddingLeft) || 0;
       const padRight = parseFloat(style.paddingRight) || 0;
-      units.push({
+      found.push({
         pos,
         kind: "text",
-        gapBefore: Math.max(0, top - cursor),
+        gapBefore: 0,
         gapScales: "spaceBefore" in node.attrs || "spaceAfter" in node.attrs,
         lines,
         lineHeight: textHeight / lines,
@@ -192,57 +199,42 @@ export function measurePageFit(view: EditorView, geometry: PageGeometry, setting
         canSpace: "spaceBefore" in node.attrs || "spaceAfter" in node.attrs,
         spaceBeforePt: marginPt(style.marginTop),
         spaceAfterPt: marginPt(style.marginBottom),
+        top,
+        bottom,
       });
-      cursor = Math.max(cursor, bottom);
       return;
     }
     if (node.isAtom || node.isLeaf) {
-      if (pos >= end) return;
+      if (pos < from) return;
       const dom = view.nodeDOM(pos);
       if (!(dom instanceof HTMLElement)) return;
       const rect = dom.getBoundingClientRect();
       const top = frame.natural(frame.toLocal(rect.top));
       const bottom = frame.natural(frame.toLocal(rect.bottom));
-      units.push({ pos, kind: "fixed", gapBefore: Math.max(0, top - cursor), gapScales: false, height: Math.max(0, bottom - top) });
-      cursor = Math.max(cursor, bottom);
+      found.push({ pos, kind: "fixed", gapBefore: 0, gapScales: false, height: Math.max(0, bottom - top), top, bottom });
       return;
     }
-    if (pos >= end) return;
     node.forEach((child, offset) => visit(child, pos + 1 + offset));
   };
   view.state.doc.forEach((node, offset) => visit(node, offset));
+  const pageContentHeight = geometry.pageHeight - geometry.marginTop - geometry.marginBottom;
+  let origin = (Math.max(1, range.fromPage) - 1) * pageContentHeight;
+  const firstBox = found.find((item) => item.kind !== "break");
+  if (firstBox && firstBox.top < origin) origin = firstBox.top;
+  let cursor = origin;
+  const units: FitUnit[] = found.map((item) => {
+    const gapBefore = item.kind === "break" ? 0 : Math.max(0, item.top - cursor);
+    if (item.kind !== "break") cursor = Math.max(cursor, item.bottom);
+    const { top: _top, bottom: _bottom, ...unit } = item;
+    return { ...unit, gapBefore };
+  });
   return {
     version: getVersion(view.state),
-    kind,
-    pageContentHeight: geometry.pageHeight - geometry.marginTop - geometry.marginBottom,
+    fromPage: range.fromPage,
+    toPage,
+    pageContentHeight,
     bodyFontSize: settings.fontSize,
     bodyLineSpacing: settings.lineSpacing,
     units,
   };
-}
-
-/** Measure, solve, and build the transaction the Format menu applies. */
-export function fitPagesInView(view: EditorView, settings: DocumentSettings, geometry: PageGeometry, kind: FitKind, flow: boolean): { summary: string; transaction: Transaction | null } {
-  if (flow) return { summary: "Fit uses the page layout. Turn off reflow to use it.", transaction: null };
-  let measurement: FitMeasurement;
-  try {
-    measurement = measurePageFit(view, geometry, settings, kind);
-  } catch (error) {
-    return { summary: error instanceof Error ? error.message : "Couldn't measure the pages.", transaction: null };
-  }
-  const solution = solveFit(measurement);
-  if (solution.unchanged || solution.blocked) return { summary: solution.summary, transaction: null };
-  let transform;
-  try {
-    transform = applyFit(view.state.doc, solution);
-  } catch (error) {
-    if (error instanceof LockedContentError) return { summary: error.message, transaction: null };
-    throw error;
-  }
-  if (!transform.steps.length) return { summary: solution.summary, transaction: null };
-  const transaction = view.state.tr;
-  for (const step of transform.steps) {
-    if (transaction.maybeStep(step).failed) return { summary: "Couldn't apply the fit.", transaction: null };
-  }
-  return { summary: solution.summary, transaction };
 }

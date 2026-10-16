@@ -34,8 +34,8 @@ function paragraph(partial: Partial<FitUnit> & { pos: number }): FitUnit {
   };
 }
 
-function measurement(kind: FitMeasurement["kind"], units: FitUnit[], body: Partial<FitMeasurement> = {}): FitMeasurement {
-  return { version: 1, kind, pageContentHeight: PAGE, bodyFontSize: 11, bodyLineSpacing: 1.15, units, ...body };
+function measurement(units: FitUnit[], body: Partial<FitMeasurement> = {}): FitMeasurement {
+  return { version: 1, fromPage: 1, toPage: 1, targetPages: 0.5, pageContentHeight: PAGE, bodyFontSize: 11, bodyLineSpacing: 1.15, units, ...body };
 }
 
 describe("line count", () => {
@@ -55,13 +55,13 @@ describe("fit math", () => {
     const units = [paragraph({ pos: 0, words: words(400, 40, 8), lineHeight: 20, gapBefore: 0 })];
     const occupied = predictFitHeight(units, 1, 1, 1);
     assert.ok(occupied > PAGE * 0.55 && occupied < PAGE * 0.9, `occupied ${occupied}`);
-    const fitted = solveFit(measurement("half", units));
+    const fitted = solveFit(measurement(units));
     assert.equal(fitted.blocked, null);
     assert.equal(fitted.unchanged, false);
     assert.ok(fitted.height <= PAGE / 2 + 0.5, `height ${fitted.height}`);
     assert.ok(fitted.height > PAGE / 2 * 0.75, `over-shrunk to ${fitted.height}`);
     // Treating the page as full would scale toward half of a full page, a much smaller font.
-    const naive = solveFit(measurement("half", [paragraph({ pos: 0, words: words(700, 40, 8), lineHeight: 20 })]));
+    const naive = solveFit(measurement([paragraph({ pos: 0, words: words(700, 40, 8), lineHeight: 20 })]));
     assert.ok(fitted.bodyFontSize > naive.bodyFontSize, `${fitted.bodyFontSize} should stay larger than a full-page squeeze (${naive.bodyFontSize})`);
     assert.equal(fitted.spacingScale, 1);
     assert.match(fitted.summary, /Body text is [\d.]+pt with line spacing [\d.]+/);
@@ -73,15 +73,15 @@ describe("fit math", () => {
     const units = [first, second];
     const occupied = predictFitHeight(units, 1, 1, 1);
     assert.ok(occupied > PAGE && occupied < PAGE * 1.7, `occupied ${occupied}`);
-    const fitted = solveFit(measurement("page", units));
+    const fitted = solveFit(measurement(units, { toPage: 2, targetPages: 1 }));
     assert.equal(fitted.blocked, null);
     assert.ok(fitted.height <= PAGE + 0.5, `height ${fitted.height}`);
     assert.ok(fitted.height > PAGE * 0.8, `over-shrunk to ${fitted.height}`);
     const bothFull = solveFit(
-      measurement("page", [
+      measurement([
         paragraph({ pos: 0, words: words(500, 40, 8), lineHeight: 20 }),
         paragraph({ pos: 20, words: words(500, 40, 8), lineHeight: 20, gapBefore: 12 }),
-      ]),
+      ], { toPage: 2, targetPages: 1 }),
     );
     assert.ok(fitted.bodyFontSize > bothFull.bodyFontSize);
   });
@@ -90,7 +90,7 @@ describe("fit math", () => {
     const units = [paragraph({ pos: 0, words: words(8, 30, 6), lineHeight: 18 })];
     const occupied = predictFitHeight(units, 1, 1, 1);
     assert.ok(occupied < PAGE / 2);
-    const fitted = solveFit(measurement("half", units));
+    const fitted = solveFit(measurement(units));
     assert.equal(fitted.unchanged, true);
     assert.equal(fitted.blocked, null);
     assert.equal(fitted.blocks.length, 0);
@@ -103,7 +103,7 @@ describe("fit math", () => {
     );
     const atMinFont = predictFitHeight(units, 6 / 11, 1, 1);
     assert.ok(atMinFont > PAGE / 2, `min font still ${atMinFont}`);
-    const fitted = solveFit(measurement("half", units));
+    const fitted = solveFit(measurement(units));
     assert.equal(fitted.blocked, null);
     assert.ok(fitted.bodyFontSize <= 6.05);
     assert.ok(fitted.bodyLineSpacing < 1.15);
@@ -126,7 +126,7 @@ describe("fit math", () => {
     );
     const typeOnly = predictFitHeight(units, 6 / 11, 0.8 / 1.15, 1);
     assert.ok(typeOnly > PAGE / 2);
-    const fitted = solveFit(measurement("half", units));
+    const fitted = solveFit(measurement(units));
     assert.equal(fitted.blocked, null);
     assert.ok(fitted.spacingScale < 1);
     assert.ok(fitted.bodyFontSize <= 6.05);
@@ -142,7 +142,7 @@ describe("fit math", () => {
       { pos: 10, kind: "break" as const, gapBefore: 0 },
       paragraph({ pos: 12, words: words(80, 40, 8), lineHeight: 20, gapBefore: 14 }),
     ];
-    const fitted = solveFit(measurement("page", units));
+    const fitted = solveFit(measurement(units, { toPage: 2, targetPages: 1 }));
     assert.match(fitted.blocked ?? "", /page break/);
     assert.equal(fitted.blocks.length, 0);
   });
@@ -150,7 +150,7 @@ describe("fit math", () => {
   test("headings and manual sizes in the range scale together", () => {
     const body = paragraph({ pos: 0, words: words(400, 40, 8), lineHeight: 20, fontSize: 11 });
     const heading = paragraph({ pos: 30, words: words(8, 50, 8), lineHeight: 28, fontSize: 20, lineSpacing: 1.2, gapBefore: 16, marks: [{ from: 0, to: 4, size: 20 }] });
-    const fitted = solveFit(measurement("half", [body, heading]));
+    const fitted = solveFit(measurement([body, heading]));
     assert.equal(fitted.blocked, null);
     const headingPlan = fitted.blocks.find((block) => block.pos === 30);
     const bodyPlan = fitted.blocks.find((block) => block.pos === 0);
@@ -183,7 +183,7 @@ describe("apply fit", () => {
         marks: [{ from: 6, to: 10, size: 16 }],
       }),
     ];
-    const fitted = solveFit(measurement("half", units));
+    const fitted = solveFit(measurement(units));
     assert.equal(fitted.unchanged, false);
     const next = applyFit(doc, fitted).doc;
     const first = next.firstChild!;

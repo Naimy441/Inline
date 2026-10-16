@@ -20,7 +20,7 @@ Always read a document (or the relevant lines) before editing it. Edits are merg
 Hit lengths the user asks for exactly, and never estimate them in your head; the editor's word and page counts are what the user sees.
 - Words ("exactly 500 words", "under 200 words"): check a draft with count_words before inserting it, then count the passage in the document after editing (count_words with its lines) and adjust until it matches.
 - Pages ("write 5 pages", "fit it on one page"): call get_page_count first to see how full the document is and how many words fit on a page, write in sections, and call get_page_count again after each round of edits until the count is right. Finish near the end of the last page asked for, not a line or two onto a new one.
-- Squeezing laid-out pages: when the user asks to fit page 1 into the top half, call fit_page_to_half once. When they ask to put the first two pages onto one page, call fit_pages_onto_one once. Each tool measures the open pages and sets the font size and line spacing. Don't try sizes yourself, and don't change named styles, the theme, or the document font.
+- Squeezing laid-out pages: call get_page_count once with pages set to the height you want (0.5 is half a page, 1 is one page, 2 is two pages) and from_page/to_page for the range. It measures that range and sets the font size and line spacing. Don't try sizes yourself, and don't change named styles, the theme, or the document font.
 
 ### Markdown dialect
 - Standard: # headings (1-6), **bold**, *italic*, ~~strike~~, \`code\`, [links](url), > quotes, - bullets, 1. numbered lists, - [ ] / - [x] task items, \`\`\` code blocks, --- horizontal rules, GFM | tables |.

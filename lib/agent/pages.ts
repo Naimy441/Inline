@@ -87,6 +87,21 @@ function pageCountFrom(doc: LiveDocument, layout: ClientLayout | null): PageCoun
   return { pages: Math.max(1, Math.ceil(words / wordsPerPage), breaks + 1), measured: false, wordsPerPage };
 }
 
+/** How full a 1-based page range is, from the layout get_page_count already uses. */
+export function describePageRange(count: PageCount, fromPage: number, toPage: number) {
+  const span = fromPage === toPage ? `Page ${fromPage}` : `Pages ${fromPage}–${toPage}`;
+  if (!count.measured) return `${span} can't be measured until an editor has the document open.`;
+  const total = count.pages;
+  if (fromPage > total) return `The document is ${total} page${total === 1 ? "" : "s"}. ${span} is past the end.`;
+  const end = Math.min(toPage, total);
+  const shown = fromPage === end ? `Page ${fromPage}` : `Pages ${fromPage}–${end}`;
+  const includesLast = end === total;
+  const fill = includesLast ? end - fromPage + (count.lastPageFill ?? 1) : end - fromPage + 1;
+  if (fromPage === end) return `${shown} is ${Math.round(fill * 100)}% full.`;
+  const rounded = Math.round(fill * 100) / 100;
+  return `${shown} fill ${rounded} page${rounded === 1 ? "" : "s"}.`;
+}
+
 /** "Page 2 starts on line 18, mid-paragraph: “…the committee…”" for each measured page start. */
 export function describePageStarts(doc: LiveDocument, starts: number[]) {
   const serialized = serializeDoc(doc.doc);

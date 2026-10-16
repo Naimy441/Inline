@@ -1,4 +1,21 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { expect, test, type Page } from "@playwright/test";
+
+async function fitRange(baseURL: string, args: Record<string, unknown>) {
+  const client = new Client({ name: "inline-e2e", version: "1.0.0" });
+  const { token } = (await (await fetch(new URL("/api/mcp/connect", baseURL))).json()) as { token: string };
+  await client.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", baseURL), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
+  try {
+    const result = await client.callTool({ name: "get_page_count", arguments: args });
+    const content = (result.content ?? []) as Array<{ type: string; text?: string }>;
+    const text = content.map((item) => item.text ?? "").join("\n");
+    expect(result.isError, text).toBeFalsy();
+    return text;
+  } finally {
+    await client.close().catch(() => undefined);
+  }
+}
 
 async function newBlankDocument(page: Page) {
   await page.goto("/");
@@ -89,9 +106,14 @@ async function fittedBottom(page: Page) {
   });
 }
 
-test("a partly full page fits into the top half without assuming a full page", async ({ page }) => {
+test("a partly full page fits into half a page without assuming a full page", async ({ page, baseURL }) => {
   test.setTimeout(90_000);
   await newBlankDocument(page);
+  await page.locator(".menubar-item", { hasText: "Format" }).click();
+  await expect(page.locator(".menu-item", { hasText: "Fit page" })).toHaveCount(0);
+  await expect(page.locator(".menu-item", { hasText: "Header & footer" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
   const doc = page.locator(".doc-content");
   await doc.click();
   let fill = await pageFill(page);
@@ -104,11 +126,12 @@ test("a partly full page fits into the top half without assuming a full page", a
   expect(fill?.sheets).toBe(1);
   expect(fill!.ratio).toBeGreaterThanOrEqual(0.58);
   expect(fill!.ratio).toBeLessThanOrEqual(0.85);
+  await expect(page.locator(".sync-status")).toHaveText(/Saved/);
 
-  await page.locator(".menubar-item", { hasText: "Format" }).click();
-  await page.locator(".menu-item", { hasText: "Fit page 1 to top half" }).click();
-  await expect(page.locator(".toaster")).toContainText(/pt/);
-  await expect(page.locator(".toaster")).toContainText(/line spacing/);
+  const id = page.url().match(/\/d\/([^/?#]+)/)![1]!;
+  const text = await fitRange(baseURL!, { document_id: id, from_page: 1, to_page: 1, pages: 0.5 });
+  expect(text).toMatch(/pt/);
+  expect(text).toMatch(/line spacing/);
 
   await expect.poll(async () => (await pageFill(page))?.ratio ?? 0, { timeout: 8_000 }).toBeGreaterThan(0.35);
   const fitted = await pageFill(page);
@@ -118,7 +141,7 @@ test("a partly full page fits into the top half without assuming a full page", a
   await expect(page.locator(".page-content")).toHaveAttribute("style", /font-size:\s*11pt/);
 });
 
-test("the first two pages fit onto one page and leave styles and later text alone", async ({ page }) => {
+test("the first two pages fit onto one page and leave styles and later text alone", async ({ page, baseURL }) => {
   test.setTimeout(120_000);
   await newBlankDocument(page);
   const doc = page.locator(".doc-content");
@@ -145,11 +168,12 @@ test("the first two pages fit onto one page and leave styles and later text alon
   await page.getByRole("button", { name: "Increase font size" }).click();
   await page.getByRole("button", { name: "Increase font size" }).click();
   await expect(boundary.locator("span")).toHaveAttribute("style", /font-size:\s*13pt/);
+  await expect(page.locator(".sync-status")).toHaveText(/Saved/);
 
-  await page.locator(".menubar-item", { hasText: "Format" }).click();
-  await page.locator(".menu-item", { hasText: "Fit pages 1–2 onto one page" }).click();
-  await expect(page.locator(".toaster")).toContainText(/pt/);
-  await expect(page.locator(".toaster")).toContainText(/line spacing/);
+  const id = page.url().match(/\/d\/([^/?#]+)/)![1]!;
+  const text = await fitRange(baseURL!, { document_id: id, from_page: 1, to_page: 2, pages: 1 });
+  expect(text).toMatch(/pt/);
+  expect(text).toMatch(/line spacing/);
 
   await expect
     .poll(async () => {
