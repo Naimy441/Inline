@@ -105,6 +105,44 @@ export function anchorAt(frame: { left: number; top: number; width: number; heig
 }
 
 /**
+ * Horizontal placement after a zoom.
+ * A page that fits in the view is centered and not scrolled sideways: that is
+ * the only time a pinch or a scroll-wheel zoom should land centered.
+ * A wider page keeps `pageLeft` (the point under the fingers, or the toolbar's
+ * center). Side gutters grow when that spot would otherwise fall outside the
+ * scroll range, so the browser cannot clamp it away, and both edges can still
+ * be scrolled into view.
+ */
+export function horizontalPan(input: {
+  canvasWidth: number;
+  pageWidth: number;
+  padLeft: number;
+  padRight: number;
+  /** Where the page's left edge should sit, relative to the canvas. */
+  pageLeft: number;
+}): { padLeft: number; padRight: number; scrollLeft: number } {
+  const { canvasWidth, pageWidth } = input;
+  const padLeft = Math.max(0, input.padLeft);
+  const padRight = Math.max(0, input.padRight);
+  if (!(canvasWidth > 0) || !(pageWidth > 0)) return { padLeft, padRight, scrollLeft: 0 };
+  // Both sides of the page are on screen.
+  if (pageWidth <= canvasWidth + 0.5) {
+    if (pageWidth + padLeft + padRight <= canvasWidth + 0.5) return { padLeft, padRight, scrollLeft: 0 };
+    const gap = (canvasWidth - pageWidth) / 2;
+    return { padLeft: gap, padRight: gap, scrollLeft: 0 };
+  }
+  const minLeft = canvasWidth - padRight - pageWidth;
+  const maxLeft = padLeft;
+  let pageLeft = input.pageLeft;
+  if (!Number.isFinite(pageLeft)) pageLeft = (canvasWidth - pageWidth) / 2;
+  let left = padLeft;
+  let right = padRight;
+  if (pageLeft > maxLeft) left = pageLeft;
+  else if (pageLeft < minLeft) right = canvasWidth - pageWidth - pageLeft;
+  return { padLeft: left, padRight: right, scrollLeft: Math.max(0, left - pageLeft) };
+}
+
+/**
  * Scroll offsets that put `anchor` back on its client pixel after the frame
  * has been remeasured. The caller adds the returned deltas by assigning
  * scrollLeft/scrollTop (the browser clamps them).
