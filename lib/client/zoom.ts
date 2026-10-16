@@ -14,20 +14,32 @@ export function clampZoom(value: number) {
 }
 
 /**
- * Next scale for a ctrl/pinch wheel event. One mouse notch (about 100 pixels,
- * or a few lines) moves the zoom by about ten percent; smaller trackpad
- * deltas accumulate smoothly. Pinching apart (negative deltaY) zooms in.
+ * Wheel pixels in one deliberate trackpad pinch. That gesture, and a two-finger
+ * spread of `PINCH_SPREAD`, each cross from 100% to an end of the 50%–200% range.
+ */
+const WHEEL_PINCH_PIXELS = 150;
+const PINCH_SPREAD = 1.2;
+
+/**
+ * Next scale for a ctrl/pinch wheel event. Pinches arrive as a burst of these.
+ * About 150 pixels is one pinch and covers most of the zoom range; smaller
+ * deltas accumulate. Pinching apart (negative deltaY) zooms in.
  */
 export function zoomFromWheel(current: number, deltaY: number, deltaMode = 0) {
   const lines = deltaMode === 1 ? deltaY : deltaMode === 2 ? deltaY * 12 : deltaY / 32;
   const pixels = Math.max(-800, Math.min(800, lines * 32));
-  return clampZoom(current * Math.exp(-pixels * 0.001));
+  return clampZoom(current * Math.exp(-pixels * (Math.log(2) / WHEEL_PINCH_PIXELS)));
 }
 
-/** Next scale for a two-finger pinch, relative to the distance when it started. */
+/**
+ * Next scale for a two-finger pinch. The finger ratio is raised so a normal
+ * spread (about a fifth farther, or a fifth closer) covers most of the range
+ * instead of matching the fingers one-to-one.
+ */
 export function zoomFromPinch(startZoom: number, startDistance: number, distance: number) {
   if (!(startDistance > 0) || !(distance > 0)) return clampZoom(startZoom);
-  return clampZoom(startZoom * (distance / startDistance));
+  const gain = Math.log(2) / Math.log(PINCH_SPREAD);
+  return clampZoom(startZoom * (distance / startDistance) ** gain);
 }
 
 /**

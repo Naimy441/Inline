@@ -11,17 +11,29 @@ describe("document zoom", () => {
   });
 
   it("zooms in when the wheel delta is negative and out when it is positive", () => {
-    const zoomIn = zoomFromWheel(1, -100, 0);
-    const zoomOut = zoomFromWheel(1, 100, 0);
-    assert.ok(zoomIn > 1.05 && zoomIn < 1.2, `zoom in ${zoomIn}`);
-    assert.ok(zoomOut < 0.95 && zoomOut > 0.8, `zoom out ${zoomOut}`);
+    const zoomIn = zoomFromWheel(1, -80, 0);
+    const zoomOut = zoomFromWheel(1, 80, 0);
+    assert.ok(zoomIn > 1.3 && zoomIn < 1.7, `zoom in ${zoomIn}`);
+    assert.ok(zoomOut < 0.75 && zoomOut > 0.55, `zoom out ${zoomOut}`);
     assert.equal(zoomFromWheel(1, 10_000, 0), 0.5);
+    assert.equal(zoomFromWheel(1, -10_000, 0), 2);
     // A line-mode notch is a real step, not a fraction of a percent.
-    assert.ok(zoomFromWheel(1, 3, 1) < 0.95);
+    assert.ok(zoomFromWheel(1, 3, 1) < 0.75);
+  });
+
+  it("a full pinch covers most of the 50%–200% range", () => {
+    assert.equal(zoomFromWheel(1, -150, 0), 2);
+    assert.equal(zoomFromWheel(1, 150, 0), 0.5);
+    // Fingers a fifth farther apart, or a fifth closer.
+    assert.equal(zoomFromPinch(1, 100, 120), 2);
+    assert.equal(zoomFromPinch(1, 120, 100), 0.5);
+    // A smaller spread is already a clear zoom, and it has not hit the cap yet.
+    const partial = zoomFromPinch(1, 100, 110);
+    assert.ok(partial > 1.3 && partial < 1.7, `partial ${partial}`);
   });
 
   it("follows the ratio of two finger distances", () => {
-    assert.equal(zoomFromPinch(1, 100, 150), 1.5);
+    assert.ok(zoomFromPinch(1, 100, 150) > zoomFromPinch(1, 100, 110));
     assert.equal(zoomFromPinch(1, 100, 20), 0.5);
     assert.equal(zoomFromPinch(1.25, 0, 40), 1.25);
   });

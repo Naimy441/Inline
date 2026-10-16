@@ -126,7 +126,7 @@ test("trackpad pinch and a two-finger touch zoom the page under the pointer", as
   await page.keyboard.down("Control");
   await page.mouse.wheel(0, -240);
   await page.keyboard.up("Control");
-  await expect(page.locator(".tb-zoom")).not.toContainText("100%");
+  await expect(page.locator(".tb-zoom")).toContainText("200%");
 
   const afterWheel = await page.evaluate(({ x, y }) => {
     const sheet = document.querySelector<HTMLElement>(".sheet")!.getBoundingClientRect();
@@ -161,8 +161,8 @@ test("trackpad pinch and a two-finger touch zoom the page under the pointer", as
     };
     const beforeWidth = box.width;
     const beforeTransform = document.querySelector<HTMLElement>(".page-stack")!.style.transform;
-    fire("touchstart", [finger(1, midX - 40, midY), finger(2, midX + 40, midY)]);
-    fire("touchmove", [finger(1, midX - 120, midY), finger(2, midX + 120, midY)]);
+    fire("touchstart", [finger(1, midX - 50, midY), finger(2, midX + 50, midY)]);
+    fire("touchmove", [finger(1, midX - 60, midY), finger(2, midX + 60, midY)]);
     // The scale has to change while the fingers are still down, not on touchend.
     const during = document.querySelector<HTMLElement>(".page-stack")!.style.transform;
     fire("touchend", []);
@@ -172,7 +172,7 @@ test("trackpad pinch and a two-finger touch zoom the page under the pointer", as
   if (touch.supported) {
     expect(touch.during).not.toBe(touch.beforeTransform);
     expect(touch.during).toContain("scale(");
-    await expect(page.locator(".tb-zoom")).not.toContainText("100%");
+    await expect(page.locator(".tb-zoom")).toContainText("200%");
     const after = await sheet.evaluate((element) => element.getBoundingClientRect().width);
     expect(after).toBeGreaterThan(touch.beforeWidth + 20);
   }
