@@ -124,6 +124,8 @@ export function draftChat(id: string, documentId: string | null, settings: ChatS
 
 export class ChatSession {
   readonly ui = new Store<ChatUiState>({ chat: null, connected: false, error: null, rateLimit: null });
+  /** The home page sets this so open_document can show the document. */
+  onOpen: ((documentId: string) => void) | null = null;
   private source: EventSource | null = null;
   private seq: number | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -196,6 +198,10 @@ export class ChatSession {
     this.ui.set((ui) => {
       let next = ui;
       for (const event of events) {
+        if (event.type === "open") {
+          this.onOpen?.(event.documentId);
+          continue;
+        }
         if (event.type === "rate_limit") next = { ...next, rateLimit: event.rateLimit };
         else if (event.type === "snapshot") next = { ...next, chat: event.chat };
         else if (next.chat) next = { ...next, chat: reduceChat(next.chat, event) };

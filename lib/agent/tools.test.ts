@@ -93,6 +93,7 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   check_spelling: {},
   add_to_dictionary: { words: ["Zorblat"] },
   list_library: {},
+  search_documents: { query: "fox" },
   list_folders: {},
   move_documents: { moves: [{ folder: "Archive" }] },
   create_folder: { name: "Projects" },

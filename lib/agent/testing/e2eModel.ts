@@ -43,6 +43,20 @@ const model: FakeModel = async (turn, claude) => {
     return;
   }
 
+  // From the home page: search the library and open the match.
+  const find = text.match(/^find the document about "(.+)"$/i);
+  if (find) {
+    const found = await claude.call("search_documents", { query: find[1] });
+    const id = found.text.match(/^- (\S+) · /m)?.[1];
+    if (!id || found.isError) {
+      claude.say(found.isError ? found.text : `I couldn't find a document about "${find[1]}".`);
+      return;
+    }
+    const opened = await claude.call("open_document", { document_id: id });
+    claude.say(opened.isError ? opened.text : `Opened the document about ${find[1]}.`);
+    return;
+  }
+
   // From the home page: find a document in the library by title and file it.
   const file = text.match(/^file "(.+)" in "(.+)"$/i);
   if (file) {

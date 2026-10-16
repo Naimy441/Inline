@@ -565,7 +565,7 @@ class ChatRuntime {
       const { folders, documents } = await library();
       const unfiled = documents.filter((item) => !item.folderId || !folders.has(item.folderId)).length;
       const where = this.home.folderId && folders.has(this.home.folderId) ? `the folder "${folderPathName(folders, this.home.folderId)}" (id ${this.home.folderId})` : "all documents (the top level)";
-      context.push(`The user is on the home page, not in a document, looking at ${where}. Their library has ${documents.length} document${documents.length === 1 ? "" : "s"} (${unfiled} unfiled) and ${folders.size} folder${folders.size === 1 ? "" : "s"}. Use list_library to see them.`);
+      context.push(`The user is on the home page, not in a document, looking at ${where}. Their library has ${documents.length} document${documents.length === 1 ? "" : "s"} (${unfiled} unfiled) and ${folders.size} folder${folders.size === 1 ? "" : "s"}. Use search_documents to find a document by words in its text, then open_document to show it. Use list_library to see the library.`);
     } else {
       context.push("No document is open.");
     }
@@ -696,6 +696,10 @@ class ChatRuntime {
         this.wroteThisTurn.set(doc.id, await doc.checkpoint("Before Claude's edits"));
       },
       onChange: (change) => this.recordChange(change),
+      onOpen: (documentId) => {
+        if (this.state.documentId) return;
+        this.emit({ type: "open", documentId });
+      },
     };
   }
 

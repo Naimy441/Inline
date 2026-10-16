@@ -63,6 +63,27 @@ test("importing a Takeout ZIP keeps Drive's folders, draws thumbnails and retire
   expect(list.documents.find((doc) => doc.title === `Pitch ${stamp}`)?.thumbnailAt).toBeTruthy();
 });
 
+test("Claude searches documents from the home page and opens the match", async ({ page, request }) => {
+  const stamp = Date.now();
+  const title = `Coast notes ${stamp}`;
+  const marker = `zephyr${stamp}`;
+  const folder = ((await (await request.post("/api/folders", { data: { name: `Trips ${stamp}` } })).json()) as { folder: { id: string } }).folder;
+  const response = await request.post("/api/documents", {
+    data: { title, markdown: `# ${title}\n\n${"padding ".repeat(80)}\n\nPack the ${marker} before dawn.`, folderId: folder.id },
+  });
+  expect(response.status()).toBe(201);
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Organize with Claude" }).click();
+  const composer = page.getByLabel("Message Claude");
+  await composer.fill(`find the document about "${marker}"`);
+  await composer.press("Enter");
+
+  await expect(page).toHaveURL(/\/d\//, { timeout: 20_000 });
+  await expect(page.locator(".doc-content")).toContainText(marker);
+  await expect(page.locator(".title-input")).toHaveValue(title);
+});
+
 test("Claude files documents from the home page, and the page updates as it works", async ({ page, request }) => {
   const title = `Invoice ${Date.now()}`;
   await createDocument(request, title);

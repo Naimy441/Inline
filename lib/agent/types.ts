@@ -166,7 +166,9 @@ export type ChatEvent =
   | { type: "queue"; queue: QueuedMessage[] }
   | { type: "meta"; title: string; documentId: string | null; settings: ChatSettings; updatedAt: number }
   | { type: "context"; context: ContextUsage }
-  | { type: "rate_limit"; rateLimit: RateLimit };
+  | { type: "rate_limit"; rateLimit: RateLimit }
+  /** The home page should show this document (open_document while no editor is listening). */
+  | { type: "open"; documentId: string };
 
 export type SequencedChatEvent = ChatEvent & { seq: number };
 

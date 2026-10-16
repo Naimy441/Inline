@@ -106,6 +106,43 @@ describe("organizing the library", () => {
     assert.equal((await runTool("delete_folder", { folder: "Gone" }, ctx)).isError, true);
   });
 
+  test("search_documents finds text past the opening excerpt and open_document shows the match from the home page", async () => {
+    const marker = "zephyrquartz";
+    const filler = Array.from({ length: 80 }, () => "padding").join(" ");
+    const notes = await make("Coast notes", `${filler} Pack the ${marker} before dawn.`);
+    await make("Grocery list", "Milk and bread.");
+    const { createFolder } = await import("@/lib/server/folders");
+    const trips = await createFolder({ name: "Trips" });
+    notes.setFolder(trips.id);
+
+    const listed = (await runTool("list_library", { excerpt_words: 12 }, ctx)).text;
+    assert.doesNotMatch(listed, new RegExp(marker), "the opening excerpt does not reach the later sentence");
+
+    const found = await runTool("search_documents", { query: marker }, ctx);
+    assert.equal(found.isError, undefined);
+    assert.match(found.text, new RegExp(`${notes.id} · "Coast notes" · in Trips`));
+    assert.match(found.text, new RegExp(marker));
+    assert.doesNotMatch(found.text, /Grocery list/);
+
+    const inTrips = await runTool("search_documents", { query: "padding", folder: "Trips" }, ctx);
+    assert.match(inTrips.text, /Coast notes/);
+    assert.doesNotMatch(inTrips.text, /Grocery list/);
+    const elsewhere = await runTool("search_documents", { query: marker, folder: "Nope" }, ctx);
+    assert.equal(elsewhere.isError, true);
+
+    const none = await runTool("search_documents", { query: "not-in-any-document" }, ctx);
+    assert.match(none.text, /No documents match/);
+    const bad = await runTool("search_documents", { query: "(", regex: true }, ctx);
+    assert.equal(bad.isError, true);
+    assert.match(bad.text, /regular expression/);
+
+    const opened: string[] = [];
+    const result = await runTool("open_document", { document_id: notes.id }, { ...ctx, onOpen: (id) => opened.push(id) });
+    assert.equal(result.isError, undefined);
+    assert.match(result.text, new RegExp(`Opened "Coast notes" \\(id ${notes.id}\\)`));
+    assert.deepEqual(opened, [notes.id]);
+  });
+
   test("create_document can file the new document, and Ask mode refuses folder changes", async () => {
     const created = await runTool("create_document", { title: "Ideas", folder: "Inbox", open: false }, ctx);
     assert.match(created.text, /Created "Ideas"/);
