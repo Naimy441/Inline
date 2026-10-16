@@ -833,7 +833,7 @@ export function Workspace({ documentId }: { documentId: string }) {
           session.run(insertText(char));
         }}
       />
-      <ContextMenu session={session} hideClaude={focusMode} readOnly={ui.mode === "viewing"} onAsk={() => askClaude()} onComment={startComment} onLink={() => setLinkEditing(true)} />
+      <ContextMenu session={session} hideClaude={focusMode} readOnly={ui.mode === "viewing"} onAsk={askClaude} onComment={startComment} onLink={() => setLinkEditing(true)} />
       <WordCountDialog open={counting} onClose={() => setCounting(false)} session={session} />
       <Toaster />
       <ConfirmHost />

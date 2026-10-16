@@ -1,6 +1,6 @@
 "use client";
 
-import { BookPlus, ClipboardPaste, Copy, Link2, Lock, LockOpen, MessageSquarePlus, RemoveFormatting, Scissors, Sparkles, Trash2 } from "lucide-react";
+import { BookOpen, BookPlus, ClipboardPaste, Copy, Link2, Lock, LockOpen, MessageSquarePlus, RemoveFormatting, Scissors, Sparkles, Trash2 } from "lucide-react";
 import { deleteSelection } from "prosemirror-commands";
 import { TextSelection } from "prosemirror-state";
 import { addColumnAfter, addColumnBefore, addRowAfter, addRowBefore, deleteColumn, deleteRow, deleteTable, isInTable } from "prosemirror-tables";
@@ -12,10 +12,13 @@ import { toast } from "@/components/ui/Toast";
 import { isTouch } from "@/lib/client/viewport";
 import { selectedWord } from "@/lib/editor/spelling";
 import { preferences } from "@/lib/client/preferences";
+import { normalizeWord } from "@/lib/doc/words";
+import { matchCase } from "@/lib/dictionary/lookup";
+import { DictionaryCard } from "@/components/workspace/DictionaryCard";
 
 /**
- * The editor's right-click menu. Shift+right-click still opens the browser's own
- * menu (spelling suggestions live there).
+ * The editor's right-click menu. A word can be looked up here (definitions and
+ * synonyms). Shift+right-click still opens the browser's own menu.
  */
 export function ContextMenu({
   session,
@@ -29,11 +32,12 @@ export function ContextMenu({
   hideClaude?: boolean;
   /** Viewing mode: only copying, commenting and asking are offered. */
   readOnly?: boolean;
-  onAsk: () => void;
+  onAsk: (prompt?: string) => void;
   onComment: () => void;
   onLink: () => void;
 }) {
   const [point, setPoint] = useState<DOMRect | null>(null);
+  const [lookup, setLookup] = useState<{ word: { from: number; to: number; text: string }; anchor: DOMRect } | null>(null);
 
   useEffect(() => {
     const view = session.view;
@@ -69,9 +73,43 @@ export function ContextMenu({
       .catch((error: Error) => toast(error.message, { tone: "error" }));
   const word = session.view ? selectedWord(session.view) : null;
   const spellcheck = preferences.get().spellcheck;
+  const shown = word && word.text.length > 24 ? `${word.text.slice(0, 23)}…` : word?.text;
+  const selectWord = (target: { from: number; to: number }) =>
+    session.run((state, dispatch) => {
+      if (target.to > state.doc.content.size) return false;
+      dispatch?.(state.tr.setSelection(TextSelection.create(state.doc, target.from, target.to)));
+      return true;
+    });
+  const replaceWord = (target: { from: number; to: number; text: string }, replacement: string) => {
+    const view = session.view;
+    if (!view || readOnly) return;
+    const current = view.state.doc.textBetween(target.from, target.to, "", "");
+    if (normalizeWord(current) !== normalizeWord(target.text)) {
+      toast("That word changed. Right-click it again.");
+      return;
+    }
+    session.run((state, dispatch) => {
+      dispatch?.(state.tr.insertText(matchCase(target.text, replacement), target.from, target.to));
+      return true;
+    });
+  };
   const paste = (plain: boolean) => void session.paste(plain).catch((error: Error) => toast(error.message, { tone: "error" }));
 
   const items: MenuItem[] = [
+    ...(word && shown
+      ? ([
+          {
+            label: `Look up “${shown}”`,
+            hint: "Definitions and synonyms",
+            icon: <BookOpen size={14} />,
+            onSelect: () => {
+              selectWord(word);
+              setLookup({ word, anchor: point ?? new DOMRect(0, 0, 0, 0) });
+            },
+          },
+          { kind: "separator" },
+        ] as MenuItem[])
+      : []),
     { label: "Cut", icon: <Scissors size={14} />, shortcut: `⌘X`, disabled: !hasSelection || readOnly, onSelect: () => session.clipboard("cut") },
     { label: "Copy", icon: <Copy size={14} />, shortcut: `⌘C`, disabled: !hasSelection, onSelect: () => session.clipboard("copy") },
     { label: "Paste", icon: <ClipboardPaste size={14} />, shortcut: `⌘V`, disabled: readOnly, onSelect: () => paste(false) },
@@ -112,7 +150,7 @@ export function ContextMenu({
     ...(word && spellcheck
       ? [
           {
-            label: `Add “${word.text.length > 24 ? `${word.text.slice(0, 23)}…` : word.text}” to dictionary`,
+            label: `Add “${shown}” to dictionary`,
             hint: "Stop underlining this word",
             icon: <BookPlus size={14} />,
             onSelect: () => {
@@ -123,8 +161,33 @@ export function ContextMenu({
         ]
       : []),
     { label: spellcheck ? "Hide spelling underlines" : "Show spelling underlines", onSelect: () => session.setSpellcheck(!spellcheck) },
-    { kind: "label", label: "Shift+right-click for spelling suggestions" },
   ];
 
-  return <Menu open={point !== null} onClose={() => setPoint(null)} anchor={point} items={items} />;
+  return (
+    <>
+      <Menu open={point !== null} onClose={() => setPoint(null)} anchor={point} items={items} />
+      {lookup && (
+        <DictionaryCard
+          word={lookup.word.text}
+          anchor={lookup.anchor}
+          readOnly={readOnly}
+          onClose={() => setLookup(null)}
+          onReplace={(synonym) => {
+            replaceWord(lookup.word, synonym);
+            setLookup(null);
+          }}
+          onAsk={
+            hideClaude
+              ? undefined
+              : () => {
+                  const text = lookup.word.text;
+                  selectWord(lookup.word);
+                  setLookup(null);
+                  onAsk(`Define “${text}” and suggest synonyms that could replace it. Don't edit the document.`);
+                }
+          }
+        />
+      )}
+    </>
+  );
 }

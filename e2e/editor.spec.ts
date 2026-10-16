@@ -89,11 +89,50 @@ test("spelling underlines can be hidden, and a word added to the dictionary", as
   await page.keyboard.type("Zorblat is here.");
   // Right-click on the word itself.
   await doc.locator("p").first().click({ button: "right", position: { x: 12, y: 8 } });
+  await expect(page.getByText("Shift+right-click for spelling suggestions")).toHaveCount(0);
   await page.getByRole("menuitem", { name: /Add “Zorblat” to dictionary/ }).click();
   await expect(doc.locator('[spellcheck="false"]')).toHaveText("Zorblat");
   await doc.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Hide spelling underlines" }).click();
   await expect(doc).toHaveAttribute("spellcheck", "false");
+});
+
+test("right-clicking a word opens definitions and synonyms", async ({ page }) => {
+  await page.route("**/api/dictionary/lookup**", async (route) => {
+    const word = new URL(route.request().url()).searchParams.get("word");
+    if (word === "ephemeral") {
+      await route.fulfill({
+        json: {
+          found: true,
+          word: "ephemeral",
+          meanings: [{ partOfSpeech: "adjective", definitions: ["Lasting for a short period of time."] }],
+          synonyms: ["fleeting"],
+        },
+      });
+      return;
+    }
+    await route.fulfill({ json: { found: false } });
+  });
+  await newBlankDocument(page);
+  const doc = page.locator(".doc-content");
+  await doc.click();
+  await page.keyboard.type("ephemeral");
+  await doc.locator("p").first().click({ button: "right", position: { x: 12, y: 8 } });
+  await expect(page.getByText("Shift+right-click for spelling suggestions")).toHaveCount(0);
+  await page.getByRole("menuitem", { name: /Look up “ephemeral”/ }).click();
+  const card = page.getByRole("dialog", { name: "Dictionary for ephemeral" });
+  await expect(card).toContainText("Lasting for a short period of time.");
+  await card.getByRole("button", { name: "Replace with fleeting" }).click();
+  await expect(doc.locator("p").first()).toHaveText("fleeting");
+
+  await page.keyboard.press("Control+a");
+  await page.keyboard.type("Zorblat");
+  await doc.locator("p").first().click({ button: "right", position: { x: 12, y: 8 } });
+  await page.getByRole("menuitem", { name: /Look up “Zorblat”/ }).click();
+  const missing = page.getByRole("dialog", { name: "Dictionary for Zorblat" });
+  await expect(missing).toContainText("No dictionary entry for “Zorblat”.");
+  await missing.getByRole("button", { name: "Ask Claude about “Zorblat”" }).click();
+  await expect(page.getByLabel("Message Claude")).toHaveValue(/Define “Zorblat”/);
 });
 
 test("document tabs can be added, renamed, reordered, exported and deleted", async ({ page }) => {
