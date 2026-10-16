@@ -3,7 +3,7 @@
 import { redo, undo } from "prosemirror-history";
 import { AllSelection } from "prosemirror-state";
 import { createRef, useEffect, useRef, useState, type RefObject } from "react";
-import type { DocumentSession, EditorMode } from "@/lib/client/documentSession";
+import { geometryFor, type DocumentSession, type EditorMode } from "@/lib/client/documentSession";
 import { currentRevealLabel } from "@/lib/client/fileManager";
 import { desktop } from "@/lib/client/desktop";
 import { modeMenuItems } from "@/components/workspace/modes";
@@ -30,6 +30,7 @@ import { textToTable } from "@/lib/editor/tables";
 import { tableFormatItems, TABLE_ASK, type TableAsk } from "@/components/workspace/tableMenu";
 import { TableDialog } from "@/components/workspace/TableDialog";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
+import { fitPagesInView } from "@/lib/editor/pageFit";
 import { insertEquation } from "@/lib/editor/math";
 import { BUILTIN_COMMANDS } from "@/lib/agent/commands";
 
@@ -175,6 +176,15 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
   const theme = activeTheme(actions.settings ?? { fontFamily: FONT_FAMILIES[0].value });
   const currentStyle = session.view ? currentStyleId(session.view.state) : null;
   const styleShortcut = (id: string) => (id === "Normal" ? "⌘⌥0" : id === "Heading1" ? "⌘⌥1" : id === "Heading2" ? "⌘⌥2" : id === "Heading3" ? "⌘⌥3" : id === "Heading4" ? "⌘⌥4" : undefined);
+  const fitPages = (kind: "half" | "page") => {
+    const view = session.view;
+    const settings = session.meta?.settings;
+    if (!view || !settings) return;
+    const { summary, transaction } = fitPagesInView(view, settings, geometryFor(session.meta), kind, session.ui.get().flow);
+    if (transaction) session.dispatch(transaction);
+    actions.notice(summary);
+    view.focus();
+  };
 
   const menus: Record<string, MenuItem[]> = {
     File: [
@@ -369,6 +379,9 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
           ...tableFormatItems(session, actions.notice),
         ],
       },
+      { kind: "separator" },
+      { label: "Fit page 1 to top half", hint: "Squeeze this page into the top half", onSelect: () => fitPages("half") },
+      { label: "Fit pages 1–2 onto one page", hint: "Squeeze the first two pages onto one page", onSelect: () => fitPages("page") },
       { kind: "separator" },
       { label: "Header & footer…", onSelect: () => actions.pageSetup("header") },
       { label: "Page numbers…", onSelect: () => actions.pageSetup("header") },

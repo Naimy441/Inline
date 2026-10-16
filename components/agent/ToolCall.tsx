@@ -31,6 +31,7 @@ import {
   RotateCcw,
   Search,
   Settings2,
+  Shrink,
   SpellCheck,
   Sparkles,
   TextCursorInput,
@@ -122,6 +123,10 @@ export function describeTool(part: ToolPart): Described {
       return { icon: <Hash size={14} />, verb: "Counted words in", target: typeof input.text === "string" ? "a draft" : lines() ?? "the document", live: "Counting words in" };
     case "get_page_count":
       return { icon: <Files size={14} />, verb: "Counted", target: "pages", live: "Counting" };
+    case "fit_page_to_half":
+      return { icon: <Shrink size={14} />, verb: "Fitted", target: "page 1 into the top half", live: "Fitting" };
+    case "fit_pages_onto_one":
+      return { icon: <Shrink size={14} />, verb: "Fitted", target: "pages 1–2 onto one page", live: "Fitting" };
     case "screenshot_page": {
       const page = input.page ?? field("page");
       return { icon: <ImageIcon size={14} />, verb: "Looked at", target: page ? `page ${page}` : "a page", live: "Looking at" };

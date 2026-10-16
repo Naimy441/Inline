@@ -255,6 +255,16 @@ export function blockSpacing(node: PMNode) {
   return parts.join("; ");
 }
 
+/** A code block's own size, leading and spacing. Null attrs keep the usual CSS. */
+function codeBlockStyle(node: PMNode) {
+  const parts: string[] = [];
+  if (node.attrs.fontSize) parts.push(`font-size: ${fontSizeCss(node.attrs.fontSize)}`);
+  if (node.attrs.lineHeight) parts.push(`line-height: ${node.attrs.lineHeight}`, `--ls: ${node.attrs.lineHeight}`);
+  const spacing = blockSpacing(node);
+  if (spacing) parts.push(spacing);
+  return parts.join("; ");
+}
+
 /** Whether two paragraphs' borders are the same, so they share one box (as Word and Google Docs draw them). */
 export function sameBorders(a: Borders | null | undefined, b: Borders | null | undefined) {
   if (!a || !b) return false;
@@ -527,20 +537,49 @@ const nodes: Record<string, NodeSpec> = {
     group: "block",
     code: true,
     defining: true,
-    /** Space above and below in points, when not the usual (a displayed equation placed as in an imported PDF). */
-    attrs: { id: { default: null }, language: { default: "" }, spaceBefore: { default: null as number | null }, spaceAfter: { default: null as number | null }, style: { default: null as string | null } },
+    /** Space above and below in points, when not the usual (a displayed equation placed as in an imported PDF). fontSize and lineHeight stay null unless a fit writes them, so the Code style and the document font are unchanged. */
+    attrs: {
+      id: { default: null },
+      language: { default: "" },
+      spaceBefore: { default: null as number | null },
+      spaceAfter: { default: null as number | null },
+      fontSize: { default: null as number | null },
+      lineHeight: { default: null as string | null },
+      style: { default: null as string | null },
+    },
     parseDOM: [
       {
         tag: "pre",
         preserveWhitespace: "full",
-        getAttrs: (dom) => ({ language: (dom as HTMLElement).getAttribute("data-language") || "", style: storedStyleFromDom(dom as HTMLElement) }),
+        getAttrs: (dom) => {
+          const el = dom as HTMLElement;
+          const fontSize = Number(el.getAttribute("data-font-size"));
+          const lineHeight = el.style?.lineHeight;
+          return {
+            language: el.getAttribute("data-language") || "",
+            style: storedStyleFromDom(el),
+            fontSize: fontSize > 0 && fontSize <= 400 ? fontSize : null,
+            lineHeight: lineHeight && /^[\d.]+$/.test(lineHeight) ? lineHeight : null,
+            spaceBefore: parseSpace(el.style?.marginTop),
+            spaceAfter: parseSpace(el.style?.marginBottom),
+          };
+        },
       },
     ],
-    toDOM: (node): DOMOutputSpec => [
-      "pre",
-      { ...(node.attrs.id ? { "data-id": node.attrs.id } : {}), "data-language": node.attrs.language || "", "data-style": nodeStyleId(node), ...(blockSpacing(node) ? { style: blockSpacing(node) } : {}) },
-      ["code", 0],
-    ],
+    toDOM: (node): DOMOutputSpec => {
+      const style = codeBlockStyle(node);
+      return [
+        "pre",
+        {
+          ...(node.attrs.id ? { "data-id": node.attrs.id } : {}),
+          "data-language": node.attrs.language || "",
+          "data-style": nodeStyleId(node),
+          ...(node.attrs.fontSize ? { "data-font-size": String(node.attrs.fontSize) } : {}),
+          ...(style ? { style } : {}),
+        },
+        ["code", 0],
+      ];
+    },
   },
 
   horizontal_rule: {
