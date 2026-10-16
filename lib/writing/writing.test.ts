@@ -88,14 +88,14 @@ describe("AI tropes", () => {
     assert.equal(cleaned, "I think cats - dogs differ.");
   });
 
-  it("flags bullet glyphs, curly quotes and ellipsis characters, and leaves real lists alone", () => {
-    const hits = detectAiTropes("Pack • towels.\n\n“Done”…\n\n- Real item\n\nPages 12–14.");
+  it("flags bullet glyphs and ellipsis characters, and leaves curly quotes and real lists alone", () => {
+    const hits = detectAiTropes("Pack • towels.\n\n“Done”… don’t\n\n- Real item\n\nPages 12–14.");
     const titles = hits.map((hit) => hit.title);
     assert.ok(titles.some((title) => title.includes("bullet glyph")));
-    assert.ok(titles.some((title) => title.includes("curly quote")));
     assert.ok(titles.some((title) => title.includes("ellipsis")));
+    assert.ok(!titles.some((title) => /quote|apostrophe/i.test(title)));
     assert.ok(!titles.some((title) => title.includes("en dash")));
-    assert.equal(findAiSymbols("- Real item\n- Another").length, 0);
+    assert.equal(findAiSymbols("“Hello,” don’t stop.\n- Real item\n- Another").length, 0);
   });
 
   it("does not treat a script joiner as a watermark", () => {
@@ -129,10 +129,10 @@ describe("AI tell cleanup", () => {
   });
 
   it("turns em dashes, fake bullets and other AI symbols into plain punctuation and lists", () => {
-    const cleaned = cleanAiTellText("The plan — a short one — is ready.\n\n• Towels\n\n• Sunscreen\n\nSee the note… “quoted”\n\nPages 12–14.\n\ncol·legi\n\n- Real item").text;
+    const cleaned = cleanAiTellText("The plan — a short one — is ready.\n\n• Towels\n\n• Sunscreen\n\nSee the note… “quoted” don’t\n\nPages 12–14.\n\ncol·legi\n\n- Real item").text;
     assert.equal(
       cleaned,
-      "The plan - a short one - is ready.\n\n- Towels\n\n- Sunscreen\n\nSee the note... \"quoted\"\n\nPages 12–14.\n\ncol·legi\n\n- Real item",
+      "The plan - a short one - is ready.\n\n- Towels\n\n- Sunscreen\n\nSee the note... “quoted” don’t\n\nPages 12–14.\n\ncol·legi\n\n- Real item",
     );
   });
 

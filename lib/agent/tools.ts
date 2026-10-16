@@ -1094,7 +1094,7 @@ export const TOOLS = [
     name: "analyze_writing",
     title: "Analyze writing",
     description:
-      "Writing diagnostics for a document or a line range: word, sentence and paragraph counts, reading ease, grade level, vocabulary diversity, long sentences, and common AI-writing tropes (em dashes, bullet glyphs that are not real lists, curly quotes, ellipsis characters, clichés like \"delve\", hidden watermark characters).",
+      "Writing diagnostics for a document or a line range: word, sentence and paragraph counts, reading ease, grade level, vocabulary diversity, long sentences, and common AI-writing tropes (em dashes, bullet glyphs that are not real lists, ellipsis characters, clichés like \"delve\", hidden watermark characters).",
     shape: { document_id: documentId, from_line: z.number().int().min(1).optional(), to_line: z.number().int().min(1).optional() },
     write: false,
     async handler(args, ctx) {
@@ -1124,7 +1124,7 @@ export const TOOLS = [
     name: "clean_ai_tells",
     title: "Clean AI tells",
     description:
-      "Clean a document so it is less likely to be flagged as AI-written. Deletes unimportant invisible characters immediately (zero-width spaces and other non-printing junk). Rewrites em dashes, en dashes used as pauses, bullet glyphs that are not real list items, curly quotes, and ellipsis characters into normal punctuation and Markdown lists (- item). Real line breaks, real lists, and joiners that belong to a script (Arabic, Indic, Thai, emoji) are kept. Locked text is left unchanged. edit_document, write_document, insert_content, and multi_edit_document already delete invisible characters in text you write and flag any AI symbols that remain.",
+      "Clean a document so it is less likely to be flagged as AI-written. Deletes unimportant invisible characters immediately (zero-width spaces and other non-printing junk). Rewrites em dashes, en dashes used as pauses, bullet glyphs that are not real list items, and ellipsis characters into normal punctuation and Markdown lists (- item). Curly quotes and apostrophes are left as written. Real line breaks, real lists, and joiners that belong to a script (Arabic, Indic, Thai, emoji) are kept. Locked text is left unchanged. edit_document, write_document, insert_content, and multi_edit_document already delete invisible characters in text you write and flag any AI symbols that remain.",
     shape: { document_id: documentId },
     write: true,
     async handler(args, ctx) {

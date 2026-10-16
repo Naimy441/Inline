@@ -7,13 +7,14 @@
  * zero-width spaces between Thai, Lao, Myanmar, or Khmer letters. Real line
  * breaks, tabs, and Markdown list markers are ordinary characters and are kept.
  *
- * Visible AI symbols (em dashes, fake bullet glyphs, curly quotes, ellipsis
- * characters) are reported so the model can rewrite them. cleanAiTellText also
- * rewrites those symbols into plain punctuation and real Markdown lists.
+ * Visible AI symbols (em dashes, fake bullet glyphs, ellipsis characters) are
+ * reported so the model can rewrite them. cleanAiTellText also rewrites those
+ * symbols into plain punctuation and real Markdown lists. Curly quotes and
+ * apostrophes are left alone; the editor inserts them on purpose.
  * Code, math, and any extra protected snippets are left alone.
  */
 
-export type AiSymbolKind = "emdash" | "endash" | "bullet" | "ellipsis" | "quote";
+export type AiSymbolKind = "emdash" | "endash" | "bullet" | "ellipsis";
 
 export type AiSymbolHit = {
   kind: AiSymbolKind;
@@ -32,7 +33,7 @@ export type CleanResult = {
   rewrites: AiSymbolHit[];
 };
 
-const KIND_ORDER: AiSymbolKind[] = ["emdash", "endash", "bullet", "ellipsis", "quote"];
+const KIND_ORDER: AiSymbolKind[] = ["emdash", "endash", "bullet", "ellipsis"];
 
 const BULLET_LINE = /^([ \t]*)[•●○▪▫■□‣◦∙►▶▸▹➤❖⁃✓✔✗✘☐☑→⇒➜➔·][ \t]*/;
 const INLINE_BULLET = /[•●○▪▫■□‣◦►▶▸▹➤❖⁃]/g;
@@ -44,7 +45,6 @@ const HINTS: Record<AiSymbolKind, string> = {
   endash: "Use a hyphen.",
   bullet: "Use a Markdown list (- item).",
   ellipsis: "Use three periods (...).",
-  quote: "Use straight quotes (\" and ').",
 };
 
 const REPLACEMENTS: Record<AiSymbolKind, string> = {
@@ -52,7 +52,6 @@ const REPLACEMENTS: Record<AiSymbolKind, string> = {
   endash: " - ",
   bullet: "- ",
   ellipsis: "...",
-  quote: '"',
 };
 
 function symbolTitle(kind: AiSymbolKind, count: number) {
@@ -66,8 +65,6 @@ function symbolTitle(kind: AiSymbolKind, count: number) {
       return `${count} bullet glyph${plural} outside a list`;
     case "ellipsis":
       return `${count} ellipsis character${plural}`;
-    case "quote":
-      return `${count} curly quote${plural}`;
   }
 }
 
@@ -178,7 +175,6 @@ function scanLine(line: string, add: (kind: AiSymbolKind, sample: string) => voi
   const withoutRanges = line.replace(/\d[ \t]*–[ \t]*\d/g, (match) => " ".repeat(match.length));
   eachMatch(/–/g, withoutRanges, () => add("endash", line));
   eachMatch(/…/g, line, () => add("ellipsis", line));
-  eachMatch(/[“”‘’«»‹›]/g, line, () => add("quote", line));
 }
 
 function eachMatch(pattern: RegExp, text: string, visit: () => void) {
@@ -215,8 +211,6 @@ function rewriteLine(line: string) {
   next = next.replace(/[ \t]*[—―–][ \t]*/g, " - ");
   next = next.replace(/%%R(\d+)%%/g, (_match, index: string) => ranges[Number(index)] ?? "");
   next = next.replace(/…/g, "...");
-  next = next.replace(/[“”«»]/g, '"');
-  next = next.replace(/[‘’‹›]/g, "'");
   next = next.replace(INLINE_BULLET, "-");
   next = next.replace(DOT_BULLET, "$1-");
   if (!trailed) next = next.replace(/[ \t]+$/g, "");
