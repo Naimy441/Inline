@@ -511,6 +511,14 @@ function markdownParser() {
     parser.enable(["table", "strikethrough"]);
     parser.use(markPlugin);
     parser.use(mathPlugin);
+    // markdown-it refuses file: links. A document link to a local file is a real target, not a script.
+    const refuse = /^(vbscript|javascript|data):/i;
+    const imageData = /^data:image\/(gif|png|jpeg|webp);/i;
+    parser.validateLink = (url: string) => {
+      const trimmed = url.trim();
+      if (/^file:/i.test(trimmed)) return safeHref(trimmed) !== null;
+      return refuse.test(trimmed) ? imageData.test(trimmed) : true;
+    };
   }
   return parser;
 }

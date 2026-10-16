@@ -3,7 +3,7 @@ import type { Attrs, MarkType, Node as PMNode, NodeType } from "prosemirror-mode
 import { liftListItem, sinkListItem, wrapInList } from "prosemirror-schema-list";
 import { NodeSelection, TextSelection, type Command, type EditorState } from "prosemirror-state";
 import { isInTable } from "prosemirror-tables";
-import { MAX_INDENT, safeHref, schema, type Align } from "@/lib/doc/schema";
+import { fileLinkHref, MAX_INDENT, safeHref, schema, type Align } from "@/lib/doc/schema";
 
 /** Editing commands shared by the toolbar, menus, keymap and command palette. */
 
@@ -345,8 +345,16 @@ export function linkAt(state: EditorState): { from: number; to: number; href: st
   return { from: start0 + Math.max(0, start), to: start0 + end, href: mark.attrs.href as string };
 }
 
+/** The href stored for text the user typed into the link field, or null when Inline refuses it. */
+export function linkHrefFromInput(raw: string): string | null {
+  const trimmed = raw.trim();
+  const candidate = fileLinkHref(trimmed) ?? (/^[\w.-]+\.[a-z]{2,}(\/|$)/i.test(trimmed) ? `https://${trimmed}` : trimmed);
+  const href = safeHref(candidate);
+  return href ? normalizeHref(href) : null;
+}
+
 export function setLink(rawHref: string | null, text?: string): Command {
-  const href = rawHref === null ? null : safeHref(/^[\w.-]+\.[a-z]{2,}(\/|$)/i.test(rawHref.trim()) ? `https://${rawHref.trim()}` : rawHref);
+  const href = rawHref === null ? null : linkHrefFromInput(rawHref);
   return (state, dispatch) => {
     if (rawHref !== null && !href) return false;
     if (!dispatch) return true;
@@ -360,7 +368,7 @@ export function setLink(rawHref: string | null, text?: string): Command {
     }
     if (from === to) return false;
     tr.removeMark(from, to, type);
-    if (href) tr.addMark(from, to, type.create({ href: normalizeHref(href) }));
+    if (href) tr.addMark(from, to, type.create({ href }));
     dispatch(tr.scrollIntoView());
     return true;
   };
@@ -368,6 +376,8 @@ export function setLink(rawHref: string | null, text?: string): Command {
 
 export function normalizeHref(href: string) {
   const trimmed = href.trim();
+  const file = fileLinkHref(trimmed);
+  if (file) return file;
   if (/^(https?:|mailto:|tel:|#|\/)/i.test(trimmed)) return trimmed;
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return `mailto:${trimmed}`;
   return `https://${trimmed}`;
@@ -488,7 +498,22 @@ export function blockPosById(doc: PMNode, id: string): number | null {
   return found;
 }
 
-/** Follow a link: in-document anchors (#block-id) move the cursor there, others open in a new tab. */
+/**
+ * Open a link that leaves the document. File links go through the desktop
+ * app when it is there, because a browser will not open `file://` itself.
+ * Web, mail and phone links open in a new tab (the desktop app hands those
+ * to the system too).
+ */
+export function openDocumentLink(href: string) {
+  const bridge = typeof window !== "undefined" ? window.inlineDesktop?.openExternal : undefined;
+  if (/^file:/i.test(href) && bridge) {
+    bridge(href);
+    return;
+  }
+  window.open(href, "_blank", "noopener,noreferrer");
+}
+
+/** Follow a link: in-document anchors (#block-id) move the cursor there, others open outside the document. */
 export function followLink(href: string): Command {
   return (state, dispatch) => {
     if (href.startsWith("#")) {
@@ -497,7 +522,7 @@ export function followLink(href: string): Command {
       dispatch?.(state.tr.setSelection(TextSelection.near(state.doc.resolve(pos + 1))).scrollIntoView());
       return true;
     }
-    if (dispatch) window.open(href, "_blank", "noopener,noreferrer");
+    if (dispatch) openDocumentLink(href);
     return true;
   };
 }

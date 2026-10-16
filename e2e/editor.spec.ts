@@ -7,6 +7,57 @@ async function newBlankDocument(page: Page) {
   await expect(page.locator(".doc-content")).toBeVisible();
 }
 
+test("a web link and a file link can be inserted, opened, and survive a reload", async ({ page }) => {
+  await newBlankDocument(page);
+  const doc = page.locator(".doc-content");
+  await doc.click();
+  await page.keyboard.type("See the notes and the file.");
+  await expect(doc.locator("p").first()).toHaveText("See the notes and the file.");
+
+  const selectWord = async (word: string) => {
+    await doc.click();
+    await page.keyboard.press("Home");
+    const index = "See the notes and the file.".indexOf(word);
+    for (let i = 0; i < index; i += 1) await page.keyboard.press("ArrowRight");
+    for (let i = 0; i < word.length; i += 1) await page.keyboard.press("Shift+ArrowRight");
+  };
+
+  await selectWord("notes");
+  await page.getByRole("button", { name: "Insert link" }).click();
+  await page.getByPlaceholder("Paste or type a link").fill("https://example.com/notes");
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect(doc.locator('a[href="https://example.com/notes"]')).toHaveText("notes");
+
+  await selectWord("file");
+  await page.getByRole("button", { name: "Insert link" }).click();
+  await page.getByPlaceholder("Paste or type a link").fill("file:///tmp/notes.pdf");
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect(doc.locator('a[href="file:///tmp/notes.pdf"]')).toHaveText("file");
+
+  await expect(page.locator(".sync-status")).toHaveText(/Saved/);
+  await page.reload();
+  await expect(doc.locator('a[href="https://example.com/notes"]')).toHaveText("notes");
+  await expect(doc.locator('a[href="file:///tmp/notes.pdf"]')).toHaveText("file");
+
+  await page.evaluate(() => {
+    const opened: string[] = [];
+    (window as unknown as { __opened: string[] }).__opened = opened;
+    window.open = ((url?: string | URL) => {
+      opened.push(String(url ?? ""));
+      return null;
+    }) as typeof window.open;
+  });
+  await doc.locator('a[href="https://example.com/notes"]').click({ modifiers: ["Control"] });
+  await doc.locator('a[href="file:///tmp/notes.pdf"]').click({ modifiers: ["Control"] });
+  await doc.locator('a[href="file:///tmp/notes.pdf"]').click();
+  await page.locator("a.bubble-url").click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __opened?: string[] }).__opened ?? [])).toEqual([
+    "https://example.com/notes",
+    "file:///tmp/notes.pdf",
+    "file:///tmp/notes.pdf",
+  ]);
+});
+
 test("typing is saved and survives a reload", async ({ page }) => {
   await newBlankDocument(page);
   await page.locator(".doc-content").click();

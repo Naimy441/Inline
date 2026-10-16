@@ -1,5 +1,6 @@
 import { app, BrowserWindow, clipboard, Menu, nativeTheme, screen, shell } from "electron";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { settings, updateSettings } from "./settings.mjs";
 
 /**
@@ -176,7 +177,8 @@ function watchDownloads(session) {
 function contextMenu(params, contents) {
   const items = [];
   if (params.linkURL && !isAppUrl(params.linkURL)) {
-    items.push({ label: "Open Link in Browser", click: () => openExternal(params.linkURL) });
+    const file = /^file:/i.test(params.linkURL);
+    items.push({ label: file ? "Open Link" : "Open Link in Browser", click: () => openExternal(params.linkURL) });
     items.push({ label: "Copy Link", click: () => clipboard.writeText(params.linkURL) });
   }
   if (params.isEditable) {
@@ -193,6 +195,20 @@ function contextMenu(params, contents) {
 }
 
 export function openExternal(url) {
+  if (typeof url !== "string") return;
+  if (/^file:/i.test(url)) {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "file:" || parsed.username || parsed.password) return;
+      if (!parsed.pathname || parsed.pathname === "/") return;
+      parsed.search = "";
+      parsed.hash = "";
+      void shell.openPath(fileURLToPath(parsed));
+    } catch {
+      // A share this machine cannot open stays a link in the document.
+    }
+    return;
+  }
   if (/^(https?|mailto):/i.test(url)) void shell.openExternal(url);
 }
 

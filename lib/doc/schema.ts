@@ -15,9 +15,12 @@ import { lineVars } from "@/lib/doc/fontMetrics";
 export type Align = "left" | "center" | "right" | "justify";
 
 /**
- * Link targets Inline allows: web, mail and phone links, in-document anchors
+ * Link targets Inline allows: web, mail and phone links, local and UNC file
+ * links (`file://`, or a Windows path written as one), in-document anchors
  * and relative paths. Script and data URLs are refused wherever a link enters
  * a document (paste, import, Markdown, Claude's tools) and never rendered.
+ * A file link has to name a file (`file://` with a path, no sign-in) so the
+ * stored target is one Word, a PDF reader, or the desktop app can open.
  */
 export function safeHref(href: unknown): string | null {
   if (typeof href !== "string") return null;
@@ -25,8 +28,39 @@ export function safeHref(href: unknown): string | null {
   if (!trimmed) return null;
   // Browsers ignore control characters and whitespace inside a scheme ("java\tscript:").
   const scheme = /^([^:/?#]+):/.exec(trimmed.replace(/[\u0000-\u0020\u007f]+/g, ""))?.[1]?.toLowerCase();
+  if (scheme === "file") {
+    const normalized = trimmed.replace(/\\/g, "/");
+    return acceptableFileHref(normalized) ? normalized : null;
+  }
   if (scheme && !["http", "https", "mailto", "tel"].includes(scheme)) return null;
   return trimmed;
+}
+
+/**
+ * A file URL, a drive path (`C:\Docs\a.docx`) or a UNC path (`\\server\share\a.docx`)
+ * written as a `file://` URL. Other text is left for `safeHref`.
+ */
+export function fileLinkHref(value: string): string | null {
+  const trimmed = value.trim();
+  if (/^file:/i.test(trimmed)) return trimmed.replace(/\\/g, "/");
+  if (/^[a-zA-Z]:[\\/]/.test(trimmed)) return `file:///${trimmed.replace(/\\/g, "/")}`;
+  if (/^\\\\[^\\]+\\[^\\]+/.test(trimmed)) return `file://${trimmed.slice(2).replace(/\\/g, "/")}`;
+  return null;
+}
+
+/** `file://` with a real path and no embedded sign-in. Empty and script-like targets are refused. */
+function acceptableFileHref(href: string): boolean {
+  if (!/^file:\/\//i.test(href)) return false;
+  if (/[\u0000-\u001f\u007f]/.test(href)) return false;
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "file:") return false;
+  if (url.username || url.password) return false;
+  return Boolean(url.pathname && url.pathname !== "/");
 }
 
 export const ALIGNMENTS: Align[] = ["left", "center", "right", "justify"];
