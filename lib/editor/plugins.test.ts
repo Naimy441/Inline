@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { sendableSteps } from "prosemirror-collab";
-import { EditorState, type Plugin } from "prosemirror-state";
+import { splitBlock } from "prosemirror-commands";
+import { EditorState, TextSelection, type Plugin } from "prosemirror-state";
 import type { DecorationSet } from "prosemirror-view";
 import { ensureBlockIds } from "../doc/ids";
 import { markdownToDoc } from "../doc/markdown";
@@ -43,6 +44,25 @@ function decorationClasses(state: EditorState) {
 function hunk(overrides: Partial<HunkJSON>): HunkJSON {
   return { id: "h1", from: 1, to: 1, author: "chat", createdAt: 0, deleted: { content: [] } as unknown as HunkJSON["deleted"], deletedText: "", insertedText: "", ...overrides };
 }
+
+describe("footnotes", () => {
+  it("keeps the label on the original note when Enter splits it", () => {
+    const state = stateFor("Before.[^1]\n\n[^1]: The note stays together.");
+    let pos = -1;
+    state.doc.descendants((node, nodePos) => {
+      if (pos < 0 && node.isText && node.text?.includes("stays")) pos = nodePos + node.text!.indexOf("stays");
+      return pos < 0;
+    });
+    const at = state.apply(state.tr.setSelection(TextSelection.create(state.doc, pos)));
+    let next = at;
+    assert.equal(splitBlock(at, (tr) => (next = at.apply(tr))), true);
+    const labels: string[] = [];
+    next.doc.descendants((node) => {
+      if (node.attrs.footnote) labels.push(String(node.attrs.footnote));
+    });
+    assert.deepEqual(labels, ["1"]);
+  });
+});
 
 describe("viewing mode", () => {
   it("refuses local edits but keeps selection changes", () => {

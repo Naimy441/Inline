@@ -1,42 +1,38 @@
 "use client";
 
-import { Bold, ExternalLink, Italic, Link2, MessageSquarePlus, Pencil, Sparkles, Unlink } from "lucide-react";
-import { NodeSelection, type EditorState } from "prosemirror-state";
+import { ExternalLink, Pencil, Sparkles, Unlink } from "lucide-react";
+import type { EditorState } from "prosemirror-state";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { DocumentSession } from "@/lib/client/documentSession";
-import { schema } from "@/lib/doc/schema";
-import { followLink, linkAt, markActive, setLink, toggle } from "@/lib/editor/commands";
+import { followLink, linkAt, setLink } from "@/lib/editor/commands";
 import { isTouch } from "@/lib/client/viewport";
-import { useShortcut } from "@/lib/client/platform";
 
 /**
- * Floating actions for the current selection (Ask Claude, comment, quick
- * formatting) and for links under the cursor. Also hosts the link editor.
+ * Floating editor for the inline prompt and for links under the cursor.
+ * Selecting text does not open an action bar.
  */
 export function SelectionBubble({
   session,
   state,
   linkEditing,
   onLinkEditing,
-  onAsk,
-  onComment,
   prompting = false,
   onPrompting,
   onInlineAsk,
+  hideAi = false,
 }: {
   session: DocumentSession;
   state: EditorState | null;
   linkEditing: boolean;
   onLinkEditing: (open: boolean) => void;
-  onAsk: () => void;
-  onComment: () => void;
   /** The inline ⌘K prompt is open. */
   prompting?: boolean;
   onPrompting?: (open: boolean) => void;
   /** Send the inline prompt to Claude about the selection (or the cursor). */
   onInlineAsk?: (text: string) => void;
+  /** Focus mode: no Ask Claude button, inline prompt, or edit-with-Claude action. */
+  hideAi?: boolean;
 }) {
-  const keys = useShortcut();
   const [dragging, setDragging] = useState(false);
   const [focused, setFocused] = useState(false);
   const [href, setHref] = useState("");
@@ -100,10 +96,9 @@ export function SelectionBubble({
 
   if (!state || !view) return null;
   const { from, to, empty } = state.selection;
-  const isNode = state.selection instanceof NodeSelection;
-  const showSelection = !empty && !isNode && focused && !dragging;
   const showLink = Boolean(link) && empty && focused && !dragging;
-  if (!prompting && !linkEditing && !showSelection && !showLink) return null;
+  // A text selection stays a selection. It does not open Ask Claude, comment, or formatting buttons.
+  if (!prompting && !linkEditing && !showLink) return null;
 
   let coords: { left: number; top: number; bottom: number };
   try {
@@ -128,7 +123,7 @@ export function SelectionBubble({
     onLinkEditing(false);
   };
 
-  if (prompting) {
+  if (prompting && !hideAi) {
     const close = () => {
       onPrompting?.(false);
       view.focus();
@@ -209,7 +204,8 @@ export function SelectionBubble({
           target="_blank"
           rel="noopener noreferrer"
           onClick={(event) => {
-            if (!link.href.startsWith("#")) return;
+            // In-document anchors and file links are opened by the editor. A browser will not follow file://.
+            if (!link.href.startsWith("#") && !/^file:/i.test(link.href)) return;
             event.preventDefault();
             session.run(followLink(link.href));
           }}
@@ -227,29 +223,5 @@ export function SelectionBubble({
     );
   }
 
-  return (
-    <div className={`bubble${above ? " is-above" : ""}`} ref={bubble} style={style} onMouseDown={(event) => event.preventDefault()}>
-      <button type="button" className="bubble-btn bubble-ask" onClick={onAsk}>
-        <Sparkles size={14} /> Ask Claude <kbd>{keys("⌘L")}</kbd>
-      </button>
-      {onPrompting && (
-        <button type="button" className="bubble-btn" aria-label="Edit with Claude" data-tip={`Edit with Claude  ${keys("⌘K")}`} onClick={() => onPrompting(true)}>
-          <Pencil size={14} />
-        </button>
-      )}
-      <span className="bubble-sep" />
-      <button type="button" className="bubble-btn" aria-label="Comment" data-tip="Comment" onClick={onComment}>
-        <MessageSquarePlus size={14} />
-      </button>
-      <button type="button" className={`bubble-btn bubble-edit${markActive(state, schema.marks.bold!) ? " is-active" : ""}`} aria-label="Bold" onClick={() => session.run(toggle("bold"))}>
-        <Bold size={14} />
-      </button>
-      <button type="button" className={`bubble-btn bubble-edit${markActive(state, schema.marks.italic!) ? " is-active" : ""}`} aria-label="Italic" onClick={() => session.run(toggle("italic"))}>
-        <Italic size={14} />
-      </button>
-      <button type="button" className="bubble-btn bubble-edit" aria-label="Link" onClick={() => onLinkEditing(true)}>
-        <Link2 size={14} />
-      </button>
-    </div>
-  );
+  return null;
 }

@@ -43,6 +43,20 @@ const model: FakeModel = async (turn, claude) => {
     return;
   }
 
+  // From the home page: search the library and open the match.
+  const find = text.match(/^find the document about "(.+)"$/i);
+  if (find) {
+    const found = await claude.call("search_documents", { query: find[1] });
+    const id = found.text.match(/^- (\S+) · /m)?.[1];
+    if (!id || found.isError) {
+      claude.say(found.isError ? found.text : `I couldn't find a document about "${find[1]}".`);
+      return;
+    }
+    const opened = await claude.call("open_document", { document_id: id });
+    claude.say(opened.isError ? opened.text : `Opened the document about ${find[1]}.`);
+    return;
+  }
+
   // From the home page: find a document in the library by title and file it.
   const file = text.match(/^file "(.+)" in "(.+)"$/i);
   if (file) {
@@ -71,6 +85,14 @@ const model: FakeModel = async (turn, claude) => {
     const compared = await claude.call("compare_pdf_page", { document_id: documentId, page: 1 });
     const finished = await claude.call("finish_pdf_import", { document_id: documentId });
     claude.say([aligned.text, compared.text.split("\n")[1] ?? "", finished.text].join("\n\n"));
+    return;
+  }
+
+  if (/what did I link/i.test(text)) {
+    const samples = [...turn.context.matchAll(/<writing-sample>([\s\S]*?)<\/writing-sample>/g)].map((match) => match[1]!.trim());
+    const docs = [...turn.context.matchAll(/<linked-document>([\s\S]*?)<\/linked-document>/g)].map((match) => match[1]!.trim());
+    const parts = [...(samples.length ? [`Sample:\n${samples.join("\n")}`] : []), ...(docs.length ? [`Context:\n${docs.join("\n")}`] : [])];
+    claude.say(parts.join("\n\n") || "Nothing linked.");
     return;
   }
 

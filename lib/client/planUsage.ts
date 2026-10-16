@@ -23,10 +23,13 @@ export function refreshPlanUsage(maxAgeMs = 30_000) {
   return inflight;
 }
 
-/** Plan usage, refreshed when Claude finishes a reply and every few minutes while shown. */
+/** Plan usage, loaded while Claude is working and again when a reply ends. */
 export function usePlanUsage(running: boolean) {
   const state = useSyncExternalStore(store.subscribe, store.get, store.get);
   useEffect(() => {
+    // The ring stays on screen during a reply, so usage has to load then too,
+    // not only once Claude is idle.
+    void refreshPlanUsage(running ? 5_000 : 15_000);
     // Inline refreshes its own copy as a reply ends; fetch it a moment later.
     const settle = running ? null : setTimeout(() => void refreshPlanUsage(5_000), 1500);
     const timer = setInterval(() => void refreshPlanUsage(), 3 * 60_000);

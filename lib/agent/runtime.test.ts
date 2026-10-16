@@ -8,6 +8,7 @@ import { afterEach, describe, it } from "node:test";
 process.env.INLINE_DATA_DIR = mkdtempSync(path.join(tmpdir(), "inline-runtime-"));
 
 import { mcpToolName } from "@/lib/agent/mcp";
+import { PAGE_LAYOUT_PLUGIN_DIR, PAGE_LAYOUT_SKILL } from "@/lib/agent/skills";
 import { agentRuntime, BUILTIN_TOOLS, setQueryImplementation, type ChatRuntime } from "@/lib/agent/runtime";
 import { fakeClaude, type FakeModel } from "@/lib/agent/testing/fakeClaude";
 import type { AssistantMessage, ChatEvent, ChatSettings, ToolPart, UserMessage } from "@/lib/agent/types";
@@ -109,6 +110,8 @@ describe("a turn", () => {
     assert.equal(options.sessionId, chat.state.id, "the Claude Code session takes the chat's id");
     assert.equal(options.resume, undefined);
     assert.deepEqual(options.settingSources, [], "the user's own Claude Code settings and hooks are not loaded");
+    assert.deepEqual(options.plugins, [{ type: "local", path: PAGE_LAYOUT_PLUGIN_DIR, skipMcpDiscovery: true }]);
+    assert.deepEqual(options.skills, [PAGE_LAYOUT_SKILL]);
   });
 
   it("tells Claude which document is open, the mode and what the user selected", async () => {
@@ -157,6 +160,28 @@ describe("a turn", () => {
     assert.deepEqual(user && "mentions" in user ? user.mentions : null, [{ id: "doc-123", title: "Budget" }]);
   });
 
+  it("includes selected pages as a writing sample, or the whole linked document as context", async () => {
+    const { PAGE_BREAK } = await import("@/lib/doc/markdown");
+    const sample = await documentHub().create({
+      title: "Voice guide",
+      markdown: `The formal page keeps its distance.\n\n${PAGE_BREAK}\n\nThe warm page talks like a friend.`,
+    });
+    const fake = useModel(() => undefined);
+    const { chat } = await newChat();
+    await turn(chat, "Match this", { links: [{ id: sample.id, title: "Voice guide", purpose: "voice", pages: [2] }] });
+    const voice = fake.turns[0]!.context;
+    assert.match(voice, /<writing-sample>[\s\S]*The warm page talks like a friend/);
+    assert.doesNotMatch(voice, /formal page/);
+    const user = chat.state.messages.find((message) => message.role === "user");
+    assert.equal(user && "links" in user ? user.links?.[0]?.purpose : "", "voice");
+
+    await turn(chat, "Use the facts", { links: [{ id: sample.id, title: "Voice guide", purpose: "context" }] });
+    const context = fake.turns[1]!.context;
+    assert.match(context, /<linked-document>[\s\S]*The formal page keeps its distance/);
+    assert.match(context, /The warm page talks like a friend/);
+    assert.doesNotMatch(context, /<writing-sample>/);
+  });
+
   it("sends a small document with the message, and only again once it changed", async () => {
     const fake = useModel(() => undefined);
     const { doc, chat } = await newChat();
@@ -197,8 +222,22 @@ describe("a turn", () => {
     const chat = await agentRuntime().create();
     await turn(chat, "Sort these", { home: { folderId: folder.id } });
     assert.match(fake.turns[0]!.context, new RegExp(`on the home page, not in a document, looking at the folder "Recipes" \\(id ${folder.id}\\)\\. Their library has \\d+ documents`));
+    assert.match(fake.turns[0]!.context, /Use search_documents to find a document/);
     await turn(chat, "And the rest", { home: { folderId: null } });
     assert.match(fake.turns[1]!.context, /looking at all documents \(the top level\)/);
+  });
+
+  it("opens a document the home page asked for", async () => {
+    const doc = await documentHub().create({ title: "Recipe", markdown: "# Recipe {.title}\n\nSalt." });
+    const events: ChatEvent[] = [];
+    useModel(async (_turn, claude) => {
+      await claude.call("open_document", { document_id: doc.id });
+      claude.say("Opened it.");
+    });
+    const chat = await agentRuntime().create();
+    chat.subscribe((event) => events.push(event));
+    await turn(chat, "Open the recipe", { home: { folderId: null } });
+    assert.ok(events.some((event) => event.type === "open" && event.documentId === doc.id));
   });
 
   it("tells Claude which folder the open document is filed in", async () => {

@@ -90,7 +90,9 @@ export function UsageMeter({ chat, running, usageLimit, onUsageLimit }: { chat: 
   const main = windows.filter((window) => window.id === "five_hour" || window.id === "seven_day");
   const top = [...main].sort((a, b) => b.utilization - a.utilization)[0];
   const percent = top ? top.utilization : (context?.percentage ?? 0);
-  if (!plan && !spent && !context) return null;
+  // Stay visible while Claude is generating. Plan, cost and context often
+  // arrive only after the reply goes idle; the ring must not wait for that.
+  if (!running && !plan && !spent && !context) return null;
   const tip = top ? `${top.label} usage ${Math.round(top.utilization)}%` : "Usage";
   return (
     <>

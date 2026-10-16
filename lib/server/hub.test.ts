@@ -186,6 +186,19 @@ describe("metadata and titles", () => {
     assert.equal(doc.meta.preview, "Trip to Lisbon");
   });
 
+  it("caps the live title while the first line is still being typed", async () => {
+    const doc = await hub.create({});
+    const line = "This opening sentence keeps going well past the point where a title would still be readable";
+    doc.receiveClientSteps(0, [insertStep(1, line.slice(0, 12))], "tab-1");
+    assert.equal(doc.meta.title, "This opening");
+    doc.receiveClientSteps(doc.version, [insertStep(13, line.slice(12))], "tab-1");
+    assert.equal(doc.meta.title, "This opening sentence keeps going well past the…");
+    assert.equal(doc.meta.autoTitle, true);
+    const capped = doc.meta.title;
+    doc.receiveClientSteps(doc.version, [insertStep(1 + line.length, " in a list")], "tab-1");
+    assert.equal(doc.meta.title, capped);
+  });
+
   it("patches settings and broadcasts the new meta", async () => {
     const doc = await hub.create({});
     const { events } = record(doc);

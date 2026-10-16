@@ -22,7 +22,7 @@ import { setPresence } from "@/lib/editor/presence";
 import { gotoHunk, mapHunksThrough, reviewHunkAtCursor, setHunks } from "@/lib/editor/review";
 import { editorPlugins } from "@/lib/editor/setup";
 import { setInvisibles } from "@/lib/editor/invisibles";
-import { normalizeWord, setDictionary } from "@/lib/editor/spelling";
+import { normalizeWord, setDictionary, setSpellcheckEnabled } from "@/lib/editor/spelling";
 import { codeBlockView } from "@/lib/editor/math";
 import { rebaseLocalEdits, unconfirmedEdits } from "@/lib/editor/resync";
 import { loadPreferences, preferences, setPreference } from "@/lib/client/preferences";
@@ -548,6 +548,7 @@ export class DocumentSession {
         substitutions: () => preferences.get().substitutions,
         showInvisibles: loadPreferences().showInvisibles,
         dictionary: loadPreferences().dictionary,
+        spellcheck: loadPreferences().spellcheck,
       }),
     });
     return state.apply(setHunks(state.tr, snapshot.hunks, snapshot.version));
@@ -971,10 +972,13 @@ export class DocumentSession {
     this.reportSelection();
   }
 
-  /** Show or hide the browser's spelling underlines. */
+  /** Show or hide spelling underlines. */
   setSpellcheck(on: boolean) {
     setPreference("spellcheck", on);
-    this.view?.setProps({});
+    const view = this.view;
+    if (!view) return;
+    view.dispatch(setSpellcheckEnabled(view.state.tr, on));
+    view.setProps({});
   }
 
   /** Never underline this word as misspelled again, in every document. Saved on the server too, so Claude's spelling check skips it. */

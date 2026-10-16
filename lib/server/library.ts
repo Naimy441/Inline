@@ -1,3 +1,4 @@
+import { EditError, searchLines } from "@/lib/doc/editing";
 import { documentFolder, folderPath, summarizeFolders, type Folder } from "@/lib/doc/folders";
 import type { DocumentMeta } from "@/lib/doc/settings";
 import { ensureFolderPath, FolderError, folderPathName, listFolders } from "@/lib/server/folders";
@@ -74,6 +75,82 @@ export function formatLibrary(folders: Map<string, Folder>, documents: DocumentM
   const shown = page.length ? `${query.offset + 1}–${query.offset + page.length}` : "none";
   const more = query.offset + page.length < total ? ` Call again with offset ${query.offset + page.length} for the rest.` : "";
   return `${total}${scope} document${total === 1 ? "" : "s"} (showing ${shown}, most recently edited first).${more}\n${lines.join("\n")}`;
+}
+
+export type LibrarySearchHit = {
+  /** Pass this to open_document. A matching tab uses that tab's id. */
+  id: string;
+  title: string;
+  /** Set when the match is on a tab other than the document's first one. */
+  tab: string | null;
+  /** Folder path ("Work/Q3"), or "" at the top level. */
+  folder: string;
+  snippets: string[];
+  matches: number;
+  /** The title matched and the body did not. */
+  titleMatch: boolean;
+};
+
+function matchesText(text: string, pattern: string, options: { regex?: boolean; caseSensitive?: boolean }) {
+  if (!options.regex) {
+    const hay = options.caseSensitive ? text : text.toLowerCase();
+    const needle = options.caseSensitive ? pattern : pattern.toLowerCase();
+    return hay.includes(needle);
+  }
+  return new RegExp(pattern, options.caseSensitive ? "u" : "iu").test(text);
+}
+
+/**
+ * Find documents whose title or full text matches. list_library only shows the
+ * opening words, so this is how a home-page request looks through the library.
+ * Most recently edited documents come first. Stops once `limit` hits are found.
+ */
+export async function searchLibrary(
+  pattern: string,
+  options: { regex?: boolean; caseSensitive?: boolean; folderId?: string | null; limit?: number } = {},
+): Promise<LibrarySearchHit[]> {
+  if (options.regex) {
+    try {
+      new RegExp(pattern, "u");
+    } catch (error) {
+      throw new EditError(`Invalid regular expression: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const hub = documentHub();
+  const { folders, documents } = await library();
+  const docs = options.folderId
+    ? documents.filter((doc) => folderPath(folders, documentFolder(folders, doc)).some((folder) => folder.id === options.folderId))
+    : documents;
+  const limit = options.limit ?? 8;
+  const hits: LibrarySearchHit[] = [];
+  for (const meta of docs) {
+    if (hits.length >= limit) break;
+    const folder = folderPathName(folders, documentFolder(folders, meta));
+    const titleMatch = matchesText(meta.title, pattern, options);
+    const tabs = meta.tabs?.length ? await hub.tabs(meta.id) : [{ id: meta.id, title: "", root: true }];
+    for (const tab of tabs) {
+      if (hits.length >= limit) break;
+      const live = await hub.get(tab.id);
+      if (!live || live.meta.trashedAt) continue;
+      const found = searchLines(live.doc, pattern, { regex: options.regex, caseSensitive: options.caseSensitive, limit: 2 });
+      const root = Boolean(tab.root) || tab.id === meta.id;
+      if (!found.hits.length && !(root && titleMatch)) continue;
+      const snippets = found.hits.map((hit) => {
+        const text = hit.text.trim();
+        return text.length > 180 ? `${text.slice(0, 180)}…` : text;
+      });
+      hits.push({
+        id: live.id,
+        title: meta.title,
+        tab: root ? null : tab.title,
+        folder,
+        snippets,
+        matches: found.total,
+        titleMatch: root && titleMatch && !found.hits.length,
+      });
+    }
+  }
+  return hits;
 }
 
 /**

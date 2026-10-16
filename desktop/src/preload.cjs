@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld("inlineDesktop", {
   platform,
   version,
   openInBrowser: (path) => ipcRenderer.send("inline:open-in-browser", typeof path === "string" ? path : null),
+  openExternal: (url) => ipcRenderer.send("inline:open-external", typeof url === "string" ? url : ""),
 });
 
 ipcRenderer.on("inline:fullscreen", (_event, fullscreen) => {

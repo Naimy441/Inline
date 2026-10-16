@@ -1,9 +1,10 @@
 "use client";
 
-import { Download, FilePlus2, FolderSync, FileText, FileUp, FolderInput, FolderOpen, FolderPlus, LayoutGrid, List, Moon, Plus, Search, Sparkles, Sun, Trash2, X } from "lucide-react";
+import { Download, FilePlus2, FolderSync, FileText, FileUp, FolderInput, FolderOpen, FolderPlus, FolderUp, LayoutGrid, List, Moon, Plus, Search, Sparkles, Sun, Trash2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from "react";
 import { api, del, patch, post } from "@/lib/client/api";
+import { docxFilesInFolder, filesDroppedOnHome } from "@/lib/client/homeImport";
 import { dismissLegacyDocuments, hasLegacyDocuments, htmlToDocJSON, importLegacyDocuments } from "@/lib/client/legacyImport";
 import { currentRevealLabel, loadServerPlatform, revealOnDisk } from "@/lib/client/fileManager";
 import { useShortcut } from "@/lib/client/platform";
@@ -21,7 +22,7 @@ import { confirmDialog } from "@/components/ui/Confirm";
 import { InlineLogo } from "@/components/ui/Logo";
 import { PanelResizer } from "@/components/ui/PanelResizer";
 import { TextCover, ThemedCover } from "./covers";
-import type { DragItem } from "./dnd";
+import { ITEM_DRAG_TYPE, type DragItem } from "./dnd";
 import type { Selection } from "./selection";
 import { AddDocumentsDialog, FolderDialog, MoveDialog, type MoveTarget } from "./FolderDialogs";
 import { MirrorDialog } from "./MirrorDialog";
@@ -89,6 +90,8 @@ export function HomePage() {
   const [importing, setImporting] = useState(false);
   /** What a PDF import is doing ("Reading page 3 of 7…"), while the browser reads and draws it. */
   const [importLabel, setImportLabel] = useState<string | null>(null);
+  /** A file from outside the app is hovering over the page, ready to import. */
+  const [fileDrag, setFileDrag] = useState(false);
   const { status: agentStatus } = useAgentStatus();
   const [agentOpen, setAgentOpen] = useState(false);
   const [mirrorOpen, setMirrorOpen] = useState(false);
@@ -99,6 +102,15 @@ export function HomePage() {
   const [previews, setPreviews] = useState<ThumbnailProgress | null>(null);
   const thumbnails = useRef<ThumbnailQueue | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const folderInput = useRef<HTMLInputElement>(null);
+  const setFolderInput = useCallback((node: HTMLInputElement | null) => {
+    folderInput.current = node;
+    // React's input props omit this attribute. The picker, and tests, read it off the element.
+    if (node) {
+      node.webkitdirectory = true;
+      node.setAttribute("webkitdirectory", "");
+    }
+  }, []);
   const { dark, toggle } = useTheme();
   const keys = useShortcut();
   const revealLabel = currentRevealLabel();
@@ -152,6 +164,7 @@ export function HomePage() {
     const onPop = () => {
       setFolderId(folderFromAddress());
       setView("documents");
+      setQuery("");
     };
     window.addEventListener("popstate", onPop);
     // Coming back to the tab picks up changes made elsewhere (an editor tab, an MCP client).
@@ -200,7 +213,19 @@ export function HomePage() {
     store(SORT_KEY, next);
   };
 
-  const open = (id: string) => router.push(`/d/${id}`);
+  const open = (id: string) => {
+    // Search lists documents from every folder while the address stays put, so Back
+    // would return to Home. Leave the document's folder in history behind it.
+    if (searching) {
+      const doc = documents?.find((item) => item.id === id);
+      const folder = doc ? documentFolder(folders, doc) : null;
+      if (folder) {
+        const url = `/?folder=${encodeURIComponent(folder)}`;
+        if (window.location.pathname + window.location.search !== url) window.history.pushState(null, "", url);
+      }
+    }
+    router.push(`/d/${id}`);
+  };
 
   const create = async (template: DocumentTemplate) => {
     setCreating(template.id);
@@ -313,6 +338,55 @@ export function HomePage() {
     const summary = `Imported ${plural(imported, "document")}${where}.`;
     if (!failed.length) toast(summary, { tone: "success" });
     else toast(`${summary} Couldn't read ${failed.length === 1 ? failed[0] : `${failed.length} files`}.`, { tone: imported ? "info" : "error", duration: 8000 });
+  };
+
+  /** A file dragged in from the desktop, not a document already on this page. */
+  const osFileDrag = (event: DragEvent) => event.dataTransfer.types.includes("Files") && !event.dataTransfer.types.includes(ITEM_DRAG_TYPE);
+  const overComposer = (event: DragEvent) => event.target instanceof Element && Boolean(event.target.closest(".composer"));
+
+  const onFileDragEnter = (event: DragEvent) => {
+    if (!osFileDrag(event)) return;
+    event.preventDefault();
+    setFileDrag(!overComposer(event));
+  };
+
+  const onFileDragOver = (event: DragEvent) => {
+    if (!osFileDrag(event)) return;
+    const composer = overComposer(event);
+    if (!composer) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    }
+    setFileDrag((current) => (current === !composer ? current : !composer));
+  };
+
+  const onFileDragLeave = (event: DragEvent) => {
+    if (!osFileDrag(event)) return;
+    const next = event.relatedTarget;
+    if (next instanceof Node && event.currentTarget.contains(next)) return;
+    setFileDrag(false);
+  };
+
+  /** Dropping a file on Home imports it the same way the Import button does. */
+  const onFileDrop = (event: DragEvent) => {
+    setFileDrag(false);
+    if (!osFileDrag(event) || overComposer(event)) return;
+    const dropped = filesDroppedOnHome(event.dataTransfer);
+    if (!dropped.files.length) {
+      if (dropped.directory) toast("Drop files to import them, or use Import folder for the Word documents in a folder.", { tone: "info" });
+      return;
+    }
+    event.preventDefault();
+    void importFiles(dropped.files);
+  };
+
+  const importFolder = (list: FileList | null) => {
+    const files = docxFilesInFolder(list ?? []);
+    if (!files.length) {
+      toast("No Word (.docx) files were found in that folder.", { tone: "error" });
+      return;
+    }
+    void importFiles(files);
   };
 
   const runLegacyImport = async () => {
@@ -600,7 +674,14 @@ export function HomePage() {
   );
 
   return (
-    <div className={`home${agentOpen ? " has-agent" : ""}`} style={{ "--home-agent-width": `${agentWidth}px` } as CSSProperties}>
+    <div
+      className={`home${agentOpen ? " has-agent" : ""}${fileDrag ? " is-file-target" : ""}`}
+      style={{ "--home-agent-width": `${agentWidth}px` } as CSSProperties}
+      onDragEnter={onFileDragEnter}
+      onDragOver={onFileDragOver}
+      onDragLeave={onFileDragLeave}
+      onDrop={onFileDrop}
+    >
       <header className="home-header">
         <div className="home-brand">
           <InlineLogo />
@@ -655,8 +736,11 @@ export function HomePage() {
                 </span>
               )}
             </h2>
-            <Button size="sm" variant="ghost" icon={<FileUp size={15} />} loading={importing} onClick={() => fileInput.current?.click()} title="PDF, Word, Markdown, HTML or text files, or a ZIP of Word files such as a Google Takeout export">
+            <Button size="sm" variant="ghost" icon={<FileUp size={15} />} loading={importing} onClick={() => fileInput.current?.click()} title="PDF, Word, Markdown, HTML or text files, or a ZIP of Word files such as a Google Takeout export. You can also drop files anywhere on this page.">
               {importing ? (importLabel ?? "Importing…") : "Import files"}
+            </Button>
+            <Button size="sm" variant="ghost" icon={<FolderUp size={15} />} disabled={importing} onClick={() => folderInput.current?.click()} title="Every Word (.docx) file in a folder, including nested folders">
+              Import folder
             </Button>
             <Button size="sm" variant="ghost" icon={<Download size={15} />} onClick={() => window.location.assign("/api/documents/backup")}>
               Download all
@@ -673,6 +757,16 @@ export function HomePage() {
               onChange={(event) => {
                 const files = [...(event.target.files ?? [])];
                 if (files.length) void importFiles(files);
+                event.target.value = "";
+              }}
+            />
+            <input
+              ref={setFolderInput}
+              type="file"
+              multiple
+              hidden
+              onChange={(event) => {
+                importFolder(event.target.files);
                 event.target.value = "";
               }}
             />
@@ -924,6 +1018,13 @@ export function HomePage() {
           if (folder) void moveItems(ids.map((id) => ({ kind: "document", id })), folder.id);
         }}
       />
+
+      {fileDrag && (
+        <div className="home-file-drop" role="status">
+          <FileUp size={28} strokeWidth={1.5} />
+          <p>Drop to import</p>
+        </div>
+      )}
     </div>
   );
 }

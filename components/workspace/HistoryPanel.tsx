@@ -39,11 +39,14 @@ export function HistoryPanel({
   selected,
   onSelect,
   onClose,
+  hideAi = false,
 }: {
   session: DocumentSession;
   selected: VersionSummary | null;
   onSelect: (version: VersionSummary | null) => void;
   onClose: () => void;
+  /** Focus mode: the empty state doesn't mention Claude, and Claude's versions aren't badged. */
+  hideAi?: boolean;
 }) {
   const versions = useVersions(session.id);
   const [label, setLabel] = useState("");
@@ -125,7 +128,7 @@ export function HistoryPanel({
         ) : versions.length === 0 ? (
           <div className="panel-empty small">
             <History size={20} />
-            <p>Versions are saved automatically as you work and before Claude edits, so you can always go back.</p>
+            <p>{hideAi ? "Versions are saved automatically as you work, so you can always go back." : "Versions are saved automatically as you work and before Claude edits, so you can always go back."}</p>
           </div>
         ) : (
           <ul className="version-list" ref={list}>
@@ -146,10 +149,12 @@ export function HistoryPanel({
                         <span className="version-label">{version.label}</span>
                         <span className="version-time">
                           {time(version.createdAt)}
-                          <span className={`version-author is-${version.author}`}>
-                            {version.author === "claude" && <Sparkles size={11} />}
-                            {AUTHORS[version.author]}
-                          </span>
+                          {!(hideAi && version.author === "claude") && (
+                            <span className={`version-author is-${version.author}`}>
+                              {version.author === "claude" && <Sparkles size={11} />}
+                              {AUTHORS[version.author]}
+                            </span>
+                          )}
                           {version.wordCount != null && <span>{version.wordCount.toLocaleString()} words</span>}
                         </span>
                       </button>

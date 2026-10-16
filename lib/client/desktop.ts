@@ -9,6 +9,8 @@ export type DesktopBridge = {
   version: string;
   /** Open this page, or `path`, in the default web browser. */
   openInBrowser: (path?: string) => void;
+  /** Open a web, mail or file link in the system handler. No-op for anything else. */
+  openExternal?: (url: string) => void;
 };
 
 declare global {

@@ -13,6 +13,7 @@ export function Popover({
   className,
   children,
   role = "dialog",
+  label,
 }: {
   open: boolean;
   onClose: () => void;
@@ -21,6 +22,8 @@ export function Popover({
   className?: string;
   children: ReactNode;
   role?: string;
+  /** Accessible name when `role` is dialog. */
+  label?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const style = useAnchoredPosition(open, anchor, ref, placement);
@@ -51,7 +54,7 @@ export function Popover({
   }, [open, onClose, anchor]);
   if (!open || typeof document === "undefined") return null;
   return createPortal(
-    <div ref={ref} role={role} className={`popover${className ? ` ${className}` : ""}`} style={{ position: "fixed", ...style }}>
+    <div ref={ref} role={role} aria-label={label} className={`popover${className ? ` ${className}` : ""}`} style={{ position: "fixed", ...style }}>
       {children}
     </div>,
     document.body,

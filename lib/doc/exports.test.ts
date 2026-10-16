@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { diffSequences, textSimilarity } from "./diff";
 import { documentToDocx, imageSize } from "./docx";
+import { docxToDoc } from "./docxImport";
 import { documentHtmlFile, escapeHtml, fragmentToHtml } from "./html";
 import { latexToOmml } from "./omml";
 import { blockIdFixes, ensureBlockIds, newId } from "./ids";
-import { markdownToDoc } from "./markdown";
+import { docToMarkdown, markdownToDoc } from "./markdown";
 import { DEFAULT_SETTINGS, type DocumentMeta } from "./settings";
+import { readZip } from "@/lib/server/unzip";
 import { createZip } from "./zip";
 
 const SAMPLE = "# Plan {.title}\n\nIntro with **bold** and a [link](https://example.com).\n\n- one\n- two\n\n| A | B |\n| --- | --- |\n| 1 | 2 |";
@@ -20,6 +22,15 @@ const latin1 = (bytes: Uint8Array) => Buffer.from(bytes).toString("latin1");
 describe("HTML export", () => {
   it("escapes text", () => {
     assert.equal(escapeHtml(`<a href="x">&</a>`), "&lt;a href=&quot;x&quot;&gt;&amp;&lt;/a&gt;");
+  });
+
+  it("renders citations, footnotes and bibliography entries", () => {
+    const html = fragmentToHtml(markdownToDoc("See <cite>(Smith, 2020)</cite>.[^1]\n\n[^1]: The note.\n\nSmith. {.bibliography}"));
+    assert.match(html, /<cite>\(Smith, 2020\)<\/cite>/);
+    assert.match(html, /<sup class="footnote-ref" data-footnote="1">1<\/sup>/);
+    assert.match(html, /class="doc-footnote" data-footnote="1"/);
+    assert.match(html, /class="doc-bibliography"/);
+    assert.match(html, /text-indent: -0.5in/);
   });
 
   it("renders blocks, marks, links and tables", () => {
@@ -48,6 +59,22 @@ describe("Word export", () => {
     assert.ok(text.includes("<w:b/>") || text.includes("<w:b "), "bold run");
     assert.ok(text.includes("<w:tbl>"), "table");
     assert.ok(text.includes("https://example.com"), "hyperlink target");
+  });
+
+  it("keeps a file link as a Word hyperlink", async () => {
+    const bytes = await documentToDocx(markdownToDoc("See the [notes](file:///tmp/notes.pdf)."), meta(), async () => null);
+    const text = latin1(bytes);
+    assert.match(text, /<w:hyperlink r:id="[^"]+">/);
+    assert.match(text, /Target="file:\/\/\/tmp\/notes\.pdf" TargetMode="External"/);
+    assert.match(docToMarkdown(await docxToDoc(readZip(bytes))), /\[notes\]\(file:\/\/\/tmp\/notes\.pdf\)/);
+  });
+
+  it("keeps citation text, footnote markers and a hanging bibliography entry", async () => {
+    const text = latin1(await documentToDocx(markdownToDoc("See <cite>(Smith, 2020)</cite>.[^1]\n\n[^1]: The note.\n\nSmith. {.bibliography}"), meta(), async () => null));
+    assert.ok(text.includes("(Smith, 2020)"));
+    assert.match(text, /<w:vertAlign w:val="superscript"\/>/);
+    assert.ok(text.includes("The note."));
+    assert.match(text, /w:hanging="720"/);
   });
 
   it("uses the document's paper size and margins", async () => {

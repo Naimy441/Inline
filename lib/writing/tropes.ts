@@ -1,6 +1,8 @@
+import { cleanAiTellText, findAiSymbols, stripInvisible } from "@/lib/writing/aiTells";
+
 export type TropeHit = {
   id: string;
-  kind: "emdash" | "phrase" | "watermark" | "structure";
+  kind: "emdash" | "phrase" | "watermark" | "structure" | "bullet" | "symbol";
   title: string;
   find: string;
   replace?: string;
@@ -29,23 +31,19 @@ const PHRASES: Array<{ pattern: RegExp; title: string; replace?: string }> = [
   { pattern: /\bunlock(?:s|ing)? the potential\b/gi, title: "AI hype: unlock potential" },
 ];
 
-const WATERMARK = /[\u200B\u200C\u200D\u2060\uFEFF\u00AD]/g;
-
 export function detectAiTropes(text: string): TropeHit[] {
   const hits: TropeHit[] = [];
-  const emdashes = [...text.matchAll(/—/g)];
-  if (emdashes.length) {
+  for (const symbol of findAiSymbols(text)) {
     hits.push({
-      id: "emdash",
-      kind: "emdash",
-      title: `${emdashes.length} em dash${emdashes.length === 1 ? "" : "es"}`,
-      find: "—",
-      replace: " - ",
+      id: symbol.kind,
+      kind: symbol.kind === "emdash" ? "emdash" : symbol.kind === "bullet" ? "bullet" : "symbol",
+      title: symbol.title,
+      find: symbol.kind === "emdash" ? "—" : symbol.find,
+      replace: symbol.replace,
     });
   }
-  // WATERMARK is global, so .test() would resume from the last match on the next call.
-  WATERMARK.lastIndex = 0;
-  if (WATERMARK.test(text)) {
+  // Invisible junk is a watermark. Script joiners and real line breaks are not.
+  if (stripInvisible(text).removed > 0) {
     hits.push({
       id: "watermark",
       kind: "watermark",
@@ -71,9 +69,8 @@ export function detectAiTropes(text: string): TropeHit[] {
 }
 
 export function cleanAiArtifacts(text: string) {
-  let next = text.replace(WATERMARK, "");
+  let next = cleanAiTellText(text).text;
   next = next.replace(/\bas an ai(?: language model)?(?:,)?\s*/gi, "");
-  next = next.replace(/—/g, " - ");
   next = next.replace(/\bit['’]s important to note that\s*/gi, "");
   next = next.replace(/\bit is important to note that\s*/gi, "");
   return next.replace(/[ \t]{2,}/g, " ");
