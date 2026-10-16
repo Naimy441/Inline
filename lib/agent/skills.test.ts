@@ -23,6 +23,8 @@ describe("page-layout skill", () => {
   it("tells the agent to look, then fix, using a screenshot when that is the signal", () => {
     assert.match(skill, /Don't only comment/);
     assert.match(skill, /screenshot_page/);
+    assert.match(skill, /not open/);
+    assert.doesNotMatch(skill, /must be open/);
     assert.match(skill, /get_page_count/);
     assert.match(skill, /last page with only a line or two/i);
     assert.match(skill, /table split across a page break/i);
