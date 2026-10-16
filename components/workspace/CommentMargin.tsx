@@ -34,6 +34,7 @@ export function CommentMargin({
   draft,
   onDraftDone,
   onAskClaude,
+  hideAskClaude = false,
 }: {
   session: DocumentSession;
   state: EditorState | null;
@@ -43,6 +44,7 @@ export function CommentMargin({
   draft: { from: number; to: number } | null;
   onDraftDone: () => void;
   onAskClaude: (comment: DocComment) => void;
+  hideAskClaude?: boolean;
 }) {
   const [layout, setLayout] = useState<{ left: number; tops: Record<string, number> } | null>(null);
   const cards = useRef(new Map<string, HTMLDivElement>());
@@ -135,6 +137,7 @@ export function CommentMargin({
             active={active === comment.id}
             onActivate={() => session.setActiveComment(comment.id)}
             onAskClaude={() => onAskClaude(comment)}
+            hideAskClaude={hideAskClaude}
           />
         </div>
       ))}

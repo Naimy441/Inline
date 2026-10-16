@@ -195,10 +195,91 @@ test("capitalization, special characters and table of contents", async ({ page }
 test("focus mode hides Claude", async ({ page }) => {
   await newBlankDocument(page);
   await expect(page.locator(".claude-toggle")).toBeVisible();
+  await expect(page.locator(".doc-content .is-empty")).toBeVisible();
+  const placeholder = () => page.locator(".doc-content .is-empty").evaluate((el) => getComputedStyle(el, "::before").content);
+  expect(await placeholder()).toContain("ask Claude");
+
   await page.locator(".menubar-item", { hasText: "View" }).click();
   await page.locator(".menu-item", { hasText: "Focus mode" }).click();
   await expect(page.locator(".claude-toggle")).toBeHidden();
   await expect(page.locator(".agent-panel")).toHaveCount(0);
+  await expect(page.locator(".usage-ring")).toHaveCount(0);
+  expect(await placeholder()).toBe('"Start writing…"');
+
+  await page.locator(".doc-content").click();
+  await page.keyboard.type("Some words to select");
+  await page.keyboard.press("ControlOrMeta+a");
+  await expect(page.locator(".bubble")).toBeVisible();
+  await expect(page.locator(".bubble-ask")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Edit with Claude" })).toHaveCount(0);
+  await expect(page.locator(".bubble").getByRole("button", { name: "Comment" })).toBeVisible();
+
+  await page.locator(".menubar-item", { hasText: "View" }).click();
+  await expect(page.locator(".menu-item", { hasText: "Claude panel" })).toHaveCount(0);
+  await expect(page.locator(".menu-item", { hasText: "Focus mode" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await page.locator(".menubar-item", { hasText: "Tools" }).click();
+  await expect(page.locator(".menu-item", { hasText: "Ask Claude" })).toHaveCount(0);
+  await expect(page.locator(".menu-item", { hasText: "Check for AI-sounding writing" })).toHaveCount(0);
+  await expect(page.locator(".menu-item", { hasText: "Word count" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await page.locator(".menubar-item", { hasText: "Help" }).click();
+  await expect(page.locator(".menu-item", { hasText: "Connect Claude Code" })).toHaveCount(0);
+  await page.locator(".menu-item", { hasText: "Keyboard shortcuts" }).click();
+  const shortcuts = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+  await expect(shortcuts).toBeVisible();
+  await expect(shortcuts).not.toContainText("Ask Claude");
+  await expect(shortcuts).not.toContainText("Show or hide Claude");
+  await expect(shortcuts).toContainText("Keep the change at the cursor");
+  await expect(shortcuts).toContainText("Bold");
+  await page.keyboard.press("Escape");
+
+  await page.locator(".doc-content").click({ button: "right" });
+  await expect(page.locator(".menu .menu-item", { hasText: "Ask Claude" })).toHaveCount(0);
+  await expect(page.locator(".menu .menu-item", { hasText: "Lock from Claude" })).toHaveCount(0);
+  await expect(page.locator(".menu .menu-item", { hasText: "Comment" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await page.locator(".doc-content").click();
+  await page.keyboard.press("ControlOrMeta+j");
+  await page.keyboard.press("ControlOrMeta+l");
+  await page.keyboard.press("ControlOrMeta+Alt+x");
+  await expect(page.locator(".agent-panel")).toHaveCount(0);
+  await expect(page.getByLabel("Ask Claude to edit")).toHaveCount(0);
+  // ⌘K is the link shortcut again while AI tools are hidden.
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(page.getByLabel("Ask Claude to edit")).toHaveCount(0);
+  const linkField = page.getByPlaceholder("Paste or type a link");
+  await expect(linkField).toBeVisible();
+  await linkField.press("Escape");
+  await expect(linkField).toHaveCount(0);
+
+  await page.locator(".doc-content").click();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.press("Control+Alt+m");
+  await page.keyboard.type("A note.");
+  await page.keyboard.press("Control+Enter");
+  const card = page.locator(".comment-card", { hasText: "A note." });
+  await expect(card).toBeVisible();
+  await card.getByRole("button", { name: "More" }).click();
+  await expect(page.locator(".menu-item", { hasText: "Ask Claude to address this" })).toHaveCount(0);
+  await expect(page.locator(".menu-item", { hasText: "Delete" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await page.locator(".menubar-item", { hasText: "View" }).click();
+  await page.locator(".menu-item", { hasText: "Focus mode" }).click();
+  await expect(page.locator(".claude-toggle")).toBeVisible();
+  await page.locator(".doc-content").click();
+  await page.keyboard.press("ControlOrMeta+a");
+  await expect(page.locator(".bubble-ask")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Edit with Claude" })).toBeVisible();
+  await page.locator(".menubar-item", { hasText: "Help" }).click();
+  await expect(page.locator(".menu-item", { hasText: "Connect Claude Code" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await card.getByRole("button", { name: "More" }).click();
+  await expect(page.locator(".menu-item", { hasText: "Ask Claude to address this" })).toBeVisible();
 });
 
 test("suggesting mode records edits for review and viewing mode is read-only", async ({ page }) => {

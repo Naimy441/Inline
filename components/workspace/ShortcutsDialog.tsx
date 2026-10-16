@@ -67,12 +67,15 @@ const GROUPS: Array<[string, Array<[string, string]>]> = [
   ],
 ];
 
-export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+const AI_SHORTCUTS = new Set(["Ask Claude about the selection", "Edit with Claude inline", "Check spelling & grammar here", "Show or hide Claude", "Stop Claude (in the chat box)"]);
+
+export function ShortcutsDialog({ open, onClose, hideAi = false }: { open: boolean; onClose: () => void; /** Focus mode: drop shortcuts that open Claude. Review shortcuts stay. */ hideAi?: boolean }) {
   if (!open) return null;
+  const groups = GROUPS.map(([title, rows]) => (title === "Claude" && hideAi ? (["Review", rows.filter(([label]) => !AI_SHORTCUTS.has(label))] as const) : ([title, rows] as const))).filter(([, rows]) => rows.length > 0);
   return (
     <Dialog open={open} onClose={onClose} title="Keyboard shortcuts" width={720}>
       <div className="shortcut-grid">
-        {GROUPS.map(([title, rows]) => (
+        {groups.map(([title, rows]) => (
           <section key={title}>
             <h3>{title}</h3>
             {rows.map(([label, keys]) => (

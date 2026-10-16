@@ -23,6 +23,7 @@ export function SelectionBubble({
   prompting = false,
   onPrompting,
   onInlineAsk,
+  hideAi = false,
 }: {
   session: DocumentSession;
   state: EditorState | null;
@@ -35,6 +36,8 @@ export function SelectionBubble({
   onPrompting?: (open: boolean) => void;
   /** Send the inline prompt to Claude about the selection (or the cursor). */
   onInlineAsk?: (text: string) => void;
+  /** Focus mode: no Ask Claude button, inline prompt, or edit-with-Claude action. */
+  hideAi?: boolean;
 }) {
   const keys = useShortcut();
   const [dragging, setDragging] = useState(false);
@@ -128,7 +131,7 @@ export function SelectionBubble({
     onLinkEditing(false);
   };
 
-  if (prompting) {
+  if (prompting && !hideAi) {
     const close = () => {
       onPrompting?.(false);
       view.focus();
@@ -229,15 +232,19 @@ export function SelectionBubble({
 
   return (
     <div className={`bubble${above ? " is-above" : ""}`} ref={bubble} style={style} onMouseDown={(event) => event.preventDefault()}>
-      <button type="button" className="bubble-btn bubble-ask" onClick={onAsk}>
-        <Sparkles size={14} /> Ask Claude <kbd>{keys("⌘L")}</kbd>
-      </button>
-      {onPrompting && (
-        <button type="button" className="bubble-btn" aria-label="Edit with Claude" data-tip={`Edit with Claude  ${keys("⌘K")}`} onClick={() => onPrompting(true)}>
-          <Pencil size={14} />
-        </button>
+      {!hideAi && (
+        <>
+          <button type="button" className="bubble-btn bubble-ask" onClick={onAsk}>
+            <Sparkles size={14} /> Ask Claude <kbd>{keys("⌘L")}</kbd>
+          </button>
+          {onPrompting && (
+            <button type="button" className="bubble-btn" aria-label="Edit with Claude" data-tip={`Edit with Claude  ${keys("⌘K")}`} onClick={() => onPrompting(true)}>
+              <Pencil size={14} />
+            </button>
+          )}
+          <span className="bubble-sep" />
+        </>
       )}
-      <span className="bubble-sep" />
       <button type="button" className="bubble-btn" aria-label="Comment" data-tip="Comment" onClick={onComment}>
         <MessageSquarePlus size={14} />
       </button>

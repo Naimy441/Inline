@@ -87,6 +87,13 @@ const MENU_TIPS: Record<string, string> = {
   Help: "Shortcuts and connecting Claude Code",
 };
 
+function menuTip(name: string, focusMode: boolean) {
+  if (!focusMode) return MENU_TIPS[name];
+  if (name === "Tools") return "Spelling and word count";
+  if (name === "Help") return "Keyboard shortcuts";
+  return MENU_TIPS[name];
+}
+
 export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSession; actions: MenuActions; zoom: number; hunks: number }) {
   const [open, setOpen] = useState<string | null>(null);
   const anchors = useRef<Record<string, RefObject<HTMLButtonElement | null>>>({});
@@ -103,7 +110,7 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
             className={`menubar-item${open === name ? " is-open" : ""}`}
             aria-haspopup="menu"
             aria-expanded={open === name}
-            data-tip={open ? undefined : MENU_TIPS[name]}
+            data-tip={open ? undefined : menuTip(name, actions.focusMode)}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => setOpen((value) => (value === name ? null : name))}
             onMouseEnter={() => open && open !== name && setOpen(name)}
@@ -169,7 +176,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       { label: "Find", shortcut: `⌘F`, onSelect: () => actions.find(false) },
       { label: "Find and replace", shortcut: `⌘H`, onSelect: () => actions.find(true) },
       { kind: "separator" },
-      { label: "Keep all pending changes", hint: "Claude's edits and suggestions", disabled: !hunks, onSelect: () => void session.review("accept", "all") },
+      { label: "Keep all pending changes", hint: actions.focusMode ? "Pending edits and suggestions" : "Claude's edits and suggestions", disabled: !hunks, onSelect: () => void session.review("accept", "all") },
       { label: "Undo all pending changes", disabled: !hunks, onSelect: () => void session.review("reject", "all") },
       { label: "Next change", shortcut: "⌥]", disabled: !hunks, onSelect: () => session.gotoChange(1) },
     ],
@@ -184,7 +191,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       { label: "Tabs & outline", onSelect: actions.toggleOutline },
       { kind: "separator" },
       ...(actions.focusMode ? [] : [{ label: "Claude panel", shortcut: `⌘J`, onSelect: actions.toggleAgent }]),
-      { label: "Focus mode", hint: "Hide Claude while you write", checked: actions.focusMode, onSelect: actions.toggleFocusMode },
+      { label: "Focus mode", hint: "Hide AI tools while you write", checked: actions.focusMode, onSelect: actions.toggleFocusMode },
       { label: "Show non-printing characters", shortcut: `⌘⇧P`, checked: actions.showInvisibles, onSelect: actions.toggleInvisibles },
       { label: "Show spelling underlines", checked: actions.spellcheck, onSelect: actions.toggleSpellcheck },
       ...(actions.pdfAnnotations === null ? [] : [{ label: "Show PDF annotations", hint: "As they were on the original pages", checked: actions.pdfAnnotations, onSelect: actions.togglePdfAnnotations }]),
@@ -323,7 +330,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
     ],
     Help: [
       { label: "Keyboard shortcuts", shortcut: `⌘/`, onSelect: actions.shortcuts },
-      { label: "Connect Claude Code…", hint: "Copy the command to use Inline from your terminal", onSelect: actions.connectClaudeCode },
+      ...(actions.focusMode ? [] : [{ label: "Connect Claude Code…", hint: "Copy the command to use Inline from your terminal", onSelect: actions.connectClaudeCode }]),
     ],
   };
   return menus;
