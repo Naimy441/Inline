@@ -306,9 +306,37 @@ test("capitalization, special characters and table of contents", async ({ page }
 
   await page.keyboard.press("End");
   await page.locator(".menubar-item", { hasText: "Insert" }).click();
-  await page.locator(".menu-item", { hasText: "Special characters" }).click();
+  const insertMenu = page.locator(".menu");
+  await expect(insertMenu.locator(".menu-item", { hasText: "Footnote" })).toBeVisible();
+  await expect(insertMenu.locator(".menu-item", { hasText: "Citation" })).toHaveCount(0);
+  await expect(insertMenu.locator(".menu-item", { hasText: "Bibliography" })).toHaveCount(0);
+  await expect(insertMenu.locator(".menu-item", { hasText: /^Date$/ })).toHaveCount(0);
+  await insertMenu.locator(".menu-item", { hasText: "Special characters" }).click();
+  const charmap = page.getByRole("dialog", { name: "Special characters" });
+  await expect(charmap).toBeVisible();
+  await expect(charmap.locator("h4", { hasText: "Emoji" })).toHaveCount(0);
+  await expect(charmap.locator(".charmap-cell", { hasText: "😀" })).toHaveCount(0);
+  await expect(charmap.getByLabel("Character category").locator("option")).toHaveText([
+    "All categories",
+    "Punctuation",
+    "Symbols",
+    "Arrows",
+    "Math",
+    "Currency",
+    "Numbers",
+    "Latin",
+    "Greek",
+    "Letterlike",
+    "Geometric",
+    "Enclosed",
+    "Technical",
+    "Music",
+    "Modifiers",
+    "Box drawing",
+  ]);
+  await expect.poll(async () => charmap.locator(".charmap-cell").count()).toBeGreaterThan(100);
   await page.getByLabel("Search characters").fill("euro");
-  await page.locator(".charmap-cell").first().click();
+  await page.getByRole("button", { name: "euro sign", exact: true }).click();
   await expect(page.locator(".doc-content p", { hasText: "SHOUT THIS€" })).toHaveCount(1);
   await page.keyboard.press("Escape");
 
