@@ -8,6 +8,7 @@ import { afterEach, describe, it } from "node:test";
 process.env.INLINE_DATA_DIR = mkdtempSync(path.join(tmpdir(), "inline-runtime-"));
 
 import { mcpToolName } from "@/lib/agent/mcp";
+import { PAGE_LAYOUT_PLUGIN_DIR, PAGE_LAYOUT_SKILL } from "@/lib/agent/skills";
 import { agentRuntime, BUILTIN_TOOLS, setQueryImplementation, type ChatRuntime } from "@/lib/agent/runtime";
 import { fakeClaude, type FakeModel } from "@/lib/agent/testing/fakeClaude";
 import type { AssistantMessage, ChatEvent, ChatSettings, ToolPart, UserMessage } from "@/lib/agent/types";
@@ -109,6 +110,8 @@ describe("a turn", () => {
     assert.equal(options.sessionId, chat.state.id, "the Claude Code session takes the chat's id");
     assert.equal(options.resume, undefined);
     assert.deepEqual(options.settingSources, [], "the user's own Claude Code settings and hooks are not loaded");
+    assert.deepEqual(options.plugins, [{ type: "local", path: PAGE_LAYOUT_PLUGIN_DIR, skipMcpDiscovery: true }]);
+    assert.deepEqual(options.skills, [PAGE_LAYOUT_SKILL]);
   });
 
   it("tells Claude which document is open, the mode and what the user selected", async () => {

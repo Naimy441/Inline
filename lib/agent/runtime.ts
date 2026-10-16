@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { query, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createInlineSdkServer, mcpToolName } from "@/lib/agent/mcp";
 import { systemPrompt } from "@/lib/agent/prompt";
+import { PAGE_LAYOUT_PLUGIN_DIR, PAGE_LAYOUT_SKILL } from "@/lib/agent/skills";
 import { documentListing, type ToolContext } from "@/lib/agent/tools";
 import type {
   AgentStatus,
@@ -743,6 +744,9 @@ class ChatRuntime {
         mcpServers: { inline: createInlineSdkServer(() => this.toolContext()) },
         // Only Inline's tools: none of the user's own MCP servers or claude.ai connectors (Google Drive and so on).
         strictMcpConfig: true,
+        // The page-layout skill, and no other skills. The plugin path is absolute because cwd is the data folder.
+        plugins: [{ type: "local", path: PAGE_LAYOUT_PLUGIN_DIR, skipMcpDiscovery: true }],
+        skills: [PAGE_LAYOUT_SKILL],
         settings: { disableClaudeAiConnectors: true },
         env: { ...process.env, ENABLE_CLAUDEAI_MCP_SERVERS: "false" },
         settingSources: [],
