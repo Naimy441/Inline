@@ -1,7 +1,7 @@
 /**
  * Document zoom. The page is scaled with a CSS transform (so text doesn't
- * reflow); these helpers keep that scale inside the menu's range and keep a
- * point on the page under the same screen pixel while the scale changes.
+ * reflow); these helpers keep that scale inside the menu's range and keep the
+ * middle of the view on the same point of the page. The pointer is not an anchor.
  */
 
 export const MIN_ZOOM = 0.5;
@@ -106,12 +106,10 @@ export function anchorAt(frame: { left: number; top: number; width: number; heig
 
 /**
  * Horizontal placement after a zoom.
- * A page that fits in the view is centered and not scrolled sideways: that is
- * the only time a pinch or a scroll-wheel zoom should land centered.
- * A wider page keeps `pageLeft` (the point under the fingers, or the toolbar's
- * center). Side gutters grow when that spot would otherwise fall outside the
- * scroll range, so the browser cannot clamp it away, and both edges can still
- * be scrolled into view.
+ * A page narrower than the view is centered by layout and not scrolled sideways.
+ * A wider page keeps `pageLeft` — the place that holds the middle of the view
+ * still — and does not snap back to center. Side gutters grow when that spot
+ * would otherwise fall outside the scroll range, so both edges can still be scrolled into view.
  */
 export function horizontalPan(input: {
   canvasWidth: number;
@@ -158,20 +156,9 @@ export function scrollForAnchor(
   };
 }
 
-/**
- * Where a toolbar or menu zoom should hold still. Horizontally that's the
- * middle of the canvas, so a page that was centered stays centered. At the
- * top of the document the page grows downward; once the reader has scrolled,
- * the middle of the view stays put.
- */
-export function manualZoomOrigin(
-  canvas: { scrollTop: number; left: number; top: number; width: number; height: number },
-  frameTop: number,
-) {
-  return {
-    x: canvas.left + canvas.width / 2,
-    y: canvas.scrollTop <= 8 ? frameTop : canvas.top + canvas.height / 2,
-  };
+/** The middle of the canvas. Toolbar, pinch, and ctrl+scroll all scale around this. */
+export function viewCenter(box: { left: number; top: number; width: number; height: number }) {
+  return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
 }
 
 export function touchDistance(points: Array<{ clientX: number; clientY: number }>) {
