@@ -4,9 +4,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { Fragment, Slice } from "prosemirror-model";
+import { EditorState, TextSelection, type Command } from "prosemirror-state";
 import { ReplaceStep, Transform } from "prosemirror-transform";
 import { docToMarkdown } from "@/lib/doc/markdown";
 import { schema } from "@/lib/doc/schema";
+import { BUILTIN_STYLES } from "@/lib/doc/styles";
+import { applyStyle, splitWithNextStyle } from "@/lib/editor/commands";
 import { documentHub, StepConflictError, type HubEvent, type LiveDocument } from "@/lib/server/hub";
 
 process.env.INLINE_DATA_DIR = mkdtempSync(path.join(tmpdir(), "inline-hub-"));
@@ -25,6 +28,22 @@ function textPos(doc: LiveDocument, text: string) {
 
 function insertStep(pos: number, text: string) {
   return new ReplaceStep(pos, pos, new Slice(Fragment.from(schema.text(text)), 0, 0)).toJSON();
+}
+
+function deleteStep(from: number, to: number) {
+  return new ReplaceStep(from, to, Slice.empty).toJSON();
+}
+
+/** Run an editor command against the live document and keep the result. */
+function applyCommand(doc: LiveDocument, command: Command, pos: number) {
+  const state = EditorState.create({ doc: doc.doc, selection: TextSelection.create(doc.doc, pos) });
+  const next = new Transform(doc.doc);
+  const ran = command(state, (transaction) => {
+    for (const step of transaction.steps) next.step(step);
+  });
+  assert.equal(ran, true);
+  assert.equal(next.docChanged, true);
+  doc.applyTransform(next, { kind: "system", label: "command" });
 }
 
 function record(doc: LiveDocument) {
@@ -199,17 +218,51 @@ describe("metadata and titles", () => {
     assert.equal(doc.meta.title, capped);
   });
 
-  it("an untitled document takes its title from the first Title block", async () => {
+  it("an untitled document follows its first line, not a Title block below it", async () => {
     const doc = await hub.create({ markdown: "A paragraph comes first.\n\n# Hello world {.title}\n\nAfter." });
     await doc.flush();
     assert.equal(doc.meta.autoTitle, true);
-    assert.equal(doc.meta.title, "Hello world");
+    assert.equal(doc.meta.title, "A paragraph comes first.");
     const from = textPos(doc, "Hello world");
-    doc.receiveClientSteps(doc.version, [new ReplaceStep(from + "Hello".length, from + "Hello".length, new Slice(Fragment.from(schema.text(" there")), 0, 0)).toJSON()], "tab-1");
-    assert.equal(doc.meta.title, "Hello there world");
+    doc.receiveClientSteps(doc.version, [insertStep(from + "Hello".length, " there")], "tab-1");
+    assert.equal(doc.meta.title, "A paragraph comes first.");
+    doc.receiveClientSteps(doc.version, [insertStep(1, "Updated ")], "tab-1");
+    assert.equal(doc.meta.title, "Updated A paragraph comes first.");
   });
 
-  it("removing the first Title block updates the title only when it was not set by hand", async () => {
+  it("a heading or a Title on the first line names an untitled document", async () => {
+    const heading = await hub.create({ markdown: "# Section one\n\nBody." });
+    await heading.flush();
+    assert.equal(heading.meta.title, "Section one");
+    const title = await hub.create({ markdown: "# Hello world {.title}\n\nAfter." });
+    await title.flush();
+    assert.equal(title.meta.title, "Hello world");
+  });
+
+  it("styling the first line does not change an automatic name", async () => {
+    const doc = await hub.create({});
+    doc.receiveClientSteps(0, [insertStep(1, "Quarterly planning")], "tab-1");
+    assert.equal(doc.meta.title, "Quarterly planning");
+    applyCommand(doc, applyStyle("Heading1", BUILTIN_STYLES), 1);
+    assert.equal(doc.doc.firstChild!.type.name, "heading");
+    assert.equal(doc.meta.title, "Quarterly planning");
+    applyCommand(doc, applyStyle("Title", BUILTIN_STYLES), 1);
+    assert.equal(doc.doc.firstChild!.type.name, "title");
+    assert.equal(doc.meta.title, "Quarterly planning");
+  });
+
+  it("clearing the text returns an automatic name to untitled", async () => {
+    const doc = await hub.create({});
+    doc.receiveClientSteps(0, [insertStep(1, "Trip")], "tab-1");
+    assert.equal(doc.meta.title, "Trip");
+    doc.receiveClientSteps(doc.version, [deleteStep(1, 1 + "Trip".length)], "tab-1");
+    assert.equal(doc.meta.autoTitle, true);
+    assert.equal(doc.meta.title, "Untitled document");
+    doc.receiveClientSteps(doc.version, [insertStep(1, "Again")], "tab-1");
+    assert.equal(doc.meta.title, "Again");
+  });
+
+  it("deleting the first line updates an automatic name and leaves a chosen name", async () => {
     const automatic = await hub.create({ markdown: "# Hello {.title}\n\n# Second {.title}" });
     await automatic.flush();
     assert.equal(automatic.meta.title, "Hello");
@@ -223,6 +276,44 @@ describe("metadata and titles", () => {
     assert.equal(named.meta.title, "Chosen name");
     named.receiveClientSteps(named.version, [insertStep(1, "Still ")], "tab-1");
     assert.equal(named.meta.title, "Chosen name");
+  });
+
+  it("splitting a Title keeps both halves and does not drop an automatic name off the first line", async () => {
+    const doc = await hub.create({ markdown: "# Hello world {.title}" });
+    await doc.flush();
+    assert.equal(doc.meta.title, "Hello world");
+    const { events, stop } = record(doc);
+    applyCommand(doc, splitWithNextStyle(() => BUILTIN_STYLES), 1 + "Hello ".length);
+    stop();
+    assert.equal(doc.doc.childCount, 2);
+    assert.equal(doc.doc.child(0).type.name, "title");
+    assert.equal(doc.doc.child(0).textContent, "Hello ");
+    assert.equal(doc.doc.child(1).type.name, "title");
+    assert.equal(doc.doc.child(1).textContent, "world");
+    assert.equal(doc.doc.textContent, "Hello world");
+    assert.equal(doc.meta.autoTitle, true);
+    assert.equal(doc.meta.title, "Hello");
+    const announced = events.filter((event) => event.type === "meta").map((event) => (event.type === "meta" ? event.meta.title : ""));
+    assert.deepEqual(announced, ["Hello"]);
+
+    applyCommand(doc, splitWithNextStyle(() => BUILTIN_STYLES), 1);
+    assert.equal(doc.doc.child(0).textContent, "");
+    assert.equal(doc.doc.child(1).textContent, "Hello ");
+    assert.equal(doc.meta.title, "Hello");
+  });
+
+  it("splitting a Title leaves a name the user set", async () => {
+    const doc = await hub.create({ markdown: "Notes\n\n# Hello world {.title}" });
+    await doc.flush();
+    assert.equal(doc.meta.title, "Notes");
+    doc.updateMeta({ title: "Chosen name" });
+    const title = textPos(doc, "Hello world");
+    applyCommand(doc, splitWithNextStyle(() => BUILTIN_STYLES), title + "Hello ".length);
+    assert.equal(doc.doc.textContent, "NotesHello world");
+    assert.equal(doc.meta.autoTitle, false);
+    assert.equal(doc.meta.title, "Chosen name");
+    doc.receiveClientSteps(doc.version, [insertStep(1, "Edited ")], "tab-1");
+    assert.equal(doc.meta.title, "Chosen name");
   });
 
   it("patches settings and broadcasts the new meta", async () => {

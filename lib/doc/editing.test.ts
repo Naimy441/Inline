@@ -5,6 +5,7 @@ import { Transform } from "prosemirror-transform";
 import {
   docPlainText,
   docWordCount,
+  followedDocumentTitle,
   wordCount,
   applyBlockStyle,
   applyFormat,
@@ -41,6 +42,24 @@ function runs(node: PMNode) {
   });
   return out;
 }
+
+describe("followed document title", () => {
+  it("uses the first line of text, whatever its style", () => {
+    assert.equal(followedDocumentTitle(markdownToDoc("Meeting notes")), "Meeting notes");
+    assert.equal(followedDocumentTitle(markdownToDoc("# Section")), "Section");
+    assert.equal(followedDocumentTitle(markdownToDoc("# Big {.title}")), "Big");
+  });
+
+  it("ignores a title below the first line and a blank title above the text", () => {
+    assert.equal(followedDocumentTitle(markdownToDoc("Notes\n\n# Big {.title}")), "Notes");
+    const blankTitle = schema.node("doc", null, [schema.node("title"), schema.node("paragraph", null, [schema.text("Still here")])]);
+    assert.equal(followedDocumentTitle(blankTitle), "Still here");
+  });
+
+  it("has no name when the document is empty", () => {
+    assert.equal(followedDocumentTitle(schema.node("doc", null, [schema.node("paragraph")])), null);
+  });
+});
 
 describe("markdown round trip", () => {
   const cases = [

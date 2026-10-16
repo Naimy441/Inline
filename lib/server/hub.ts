@@ -637,11 +637,11 @@ export class LiveDocument {
     }, PERSIST_DELAY_MS);
   }
 
-  /** While the document is still untitled, keep its name on the first Title block (or the first line). */
+  /** While the document is still untitled, keep its name on the first line. Clearing the text returns it to untitled. */
   private syncAutoTitle() {
     if (!this.meta.autoTitle) return;
-    const title = followedDocumentTitle(this.doc);
-    if (!title || title === this.meta.title) return;
+    const title = followedDocumentTitle(this.doc) ?? "Untitled document";
+    if (title === this.meta.title) return;
     this.meta = { ...this.meta, title };
     this.emit({ type: "meta", meta: this.meta });
     this.onRetitle?.(title);
