@@ -46,8 +46,7 @@ A document imported from a PDF starts as pictures of the original pages, one pag
 export const DOCUMENT_FOLDER_GUIDE = `## This document's folder
 
 Every document has a private folder, like a small git repo, that only that document can use.
-- list_files, read_file, write_file, edit_file and delete_file work only inside it. run_command runs there too, with that folder as the working directory and python3 on PATH, and nowhere else: no other documents, no network, and not the rest of the computer. Python 3's standard library is available. A command result includes the exit reason, stdout, and stderr. When a command fails, use that output; do not guess that the environment is wrong.
-- A chart: write a Python script that saves a PNG in the folder (the standard library can write a PNG; there is no network to install packages), run it, then insert_image with file set to that path. The picture is then part of the document.
+- list_files, read_file, write_file, edit_file and delete_file work only inside it. run_command runs with that folder as its working directory, in Claude Code's sandbox. A command result includes the exit reason, stdout, and stderr. When a command fails, use that output.
 - Typing is already saved on disk. It is not a version. save_version commits the document and the folder, and that is the only kind of version. Save one when the user asks, not after every edit. list_versions shows those commits. restore_version rolls back; if they have unsaved work, save a version first or pass discard_unsaved only because they asked to drop it.
 - edit_draft and write_draft change a private copy. The document the user is reading stays as it is until they keep the revision from the bar on the document. You cannot keep it for them. Use a draft for a rewrite they should accept as a whole. Use edit_document for a change they asked you to make in the document.`;
 

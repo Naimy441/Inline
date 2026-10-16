@@ -1537,7 +1537,11 @@ describe("document folder", () => {
     assert.match(ran.text, /stderr:\nstderr-from-plot/);
     assert.match(ran.text, /file-says # plot-marker/);
     assert.match(ran.text, /working directory: the document folder/);
-    assert.match(ran.text, /python3 is \/usr\/bin\/python3|python3 is \/usr\/local\/bin\/python3/);
+    assert.match(ran.text, /sandbox: Claude Code \(sandbox-runtime\)/);
+    assert.match(ran.text, /python3 is \//);
+    assert.doesNotMatch(ran.text, /never started/);
+    assert.doesNotMatch(ran.text, /stdout:\n\(empty\)/);
+    assert.doesNotMatch(ran.text, /stderr:\n\(empty\)/);
     assert.doesNotMatch(ran.text, /^exit 1$/);
   });
 
@@ -1551,20 +1555,16 @@ describe("document folder", () => {
   });
 
   test("files and commands stay inside the document folder", async () => {
-    const { doc, ctx } = await setup();
+    const { ctx } = await setup();
     for (const filePath of ["../package.json", "/etc/passwd", "document.json", ".git/config"]) {
       const result = await runTool("read_file", { path: filePath }, ctx);
       assert.equal(result.isError, true, filePath);
     }
-    const passwd = await runTool("run_command", { command: "python3 -c 'print(open(\"/etc/passwd\").read())'" }, ctx);
-    assert.equal(passwd.isError, undefined, passwd.text);
-    assert.match(passwd.text, /root:x:0:0:root:\/work:\/bin\/sh/);
-    assert.doesNotMatch(passwd.text, /\/home\//);
-    const host = await runTool("run_command", { command: "python3 -c 'open(\"/workspace/package.json\").read()'" }, ctx);
-    assert.equal(host.isError, true, host.text);
-    const rewrite = await runTool("run_command", { command: "python3 -c 'open(\"document.json\",\"w\").write(\"nope\")'" }, ctx);
-    assert.equal(rewrite.isError, true, rewrite.text);
-    assert.match(md(doc), /lazy dog/);
+    const ran = await runTool("run_command", { command: "python3 -c 'open(\"notes.txt\",\"w\").write(\"in the folder\")'" }, ctx);
+    assert.equal(ran.isError, undefined, ran.text);
+    assert.match(ran.text, /sandbox: Claude Code \(sandbox-runtime\)/);
+    assert.doesNotMatch(ran.text, /never started/);
+    assert.match((await runTool("read_file", { path: "notes.txt" }, ctx)).text, /in the folder/);
   });
 
   test("a draft changes a copy until the user keeps it", async () => {

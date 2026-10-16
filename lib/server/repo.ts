@@ -19,8 +19,8 @@ const exec = promisify(execFile);
  * makes for it, live in one folder. Typing writes the working tree. A version
  * is a commit, and only a commit — nothing is saved automatically.
  *
- * The folder is private. File tools and commands resolve inside it and refuse
- * to leave, and commands run in a sandbox that cannot see other documents.
+ * The folder is private. File tools resolve inside it and refuse to leave.
+ * Commands run there, in Claude Code's sandbox, with that folder as the working directory.
  */
 
 const SHA = /^[0-9a-f]{40}$/;
