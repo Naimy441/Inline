@@ -1476,7 +1476,11 @@ class AgentRuntime {
   }
 
   setDefaults(patch: Partial<ChatSettings>) {
-    this.defaultSettings = { ...this.defaultSettings, ...patch };
+    // A pause limit belongs to the chat that set it. New chats stay at 100% until one is chosen there.
+    const { usageLimit: _limit, ...rest } = patch;
+    const next = { ...this.defaultSettings, ...rest };
+    delete next.usageLimit;
+    this.defaultSettings = next;
   }
 
   /** Plan usage seen within `maxAgeMs`, or null. */
