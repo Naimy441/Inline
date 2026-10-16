@@ -54,7 +54,26 @@ function likeness(own: string[], other: string[]) {
 /** Lines alike enough to be the same line. */
 const MATCH = 0.6;
 
-export type LineMatch = { text: string; original: number; rendered: number | null; dx: number | null; /** Its text is on the page more than once: placed by order. */ repeated?: boolean };
+export type LineMatch = {
+  text: string;
+  original: number;
+  rendered: number | null;
+  dx: number | null;
+  /** Its text is on the page more than once: placed by order. */
+  repeated?: boolean;
+  /**
+   * The line's glyphs were replaced by a math block, so they are not missing
+   * text. `offset` is how far that equation sits from where it should
+   * (points; positive means the equation is low).
+   */
+  math?: { text: string; offset: number };
+};
+
+/** A rendered math block: where it sits, and a short name for the report. */
+export type MathSpan = { id: string; top: number; bottom: number; text: string };
+
+/** How far past a math block a glyph line can sit and still belong to it (a row a few points off is still that equation). */
+const MATH_SLACK = 12;
 
 /**
  * Where the rendered page's lines are, against the original's: each original
@@ -109,6 +128,78 @@ export function compareLines(original: PdfTextLine[], rendered: RenderedLine[]):
 }
 
 const round = (value: number) => Math.round(value * 10) / 10;
+
+const fixed = (value: number) => round(value).toFixed(1);
+
+/**
+ * Glyph lines a math block replaced (MathJax drawn as LaTeX): they are not
+ * missing text. The equation's position is the offset of its center from the
+ * original glyphs' center, so padding around the block doesn't look like a miss.
+ * `anchors` is where each block's top should be, for planAlignment when no words matched.
+ */
+export function coverMath(matches: LineMatch[], original: PdfTextLine[], blocks: MathSpan[]): { matches: LineMatch[]; anchors: Map<string, number> } {
+  const anchors = new Map<string, number>();
+  if (!blocks.length) return { matches, anchors };
+  const sourceOf = (row: LineMatch) => original.find((line) => Math.abs(line.baseline - row.original) < 0.05 && line.text.replace(/\t/g, " ").slice(0, 60) === row.text);
+  const groups = new Map<string, { block: MathSpan; lines: PdfTextLine[] }>();
+  const chosen = matches.map((row) => {
+    if (row.rendered !== null) return { row, block: null as MathSpan | null };
+    const line = sourceOf(row);
+    if (!line) return { row, block: null };
+    const block = blocks
+      .filter((item) => line.baseline >= item.top - MATH_SLACK && line.baseline <= item.bottom + MATH_SLACK)
+      .sort((a, b) => Math.abs((a.top + a.bottom) / 2 - line.baseline) - Math.abs((b.top + b.bottom) / 2 - line.baseline))[0];
+    if (!block) return { row, block: null };
+    const group = groups.get(block.id) ?? { block, lines: [] };
+    group.lines.push(line);
+    groups.set(block.id, group);
+    return { row, block };
+  });
+  const offsetOf = new Map<string, number>();
+  for (const [id, group] of groups) {
+    const top = Math.min(...group.lines.map((line) => line.box.y));
+    const bottom = Math.max(...group.lines.map((line) => line.box.y + line.box.height));
+    const offset = round((group.block.top + group.block.bottom) / 2 - (top + bottom) / 2);
+    offsetOf.set(id, offset);
+    // planAlignment moves a block with no matched words by block.top − anchor.
+    anchors.set(id, round(group.block.top - offset));
+  }
+  return {
+    anchors,
+    matches: chosen.map(({ row, block }) => (block ? { ...row, math: { text: block.text, offset: offsetOf.get(block.id) ?? 0 } } : row)),
+  };
+}
+
+/** One compare row, as the tools print it. A math line says which equation it is in, and whether that equation sits right. */
+export function formatMatch(row: LineMatch): string {
+  if (row.math) {
+    const off = row.math.offset;
+    const where = Math.abs(off) <= 3 ? "the equation's position matches" : `the equation is ${off >= 0 ? "+" : ""}${fixed(off)} pt from where it should be`;
+    return `  ${fixed(row.original).padStart(6)}  in math  "${row.text}" (inside the math block "${row.math.text}"; ${where}; not missing text)`;
+  }
+  if (row.rendered === null) return `  ${fixed(row.original).padStart(6)}  missing  "${row.text}"`;
+  const delta = row.rendered - row.original;
+  return `  ${fixed(row.original).padStart(6)} ${fixed(row.rendered).padStart(7)}  ${(delta >= 0 ? "+" : "") + fixed(delta)}${row.dx !== null && Math.abs(row.dx) > 3 ? ` (x ${row.dx > 0 ? "+" : ""}${fixed(row.dx)})` : ""}  "${row.text}"${row.repeated ? " (its words are on the page more than once: matched in order)" : ""}`;
+}
+
+/** Where each equation in these rows sits, once. */
+export function equationNote(rows: LineMatch[]): string {
+  const seen = new Map<string, number>();
+  for (const row of rows) if (row.math && !seen.has(row.math.text)) seen.set(row.math.text, row.math.offset);
+  return [...seen]
+    .map(([text, offset]) => (Math.abs(offset) <= 3 ? `The equation "${text}" is where it should be.` : `The equation "${text}" is ${offset >= 0 ? "+" : ""}${fixed(offset)} pt from where it should be.`))
+    .join(" ");
+}
+
+/**
+ * A matched line inside one math block whose first line already matches.
+ * Spacing around the block can't move it; the row gap in the equation can.
+ */
+export function innerMathNote(text: string, offset: number, block: string): string {
+  const signed = `${offset >= 0 ? "+" : ""}${fixed(offset)}`;
+  const gap = Math.max(1, Math.round(Math.abs(offset)));
+  return `"${text.slice(0, 40)}" (${signed} pt) is inside the math block "${block}". Its first line already matches, so before= cannot move this line. Change the row gap in that equation (\\\\[${gap}pt] after the row above it), not line=.`;
+}
 
 /**
  * The spacing changes that put each block's first matched line where it is

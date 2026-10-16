@@ -27,7 +27,7 @@ import { lineBreaksFor } from "@/lib/agent/pdfLines";
 import { pageColors, pageDraft } from "@/lib/server/pdfDrafts";
 import { unexplainedMarks } from "@/lib/pdf/import/marks";
 import { inkColor } from "@/lib/pdf/import/inkColor";
-import { compareLines, planAlignment, type AlignmentPlan, type BlockSpacing } from "@/lib/agent/pdfAlign";
+import { compareLines, coverMath, equationNote, formatMatch, innerMathNote, planAlignment, type AlignmentPlan, type BlockSpacing, type LineMatch, type MathSpan } from "@/lib/agent/pdfAlign";
 import { MATH_LANGUAGE, TEXTBLOCK_TYPES } from "@/lib/doc/schema";
 import { findUpload } from "@/lib/server/store";
 import type { ToolContext, ToolDefinition, ToolResult } from "@/lib/agent/tools";
@@ -60,7 +60,7 @@ Work one page at a time:
 1. read_pdf_page — the page as a picture, its text lines, and the draft with its concerns.
 2. write_pdf_page — the draft, corrected: fix every flagged equation (read it from the picture; replace any equation the draft placed as a picture with LaTeX), and anything else that differs from the picture (a misread symbol, a heading that should be one, a list, a missing rule). Keep the draft's layout attributes unless the picture shows they're off. If the draft needs no change, use_draft: true writes it as it is. Write the whole page in one call; don't write \\pagebreak.
 3. align_pdf_page — keeps the PDF's line breaks in every paragraph and sets the space around every block so each line lands at its height in the original, measuring in the editor until it matches. Leave vertical spacing to it. It reports the page as measured afterwards, the spacing it set, and what spacing couldn't fix and why.
-4. compare_pdf_page — the original next to your page as the editor lays it out, with the text area, where your page's blocks run, and how far each line sits from where it should (lines matched one to one, in order down the page). Fix what alignment can't with edit_pdf_page (exact replacements in the page's layout Markdown, which read_pdf_page shows for a converted page; it keeps the blocks you don't touch as they are), then align_pdf_page again: wrong sizes, anything missing or extra, a page that runs onto a second one. Lines within ±3 pt of their original height are a match. An offset that grows within a block means its line spacing (line=) or size differs.
+4. compare_pdf_page — the original next to your page as the editor lays it out, with the text area, where your page's blocks run, and how far each line sits from where it should (lines matched one to one, in order down the page). Fix what alignment can't with edit_pdf_page (exact replacements in the page's layout Markdown, which read_pdf_page shows for a converted page; it keeps the blocks you don't touch as they are), then align_pdf_page again: wrong sizes, anything missing or extra, a page that runs onto a second one. Lines within ±3 pt of their original height are a match. An offset that grows within a block means its line spacing (line=) or size differs. A PDF line whose glyphs you replaced with LaTeX is inside a math block: the report says so, and whether the equation's position matches. It is not missing text. When one row inside a math block stays off, the report names that block and the row gap to change (\\\\[6pt]), not line=.
 Change a page only with write_pdf_page, edit_pdf_page and align_pdf_page while converting: other editing tools mark their changes for the user to review, which a conversion shouldn't leave behind.
 Only then the next page: compare every page, and don't finish with pages you haven't compared. Plan the pages with TodoWrite for long documents. When every page is done and matches, call finish_pdf_import.
 If a tool says the editor hasn't laid the page out yet, it is busy (or reloading): call it again in a moment, more than once if needed, rather than skipping the check. Only when it keeps failing is the document closed; then say so to the user.
@@ -293,6 +293,7 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
     if (!tr.docChanged || tr.doc.eq(doc.doc)) return fail("The page already has this content.");
     // A conversion isn't an edit to review: it is applied as it is, and can be undone from the version history.
     doc.applyTransform(tr, { kind: "system", label: "pdf-import" }, { hunks: mapHunks(doc.hunks, tr.mapping) });
+    setCompared(doc, page, false);
     const written = pageRanges(doc.doc)[page - 1]!;
     showActivity(ctx, doc, { chatId: ctx.author, status: "editing", label: tool === "write_pdf_page" ? `Converted page ${page}` : `Corrected page ${page}`, range: { from: written.from, to: written.to } });
     doc.sendCommand({ kind: "scroll_to", from: written.from, to: Math.min(written.to, written.from + 1), version: doc.version });
@@ -520,6 +521,9 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
           if (count > 1 && !edit.replace_all) return fail(`Edit ${index + 1}: old_string is on the page ${count} times. Give more of the text around it, or replace_all: true.`);
           text = edit.replace_all ? text.split(edit.old_string).join(edit.new_string) : text.replace(edit.old_string, () => edit.new_string);
         }
+        // border-space past the cap is dropped on parse, which used to look like the edit was already there.
+        const tooWide = frameWidthError(text);
+        if (tooWide) return fail(tooWide);
         const parsed = parseMarkdown(text).filter((node) => node.type.name !== "page_break");
         if (!parsed.length) return fail("The page would be empty.");
         // Blocks written as they were stay the blocks they were (their ids, and the line breaks kept from the PDF).
@@ -537,7 +541,7 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
       name: "compare_pdf_page",
       title: "Compare PDF page",
       description:
-        "Compare a converted page with the original: shows the original page and the page as the editor lays it out (the way it would print); gives the document's text area and where the page's blocks run on it (and how far it runs over, if it does); and lists how far each line sits from its place in the original, in points, lines matched one to one in order down the page. Use it after align_pdf_page and fix what differs. Needs the document open in the editor.",
+        "Compare a converted page with the original: shows the original page and the page as the editor lays it out (the way it would print); gives the document's text area and where the page's blocks run on it (and how far it runs over, if it does); and lists how far each line sits from its place in the original, in points, lines matched one to one in order down the page. A line inside a math block is not missing text; the report says whether that equation's position matches. Use it after align_pdf_page and fix what differs. Needs the document open in the editor.",
       shape: { document_id: documentId, page: z.number().int().min(1).describe("Page number in the PDF (1-based).") },
       write: false,
       async handler(args, ctx) {
@@ -564,28 +568,33 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
         if (!rendered.length) return fail("The editor couldn't picture the page.");
         const original = await uploadBase64(record.pages[args.page - 1]!.view);
         const analysis = record.manifest.pages[args.page - 1]!;
-        const report = compareLines(analysis.lines, rendered[0]!.lines ?? []);
+        const covered = coverMath(compareLines(analysis.lines, rendered[0]!.lines ?? []), analysis.lines, mathSpans(range, rendered[0]!.blocks ?? []));
+        const report = covered.matches;
         const placed = report.filter((row) => row.rendered !== null);
+        const inMath = report.filter((row) => row.math);
+        const missing = report.filter((row) => row.rendered === null && !row.math);
         const offsets = placed.map((row) => row.rendered! - row.original);
         const worst = placed.reduce<(typeof placed)[number] | null>((acc, row) => (!acc || Math.abs(row.rendered! - row.original) > Math.abs(acc.rendered! - acc.original) ? row : acc), null);
-        const lines = report.map((row) =>
-          row.rendered === null ? `  ${f(row.original).padStart(6)}  missing  "${row.text}"` : `  ${f(row.original).padStart(6)} ${f(row.rendered).padStart(7)}  ${(row.rendered - row.original >= 0 ? "+" : "") + f(row.rendered - row.original)}${row.dx !== null && Math.abs(row.dx) > 3 ? ` (x ${row.dx > 0 ? "+" : ""}${f(row.dx)})` : ""}  "${row.text}"${row.repeated ? " (its words are on the page more than once: matched in order)" : ""}`,
-        );
+        const lines = report.map((row) => formatMatch(row));
+        const mathNote = equationNote(inMath);
         const summary = placed.length
-          ? `Lines found: ${placed.length} of ${report.length}. Offsets from the original: ${f(Math.min(...offsets))} to ${f(Math.max(...offsets))} pt${worst ? ` (largest at "${worst.text}")` : ""}. Within ±3 pt is a match; a steady drift means spacing above that point is off.`
-          : "No lines could be matched by their words (a page of equations or pictures): compare the pictures.";
+          ? `Lines found: ${placed.length} of ${report.length}.${inMath.length ? ` ${inMath.length} more ${inMath.length === 1 ? "is" : "are"} inside a math block, not missing text.` : ""}${missing.length ? ` ${missing.length} missing.` : ""} Offsets from the original: ${f(Math.min(...offsets))} to ${f(Math.max(...offsets))} pt${worst ? ` (largest at "${worst.text}")` : ""}. Within ±3 pt is a match; a steady drift means spacing above that point is off.${mathNote ? ` ${mathNote}` : ""}`
+          : inMath.length
+            ? `No text line matched by its words. ${inMath.length} ${inMath.length === 1 ? "line is" : "lines are"} inside a math block, not missing text. ${mathNote}`
+            : "No lines could be matched by their words (a page of equations or pictures): compare the pictures.";
         const images = [...(original ? [{ data: original, mimeType: "image/png" }] : []), ...rendered.map((page) => ({ data: Buffer.from(page.png).toString("base64"), mimeType: "image/png" }))];
         const fit = pageFit(doc, range, rendered[0]!);
         const settings = doc.meta.settings.pageSetup.margins;
         // Where the original's content runs, to set beside where the page's blocks do.
-        const marks = [...analysis.lines.map((line) => line.box), ...analysis.images.map((image) => image.box), ...analysis.rules.map((rule) => rule.box)].filter((box) => box.y + box.height > 0 && box.y < analysis.height);
-        const inOriginal = marks.length ? { top: Math.max(0, Math.min(...marks.map((box) => box.y))), bottom: Math.min(analysis.height, Math.max(...marks.map((box) => box.y + box.height))) } : null;
+        const inOriginal = originalExtent(analysis);
         const geometry = fit
           ? [
-              `Text area of the document's pages: ${f(fit.area.top)} to ${f(fit.area.bottom)} pt from the top (margins ${settings.top}" top, ${settings.bottom}" bottom; the same on every page, with nothing else reserved). ${fit.extent ? `Your page's blocks run from ${f(fit.extent.top)} to ${f(fit.extent.bottom)} pt` : "Your page has no blocks on its first sheet"}${inOriginal ? `; the original's content from ${f(inOriginal.top)} to ${f(inOriginal.bottom)} pt` : ""}.`,
+              `Text area of the document's pages: ${f(fit.area.top)} to ${f(fit.area.bottom)} pt from the top (margins ${settings.top}" top, ${settings.bottom}" bottom; the same on every page, with nothing else reserved). ${fit.extent ? `Your page's blocks run from ${f(fit.extent.top)} to ${f(fit.extent.bottom)} pt` : "Your page has no blocks on its first sheet"}${inOriginal && !inOriginal.continuation ? `; the original's content from ${f(inOriginal.top)} to ${f(inOriginal.bottom)} pt` : ""}.`,
+              inOriginal?.continuation ? originalExtentSentence(inOriginal) : "",
               fit.count > 1 || fit.past >= 1 ? describeFit(fit) : "",
             ]
           : [];
+        setCompared(doc, args.page, true);
         return {
           text: [
             `Page ${args.page}: the first picture is the original, ${rendered.length === 1 ? "the second is your page" : "the next two are your page and the one it runs onto"} (page ${taken.first + 1} of the document)${taken.count > 1 ? `. It takes ${taken.count} pages: it must fit on one.` : "."}`,
@@ -603,7 +612,7 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
       name: "align_pdf_page",
       title: "Align PDF page",
       description:
-        "Line a converted page up with the original: keeps the PDF's line breaks in every paragraph, measures where each block's first line sits in the editor against the PDF, and sets the space above and below blocks so every line lands at its original height, repeating until it matches; a page that runs onto the next has its largest gaps narrowed first. Reports the result as measured at the end, the spacing it set, and anything spacing couldn't fix (with why). Run it after write_pdf_page or edit_pdf_page (it changes only spacing), then check with compare_pdf_page. Needs the document open in the editor.",
+        "Line a converted page up with the original: keeps the PDF's line breaks in every paragraph, measures where each block's first line sits in the editor against the PDF, and sets the space above and below blocks so every line lands at its original height, repeating until it matches; a page that runs onto the next has its largest gaps narrowed first. A math block with no matched words is moved onto the equation. A line inside one math block that spacing can't move names that block and the row gap to change. Reports the result as measured at the end, the spacing it set, and anything spacing couldn't fix (with why). Run it after write_pdf_page or edit_pdf_page (it changes only spacing), then check with compare_pdf_page. Needs the document open in the editor.",
       shape: { document_id: documentId, page: z.number().int().min(1).describe("Page number in the PDF (1-based).") },
       write: true,
       async handler(args, ctx) {
@@ -627,6 +636,7 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
               const tr = new Transform(doc.doc);
               for (const { pos, value } of locked) tr.setNodeAttribute(pos, "lineBreaks", value);
               doc.applyTransform(tr, { kind: "system", label: "pdf-lines" }, { hunks: mapHunks(doc.hunks, tr.mapping) });
+              setCompared(doc, args.page, false);
             }
           }
         }
@@ -646,6 +656,7 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
           });
           if (!tr.docChanged) return false;
           doc.applyTransform(tr, { kind: "system", label: "pdf-align" }, { hunks: mapHunks(doc.hunks, tr.mapping) });
+          setCompared(doc, args.page, false);
           return true;
         };
         const measure = async () => {
@@ -672,7 +683,12 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
             const spaced = TEXTBLOCK_TYPES.has(node.type.name) || (node.type.name === "code_block" && node.attrs.language === MATH_LANGUAGE);
             return { spaceBefore: node.attrs.spaceBefore ?? null, spaceAfter: node.attrs.spaceAfter ?? null, canBefore: spaced, canAfter: spaced };
           };
-          return planAlignment(analysis.lines, page.lines ?? [], blocks, spacing, 0.75, pictureAnchors(range, record, args.page));
+          const spans = mathSpans(range, blocks);
+          const covered = coverMath(compareLines(analysis.lines, page.lines ?? []), analysis.lines, spans);
+          // A math block whose glyphs became LaTeX has no words to match; move it onto the equation.
+          const anchors = pictureAnchors(range, record, args.page);
+          for (const [id, top] of covered.anchors) if (!anchors.has(id)) anchors.set(id, top);
+          return planAlignment(analysis.lines, page.lines ?? [], blocks, spacing, 0.75, anchors);
         };
         // A page that runs onto another has its largest gap narrowed, a step at a time; then it is lined up again.
         const shrinkLargestGap = () => {
@@ -711,8 +727,12 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
         // The page as it is now, measured.
         const final = await measure();
         if (typeof final === "string") return fail(final);
-        const report = compareLines(analysis.lines, final.page.lines ?? []);
+        const spans = mathSpans(final.range, (final.page.blocks ?? []).filter((block) => final.range.nodes.some((node) => node.attrs.id === block.id)));
+        const covered = coverMath(compareLines(analysis.lines, final.page.lines ?? []), analysis.lines, spans);
+        const report = covered.matches;
         const placed = report.filter((row) => row.rendered !== null);
+        const inMath = report.filter((row) => row.math);
+        const missing = report.filter((row) => row.rendered === null && !row.math);
         const offsets = placed.map((row) => row.rendered! - row.original);
         const off = placed.filter((row) => Math.abs(row.rendered! - row.original) > 3);
         const stuck = plan(final).stuck;
@@ -726,15 +746,32 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
           return parts.length ? [`"${before.text}" ${parts.join(", ")}`] : [];
         });
         const signed = (value: number) => `${value >= 0 ? "+" : ""}${f(value)}`;
+        // A row inside one math block is not a line= problem: name the block and what can move it.
+        const inner: string[] = [];
+        const explained = new Set<LineMatch>();
+        for (const row of off) {
+          const block = (final.page.blocks ?? []).find((item) => row.rendered! >= item.top - 1 && row.rendered! <= item.bottom + 1);
+          const span = block ? spans.find((item) => item.id === block.id) : undefined;
+          if (!block || !span) continue;
+          const first = report.find((item) => item.rendered !== null && item.rendered >= block.top - 1 && item.rendered <= block.bottom + 1);
+          const firstMatches = Boolean(first && first !== row && Math.abs(first.rendered! - first.original) <= 3);
+          inner.push(firstMatches ? innerMathNote(row.text, row.rendered! - row.original, span.text) : `"${row.text.slice(0, 40)}" (${signed(row.rendered! - row.original)} pt) is inside the math block "${span.text}". Change before= on that block to move the equation; line= does not move a row inside it.`);
+          explained.add(row);
+        }
+        const unexplained = off.filter((row) => !explained.has(row));
         const out = [
           `Lined up page ${args.page} (${rounds} measurement${rounds === 1 ? "" : "s"}), then measured it again:`,
           placed.length
             ? `${placed.length} of ${report.length} lines found; ${placed.length - off.length} within ±3 pt of the original (${f(Math.min(...offsets))} to ${f(Math.max(...offsets))} pt)${off.length ? "" : ": a match"}.`
-            : "No line could be matched by its words (a page of equations or pictures): compare the pictures with compare_pdf_page.",
-          report.length > placed.length ? `${report.length - placed.length} line${report.length - placed.length === 1 ? "" : "s"} of the original weren't found on the page (missing, or worded differently): compare_pdf_page lists them.` : "",
-          off.length ? `Still off by more than 3 pt: ${off.slice(0, 8).map((row) => `"${row.text.slice(0, 40)}" ${signed(row.rendered! - row.original)}`).join("; ")}${off.length > 8 ? `; and ${off.length - 8} more` : ""}.` : "",
+            : inMath.length
+              ? ""
+              : "No line could be matched by its words (a page of equations or pictures): compare the pictures with compare_pdf_page.",
+          missing.length ? `${missing.length} line${missing.length === 1 ? "" : "s"} of the original weren't found on the page (missing, or worded differently): compare_pdf_page lists them.` : "",
+          inMath.length ? `${inMath.length} line${inMath.length === 1 ? "" : "s"} ${inMath.length === 1 ? "is" : "are"} inside a math block, not missing text. ${equationNote(inMath)}` : "",
+          unexplained.length ? `Still off by more than 3 pt: ${unexplained.slice(0, 8).map((row) => `"${row.text.slice(0, 40)}" ${signed(row.rendered! - row.original)}`).join("; ")}${unexplained.length > 8 ? `; and ${unexplained.length - 8} more` : ""}.` : "",
           stuck.length ? `What spacing can't fix:\n${stuck.slice(0, 6).map((item) => `- "${item.text.slice(0, 40)}" (${signed(item.offset)} pt): ${item.reason}.`).join("\n")}` : "",
-          off.length && !stuck.length ? "Lines off within a block whose first line matches: its line spacing (line=) or size differs from the original, or its lines wrap differently." : "",
+          inner.length ? `A line inside one math block:\n${inner.map((note) => `- ${note}`).join("\n")}` : "",
+          unexplained.length && !stuck.length ? "Lines off within a block whose first line matches: its line spacing (line=) or size differs from the original, or its lines wrap differently." : "",
           changed.length ? `Spacing set (pt): ${changed.slice(0, 12).join("; ")}${changed.length > 12 ? `; and ${changed.length - 12} more blocks` : ""}.` : "No spacing needed changing.",
           final.fit.count > 1 || final.fit.past >= 1 ? describeFit(final.fit) : "",
           "Check it with compare_pdf_page.",
@@ -746,13 +783,15 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
     defineTool({
       name: "finish_pdf_import",
       title: "Finish PDF import",
-      description: "Mark an imported PDF's conversion as finished, once every page is written and matches the original. Reports pages that are still pictures.",
+      description: "Mark an imported PDF's conversion as finished, once every page is written, compared with compare_pdf_page, and matches the original. Refuses until every page has been compared, and says which pages are left. Reports pages that are still pictures.",
       shape: { document_id: documentId },
       write: true,
       async handler(args, ctx) {
         const { doc, record } = await importOf(ctx, args.document_id);
         const left = pagesLeft(doc.doc, record.manifest.pageCount);
         if (left.length) return fail(`Page${left.length === 1 ? "" : "s"} ${compactPages(left)} ${left.length === 1 ? "is" : "are"} still the original picture. Convert ${left.length === 1 ? "it" : "them"} with read_pdf_page and write_pdf_page first.`);
+        const unseen = uncomparedPages(record.manifest.pageCount, doc.meta.pdfImport?.compared ?? []);
+        if (unseen.length) return fail(uncomparedMessage(unseen));
         record.finishedAt = Date.now();
         await writePdfImport(record);
         doc.setPdfImport({ status: "done" });
@@ -779,6 +818,119 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
 
 function wordsIn(blocks: PMNode[]) {
   return serializeBlocks(blocks).split(/\s+/).filter(Boolean).length;
+}
+
+/** Remember which pages compare_pdf_page has checked. Writing or lining a page up clears it. */
+function setCompared(doc: LiveDocument, page: number, seen: boolean) {
+  const meta = doc.meta.pdfImport;
+  if (!meta) return;
+  const compared = new Set(meta.compared ?? []);
+  if (seen) compared.add(page);
+  else compared.delete(page);
+  const next = [...compared].sort((a, b) => a - b);
+  const prev = [...(meta.compared ?? [])].sort((a, b) => a - b);
+  if (next.join() === prev.join()) return;
+  doc.setPdfImport({ compared: next });
+}
+
+/** Pages that have not been compared since they were written or lined up. */
+export function uncomparedPages(pageCount: number, compared: readonly number[]) {
+  const seen = new Set(compared);
+  const left: number[] = [];
+  for (let page = 1; page <= pageCount; page += 1) if (!seen.has(page)) left.push(page);
+  return left;
+}
+
+/** finish_pdf_import's refusal, naming the pages still to compare. */
+export function uncomparedMessage(pages: number[]) {
+  const list = compactPages(pages);
+  return pages.length === 1
+    ? `Page ${list} hasn't been compared. compare_pdf_page it before finish_pdf_import.`
+    : `Pages ${list} haven't been compared. compare_pdf_page each of them before finish_pdf_import.`;
+}
+
+/**
+ * border-space layoutAttrs will keep (lib/doc/markdown.ts). A larger padding is
+ * how a frame would extend past the text width, and parse drops it, so an edit
+ * must say so instead of claiming the page already has that content.
+ */
+const MAX_BORDER_SPACE = 40;
+
+/** The frame-width error for Markdown that asks a frame to extend past the text, or null when the padding is allowed. */
+export function frameWidthError(markdown: string): string | null {
+  const bad: string[] = [];
+  for (const match of markdown.matchAll(/border-space(?:-(top|right|bottom|left))?=(\d+(?:\.\d+)?)(?:pt)?/g)) {
+    const value = Number(match[2]);
+    if (!Number.isFinite(value) || (value >= 0 && value <= MAX_BORDER_SPACE)) continue;
+    bad.push(`border-space${match[1] ? `-${match[1]}` : ""}=${match[2]}`);
+  }
+  if (!bad.length) return null;
+  return `A frame cannot extend past the text width (${bad.join(", ")}). The page was not changed.`;
+}
+
+/** A displayed equation, or a paragraph that is only math: its glyphs are LaTeX now. */
+function isMathBlock(node: PMNode) {
+  if (node.type.name === "code_block" && node.attrs.language === MATH_LANGUAGE) return true;
+  if (!node.isTextblock) return false;
+  let math = 0;
+  let other = 0;
+  node.descendants((child) => {
+    if (!child.isText) return;
+    const text = (child.text ?? "").replace(/\s/g, "");
+    if (!text) return;
+    if (child.marks.some((mark) => mark.type.name === "math")) math += text.length;
+    else other += text.length;
+  });
+  return math > 0 && other === 0;
+}
+
+function mathSpans(range: PageRange, blocks: RenderedBlock[]): MathSpan[] {
+  const at = new Map(blocks.map((block) => [block.id, block]));
+  const spans: MathSpan[] = [];
+  for (const node of range.nodes) {
+    if (!isMathBlock(node)) continue;
+    const id = String(node.attrs.id ?? "");
+    const box = at.get(id);
+    if (!box) continue;
+    spans.push({ id, top: box.top, bottom: box.bottom, text: snippet(node) });
+  }
+  return spans;
+}
+
+type ExtentPage = {
+  height: number;
+  lines: Array<{ box: PdfBox }>;
+  images: Array<{ box: PdfBox }>;
+  rules: Array<{ kind: string; box: PdfBox }>;
+};
+
+/** A frame or upright the page's top edge cuts: it continues from the page before. */
+function clippedAtTop(rule: { kind: string; box: PdfBox }) {
+  return (rule.kind === "frame" || rule.kind === "vline") && rule.box.y <= 1 && rule.box.height >= 12 && rule.box.y + rule.box.height > 1;
+}
+
+/**
+ * Where the original page's content runs. A frame clipped at the top is a
+ * continuation from the previous page, not a sign that the content starts at 0.
+ */
+export function originalExtent(page: ExtentPage): { top: number; bottom: number; continuation: boolean } | null {
+  const uprights = page.rules.filter((rule) => rule.kind === "vline" && rule.box.y <= 1 && rule.box.height >= 12);
+  const continuation = page.rules.some((rule) => rule.kind === "frame" && clippedAtTop(rule)) || uprights.length >= 2;
+  const skip = new Set(page.rules.filter((rule) => continuation && (clippedAtTop(rule) || (rule.kind === "hline" && rule.box.y <= 1))));
+  const marks = [...page.lines.map((line) => line.box), ...page.images.map((image) => image.box), ...page.rules.filter((rule) => !skip.has(rule)).map((rule) => rule.box)].filter((box) => box.y + box.height > 0 && box.y < page.height);
+  if (!marks.length) return continuation ? { top: 0, bottom: 0, continuation: true } : null;
+  return {
+    top: Math.max(0, Math.min(...marks.map((box) => box.y))),
+    bottom: Math.min(page.height, Math.max(...marks.map((box) => box.y + box.height))),
+    continuation,
+  };
+}
+
+/** The compare sentence for where the original's content runs. */
+export function originalExtentSentence(extent: { top: number; bottom: number; continuation: boolean }) {
+  if (!extent.continuation) return `the original's content from ${f(extent.top)} to ${f(extent.bottom)} pt`;
+  const range = extent.bottom > extent.top ? ` The original's content runs from ${f(extent.top)} to ${f(extent.bottom)} pt.` : "";
+  return `A frame continues from the previous page and is clipped at the top edge; that is not where the page's content starts.${range}`;
 }
 
 /** "1-3, 5" for [1, 2, 3, 5]. */
