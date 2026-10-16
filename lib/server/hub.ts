@@ -77,8 +77,8 @@ export type ClientCommand =
   | { kind: "dictionary"; words: string[] }
   /** Picture these pages (0-based) for Claude and post them to /api/documents/[id]/render (lib/server/renders.ts). */
   | { kind: "render_pages"; requestId: string; pages: number[]; scale: number; span?: { first: string; last: string } }
-  /** Measure pages for a fit and post them to /api/documents/[id]/fit (lib/server/fitMeasure.ts). */
-  | { kind: "measure_fit"; requestId: string; fit: "half" | "page" };
+  /** Measure a page range and post it to /api/documents/[id]/fit (lib/server/fitMeasure.ts). */
+  | { kind: "measure_fit"; requestId: string; fromPage: number; toPage: number };
 
 export type HubEvent =
   | { type: "steps"; version: number; steps: unknown[]; clientIDs: string[]; hunks?: HunkJSON[] }

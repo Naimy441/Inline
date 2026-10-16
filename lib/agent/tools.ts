@@ -47,8 +47,8 @@ import { findMisspellings, speller, type Misspelling } from "@/lib/server/spellc
 import { normalizeWord } from "@/lib/doc/words";
 import { cleanAiTellText, findAiSymbols, formatCleanSummary, formatWriteCheck, mergeSymbolHits, stripInvisible, type AiSymbolHit } from "@/lib/writing/aiTells";
 import { detectAiTropes } from "@/lib/writing/tropes";
-import { describePageStarts, pageCount, pageCountNow } from "@/lib/agent/pages";
-import { applyFit, solveFit, type FitKind, type FitMeasurement } from "@/lib/doc/pageFit";
+import { describePageRange, describePageStarts, pageCount, pageCountNow } from "@/lib/agent/pages";
+import { applyFit, solveFit } from "@/lib/doc/pageFit";
 import { FitUnavailableError, requestFitMeasurement } from "@/lib/server/fitMeasure";
 import { PageOutOfRangeError, renderClosedDocumentPage } from "@/lib/server/headlessPage";
 import { RenderUnavailableError, requestPageRenders } from "@/lib/server/renders";
@@ -267,29 +267,28 @@ function showActivity(ctx: ToolContext, doc: LiveDocument, activity: Parameters<
 
 const EXTERNAL_ACTIVITY_MS = 4000;
 
-/** Measure the open pages once, solve the fit, and apply it. */
-async function fitLaidOutPages(ctx: ToolContext, documentId: string | undefined, kind: FitKind) {
-  const doc = await resolveDocument(ctx, documentId);
-  const tool = kind === "half" ? "fit_page_to_half" : "fit_pages_onto_one";
-  showActivity(ctx, doc, { chatId: ctx.author, status: "reading", label: kind === "half" ? "Fitting page 1" : "Fitting pages 1–2" });
-  let measurement: FitMeasurement;
+/** Measure one page range, solve the font size and line spacing, and apply them. */
+async function fitPageRange(ctx: ToolContext, doc: LiveDocument, fromPage: number, toPage: number, pages: number) {
+  const span = fromPage === toPage ? `page ${fromPage}` : `pages ${fromPage}–${toPage}`;
+  showActivity(ctx, doc, { chatId: ctx.author, status: "reading", label: `Fitting ${span}` });
+  let measured;
   try {
-    measurement = await requestFitMeasurement(doc, kind);
+    measured = await requestFitMeasurement(doc, { fromPage, toPage });
   } catch (error) {
     if (error instanceof FitUnavailableError) return fail(error.message);
     throw error;
   }
-  if (measurement.version !== doc.version) {
-    return fail("The document changed while it was being measured. Call the tool once more; don't choose a font size yourself.");
+  if (measured.version !== doc.version) {
+    return fail("The document changed while it was being measured. Call get_page_count once more; don't choose a font size yourself.");
   }
-  const solution = solveFit(measurement);
+  const solution = solveFit({ ...measured, targetPages: pages });
   if (solution.unchanged || solution.blocked) return ok(solution.summary);
   return commitEdit(
     ctx,
     doc,
-    tool,
+    "get_page_count",
     (current) => {
-      if (doc.version !== measurement.version) throw new EditError("The document changed while it was being measured. Call the tool once more; don't choose a font size yourself.");
+      if (doc.version !== measured.version) throw new EditError("The document changed while it was being measured. Call get_page_count once more; don't choose a font size yourself.");
       return applyFit(current, solution);
     },
     solution.summary,
@@ -718,13 +717,27 @@ export const TOOLS = [
     name: "get_page_count",
     title: "Get page count",
     description:
-      "How many pages a document fills in the user's editor with its current page size, margins, fonts, spacing and images; where each page starts (line numbers); and how full the last page is. When no editor has the document open, the count is an estimate from the word count.\n\n" +
+      "How many pages a document fills in the user's editor with its current page size, margins, fonts, spacing and images; where each page starts (line numbers); and how full the last page is. Pass from_page and to_page to measure that range, including a page that is only partly full. When no editor has the document open, the count is an estimate from the word count.\n\n" +
       "Use it whenever the user asks for a length in pages (\"write 5 pages\", \"keep it to one page\", \"cut a page\"): check before writing to plan how much to add, then check again after each round of edits and keep adjusting until the page count is right. Don't guess pages from word counts.\n\n" +
-      "Counts are for the document once your pending changes are kept: deleted text still showing struck through for review is not counted. Fit a length in pages by changing the text. Don't change margins, page size, font, font size or spacing to make it fit unless the user asks for that. When they ask to squeeze page 1 into the top half, call fit_page_to_half once. When they ask to put the first two pages onto one page, call fit_pages_onto_one once. Those tools measure the open editor and set the size; don't hunt for a font size yourself.",
-    shape: { document_id: documentId },
+      "To fit a measured range into a height, call this once with pages set to that height: a fraction of a page (0.5 is the top half of one page) or a number of pages (1, 2). from_page and to_page choose the range; omit them to fit the whole document. It measures the open editor, calculates font size and line spacing, applies them to that range only, and reports the numbers. Do not follow it with update_document_settings, format_text, or your own size guesses. If it says nothing was changed, stop. Named styles, the theme, the document font, and text outside the range stay as they are. The document must be open.\n\n" +
+      "Counts are for the document once your pending changes are kept: deleted text still showing struck through for review is not counted. Fit a length in pages by changing the text, unless the user asked to squeeze the layout. Don't change margins, page size, or the document font to make it fit unless the user asks for that.",
+    shape: {
+      document_id: documentId,
+      from_page: z.number().int().min(1).max(100_000).optional().describe("First page to measure or fit (1-based). Defaults to 1."),
+      to_page: z.number().int().min(1).max(100_000).optional().describe("Last page of the range, inclusive. When fitting, defaults to from_page, or the end of the document when from_page is omitted."),
+      pages: z.number().gt(0).max(500).optional().describe("Fit the range into this many pages. 0.5 is half a page. Omit to measure only."),
+    },
     write: false,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
+      if (args.from_page != null && args.to_page != null && args.to_page < args.from_page) return fail("to_page is before from_page.");
+      if (args.pages != null) {
+        if (ctx.readOnly) return fail("You are in Ask mode, so documents can't be changed. Describe the change instead, or ask the user to switch to Agent mode.");
+        if (doc.meta.kind === "canvas") return fail("This is a canvas, so it has no pages to fit.");
+        const fromPage = args.from_page ?? 1;
+        const toPage = args.to_page ?? args.from_page ?? 100_000;
+        return fitPageRange(ctx, doc, fromPage, toPage, args.pages);
+      }
       const count = await pageCount(doc);
       const settings = doc.meta.settings;
       const margins = settings.pageSetup.margins;
@@ -747,33 +760,8 @@ export const TOOLS = [
         lines.push(`"${doc.meta.title}" (id ${doc.id}) fills about ${count.pages} page${plural} (${setup}). No editor has measured the current text, so this is estimated from the word count.`);
       }
       lines.push(`${words.toLocaleString()} words; about ${count.wordsPerPage.toLocaleString()} words fit on a full page of paragraphs with this formatting. Headings, lists, tables, images and page breaks change that.`);
+      if (args.from_page != null || args.to_page != null) lines.push(describePageRange(count, args.from_page ?? 1, args.to_page ?? count.pages));
       return ok(lines.join("\n"));
-    },
-  }),
-
-  defineTool({
-    name: "fit_page_to_half",
-    title: "Fit page 1 to the top half",
-    description:
-      "Measure page 1 as the editor lays it out and fit that content into the top half of page 1. Call this once. It measures the current pages, calculates the font size and line spacing that fit, applies them, and reports the numbers. A page that is only partly full is measured as it is, not as a full page.\n\n" +
-      "It writes direct formatting on the blocks in page 1 only. Named styles, the theme, the document's default font, and text outside page 1 stay as they are. Do not follow this with update_document_settings, format_text, or your own size guesses. If it says nothing was changed, stop. The document must be open in the editor.",
-    shape: { document_id: documentId },
-    write: true,
-    handler(args, ctx) {
-      return fitLaidOutPages(ctx, args.document_id, "half");
-    },
-  }),
-
-  defineTool({
-    name: "fit_pages_onto_one",
-    title: "Fit pages 1–2 onto one page",
-    description:
-      "Measure pages 1 and 2 as the editor lays them out and fit that content onto a single page. Call this once. It measures the current pages, calculates the font size and line spacing that fit, applies them, and reports the numbers. Partly empty pages are measured as they are.\n\n" +
-      "It writes direct formatting on the blocks in those two pages only. Named styles, the theme, the document's default font, and text after page 2 stay as they are. Do not follow this with update_document_settings, format_text, or your own size guesses. If it says nothing was changed, stop. The document must be open in the editor.",
-    shape: { document_id: documentId },
-    write: true,
-    handler(args, ctx) {
-      return fitLaidOutPages(ctx, args.document_id, "page");
     },
   }),
 

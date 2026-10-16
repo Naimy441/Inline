@@ -76,8 +76,6 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   clean_ai_tells: {},
   count_words: {},
   get_page_count: {},
-  fit_page_to_half: {},
-  fit_pages_onto_one: {},
   screenshot_page: { page: 1 },
   list_documents: {},
   create_document: { title: "Another" },
@@ -1241,19 +1239,36 @@ describe("get_page_count", () => {
   });
 });
 
-describe("fit pages", () => {
-  test("fit_page_to_half needs the document open in an editor", async () => {
-    const { ctx } = await setup();
-    const result = await runTool("fit_page_to_half", {}, ctx);
-    assert.equal(result.isError, true);
-    assert.match(result.text, /open/);
+describe("get_page_count ranges", () => {
+  test("reports how full a measured page range is", async () => {
+    const { doc, ctx } = await setup();
+    const third = findText(doc.doc, "Findings");
+    doc.setLayout({ version: doc.version, pages: 3, starts: [third, third + 5], lastPageFill: 0.4 });
+    const middle = await runTool("get_page_count", { from_page: 1, to_page: 2 }, ctx);
+    assert.equal(middle.isError, undefined, middle.text);
+    assert.match(middle.text, /Pages 1–2 fill 2 pages/);
+    const last = await runTool("get_page_count", { from_page: 3, to_page: 3 }, ctx);
+    assert.match(last.text, /Page 3 is 40% full/);
+    const first = await runTool("get_page_count", { from_page: 1, to_page: 1 }, ctx);
+    assert.match(first.text, /Page 1 is 100% full/);
   });
 
-  test("fit_pages_onto_one needs the document open in an editor", async () => {
-    const { ctx } = await setup();
-    const result = await runTool("fit_pages_onto_one", {}, ctx);
+  test("fitting a page range needs the document open in an editor", async () => {
+    const { doc, ctx } = await setup();
+    const version = doc.version;
+    const result = await runTool("get_page_count", { from_page: 1, to_page: 1, pages: 0.5 }, ctx);
     assert.equal(result.isError, true);
     assert.match(result.text, /open/);
+    assert.equal(doc.version, version);
+  });
+
+  test("fitting is refused in Ask mode and changes nothing", async () => {
+    const { doc, ctx } = await setup({ readOnly: true });
+    const version = doc.version;
+    const result = await runTool("get_page_count", { from_page: 1, to_page: 2, pages: 1 }, ctx);
+    assert.equal(result.isError, true);
+    assert.match(result.text, /Ask mode/);
+    assert.equal(doc.version, version);
   });
 });
 

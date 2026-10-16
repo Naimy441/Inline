@@ -1,17 +1,19 @@
 import { randomUUID } from "node:crypto";
-import type { FitKind, FitMeasurement } from "@/lib/doc/pageFit";
+import type { FitMeasurement } from "@/lib/doc/pageFit";
 import type { LiveDocument } from "@/lib/server/hub";
 
 /**
- * A measurement of the open editor's pages, for fit_page_to_half and
- * fit_pages_onto_one. Only a browser lays the pages out, so the server asks
- * the open editor (a "measure_fit" command) and waits for it to post the
- * measurement back to /api/documents/[id]/fit.
+ * A measurement of one page range in the open editor, for get_page_count.
+ * Only a browser lays the pages out, so the server asks the open editor
+ * (a "measure_fit" command) and waits for it to post the measurement back
+ * to /api/documents/[id]/fit.
  */
+
+export type MeasuredPages = Omit<FitMeasurement, "targetPages">;
 
 type Waiting = {
   documentId: string;
-  resolve: (measurement: FitMeasurement) => void;
+  resolve: (measurement: MeasuredPages) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 };
@@ -20,17 +22,17 @@ const waiting = new Map<string, Waiting>();
 
 export class FitUnavailableError extends Error {}
 
-/** Ask the open editor to measure the pages a fit will squeeze. */
-export function requestFitMeasurement(doc: LiveDocument, kind: FitKind, timeoutMs = 10_000): Promise<FitMeasurement> {
+/** Ask the open editor to measure this page range (1-based, inclusive). */
+export function requestFitMeasurement(doc: LiveDocument, range: { fromPage: number; toPage: number }, timeoutMs = 10_000): Promise<MeasuredPages> {
   const requestId = randomUUID();
-  return new Promise<FitMeasurement>((resolve, reject) => {
+  return new Promise<MeasuredPages>((resolve, reject) => {
     const timer = setTimeout(() => {
       waiting.delete(requestId);
       reject(new FitUnavailableError("The editor didn't send the page measurement in time. The document needs to be open in Inline."));
     }, timeoutMs);
     timer.unref?.();
     waiting.set(requestId, { documentId: doc.id, resolve, reject, timer });
-    const viewers = doc.sendCommand({ kind: "measure_fit", requestId, fit: kind });
+    const viewers = doc.sendCommand({ kind: "measure_fit", requestId, fromPage: range.fromPage, toPage: range.toPage });
     if (!viewers) {
       clearTimeout(timer);
       waiting.delete(requestId);
@@ -40,7 +42,7 @@ export function requestFitMeasurement(doc: LiveDocument, kind: FitKind, timeoutM
 }
 
 /** The editor's answer. Returns false for a request that isn't waiting. */
-export function deliverFitMeasurement(documentId: string, requestId: string, answer: { error?: string; measurement?: FitMeasurement }) {
+export function deliverFitMeasurement(documentId: string, requestId: string, answer: { error?: string; measurement?: MeasuredPages }) {
   const entry = waiting.get(requestId);
   if (!entry || entry.documentId !== documentId) return false;
   waiting.delete(requestId);

@@ -32,7 +32,6 @@ import {
   RotateCcw,
   Search,
   Settings2,
-  Shrink,
   SpellCheck,
   FolderOpen,
   Sparkles,
@@ -124,12 +123,16 @@ export function describeTool(part: ToolPart): Described {
       return { icon: <ListTree size={14} />, verb: "Read", target: "the outline", live: "Reading" };
     case "count_words":
       return { icon: <Hash size={14} />, verb: "Counted words in", target: typeof input.text === "string" ? "a draft" : lines() ?? "the document", live: "Counting words in" };
-    case "get_page_count":
+    case "get_page_count": {
+      const pages = input.pages ?? field("pages");
+      if (pages != null && pages !== "") {
+        const from = input.from_page ?? field("from_page");
+        const to = input.to_page ?? field("to_page");
+        const range = from ? `pages ${from}${to ? `–${to}` : ""}` : "the pages";
+        return { icon: <Files size={14} />, verb: "Fitted", target: `${range} into ${pages} page${Number(pages) === 1 ? "" : "s"}`, live: "Fitting" };
+      }
       return { icon: <Files size={14} />, verb: "Counted", target: "pages", live: "Counting" };
-    case "fit_page_to_half":
-      return { icon: <Shrink size={14} />, verb: "Fitted", target: "page 1 into the top half", live: "Fitting" };
-    case "fit_pages_onto_one":
-      return { icon: <Shrink size={14} />, verb: "Fitted", target: "pages 1–2 onto one page", live: "Fitting" };
+    }
     case "screenshot_page": {
       const page = input.page ?? field("page");
       return { icon: <ImageIcon size={14} />, verb: "Looked at", target: page ? `page ${page}` : "a page", live: "Looking at" };

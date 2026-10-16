@@ -1,6 +1,5 @@
 import { z } from "zod";
-import type { FitMeasurement } from "@/lib/doc/pageFit";
-import { deliverFitMeasurement } from "@/lib/server/fitMeasure";
+import { deliverFitMeasurement, type MeasuredPages } from "@/lib/server/fitMeasure";
 import { json, readJson, route, routeDocument } from "@/lib/server/http";
 
 type Context = { params: Promise<{ id: string }> };
@@ -40,7 +39,8 @@ const Unit = z.object({
 
 const Measurement = z.object({
   version: z.number().int().min(0),
-  kind: z.enum(["half", "page"]),
+  fromPage: z.number().int().min(1).max(100_000),
+  toPage: z.number().int().min(1).max(100_000),
   pageContentHeight: z.number().finite().positive().max(100_000),
   bodyFontSize: z.number().finite().positive().max(400),
   bodyLineSpacing: z.number().finite().positive().max(20),
@@ -60,7 +60,7 @@ export const POST = route(async (request, context: Context) => {
   return json({
     delivered: deliverFitMeasurement(doc.id, body.requestId, {
       ...(body.error ? { error: body.error } : {}),
-      ...(body.measurement ? { measurement: body.measurement as FitMeasurement } : {}),
+      ...(body.measurement ? { measurement: body.measurement as MeasuredPages } : {}),
     }),
   });
 });
