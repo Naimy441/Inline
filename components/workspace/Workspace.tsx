@@ -493,6 +493,7 @@ export function Workspace({ documentId }: { documentId: string }) {
       toast("Claude opened another document.", { action: { label: "Open", run: () => router.push(`/d/${command.documentId}`) } });
     } else if (command.kind === "scroll_to") session.scrollTo(command.from, command.to);
     else if (command.kind === "render_pages") void session.answerRender(command).catch(() => undefined);
+    else if (command.kind === "measure_fit") void session.answerFit(command).catch(() => undefined);
   };
 
   // App-level shortcuts that work even when the editor isn't focused.

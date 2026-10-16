@@ -18,6 +18,7 @@ import type { PdfDocumentModel } from "@/lib/pdf/pdfWriter";
 import { fitLinesNow } from "@/lib/editor/lineFit";
 import { closestFace, documentFonts, ensureFonts, fontData, loadDocumentFonts, type DocumentFont } from "@/lib/client/fonts";
 import { lineMetrics, primaryFamily } from "@/lib/doc/fontMetrics";
+import { measurePageFit } from "@/lib/editor/pageFit";
 import { pageCount, pageStarts, relayout, type PageGeometry, type PageLayout } from "@/lib/editor/pagination";
 import { setPresence } from "@/lib/editor/presence";
 import { gotoHunk, mapHunksThrough, reviewHunkAtCursor, setHunks } from "@/lib/editor/review";
@@ -53,7 +54,9 @@ export type ClientCommand =
   | { kind: "download"; url: string; filename: string }
   | { kind: "dictionary"; words: string[] }
   /** Picture these pages (0-based) for Claude and post them to /api/documents/[id]/render (lib/server/renders.ts). */
-  | { kind: "render_pages"; requestId: string; pages: number[]; scale: number; span?: { first: string; last: string } };
+  | { kind: "render_pages"; requestId: string; pages: number[]; scale: number; span?: { first: string; last: string } }
+  /** Measure pages for a fit and post them to /api/documents/[id]/fit (lib/server/fitMeasure.ts). */
+  | { kind: "measure_fit"; requestId: string; fit: "half" | "page" };
 
 type Snapshot = { meta: DocumentMeta; epoch?: string; doc: unknown; version: number; comments: DocComment[]; hunks: HunkJSON[]; activity: AgentActivity | null };
 
@@ -365,6 +368,32 @@ export class DocumentSession {
       form.append(`blocks-${index}`, JSON.stringify(blocks[index] ?? this.blocksOnPage(index)));
     }
     await fetch(`/api/documents/${this.id}/render`, { method: "POST", body: form });
+  }
+
+  /**
+   * Measure the pages a fit will squeeze, as they are laid out now, and post
+   * that measurement to the server (lib/server/fitMeasure.ts).
+   */
+  async answerFit(command: { requestId: string; fit: "half" | "page" }) {
+    const fail = (error: string) => post(`/api/documents/${this.id}/fit`, { requestId: command.requestId, error });
+    const view = this.view;
+    const meta = this.meta;
+    if (!view || !meta?.settings) {
+      await fail("The document isn't open in an editor, so its pages can't be measured.");
+      return;
+    }
+    if (this.ui.get().flow) {
+      await fail("Fit uses the page layout. Turn off reflow to use it.");
+      return;
+    }
+    try {
+      relayout(view);
+      await settleLayout(() => pageCount(view.state));
+      const measurement = measurePageFit(view, geometryFor(meta), meta.settings, command.fit);
+      await post(`/api/documents/${this.id}/fit`, { requestId: command.requestId, measurement });
+    } catch (error) {
+      await fail(error instanceof Error ? error.message : "Couldn't measure the pages.");
+    }
   }
 
   /**
