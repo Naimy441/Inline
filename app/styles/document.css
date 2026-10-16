@@ -2,6 +2,9 @@
 
 .doc-content {
   position: relative;
+  /* Its own formatting context, so the first block's space above it stays inside the editor rather than
+     moving the editor down with it: pagination (lib/editor/pagination.ts) measures pages from the editor's top. */
+  display: flow-root;
   min-height: inherit;
   color: var(--paper-text);
   /* Font, size and spacing come from the document's settings on .page-content. */
@@ -14,6 +17,32 @@
   font-feature-settings: "liga" 0;
   caret-color: var(--paper-text);
   outline: none;
+}
+
+/*
+ * Spaces at the end of a line hang past the margin, as in Google Docs and
+ * Word, so a line holds the same words as Google's. Documents rebuilt from a
+ * PDF keep each line's last space on the line (lib/editor/lineFit.ts).
+ */
+.page-content:not(.from-pdf) .doc-content {
+  white-space: pre-wrap;
+}
+
+/*
+ * Pages draw text with the system's usual smoothing, as Google Docs does, not
+ * the thinner grayscale antialiasing the app's chrome uses (base.css): black
+ * text looks as heavy as in Google Docs.
+ */
+.page-stack {
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
+}
+
+/* Text colored plain black (pasted from Google Docs or Word, or picked) is the page's text color, light on a dark page. */
+@media screen {
+  :root[data-theme="dark"] .doc-content .text-black {
+    color: var(--paper-text) !important;
+  }
 }
 
 .doc-content[contenteditable="false"] {

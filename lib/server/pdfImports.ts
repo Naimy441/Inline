@@ -5,7 +5,7 @@ import type { Node as PMNode } from "prosemirror-model";
 import { ensureBlockIds } from "@/lib/doc/ids";
 import { schema } from "@/lib/doc/schema";
 import { DEFAULT_SETTINGS, FONT_FAMILIES, PAPER_SIZES, googleFontValue, normalizeSettings, type DocumentSettings, type PaperSize } from "@/lib/doc/settings";
-import { fontStyle, TEX_MATH_FONT } from "@/lib/pdf/import/text";
+import { fontStyle, variableWeight, TEX_MATH_FONT } from "@/lib/pdf/import/text";
 import type { PdfBox, PdfImportManifest, PdfPageAnalysis } from "@/lib/pdf/import/types";
 import { lineMetrics } from "@/lib/doc/fontMetrics";
 import { listFonts, saveFont } from "@/lib/server/fonts";
@@ -109,7 +109,7 @@ export async function fontFor(pdfFont: string, options: { lookupGoogle?: boolean
   if (TEX_FONT.test(name)) return { family: COMPUTER_MODERN, css: `"${COMPUTER_MODERN}", "Latin Modern Roman", "CMU Serif", Georgia, serif`, computerModern: true };
   if (/times|tinos|nimbusrom|nimbus ?roman|liberationserif|texgyretermes|termes|stix|ptmr|utm/i.test(name)) return known("Times New Roman");
   if (/helvetica|arial|nimbussan|nimbus ?sans|liberationsans|arimo|texgyreheros|phvr|uhv/i.test(name)) return known("Arial");
-  if (/courier|nimbusmon|nimbus ?mono|liberationmono|cousine|pcrr/i.test(name)) return known("Courier New");
+  if (/courier|nimbusmon|nimbus ?mono|liberationmono|cousine|pcrr|menlo|monaco|consola|sfmono|mono\b|monospace|inconsolata|andale|lucidaconsole/i.test(name)) return known("Courier New");
   if (/georgia/i.test(name)) return known("Georgia");
   if (/garamond/i.test(name)) return known("EB Garamond");
   if (/merriweather/i.test(name)) return known("Merriweather");
@@ -208,7 +208,10 @@ export function pdfFontFace(name: string): { base: string; bold: boolean; italic
   }
   const style = fontStyle(clean);
   const base = clean.replace(/[-,].*$/, "").replace(/(MT|PS)$/g, "") || clean;
-  return { base, bold: style.bold, italic: style.italic };
+  // An instance of a variable font between regular and bold (a medium heading) is a family of its own, not the regular's.
+  const weight = variableWeight(clean);
+  const named = weight === null || weight === 400 || weight === 700 ? base : weight < 400 ? `${base} Light` : weight < 600 ? `${base} Medium` : weight < 700 ? `${base} Semibold` : `${base} Black`;
+  return { base: named, bold: style.bold, italic: style.italic };
 }
 
 /** The family letters missing from a PDF font are shown in: Computer Modern's for TeX's, else the nearest Inline has. */

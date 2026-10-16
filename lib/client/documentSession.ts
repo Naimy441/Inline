@@ -316,7 +316,8 @@ export class DocumentSession {
     const blocks: Array<{ id: string; top: number; bottom: number; joined?: boolean; inside?: number }>[] = [];
     const model = await this.pdfModel(() => {
       if (command.span) span = this.pagesOf(command.span.first, command.span.last);
-      const wanted = span ? [span.first, ...command.pages] : command.pages;
+      const measured = span as { first: number; last: number } | null;
+      const wanted = measured ? [...Array.from({ length: Math.min(measured.last, measured.first + 4) - measured.first + 1 }, (_, k) => measured.first + k), ...command.pages] : command.pages;
       for (const index of wanted) blocks[index] = this.blocksOnPage(index);
     });
     const [{ buildPdf }, { openPdf }, { pageLines }] = await Promise.all([import("@/lib/pdf/pdfWriter"), import("@/lib/pdf/import/prepare"), import("@/lib/pdf/import/pageLines")]);
@@ -326,6 +327,10 @@ export class DocumentSession {
     const measured = span as { first: number; last: number } | null;
     if (measured) {
       form.append("span", JSON.stringify(measured));
+      // Where the blocks are on every page the run takes, to say what ran over and by how much.
+      const sheets: Array<{ page: number; blocks: (typeof blocks)[number] }> = [];
+      for (let index = measured.first; index <= Math.min(measured.last, measured.first + 4); index += 1) sheets.push({ page: index, blocks: blocks[index] ?? [] });
+      form.append("span-blocks", JSON.stringify(sheets));
       pages.unshift(measured.first);
     }
     for (const index of pages) {

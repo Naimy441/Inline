@@ -47,7 +47,20 @@ export const POST = route(async (request, context: Context) => {
   } catch {
     span = null;
   }
+  // Where the run's blocks are on each page it takes.
+  let spanBlocks: RenderedPage["spanBlocks"];
+  try {
+    const raw = form!.get("span-blocks");
+    const parsed = typeof raw === "string" ? (JSON.parse(raw) as unknown) : null;
+    if (Array.isArray(parsed))
+      spanBlocks = parsed
+        .filter((sheet): sheet is { page: number; blocks: RenderedBlock[] } => Boolean(sheet) && Number.isInteger(sheet.page) && Array.isArray(sheet.blocks))
+        .slice(0, 8)
+        .map((sheet) => ({ page: sheet.page, blocks: sheet.blocks.filter((block) => Boolean(block) && typeof block.id === "string" && Number.isFinite(block.top) && Number.isFinite(block.bottom)).slice(0, 2000) }));
+  } catch {
+    spanBlocks = undefined;
+  }
   const ordered = span ? pages : pages.sort((a, b) => a.page - b.page);
-  if (span && ordered[0]) ordered[0] = { ...ordered[0], span };
+  if (span && ordered[0]) ordered[0] = { ...ordered[0], span, ...(spanBlocks ? { spanBlocks } : {}) };
   return json({ delivered: deliverPageRenders(doc.id, requestId, ordered) });
 });

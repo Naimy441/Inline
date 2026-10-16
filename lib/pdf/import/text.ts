@@ -26,7 +26,20 @@ const ITALIC = /italic|oblique|^cmti|^cmmi|^sfti|^cmsl|^sfsl|-it\b|\bit\d|^lmrom
 
 export function fontStyle(name: string, flags: { bold?: boolean; italic?: boolean } = {}): FontInfo {
   const clean = cleanFontName(name);
-  return { name: clean, bold: Boolean(flags.bold) || BOLD.test(clean), italic: Boolean(flags.italic) || ITALIC.test(clean) };
+  const weight = variableWeight(clean);
+  return { name: clean, bold: Boolean(flags.bold) || (weight !== null ? weight >= 600 : BOLD.test(clean)), italic: Boolean(flags.italic) || ITALIC.test(clean) };
+}
+
+/**
+ * The weight of an instance of a variable font, from the name Apple's PDF
+ * tools give it: ".SFNS-Regular_wdth_opsz110000_GRAD_wght2BC0000" is weight
+ * 0x2BC (700) whatever its "Regular" says; null for a font named otherwise.
+ */
+export function variableWeight(name: string): number | null {
+  const match = /_wght([0-9A-F]{5,})\b/i.exec(name);
+  if (!match) return null;
+  const weight = Number.parseInt(match[1]!, 16) / 0x10000;
+  return weight >= 1 && weight <= 1000 ? Math.round(weight) : null;
 }
 
 /**

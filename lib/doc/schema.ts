@@ -241,6 +241,14 @@ export function parseTextIndent(value: string): number | null {
   return Number.isFinite(rounded) && rounded !== 0 ? rounded : null;
 }
 
+/** Space above or below a block given in points ("12pt", as Google Docs, Word and Inline's own copies write it); null otherwise. */
+function parseSpace(value: string | undefined): number | null {
+  const match = value?.trim().match(/^([\d.]+)pt$/);
+  if (!match) return null;
+  const pt = Number(match[1]);
+  return Number.isFinite(pt) && pt <= 400 ? pt : null;
+}
+
 function parseBlockAttrs(dom: HTMLElement) {
   const style = dom.style;
   const rtl = dom.getAttribute("dir") === "rtl";
@@ -261,8 +269,8 @@ function parseBlockAttrs(dom: HTMLElement) {
     align: ALIGNMENTS.includes(align) ? align : "left",
     indent: Math.max(0, Math.min(MAX_INDENT, indent)),
     lineHeight: style?.lineHeight && /^[\d.]+$/.test(style.lineHeight) ? style.lineHeight : null,
-    spaceBefore: null,
-    spaceAfter: null,
+    spaceBefore: parseSpace(style?.marginTop),
+    spaceAfter: parseSpace(style?.marginBottom),
     textIndent: parseTextIndent(style?.textIndent || ""),
     dir: rtl ? ("rtl" as const) : null,
     fontSize: fontSize > 0 && fontSize <= 400 ? fontSize : null,
@@ -730,7 +738,8 @@ const marks: Record<string, MarkSpec> = {
   text_color: {
     attrs: { color: {} },
     parseDOM: [{ style: "color", getAttrs: (value) => (value && value !== "inherit" ? { color: value } : false) }],
-    toDOM: (mark): DOMOutputSpec => ["span", { style: `color: ${mark.attrs.color}` }, 0],
+    // Black is the page's own text color, so it turns light with the page in dark mode (document.css).
+    toDOM: (mark): DOMOutputSpec => ["span", { style: `color: ${mark.attrs.color}`, ...(isBlack(mark.attrs.color) ? { class: "text-black" } : {}) }, 0],
   },
 
   font_family: {
@@ -799,6 +808,12 @@ export const TEXTBLOCK_TYPES = new Set(["paragraph", "heading", "title", "subtit
 
 export function isTextblockType(name: string) {
   return TEXTBLOCK_TYPES.has(name);
+}
+
+/** Whether a CSS color is plain black (#000, #000000, rgb(0, 0, 0), black), as Google Docs and Word color default text. */
+export function isBlack(color: unknown) {
+  if (typeof color !== "string") return false;
+  return /^(#(000f?|000000(ff)?)|black|windowtext|rgba?\(0,0,0(,(1|1\.0*|100%))?\))$/.test(color.toLowerCase().replace(/\s+/g, ""));
 }
 
 export function cssSizeToPt(value: string | null | undefined): number | null {

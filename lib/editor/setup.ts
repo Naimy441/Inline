@@ -10,6 +10,7 @@ import { findWrapping } from "prosemirror-transform";
 import { splitListItem } from "prosemirror-schema-list";
 import { Plugin, TextSelection, type Command, type EditorState, type Transaction } from "prosemirror-state";
 import { columnResizing, goToNextCell, tableEditing } from "prosemirror-tables";
+import type { EditorView } from "prosemirror-view";
 import { blockIdFixes } from "@/lib/doc/ids";
 import { parseMarkdown } from "@/lib/doc/markdown";
 import { schema } from "@/lib/doc/schema";
@@ -19,6 +20,7 @@ import {
   followLink,
   indent,
   insertTab,
+  goToDocumentEdge,
   insertPageBreak,
   outdent,
   setAlign,
@@ -38,6 +40,9 @@ import { paginationPlugin, type PageGeometry, type PageLayout } from "@/lib/edit
 import { bordersPlugin } from "@/lib/editor/borders";
 import { lineFitPlugin } from "@/lib/editor/lineFit";
 import { tabsPlugin } from "@/lib/editor/tabs";
+import { endWithTextblock, pasteIntoEmptyTextblock, transformPastedHtml } from "@/lib/editor/paste";
+import { syncDomSelection } from "@/lib/editor/domSync";
+import { imageClipboardPlugin } from "@/lib/editor/imageClipboard";
 import { justifyPlugin } from "@/lib/editor/justify";
 import { placeholderPlugin } from "@/lib/editor/placeholder";
 import { presencePlugin } from "@/lib/editor/presence";
@@ -242,6 +247,11 @@ function buildKeymap(extra: Record<string, Command>) {
     "Mod-Shift-9": toggleList("task"),
     "Mod-Shift-.": toggleBlockquote,
     "Mod-Enter": insertPageBreak,
+    // Ctrl/⌘+End (and ⌘+Down on a Mac) move the caret in the editor state itself.
+    // The browser's own move can land after Enter has already split at the old caret.
+    "Mod-End": goToDocumentEdge("end"),
+    "Mod-Home": goToDocumentEdge("start"),
+    ...(mac ? { "Mod-ArrowDown": goToDocumentEdge("end"), "Mod-ArrowUp": goToDocumentEdge("start") } : {}),
     "Shift-Enter": insertHardBreak,
     Enter: chainCommands(splitListItem(nodes.list_item!), liftEmptyBlock),
     // Tab and Shift-Tab never fall through to the browser, which would move focus out of the document.
@@ -257,11 +267,43 @@ function buildKeymap(extra: Record<string, Command>) {
   return keymap(bindings);
 }
 
-/** Paste plain text that looks like Markdown as rich content. */
+/** Read the browser caret into the editor state before key commands, so Enter follows Ctrl/⌘+End. */
+function readSelectionPlugin() {
+  return new Plugin({
+    props: {
+      handleKeyDown(view) {
+        syncDomSelection(view);
+        return false;
+      },
+    },
+  });
+}
+
+/** Views whose paste in progress starts with a whole Google Docs paragraph (lib/editor/paste.ts). */
+const wholeParagraphs = new WeakMap<EditorView, boolean>();
+
+/** Paste plain text that looks like Markdown as rich content, and Google Docs' HTML as Google shows it. */
 function markdownPastePlugin() {
   const looksLikeMarkdown = (text: string) => /(^|\n)(#{1,6} |[-*+] |\d+\. |> |```|\|.+\|)|\[\^[A-Za-z0-9]|\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\)|<cite>/.test(text);
   return new Plugin({
     props: {
+      transformPastedHTML(html, view) {
+        const result = transformPastedHtml(html);
+        wholeParagraphs.set(view, result.paragraphs);
+        return result.html;
+      },
+      transformPasted(slice, view) {
+        const whole = wholeParagraphs.get(view);
+        wholeParagraphs.delete(view);
+        return whole ? pasteIntoEmptyTextblock(slice, view.state) : slice;
+      },
+      handlePaste(view, _event, slice) {
+        // Not on drop: a picture dragged elsewhere moves without a line of its own.
+        const ended = endWithTextblock(slice, view.state);
+        if (!ended) return false;
+        view.dispatch(view.state.tr.replaceSelection(ended).scrollIntoView().setMeta("paste", true).setMeta("uiEvent", "paste"));
+        return true;
+      },
       clipboardTextParser(text, $context, plain) {
         if (plain || $context.parent.type.spec.code || !looksLikeMarkdown(text)) return null as unknown as Slice;
         try {
@@ -339,6 +381,8 @@ export function editorPlugins(options: EditorPluginOptions) {
   return [
     readOnlyPlugin(options.readOnly ?? (() => false)),
     buildInputRules(options.substitutions ?? (() => true)),
+    // Before the keymaps: the browser caret is in state before Enter or an arrow command reads it.
+    readSelectionPlugin(),
     // Before the keymaps: Enter and the arrows mean something else around an equation.
     mathPlugin(),
     buildKeymap(options.keys ?? {}),
@@ -353,6 +397,7 @@ export function editorPlugins(options: EditorPluginOptions) {
     blockIdPlugin(),
     footnoteLabelPlugin(),
     markdownPastePlugin(),
+    imageClipboardPlugin(),
     reviewPlugin(options.review),
     presencePlugin(),
     commentsPlugin(options.onActivateComment),
