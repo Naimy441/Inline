@@ -10,10 +10,12 @@ export type Preferences = {
   spellcheck: boolean;
   /** Words never underlined as misspelled (normalized: lower case). */
   dictionary: string[];
+  /** Help → Developer options: copy prompts, thoughts, tool calls and replies. */
+  devOptions: boolean;
 };
 
 const KEY = "inline-preferences";
-const DEFAULTS: Preferences = { substitutions: true, showInvisibles: false, spellcheck: true, dictionary: [] };
+const DEFAULTS: Preferences = { substitutions: true, showInvisibles: false, spellcheck: true, dictionary: [], devOptions: false };
 
 function load(): Preferences {
   if (typeof window === "undefined") return DEFAULTS;
@@ -24,6 +26,7 @@ function load(): Preferences {
       showInvisibles: typeof raw.showInvisibles === "boolean" ? raw.showInvisibles : DEFAULTS.showInvisibles,
       spellcheck: typeof raw.spellcheck === "boolean" ? raw.spellcheck : DEFAULTS.spellcheck,
       dictionary: Array.isArray(raw.dictionary) ? raw.dictionary.filter((word): word is string => typeof word === "string").slice(0, 5000) : DEFAULTS.dictionary,
+      devOptions: raw.devOptions === true,
     };
   } catch {
     return DEFAULTS;

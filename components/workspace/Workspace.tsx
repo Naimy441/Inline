@@ -36,7 +36,7 @@ import { PageSetupDialog } from "@/components/workspace/PageSetupDialog";
 import { ReviewBar } from "@/components/workspace/ReviewBar";
 import { EDITOR_MODES, modeMenuItems } from "@/components/workspace/modes";
 import { COMPACT_QUERY, isCompact, useMediaQuery, useVisualViewportVars } from "@/lib/client/viewport";
-import { DEFAULT_PREFERENCES, preferences, setPreference } from "@/lib/client/preferences";
+import { DEFAULT_PREFERENCES, loadPreferences, preferences, setPreference } from "@/lib/client/preferences";
 import { SelectionBubble } from "@/components/workspace/SelectionBubble";
 import { ShortcutsDialog } from "@/components/workspace/ShortcutsDialog";
 import { ContextMenu } from "@/components/workspace/ContextMenu";
@@ -187,6 +187,9 @@ export function Workspace({ documentId }: { documentId: string }) {
     return () => clearTimeout(timer);
   }, [ready, documentId, session]);
   const prefs = useSyncExternalStore(preferences.subscribe, preferences.get, () => DEFAULT_PREFERENCES);
+  useEffect(() => {
+    loadPreferences();
+  }, []);
   const meta = ui.meta;
   // A document's tabs share one Claude chat, kept under the first tab's id.
   const [rememberedChatKey] = useState(() => (typeof window === "undefined" ? documentId : rememberedRoot(documentId)));
@@ -500,6 +503,12 @@ export function Workspace({ documentId }: { documentId: string }) {
     toggleSubstitutions: () => {
       setPreference("substitutions", !prefs.substitutions);
       toast(prefs.substitutions ? "Automatic substitutions off." : "Automatic substitutions on.");
+    },
+    devOptions: prefs.devOptions,
+    toggleDevOptions: () => {
+      const next = !prefs.devOptions;
+      setPreference("devOptions", next);
+      toast(next ? "Developer options on. Copy actions appear in Claude chats." : "Developer options off.");
     },
     pdfAnnotations: meta?.pdfImport?.inkPages.length ? meta.pdfImport.showAnnotations : null,
     togglePdfAnnotations: () => void togglePdfAnnotations(),

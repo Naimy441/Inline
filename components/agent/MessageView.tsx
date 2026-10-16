@@ -3,6 +3,7 @@
 import { Check, ChevronRight, CircleAlert, Copy, FileText, Image as ImageIcon, PenLine, RotateCcw, TextQuote } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { AssistantMessage, AssistantPart, ChatMessage, ThinkingPart, UserMessage } from "@/lib/agent/types";
+import { turnCopyTargets } from "@/lib/agent/devCopy";
 import { assistantReplyText } from "@/lib/agent/messageText";
 import { Spark } from "@/components/agent/Activity";
 import { Markdown } from "@/components/agent/Markdown";
@@ -21,7 +22,18 @@ function formatTokens(count: number) {
   return count >= 1000 ? `${(count / 1000).toFixed(count >= 10_000 ? 0 : 1)}k` : String(count);
 }
 
-export const UserBubble = memo(function UserBubble({ message }: { message: UserMessage }) {
+function CopyTurn({ show, messageId, onCopyTurn }: { show: boolean; messageId: string; onCopyTurn?: (messageId: string) => void }) {
+  if (!show || !onCopyTurn) return null;
+  return (
+    <div className="dev-copy-row">
+      <button type="button" className="link-btn dev-copy" onClick={() => onCopyTurn(messageId)}>
+        Copy turn
+      </button>
+    </div>
+  );
+}
+
+export const UserBubble = memo(function UserBubble({ message, showCopy, onCopyTurn }: { message: UserMessage; showCopy?: boolean; onCopyTurn?: (messageId: string) => void }) {
   return (
     <div className="msg msg-user">
       {(message.selection?.text.trim() || Boolean(message.attachments?.length)) && (
@@ -46,6 +58,7 @@ export const UserBubble = memo(function UserBubble({ message }: { message: UserM
           <CopyTextButton label="Copy prompt" text={message.text} />
         </div>
       )}
+      <CopyTurn show={Boolean(showCopy)} messageId={message.id} onCopyTurn={onCopyTurn} />
     </div>
   );
 });
@@ -100,11 +113,16 @@ export const AssistantView = memo(function AssistantView({
   documentId,
   onRestore,
   latestThinking,
+  showCopy,
+  onCopyTurn,
 }: {
   message: AssistantMessage;
   isLast: boolean;
   /** The reasoning block shown open: the newest one, in the latest reply only. */
   latestThinking?: string;
+  /** Copy this prompt turn. Shown only for the last message of a turn, and only when developer options are on. */
+  showCopy?: boolean;
+  onCopyTurn?: (messageId: string) => void;
   /** The open document, which "Restore to before" applies to. */
   documentId?: string;
   /** Put the open document back to the version saved before this reply's edits. */
@@ -210,6 +228,7 @@ export const AssistantView = memo(function AssistantView({
           <CopyTextButton label="Copy response" text={reply} />
         </div>
       )}
+      {!streaming && <CopyTurn show={Boolean(showCopy)} messageId={message.id} onCopyTurn={onCopyTurn} />}
     </div>
   );
 });
@@ -262,6 +281,7 @@ export function MessageList({
   onReview,
   documentId,
   onRestore,
+  onCopyTurn,
 }: {
   messages: ChatMessage[];
   /** Pending changes in the open document; each card acts only on its own turn's. */
@@ -270,15 +290,18 @@ export function MessageList({
   onReview: (action: "next" | "accept" | "reject", ids: string[]) => void;
   documentId?: string;
   onRestore?: (versionId: string, messageId: string) => void;
+  /** When set (developer options), the last message of each turn can copy that turn. */
+  onCopyTurn?: (messageId: string) => void;
 }) {
   const byTurn = useStableGroups(hunks);
+  const copyAt = useMemo(() => (onCopyTurn ? turnCopyTargets(messages) : null), [onCopyTurn, messages]);
   const last = messages[messages.length - 1];
   const latestThinking = last?.role === "assistant" ? last.parts.findLast((part) => part.type === "thinking")?.id : undefined;
   return (
     <>
       {messages.map((message, index) =>
         message.role === "user" ? (
-          <UserBubble key={message.id} message={message} />
+          <UserBubble key={message.id} message={message} showCopy={copyAt?.has(message.id)} onCopyTurn={onCopyTurn} />
         ) : (
           <AssistantView
             key={message.id}
@@ -290,6 +313,8 @@ export function MessageList({
             documentId={documentId}
             onRestore={onRestore}
             latestThinking={index === messages.length - 1 ? latestThinking : undefined}
+            showCopy={copyAt?.has(message.id)}
+            onCopyTurn={onCopyTurn}
           />
         ),
       )}
