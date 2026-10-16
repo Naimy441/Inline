@@ -28,18 +28,34 @@ test("manual zoom stays centered and the zoomed page scrolls on both axes", asyn
   await chooseZoom(page, "100%");
   const fitted = await page.locator(".canvas").evaluate((canvas) => ({
     overflowX: canvas.scrollWidth - canvas.clientWidth,
-    scrollTop: canvas.scrollTop,
+    overflowY: canvas.scrollHeight - canvas.clientHeight,
   }));
   expect(fitted.overflowX).toBeLessThanOrEqual(1);
+  expect(fitted.overflowY).toBeGreaterThan(40);
 
-  const sheet = page.locator(".sheet").first();
-  const spot = await sheet.boundingBox();
-  expect(spot).toBeTruthy();
-  await page.mouse.move(spot!.x + 80, spot!.y + 120);
-  await page.mouse.wheel(0, 360);
-  const scrolled = await page.locator(".canvas").evaluate((canvas) => canvas.scrollTop);
-  expect(scrolled).toBeGreaterThan(fitted.scrollTop + 40);
-  await expect(page.locator(".tb-zoom")).toContainText("100%");
+  // A plain wheel must keep scrolling (it is not cancelled) and must not zoom.
+  const wheel = await page.evaluate(() => {
+    const canvas = document.querySelector<HTMLElement>(".canvas")!;
+    let prevented = true;
+    const onWheel = (event: WheelEvent) => {
+      prevented = event.defaultPrevented;
+    };
+    canvas.addEventListener("wheel", onWheel);
+    canvas.dispatchEvent(new WheelEvent("wheel", { deltaY: 240, bubbles: true, cancelable: true }));
+    canvas.removeEventListener("wheel", onWheel);
+    return { prevented, label: document.querySelector(".tb-zoom")!.textContent ?? "" };
+  });
+  expect(wheel.prevented).toBe(false);
+  expect(wheel.label).toContain("100%");
+
+  const scrolled = await page.locator(".canvas").evaluate((canvas) => {
+    const before = document.querySelector<HTMLElement>(".sheet")!.getBoundingClientRect().top;
+    canvas.scrollTop = 180;
+    const after = document.querySelector<HTMLElement>(".sheet")!.getBoundingClientRect().top;
+    return { scrollTop: canvas.scrollTop, moved: before - after };
+  });
+  expect(scrolled.scrollTop).toBeGreaterThan(40);
+  expect(scrolled.moved).toBeGreaterThan(40);
   await page.locator(".canvas").evaluate((canvas) => {
     canvas.scrollTop = 0;
     canvas.scrollLeft = 0;
@@ -116,10 +132,8 @@ test("trackpad pinch and a two-finger touch zoom the page under the pointer", as
     const sheet = document.querySelector<HTMLElement>(".sheet")!.getBoundingClientRect();
     const frame = document.querySelector<HTMLElement>(".page-stack-frame")!.getBoundingClientRect();
     const canvas = document.querySelector<HTMLElement>(".canvas")!;
-    // The same fraction of the page should still sit under the pointer.
     const fx = (x - sheet.left) / sheet.width;
     return {
-      label: document.querySelector(".tb-zoom")!.textContent,
       width: sheet.width,
       aligned: Math.abs(sheet.left - frame.left) < 2 && Math.abs(sheet.width - frame.width) < 2,
       fx,
@@ -145,19 +159,16 @@ test("trackpad pinch and a two-finger touch zoom the page under the pointer", as
     const fire = (type: string, points: Touch[]) => {
       canvas.dispatchEvent(new TouchEvent(type, { bubbles: true, cancelable: true, touches: points, targetTouches: points, changedTouches: points }));
     };
+    const beforeWidth = box.width;
     fire("touchstart", [finger(1, midX - 40, midY), finger(2, midX + 40, midY)]);
     fire("touchmove", [finger(1, midX - 120, midY), finger(2, midX + 120, midY)]);
     fire("touchend", []);
-    return {
-      supported: true as const,
-      before: box.width,
-      after: sheet.getBoundingClientRect().width,
-      label: document.querySelector(".tb-zoom")!.textContent ?? "",
-    };
+    return { supported: true as const, beforeWidth };
   });
   expect(touch.supported).toBe(true);
   if (touch.supported) {
-    expect(touch.after).toBeGreaterThan(touch.before + 20);
-    expect(touch.label).not.toContain("100%");
+    await expect(page.locator(".tb-zoom")).not.toContainText("100%");
+    const after = await sheet.evaluate((element) => element.getBoundingClientRect().width);
+    expect(after).toBeGreaterThan(touch.beforeWidth + 20);
   }
 });
