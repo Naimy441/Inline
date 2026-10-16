@@ -76,6 +76,8 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   clean_ai_tells: {},
   count_words: {},
   get_page_count: {},
+  fit_page_to_half: {},
+  fit_pages_onto_one: {},
   screenshot_page: { page: 1 },
   list_documents: {},
   create_document: { title: "Another" },
@@ -1234,6 +1236,22 @@ describe("get_page_count", () => {
     } finally {
       stop();
     }
+  });
+});
+
+describe("fit pages", () => {
+  test("fit_page_to_half needs the document open in an editor", async () => {
+    const { ctx } = await setup();
+    const result = await runTool("fit_page_to_half", {}, ctx);
+    assert.equal(result.isError, true);
+    assert.match(result.text, /open/);
+  });
+
+  test("fit_pages_onto_one needs the document open in an editor", async () => {
+    const { ctx } = await setup();
+    const result = await runTool("fit_pages_onto_one", {}, ctx);
+    assert.equal(result.isError, true);
+    assert.match(result.text, /open/);
   });
 });
 
