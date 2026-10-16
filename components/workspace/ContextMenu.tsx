@@ -4,6 +4,7 @@ import { BookOpen, BookPlus, ClipboardPaste, Copy, Link2, Lock, LockOpen, Messag
 import { deleteSelection } from "prosemirror-commands";
 import { TextSelection } from "prosemirror-state";
 import { addColumnAfter, addColumnBefore, addRowAfter, addRowBefore, deleteColumn, deleteRow, deleteTable, isInTable } from "prosemirror-tables";
+import { tableFormatItems } from "@/components/workspace/tableMenu";
 import { useEffect, useState } from "react";
 import type { DocumentSession } from "@/lib/client/documentSession";
 import { clearFormatting } from "@/lib/editor/commands";
@@ -155,6 +156,7 @@ export function ContextMenu({
               { label: "Delete row", onSelect: () => run(deleteRow) },
               { label: "Delete column", onSelect: () => run(deleteColumn) },
               { label: "Delete table", danger: true, onSelect: () => run(deleteTable) },
+              ...tableFormatItems(session, (message) => toast(message)),
             ],
           },
         ] as MenuItem[])

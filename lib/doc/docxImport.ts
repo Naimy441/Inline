@@ -1,6 +1,6 @@
 import type { Mark, Node as PMNode } from "prosemirror-model";
 import { newId } from "@/lib/doc/ids";
-import { defaultListNumbering, safeHref, sameBorders, schema, type Align, type BorderLine, type Borders, type ListMarker, type ListNumbering, type TabStop } from "@/lib/doc/schema";
+import { defaultListNumbering, normalizeFormula, safeHref, sameBorders, schema, type Align, type BorderLine, type Borders, type CellBorders, type ListMarker, type ListNumbering, type TableBorders, type TableLine, type TabStop } from "@/lib/doc/schema";
 import { primaryFamily } from "@/lib/doc/fontMetrics";
 import { DEFAULT_SETTINGS, DEFAULT_TAB_STOP, FONT_FAMILIES, PAPER_SIZES, type CommentAuthor, type DocComment, type DocumentSettings, type HorizontalAlign, type PaperSize } from "@/lib/doc/settings";
 
@@ -1052,9 +1052,66 @@ function cellShading(tcPr: XmlElement | undefined) {
   return fill && fill !== "FFFFFF" ? `#${fill.toLowerCase()}` : null;
 }
 
+/** A Word table edge. Inline's own grey grid is left unset, so a plain table round-trips without extra borders. */
+function tableEdge(line: XmlElement | undefined): TableLine | null {
+  if (!line) return null;
+  const kind = val(line) ?? "single";
+  if (kind === "nil" || kind === "none") return { style: "nil", width: 0, color: null };
+  const size = numAttr(line, "w:sz") ?? 4;
+  const color = hex(line.attrs["w:color"]);
+  const style: TableLine["style"] = kind === "double" ? "double" : /dot/i.test(kind) ? "dotted" : /dash/i.test(kind) ? "dashed" : "solid";
+  return { style, width: Math.max(0.25, size / 8), color: color ? `#${color.toLowerCase()}` : null };
+}
+
+function isDefaultGrid(borders: TableBorders) {
+  const sides = ["top", "left", "bottom", "right", "insideH", "insideV"] as const;
+  return sides.every((side) => {
+    const line = borders[side];
+    return line?.style === "solid" && Math.abs(line.width - 0.5) < 0.02 && line.color === "#bfbfbf";
+  });
+}
+
+function readTableBorders(tbl: XmlElement): TableBorders | null {
+  const tblBorders = child(child(tbl, "w:tblPr"), "w:tblBorders");
+  if (!tblBorders) return null;
+  const borders: TableBorders = {};
+  for (const side of ["top", "left", "bottom", "right", "insideH", "insideV"] as const) {
+    const line = tableEdge(child(tblBorders, `w:${side}`));
+    if (line) borders[side] = line;
+  }
+  if (!Object.keys(borders).length || isDefaultGrid(borders)) return null;
+  return borders;
+}
+
+function readCellBorders(tcPr: XmlElement | undefined): CellBorders | null {
+  const tcBorders = child(tcPr, "w:tcBorders");
+  if (!tcBorders) return null;
+  const borders: CellBorders = {};
+  for (const side of ["top", "left", "bottom", "right"] as const) {
+    const line = tableEdge(child(tcBorders, `w:${side}`));
+    if (line) borders[side] = line;
+  }
+  return Object.keys(borders).length ? borders : null;
+}
+
+/** The first formula in the cell, `SUM(A1:B2)` or `SUM(ABOVE)`. */
+function readCellFormula(tc: XmlElement): string | null {
+  const chunks: string[] = [];
+  const walk = (node: XmlElement) => {
+    for (const item of elements(node)) {
+      if (item.name === "w:instrText") chunks.push(textOf({ ...item, name: "w:t" }));
+      else if (item.name === "w:fldSimple" && item.attrs["w:instr"]) chunks.push(item.attrs["w:instr"]);
+      else walk(item);
+    }
+  };
+  walk(tc);
+  return normalizeFormula(chunks.join(" "));
+}
+
 async function readTable(tbl: XmlElement, ctx: Context): Promise<PMNode | null> {
-  type Cell = { col: number; colspan: number; rowspan: number; background: string | null; blocks: PMNode[]; header: boolean };
+  type Cell = { col: number; colspan: number; rowspan: number; background: string | null; borders: CellBorders | null; formula: string | null; blocks: PMNode[]; header: boolean };
   const rows: Cell[][] = [];
+  const rowHeights: Array<{ height: number; rule: "atLeast" | "exact" } | null> = [];
   const rowElements = elements(tbl, "w:tr");
   // The cell that starts each column's vertical merge, by grid column.
   const merging = new Map<number, Cell>();
@@ -1065,6 +1122,9 @@ async function readTable(tbl: XmlElement, ctx: Context): Promise<PMNode | null> 
   for (const [index, tr] of rowElements.entries()) {
     const cells: Cell[] = [];
     const header = index < headerRows;
+    const trHeight = child(child(tr, "w:trPr"), "w:trHeight");
+    const twips = numAttr(trHeight, "w:val");
+    rowHeights.push(twips ? { height: Math.round((twips / 20) * 100) / 100, rule: trHeight?.attrs["w:hRule"] === "exact" ? "exact" : "atLeast" } : null);
     let col = Number(val(child(child(tr, "w:trPr"), "w:gridBefore")) ?? 0) || 0;
     for (const tc of elements(tr, "w:tc")) {
       const tcPr = child(tc, "w:tcPr");
@@ -1078,7 +1138,7 @@ async function readTable(tbl: XmlElement, ctx: Context): Promise<PMNode | null> 
       const blocks = groupLists(await readBlocks(tc, ctx, header ? "header" : "cell")).filter((block) => block.type !== schema.nodes.page_break);
       // Inline writes header cells with their light grey; that's how a header cell looks anyway.
       const shading = cellShading(tcPr);
-      const cell: Cell = { col, colspan, rowspan: 1, background: header && shading === HEADER_FILL ? null : shading, blocks, header };
+      const cell: Cell = { col, colspan, rowspan: 1, background: header && shading === HEADER_FILL ? null : shading, borders: readCellBorders(tcPr), formula: readCellFormula(tc), blocks, header };
       if (vMerge) merging.set(col, cell);
       else merging.delete(col);
       cells.push(cell);
@@ -1093,18 +1153,44 @@ async function readTable(tbl: XmlElement, ctx: Context): Promise<PMNode | null> 
     for (let k = 0; k < cell.rowspan && r + k < rows.length; k += 1) occupied[r + k]! += cell.colspan;
   }));
   const width = Math.max(...occupied);
+  const grid = readGridColumns(tbl, width);
   const nodes: PMNode[] = [];
   rows.forEach((cells, r) => {
     const made = cells.map((cell) =>
       (cell.header ? schema.nodes.table_header! : schema.nodes.table_cell!).create(
-        { colspan: cell.colspan, rowspan: Math.min(cell.rowspan, rows.length - r), background: cell.background },
+        {
+          colspan: cell.colspan,
+          rowspan: Math.min(cell.rowspan, rows.length - r),
+          background: cell.background,
+          ...(cell.borders ? { borders: cell.borders } : {}),
+          ...(cell.formula ? { formula: cell.formula } : {}),
+          ...(grid ? { colwidth: grid.slice(cell.col, cell.col + cell.colspan) } : {}),
+        },
         cell.blocks.length ? cell.blocks : [schema.nodes.paragraph!.create()],
       ),
     );
-    for (let i = occupied[r]!; i < width; i += 1) made.push(schema.nodes.table_cell!.create(null, schema.nodes.paragraph!.create()));
-    if (made.length) nodes.push(schema.nodes.table_row!.create(null, made));
+    for (let i = occupied[r]!; i < width; i += 1) made.push(schema.nodes.table_cell!.create(grid ? { colwidth: [grid[i] ?? grid[0]!] } : null, schema.nodes.paragraph!.create()));
+    if (made.length) nodes.push(schema.nodes.table_row!.create(rowHeights[r] ? { height: rowHeights[r]!.height, heightRule: rowHeights[r]!.rule } : null, made));
   });
-  return nodes.length ? schema.nodes.table!.create(null, nodes) : null;
+  const borders = readTableBorders(tbl);
+  return nodes.length ? schema.nodes.table!.create(borders ? { borders } : null, nodes) : null;
+}
+
+/**
+ * Column widths in CSS pixels, or null when the file's columns are the equal
+ * percentage grid Inline writes for a table the user hasn't sized.
+ */
+function readGridColumns(tbl: XmlElement, columns: number): number[] | null {
+  const grid = child(tbl, "w:tblGrid");
+  if (!grid) return null;
+  const cols = elements(grid, "w:gridCol").map((col) => numAttr(col, "w:w") ?? 0).filter((width) => width > 0);
+  if (cols.length < columns) return null;
+  const used = cols.slice(0, columns);
+  const tblW = child(child(tbl, "w:tblPr"), "w:tblW");
+  const pct = !tblW || tblW.attrs["w:type"] === "pct" || val(tblW) === "pct";
+  const equal = used.every((width) => Math.abs(width - used[0]!) <= 1);
+  if (pct && equal) return null;
+  return used.map((width) => Math.max(1, Math.round(width / 15)));
 }
 
 async function readBlocks(container: XmlElement, ctx: Context, cell: "cell" | "header" | null = null, items = elements(container)): Promise<Block[]> {

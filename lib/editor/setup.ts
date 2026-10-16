@@ -35,6 +35,7 @@ import { spellingPlugin } from "@/lib/editor/spelling";
 import { invisiblesPlugin } from "@/lib/editor/invisibles";
 import { inMath, mathInputRules, mathPlugin } from "@/lib/editor/math";
 import { paginationPlugin, type PageGeometry, type PageLayout } from "@/lib/editor/pagination";
+import { InlineTableView, tableBorderPlugin, tableFormulaPlugin } from "@/lib/editor/tables";
 import { bordersPlugin } from "@/lib/editor/borders";
 import { lineFitPlugin } from "@/lib/editor/lineFit";
 import { tabsPlugin } from "@/lib/editor/tabs";
@@ -347,8 +348,10 @@ export function editorPlugins(options: EditorPluginOptions) {
     dropCursor({ color: "var(--accent)", width: 2 }),
     gapCursor(),
     imageSelectionPlugin(),
-    columnResizing(),
+    columnResizing({ View: InlineTableView }),
     tableEditing(),
+    tableBorderPlugin(),
+    tableFormulaPlugin(),
     collab({ version: options.version, clientID: options.clientID }),
     blockIdPlugin(),
     footnoteLabelPlugin(),

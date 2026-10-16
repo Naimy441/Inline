@@ -24,6 +24,9 @@ import {
   toggleList,
 } from "@/lib/editor/commands";
 import { addColumnAfter, addColumnBefore, addRowAfter, addRowBefore, deleteColumn, deleteRow, deleteTable, isInTable, toggleHeaderRow } from "prosemirror-tables";
+import { textToTable } from "@/lib/editor/tables";
+import { tableFormatItems, TABLE_ASK, type TableAsk } from "@/components/workspace/tableMenu";
+import { TableDialog } from "@/components/workspace/TableDialog";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { insertEquation } from "@/lib/editor/math";
 import { BUILTIN_COMMANDS } from "@/lib/agent/commands";
@@ -103,6 +106,12 @@ function menuTip(name: string, focusMode: boolean) {
 
 export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSession; actions: MenuActions; zoom: number; hunks: number }) {
   const [open, setOpen] = useState<string | null>(null);
+  const [tableAsk, setTableAsk] = useState<TableAsk | null>(null);
+  useEffect(() => {
+    const onAsk = (event: Event) => setTableAsk((event as CustomEvent<TableAsk>).detail);
+    document.addEventListener(TABLE_ASK, onAsk);
+    return () => document.removeEventListener(TABLE_ASK, onAsk);
+  }, []);
   const anchors = useRef<Record<string, RefObject<HTMLButtonElement | null>>>({});
   const anchor = (name: string) => (anchors.current[name] ??= createRef<HTMLButtonElement>());
   const menus = documentMenus(session, actions, zoom, hunks);
@@ -147,6 +156,7 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
           <Menu open={open === name} onClose={() => setOpen((value) => (value === name ? null : value))} anchor={anchor(name)} items={items} />
         </span>
       ))}
+      <TableDialog key={tableAsk ?? "closed"} kind={tableAsk} session={session} onClose={() => setTableAsk(null)} notice={actions.notice} />
     </nav>
   );
 }
@@ -230,7 +240,11 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       { label: "Tab", onSelect: actions.addTab },
       {
         label: "Table",
-        submenu: [2, 3, 4, 5].map((size) => ({ label: `${size} × ${size}`, onSelect: () => run(insertTable(size, size)) })),
+        submenu: [
+          ...[2, 3, 4, 5].map((size) => ({ label: `${size} × ${size}`, onSelect: () => run(insertTable(size, size)) })),
+          { kind: "separator" },
+          { label: "Text to table", onSelect: () => !run(textToTable) && actions.notice("Select the lines to turn into a table. Separate cells with tabs.") },
+        ],
       },
       { label: "Link", shortcut: `⌘K`, onSelect: actions.link },
       { label: "Comment", shortcut: `⌘⌥M`, onSelect: actions.comment },
@@ -329,6 +343,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
           { label: "Delete row", onSelect: () => run(deleteRow) },
           { label: "Delete column", onSelect: () => run(deleteColumn) },
           { label: "Delete table", danger: true, onSelect: () => run(deleteTable) },
+          ...tableFormatItems(session, actions.notice),
         ],
       },
       { kind: "separator" },

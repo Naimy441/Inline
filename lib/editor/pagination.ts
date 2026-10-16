@@ -1,7 +1,9 @@
 import type { Node as PMNode } from "prosemirror-model";
 import { Plugin, PluginKey, type EditorState } from "prosemirror-state";
 import { Decoration, DecorationSet, type EditorView } from "prosemirror-view";
+import { TableMap } from "prosemirror-tables";
 import { syncDomSelection } from "@/lib/editor/domSync";
+import { headerRowCount } from "@/lib/editor/tables";
 
 /**
  * Page layout for a single continuous ProseMirror document.
@@ -24,7 +26,9 @@ export type PageGeometry = {
   gap: number;
 };
 
-type Break = { pos: number; height: number; inline: boolean };
+/** A break inside a table is a row, so the spacer stays in the table. `headerHTML` is the header repeated on the next page. */
+type RowGap = { columns: number; headerHeight: number; headerHTML: string };
+type Break = { pos: number; height: number; inline: boolean; rowGap?: RowGap };
 
 /**
  * How far (px) a line may end past the bottom margin and stay on its page.
@@ -46,7 +50,10 @@ type PageState = { breaks: Break[]; pages: number; decorations: DecorationSet; e
 
 export const pageKey = new PluginKey<PageState>("pagination");
 
-type Unit = { top: number; bottom: number; kind: "line"; block: PMNode; blockPos: number } | { top: number; bottom: number; kind: "box"; pos: number; forceBreakAfter?: boolean };
+type Unit =
+  | { top: number; bottom: number; kind: "line"; block: PMNode; blockPos: number }
+  | { top: number; bottom: number; kind: "box"; pos: number; forceBreakAfter?: boolean }
+  | { top: number; bottom: number; kind: "row"; pos: number; tablePos: number; rowIndex: number; headerRows: number; headerHeight: number; headerHTML: string; columns: number };
 
 function spacer(height: number, inline: boolean) {
   const el = document.createElement(inline ? "span" : "div");
@@ -62,14 +69,48 @@ function decorate(doc: PMNode, breaks: Break[]) {
   return DecorationSet.create(
     doc,
     breaks.map((item) =>
-      Decoration.widget(item.pos, () => spacer(item.height, item.inline), {
+      Decoration.widget(item.pos, () => (item.rowGap ? tableGap(item) : spacer(item.height, item.inline)), {
         side: -1,
-        key: `gap-${item.pos}-${Math.round(item.height)}`,
+        key: `gap-${item.pos}-${Math.round(item.height)}-${item.rowGap ? hashText(item.rowGap.headerHTML) : 0}`,
         ignoreSelection: true,
         marks: [],
       }),
     ),
   );
+}
+
+function hashText(text: string) {
+  let hash = 0;
+  for (let i = 0; i < text.length; i += 1) hash = (hash * 33 + text.charCodeAt(i)) | 0;
+  return hash;
+}
+
+/**
+ * The page break has to be a table row. A div between rows is moved out of the
+ * table by the browser, and the header is drawn again at the bottom of the gap
+ * so it sits at the top of the next page, above the row that follows.
+ */
+function tableGap(item: Break) {
+  const gap = item.rowGap!;
+  const tr = document.createElement("tr");
+  tr.className = "page-gap table-page-break";
+  tr.contentEditable = "false";
+  tr.style.height = `${item.height}px`;
+  tr.setAttribute("data-height", String(item.height));
+  tr.setAttribute("aria-hidden", "true");
+  const td = document.createElement("td");
+  td.colSpan = Math.max(1, gap.columns);
+  td.style.cssText = `height:${item.height}px;padding:0;border:none;background:transparent;vertical-align:bottom`;
+  if (gap.headerHTML && gap.headerHeight > 0) {
+    const space = document.createElement("div");
+    space.style.height = `${Math.max(0, item.height - gap.headerHeight)}px`;
+    const table = document.createElement("table");
+    table.className = "repeated-header";
+    table.innerHTML = `<tbody>${gap.headerHTML}</tbody>`;
+    td.append(space, table);
+  }
+  tr.append(td);
+  return tr;
 }
 
 export function paginationPlugin(geometry: () => PageGeometry, onLayout?: (layout: PageLayout) => void) {
@@ -175,7 +216,10 @@ export function pageStarts(state: EditorState) {
 
 function sameBreaks(a: Break[], b: Break[]) {
   if (a.length !== b.length) return false;
-  return a.every((item, i) => item.pos === b[i]!.pos && Math.abs(item.height - b[i]!.height) < 1 && item.inline === b[i]!.inline);
+  return a.every((item, i) => {
+    const other = b[i]!;
+    return item.pos === other.pos && Math.abs(item.height - other.height) < 1 && item.inline === other.inline && (item.rowGap?.headerHTML ?? "") === (other.rowGap?.headerHTML ?? "") && Math.abs((item.rowGap?.headerHeight ?? 0) - (other.rowGap?.headerHeight ?? 0)) < 1;
+  });
 }
 
 const TEXTBLOCKS = new Set(["paragraph", "heading", "title", "subtitle", "code_block"]);
@@ -190,6 +234,64 @@ const CONTAINERS = new Set(["bullet_list", "ordered_list", "list_item", "blockqu
  */
 type LineCache = { width: number; height: number; lines: Array<{ top: number; bottom: number }> };
 const lineCache = new WeakMap<PMNode, LineCache>();
+
+/** Rows are separate so a long table breaks between them and can repeat its header. */
+function collectRows(view: EditorView, node: PMNode, pos: number, dom: HTMLElement, units: Unit[], natural: (y: number) => number, toLocal: (y: number) => number, scale: number) {
+  const headers = headerRowCount(node);
+  let columns = 1;
+  try {
+    columns = TableMap.get(node).width;
+  } catch {
+    columns = 1;
+  }
+  const tableEl = dom.tagName === "TABLE" ? dom : (dom.querySelector("table") ?? dom);
+  const pending: Array<{ top: number; bottom: number; pos: number; index: number }> = [];
+  let headerHeight = 0;
+  node.forEach((row, offset, index) => {
+    const rowPos = pos + 1 + offset;
+    const rowDom = view.nodeDOM(rowPos);
+    const measured = rowDom instanceof HTMLElement && rowDom.tagName === "TR" ? rowDom : null;
+    if (!measured) return;
+    const rect = measured.getBoundingClientRect();
+    const top = natural(toLocal(rect.top));
+    const bottom = natural(toLocal(rect.bottom));
+    if (index < headers) headerHeight += Math.max(0, bottom - top);
+    pending.push({ top, bottom, pos: rowPos, index });
+  });
+  const headerHTML = headers > 0 ? repeatedHeaderHTML(node, tableEl, headers, scale) : "";
+  for (const row of pending) {
+    units.push({ kind: "row", top: row.top, bottom: row.bottom, pos: row.pos, tablePos: pos, rowIndex: row.index, headerRows: headers, headerHeight, headerHTML, columns });
+  }
+}
+
+function repeatedHeaderHTML(table: PMNode, tableEl: HTMLElement, headerRows: number, scale: number) {
+  const trs = Array.from(tableEl.querySelectorAll(":scope > tbody > tr, :scope > tr")).filter((el) => !el.classList.contains("page-gap"));
+  const parts: string[] = [];
+  for (let i = 0; i < headerRows && i < table.childCount; i += 1) {
+    const row = table.child(i);
+    const tr = trs[i] as HTMLTableRowElement | undefined;
+    const cells: string[] = [];
+    row.forEach((cell, _offset, column) => {
+      const td = tr?.cells[column];
+      const width = td ? td.getBoundingClientRect().width / (scale || 1) : 0;
+      const bg = safeCssColor(typeof cell.attrs.background === "string" ? cell.attrs.background : null);
+      const span = Number(cell.attrs.colspan) || 1;
+      const style = [`border:1px solid #c4c7c5`, `padding:5px 7px`, `font-weight:700`, `vertical-align:top`, width ? `width:${Math.round(width)}px` : "", bg ? `background:${bg}` : "background:rgba(0,0,0,0.03)"].filter(Boolean).join(";");
+      cells.push(`<td colspan="${span}" style="${style}">${escapeHtml(cell.textContent)}</td>`);
+    });
+    parts.push(`<tr>${cells.join("")}</tr>`);
+  }
+  return parts.join("");
+}
+
+function safeCssColor(value: string | null) {
+  if (!value) return null;
+  return /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(value) || /^rgba?\(\s*\d+\s*,\s*\d+\s*,\s*\d+/i.test(value) ? value : null;
+}
+
+function escapeHtml(text: string) {
+  return text.replace(/[&<>]/g, (char) => (char === "&" ? "&amp;" : char === "<" ? "&lt;" : "&gt;"));
+}
 
 function measure(view: EditorView, geometry: PageGeometry, keepCache = true): { breaks: Break[]; pages: number; lastPageFill: number } | null {
   const root = view.dom as HTMLElement;
@@ -254,6 +356,10 @@ function measure(view: EditorView, geometry: PageGeometry, keepCache = true): { 
       node.forEach((child, offset) => collect(child, pos + 1 + offset));
       return;
     }
+    if (node.type.name === "table") {
+      collectRows(view, node, pos, dom, units, natural, toLocal, scale);
+      return;
+    }
     const rect = dom.getBoundingClientRect();
     units.push({ kind: "box", top: natural(toLocal(rect.top)), bottom: natural(toLocal(rect.bottom)), pos, forceBreakAfter: node.type.name === "page_break" });
   };
@@ -283,9 +389,12 @@ function measure(view: EditorView, geometry: PageGeometry, keepCache = true): { 
       // After a page break, a block keeps the space it asks for above it (as Word does after a manual break);
       // after a page simply filling up, it starts at the top.
       const above = forceNext && unit.kind === "line" && Number(unit.block.attrs.spaceBefore) > 0 ? (Number(unit.block.attrs.spaceBefore) * 96) / 72 : 0;
-      const height = target * pitch - top + above;
+      // A header row is drawn again at the top of the next page, and the row that didn't fit starts under it.
+      const repeat = unit.kind === "row" && unit.rowIndex > 0 && unit.headerRows > 0 && unit.rowIndex >= unit.headerRows && unit.headerHeight > 0 && unit.headerHeight < contentHeight * 0.6;
+      const extra = repeat ? unit.headerHeight : 0;
+      const height = target * pitch - top + above + extra;
       if (height > 0) {
-        let pos = unit.kind === "line" ? lineStart(view, unit.block, unit.blockPos, unit.top, toLocal, natural) : unit.pos;
+        let pos: number | null = unit.kind === "line" ? lineStart(view, unit.block, unit.blockPos, unit.top, toLocal, natural) : unit.kind === "row" && unit.rowIndex === 0 ? unit.tablePos : unit.pos;
         let inline = unit.kind === "line";
         // A block's first line moves the whole block: a spacer inside it would leave what comes before its
         // text (a list marker, a first-line indent) as a line of its own above the spacer.
@@ -293,8 +402,9 @@ function measure(view: EditorView, geometry: PageGeometry, keepCache = true): { 
           pos = blockStart(view.state.doc, unit.blockPos);
           inline = false;
         }
+        const rowGap = unit.kind === "row" && unit.rowIndex > 0 ? { columns: unit.columns, headerHeight: repeat ? unit.headerHeight : 0, headerHTML: repeat ? unit.headerHTML : "" } : undefined;
         if (pos != null) {
-          breaks.push({ pos, height, inline });
+          breaks.push({ pos, height, inline, ...(rowGap ? { rowGap } : {}) });
           shift += height;
         }
       }

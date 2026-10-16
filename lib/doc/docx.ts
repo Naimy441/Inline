@@ -1,5 +1,5 @@
 import type { Mark, Node as PMNode } from "prosemirror-model";
-import { cssSizeToPt, defaultListNumbering, MATH_LANGUAGE, schema, type BorderLine, type Borders, type ListMarker, type ListNumbering, type TabStop } from "@/lib/doc/schema";
+import { cssSizeToPt, defaultListNumbering, MATH_LANGUAGE, schema, type BorderLine, type Borders, type CellBorders, type ListMarker, type ListNumbering, type TableBorders, type TableLine, type TabStop } from "@/lib/doc/schema";
 import { latexToOmml, OMML_NAMESPACE } from "@/lib/doc/omml";
 import { DEFAULT_TAB_STOP, pageSize, type DocComment, type DocumentMeta } from "@/lib/doc/settings";
 import { createZip, type ZipEntry } from "@/lib/doc/zip";
@@ -213,6 +213,61 @@ async function inlineImageRun(node: PMNode, ctx: Context, size: number | null) {
   return `<w:r>${runProps([], "", size)}<w:drawing><wp:inline distT="${top}" distB="${bottom}" distL="${left}" distR="${right}"><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${id}" name="Picture ${id}" descr="${xml(String(node.attrs.alt || ""))}"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="${id}" name="Picture ${id}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${entry.rel}">${alpha}</a:blip><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
 }
 
+const TABLE_LINE_KIND: Record<TableLine["style"], string> = { solid: "single", double: "double", dotted: "dotted", dashed: "dashed", nil: "nil" };
+
+function tableLineXml(tag: string, line: TableLine | undefined) {
+  if (!line || line.style === "nil") return `<w:${tag} w:val="nil"/>`;
+  const color = line.color && /^#[0-9a-f]{6}$/i.test(line.color) ? line.color.slice(1).toUpperCase() : "auto";
+  return `<w:${tag} w:val="${TABLE_LINE_KIND[line.style]}" w:sz="${Math.max(2, Math.round(line.width * 8))}" w:space="0" w:color="${color}"/>`;
+}
+
+/** The grey grid an ordinary table has. A table that sets its own edges writes those instead. */
+function tableBordersXml(borders: TableBorders | null) {
+  const sides = ["top", "left", "bottom", "right", "insideH", "insideV"] as const;
+  const body = borders ? sides.map((side) => tableLineXml(side, borders[side])).join("") : sides.map((side) => `<w:${side} w:val="single" w:sz="4" w:space="0" w:color="BFBFBF"/>`).join("");
+  return `<w:tblBorders>${body}</w:tblBorders>`;
+}
+
+function cellBordersXml(borders: CellBorders | null) {
+  if (!borders) return "";
+  const sides = (["top", "left", "bottom", "right"] as const).filter((side) => borders[side]);
+  if (!sides.length) return "";
+  return `<w:tcBorders>${sides.map((side) => tableLineXml(side, borders[side])).join("")}</w:tcBorders>`;
+}
+
+/** Column widths in twips. Unset columns share the page; a set column keeps its pixel width (15 twips to a CSS pixel). */
+function tableColumnTwips(node: PMNode, columns: number, contentWidthPx: number) {
+  const fallback = Math.max(1, Math.floor((contentWidthPx * 15) / columns));
+  const widths = Array.from({ length: columns }, () => 0);
+  const below = new Map<string, number>();
+  node.forEach((row, _offset, r) => {
+    let col = 0;
+    row.forEach((cell) => {
+      while (below.has(`${r}:${col}`)) col += below.get(`${r}:${col}`)!;
+      const span = Number(cell.attrs.colspan) || 1;
+      const rows = Math.min(Number(cell.attrs.rowspan) || 1, node.childCount - r);
+      for (let k = 1; k < rows; k += 1) below.set(`${r + k}:${col}`, span);
+      const cols = cell.attrs.colwidth as number[] | null;
+      if (cols) {
+        for (let i = 0; i < span && col + i < columns; i += 1) {
+          if (cols[i]! > 0) widths[col + i] = Math.round(cols[i]! * 15);
+        }
+      }
+      col += span;
+    });
+  });
+  if (!widths.some((width) => width > 0)) return Array.from({ length: columns }, () => fallback);
+  const known = widths.filter((width) => width > 0);
+  const fill = Math.round(known.reduce((sum, width) => sum + width, 0) / known.length);
+  return widths.map((width) => width || fill);
+}
+
+function twipsSpan(widths: number[], col: number, span: number) {
+  let total = 0;
+  for (let i = 0; i < span; i += 1) total += widths[col + i] ?? widths[0] ?? 0;
+  return total;
+}
+
 const TAB_KINDS: Record<TabStop["align"], string> = { left: "left", right: "right", center: "center", decimal: "decimal" };
 const BORDER_KINDS: Record<BorderLine["style"], string> = { solid: "single", double: "double", dotted: "dotted", dashed: "dashed" };
 
@@ -366,17 +421,24 @@ async function blockXml(node: PMNode, ctx: Context, list?: { numId: number; leve
         });
       });
       const columns = Math.max(1, ...occupied);
-      const gridWidth = Math.floor((ctx.contentWidthPx * 15) / columns);
-      let out = `<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="5000" w:type="pct"/><w:tblBorders>${["top", "left", "bottom", "right", "insideH", "insideV"].map((side) => `<w:${side} w:val="single" w:sz="4" w:space="0" w:color="BFBFBF"/>`).join("")}</w:tblBorders><w:tblCellMar><w:left w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid>${Array.from({ length: columns }, () => `<w:gridCol w:w="${gridWidth}"/>`).join("")}</w:tblGrid>`;
-      const continuation = (span: number) => `<w:tc><w:tcPr><w:tcW w:w="${gridWidth * span}" w:type="dxa"/>${span > 1 ? `<w:gridSpan w:val="${span}"/>` : ""}<w:vMerge/></w:tcPr><w:p/></w:tc>`;
+      const colTwips = tableColumnTwips(node, columns, ctx.contentWidthPx);
+      const defaultWidth = Math.max(1, Math.floor((ctx.contentWidthPx * 15) / columns));
+      // Equal columns at the page width stay a percentage, which is how an ordinary table is written.
+      const explicit = colTwips.some((width) => width !== defaultWidth);
+      const tableWidth = explicit ? `<w:tblW w:w="${colTwips.reduce((sum, width) => sum + width, 0)}" w:type="dxa"/>` : `<w:tblW w:w="5000" w:type="pct"/>`;
+      let out = `<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/>${tableWidth}${tableBordersXml(node.attrs.borders as TableBorders | null)}<w:tblCellMar><w:left w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid>${colTwips.map((width) => `<w:gridCol w:w="${width}"/>`).join("")}</w:tblGrid>`;
+      const continuation = (span: number, at: number) => `<w:tc><w:tcPr><w:tcW w:w="${twipsSpan(colTwips, at, span)}" w:type="dxa"/>${span > 1 ? `<w:gridSpan w:val="${span}"/>` : ""}<w:vMerge/></w:tcPr><w:p/></w:tc>`;
       for (let r = 0; r < node.childCount; r += 1) {
         const row = node.child(r);
         const header = row.childCount > 0 && Array.from({ length: row.childCount }, (_, c) => row.child(c)).every((cell) => cell.type.name === "table_header");
-        out += header ? "<w:tr><w:trPr><w:tblHeader/></w:trPr>" : "<w:tr>";
+        const height = Number(row.attrs.height);
+        const rule = row.attrs.heightRule === "exact" ? "exact" : "atLeast";
+        const trPr = [header ? "<w:tblHeader/>" : "", height > 0 ? `<w:trHeight w:val="${Math.round(height * 20)}" w:hRule="${rule}"/>` : ""].filter(Boolean).join("");
+        out += trPr ? `<w:tr><w:trPr>${trPr}</w:trPr>` : "<w:tr>";
         let col = 0;
         const fillMerged = () => {
           for (let merged = below.get(`${r}:${col}`); merged; merged = below.get(`${r}:${col}`)) {
-            out += continuation(merged.span);
+            out += continuation(merged.span, col);
             col += merged.span;
           }
         };
@@ -387,12 +449,18 @@ async function blockXml(node: PMNode, ctx: Context, list?: { numId: number; leve
           const rows = Math.min(Number(cell.attrs.rowspan) || 1, node.childCount - r);
           for (let k = 1; k < rows; k += 1) below.set(`${r + k}:${col}`, { span });
           const fill = cell.attrs.background ? colorHex(String(cell.attrs.background)) : cell.type.name === "table_header" ? "F3F4F6" : null;
-          out += `<w:tc><w:tcPr><w:tcW w:w="${gridWidth * span}" w:type="dxa"/>${span > 1 ? `<w:gridSpan w:val="${span}"/>` : ""}${rows > 1 ? '<w:vMerge w:val="restart"/>' : ""}${fill ? `<w:shd w:val="clear" w:color="auto" w:fill="${fill}"/>` : ""}</w:tcPr>`;
+          const borders = cellBordersXml(cell.attrs.borders as CellBorders | null);
+          out += `<w:tc><w:tcPr><w:tcW w:w="${twipsSpan(colTwips, col, span)}" w:type="dxa"/>${span > 1 ? `<w:gridSpan w:val="${span}"/>` : ""}${rows > 1 ? '<w:vMerge w:val="restart"/>' : ""}${borders}${fill ? `<w:shd w:val="clear" w:color="auto" w:fill="${fill}"/>` : ""}</w:tcPr>`;
           let inner = "";
-          for (let k = 0; k < cell.childCount; k += 1) {
-            const block = await blockXml(cell.child(k), ctx, undefined, 0, k + 1 < cell.childCount ? cell.child(k + 1) : null);
-            // Header cells are bold on the page.
-            inner += cell.type.name === "table_header" ? block.replace(/<w:p>(?!<w:pPr><w:pStyle)(<w:pPr>)?/g, (_match, pPr) => (pPr ? '<w:p><w:pPr><w:pStyle w:val="TableHeading"/>' : '<w:p><w:pPr><w:pStyle w:val="TableHeading"/></w:pPr>')) : block;
+          const formula = typeof cell.attrs.formula === "string" ? cell.attrs.formula : "";
+          if (formula) {
+            inner = `<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> =${xml(formula)} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>${xml(cell.textContent)}</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>`;
+          } else {
+            for (let k = 0; k < cell.childCount; k += 1) {
+              const block = await blockXml(cell.child(k), ctx, undefined, 0, k + 1 < cell.childCount ? cell.child(k + 1) : null);
+              // Header cells are bold on the page.
+              inner += cell.type.name === "table_header" ? block.replace(/<w:p>(?!<w:pPr><w:pStyle)(<w:pPr>)?/g, (_match, pPr) => (pPr ? '<w:p><w:pPr><w:pStyle w:val="TableHeading"/>' : '<w:p><w:pPr><w:pStyle w:val="TableHeading"/></w:pPr>')) : block;
+            }
           }
           out += (inner || "<w:p/>") + "</w:tc>";
           col += span;
