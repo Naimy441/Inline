@@ -65,8 +65,8 @@ class Mcp {
 
 /** Tool names and hints straight from lib/agent/tools.ts, so the test can't drift from the registry. */
 function toolsFromSource() {
-  // tools.ts, and the PDF tools it lists (lib/agent/pdfTools.ts).
-  const source = ["tools.ts", "pdfTools.ts"].map((file) => readFileSync(path.join(__dirname, "..", "lib", "agent", file), "utf8")).join("\n");
+  // tools.ts, the PDF tools it lists (lib/agent/pdfTools.ts), and the job tools (lib/agent/jobs.ts).
+  const source = ["tools.ts", "pdfTools.ts", "jobs.ts"].map((file) => readFileSync(path.join(__dirname, "..", "lib", "agent", file), "utf8")).join("\n");
   const blocks = source.split("defineTool({").slice(1);
   return blocks.map((block) => {
     const name = /name:\s*"([a-z_]+)"/.exec(block)?.[1];

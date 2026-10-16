@@ -56,6 +56,8 @@ import { FOLDER_COLORS } from "@/lib/doc/folders";
 import { createFolder, deleteFolder, FolderError, folderPathName, updateFolder } from "@/lib/server/folders";
 import { formatFolderTree, formatLibrary, library, MAX_EXCERPT_WORDS, moveDocuments, resolveFolder, searchLibrary } from "@/lib/server/library";
 import { pdfTools } from "@/lib/agent/pdfTools";
+import { formatCommandReport } from "@/lib/server/sandbox";
+import { jobTools } from "@/lib/agent/jobs";
 
 /**
  * The tools Claude uses to work in Inline documents. They are transport
@@ -87,6 +89,8 @@ export type ToolContext = {
    * request from the home page can open a search match.
    */
   onOpen?: (documentId: string) => void;
+  /** Set while a job is running, so a cancel stops the work. */
+  signal?: AbortSignal;
 };
 
 /** A tool's answer: text, and pictures for Claude to see (a PDF page, a comparison). */
@@ -1741,7 +1745,7 @@ export const TOOLS = [
     name: "run_command",
     title: "Run command",
     description:
-      "Run a shell command in this document's folder only. The command cannot see other documents or the rest of the computer, and it has no network. Python 3's standard library is available; write a script with write_file, run it, and it can save a PNG or SVG in the folder. Then insert_image with file to place that image in the document. The document file and the git history are read-only from here. Default timeout is 30 seconds (max 120).",
+      "Run a shell command in this document's folder only. The working directory is that folder, so a file you just wrote (plot.py) is right here, and python3 is on PATH. The command cannot see other documents or the rest of the computer, and it has no network. Python 3's standard library is available; write a script with write_file, run it, and it can save a PNG or SVG in the folder. Then insert_image with file to place that image in the document. The document file and the git history are read-only from here. The result always includes the exit reason, stdout, and stderr: read those when it fails. Default timeout is 30 seconds (max 120).",
     shape: {
       document_id: documentId,
       command: z.string().describe("Shell command, run with bash. The working directory is the document folder."),
@@ -1751,9 +1755,9 @@ export const TOOLS = [
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
       const timeout = (args.timeout_seconds ?? 30) * 1000;
-      const result = await runWorkspaceCommand(doc.id, args.command, timeout);
-      const output = [`exit ${result.code}`, result.stdout && `stdout:\n${result.stdout}`, result.stderr && `stderr:\n${result.stderr}`].filter(Boolean).join("\n");
-      return result.code === 0 ? ok(output) : fail(output);
+      const result = await runWorkspaceCommand(doc.id, args.command, timeout, ctx.signal);
+      const report = formatCommandReport(args.command, result);
+      return report.isError ? fail(report.text) : ok(report.text);
     },
   }),
 
@@ -1909,6 +1913,8 @@ export const TOOLS = [
 
   // Rebuilding an imported PDF as an editable document (lib/agent/pdfTools.ts).
   ...pdfTools({ defineTool, ok, fail, resolveDocument, documentId, showActivity }),
+  // Background, cancel, and parallel runs (lib/agent/jobs.ts).
+  ...jobTools({ defineTool, ok, fail }),
 ];
 
 function clip(text: string, max = 160) {
@@ -1922,6 +1928,7 @@ export const WRITE_TOOL_NAMES = TOOLS.filter((tool) => tool.write).map((tool) =>
 export async function runTool(name: string, args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
   const tool = TOOLS.find((item) => item.name === name);
   if (!tool) return fail(`Unknown tool ${name}.`);
+  if (ctx.signal?.aborted) return fail("This job was cancelled.");
   // Every write tool is refused in Ask mode, including ones that only touch comments or versions.
   if (tool.write && ctx.readOnly) return fail("You are in Ask mode, so documents can't be changed. Describe the change instead, or ask the user to switch to Agent mode.");
   const parsed = z.object(tool.shape).safeParse(args);

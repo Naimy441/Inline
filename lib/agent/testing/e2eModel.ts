@@ -7,6 +7,7 @@ import { fakeClaude, type FakeModel } from "@/lib/agent/testing/fakeClaude";
  */
 
 const failedOnce = new Set<string>();
+let backgroundJob: string | undefined;
 
 const model: FakeModel = async (turn, claude) => {
   const text = turn.text;
@@ -88,6 +89,43 @@ const model: FakeModel = async (turn, claude) => {
     // Pages left: the notice stays up, but a finished turn clears the caret. Hold the
     // turn so the locator chip can be read next to it. A one-page import finishes here.
     if (finished.isError) await claude.untilInterrupted();
+    return;
+  }
+
+  const readBoth = text.match(/^read (\S+) and (\S+) together$/);
+  if (readBoth) {
+    const result = await claude.call("start_jobs", {
+      jobs: [
+        { tool: "read_document", arguments: { document_id: readBoth[1] } },
+        { tool: "read_document", arguments: { document_id: readBoth[2] } },
+      ],
+    });
+    claude.say(result.text);
+    return;
+  }
+
+  if (/^cancel a long command$/i.test(text)) {
+    const started = await claude.call("start_job", { tool: "run_command", arguments: { command: "sleep 30; echo should-not-finish" }, document_id: documentId });
+    const id = started.text.match(/job_[0-9a-f]+/)?.[0];
+    const stopped = id ? await claude.call("stop_job", { job_id: id }) : started;
+    claude.say(stopped.text);
+    return;
+  }
+
+  if (/^start a background read$/i.test(text)) {
+    const started = await claude.call("start_job", { tool: "read_document", arguments: { document_id: documentId } });
+    backgroundJob = started.text.match(/job_[0-9a-f]+/)?.[0];
+    claude.say(started.text);
+    return;
+  }
+
+  if (/^pick up the background job$/i.test(text)) {
+    let result = await claude.call("get_job", { job_id: backgroundJob ?? "job_missing" });
+    for (let attempt = 0; attempt < 25 && /still running/.test(result.text); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      result = await claude.call("get_job", { job_id: backgroundJob ?? "job_missing" });
+    }
+    claude.say(result.text);
     return;
   }
 

@@ -533,14 +533,14 @@ export async function deleteWorkspaceFile(documentId: string, userPath: string) 
   });
 }
 
-export async function runWorkspaceCommand(documentId: string, command: string, timeoutMs: number) {
+export async function runWorkspaceCommand(documentId: string, command: string, timeoutMs: number, signal?: AbortSignal) {
   const trimmed = command.trim();
   if (!trimmed) throw new Error("Give a command to run.");
   if (trimmed.length > 20_000) throw new Error("That command is too long.");
   return withLock(documentId, async () => {
     await ensureDocumentRepo(documentId);
     const root = documentRepoPath(documentId);
-    return runInFolder(root, trimmed, timeoutMs);
+    return runInFolder(root, trimmed, timeoutMs, signal);
   });
 }
 

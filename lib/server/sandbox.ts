@@ -1,10 +1,64 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
+import { accessSync, constants } from "node:fs";
 import { access, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-export type SandboxResult = { code: number; stdout: string; stderr: string };
+export type SandboxResult = {
+  code: number;
+  stdout: string;
+  stderr: string;
+  /** Set when the process was killed by a signal. */
+  signal: string | null;
+  /** False when the sandbox exited before the user's command started. */
+  started: boolean;
+  backend: string;
+};
 
 const OUTPUT_CAP = 100_000;
+const STARTED = "inline-started";
+
+/** What the command can see. The working directory is the document folder, mounted at /work. */
+export function sandboxEnvironment() {
+  const PATH = process.platform === "darwin" ? "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin" : "/usr/local/bin:/usr/bin:/bin";
+  let python3 = "not found on this machine";
+  for (const candidate of PATH.split(":").map((dir) => path.join(dir, "python3"))) {
+    try {
+      accessSync(candidate, constants.X_OK);
+      python3 = candidate;
+      break;
+    } catch {
+      // Try the next directory on PATH.
+    }
+  }
+  return { PATH, HOME: "/work", PYTHONUNBUFFERED: "1", python3 };
+}
+
+/** Text Claude should see for a command: the exit reason, both streams, and where it ran. */
+export function formatCommandReport(command: string, result: SandboxResult) {
+  const reason = !result.started
+    ? "the command never started; the sandbox stopped during setup"
+    : result.code === 130
+      ? `cancelled${result.signal ? ` by ${result.signal}` : ""}`
+      : result.code === 124
+        ? "killed because it ran too long or wrote too much"
+        : result.signal
+          ? `killed by ${result.signal}`
+          : result.code === 0
+            ? "finished"
+            : "finished with an error";
+  const env = sandboxEnvironment();
+  const text = [
+    `exit ${result.code} (${reason})`,
+    `command: ${command}`,
+    "working directory: the document folder",
+    `environment: PATH=${env.PATH} HOME=${env.HOME} PYTHONUNBUFFERED=${env.PYTHONUNBUFFERED}; python3 is ${env.python3}`,
+    "stdout:",
+    result.stdout.replace(/\s+$/, "") || "(empty)",
+    "stderr:",
+    result.stderr.replace(/\s+$/, "") || "(empty)",
+  ].join("\n");
+  return { text, isError: result.code !== 0 || !result.started };
+}
 
 /**
  * Run a shell command with the document folder as its whole machine.
@@ -12,17 +66,28 @@ const OUTPUT_CAP = 100_000;
  * only inside the folder. The document file and git history are read-only,
  * there is no network, and the rest of the disk is not mounted.
  */
-export async function runInFolder(folder: string, command: string, timeoutMs: number): Promise<SandboxResult> {
+export async function runInFolder(folder: string, command: string, timeoutMs: number, signal?: AbortSignal): Promise<SandboxResult> {
   const scratch = path.join(folder, ".tmp");
   await mkdir(scratch, { recursive: true });
   const script = path.join(scratch, "cmd.sh");
-  await writeFile(script, `#!/bin/bash\n${command}\n`, { mode: 0o700 });
+  const marker = path.join(scratch, STARTED);
+  // The marker is written only after the sandbox is up and this script starts, so a setup failure is not reported as an empty command.
+  await writeFile(script, `#!/bin/bash\necho started > .tmp/${STARTED} || true\nset +e\n${command}\nexit $?\n`, { mode: 0o700 });
+  await rm(marker, { force: true });
   try {
-    if (process.platform === "linux") return await runLinux(folder, timeoutMs);
-    if (process.platform === "darwin") return await runMac(folder, timeoutMs);
-    throw new Error("Running commands needs a sandbox, and this computer doesn't have one Inline can use.");
+    const backend = process.platform === "linux" ? await chooseLinuxBackend() : process.platform === "darwin" ? "sandbox-exec" : "none";
+    const captured =
+      process.platform === "linux"
+        ? await runLinux(folder, timeoutMs, signal)
+        : process.platform === "darwin"
+          ? await runMac(folder, timeoutMs, signal)
+          : null;
+    if (!captured) throw new Error("Running commands needs a sandbox, and this computer doesn't have one Inline can use.");
+    const started = await exists(marker);
+    return { ...captured, started, backend };
   } finally {
     await rm(script, { force: true });
+    await rm(marker, { force: true });
   }
 }
 
@@ -50,14 +115,15 @@ async function probe(command: string, args: string[]) {
   }
 }
 
-async function runLinux(folder: string, timeoutMs: number): Promise<SandboxResult> {
+async function runLinux(folder: string, timeoutMs: number, signal?: AbortSignal): Promise<Captured> {
   const backend = await chooseLinuxBackend();
-  return backend === "bwrap" ? runBwrap(folder, timeoutMs) : runUnshare(folder, timeoutMs);
+  return backend === "bwrap" ? runBwrap(folder, timeoutMs, signal) : runUnshare(folder, timeoutMs, signal);
 }
 
-async function runUnshare(folder: string, timeoutMs: number): Promise<SandboxResult> {
+async function runUnshare(folder: string, timeoutMs: number, signal?: AbortSignal): Promise<Captured> {
   const setup = `
 set -eu
+trap 'status=$?; echo "sandbox setup failed (exit $status) at line $LINENO: $BASH_COMMAND" >&2; exit $status' ERR
 WS="$1"
 root=$(mktemp -d)
 mount --bind "$root" "$root"
@@ -69,6 +135,7 @@ bind_ro() {
   mount -o remount,bind,ro "$2"
 }
 bind_ro /usr "$root/usr"
+bind_ro /usr/local "$root/usr/local"
 bind_ro /bin "$root/bin"
 bind_ro /lib "$root/lib"
 if [ -d /lib64 ]; then bind_ro /lib64 "$root/lib64"; fi
@@ -107,14 +174,16 @@ if [ -d /oldroot/home ] || [ -d /oldroot/usr ]; then
 fi
 rmdir /oldroot 2>/dev/null || true
 cd /work
+# Setup failures use the ERR trap. The user's command is allowed to exit non-zero without that trap treating it as a setup failure.
+trap - ERR
 set +e
-env -i PATH="/usr/bin:/bin" HOME=/work TMPDIR=/tmp LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 bash /work/.tmp/cmd.sh
+env -i PATH="${sandboxEnvironment().PATH}" HOME=/work TMPDIR=/tmp LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 bash /work/.tmp/cmd.sh
 exit $?
 `;
-  return capture("unshare", ["--user", "--map-root-user", "--mount", "--net", "--fork", "--pid", "--mount-proc", "bash", "-s", "--", folder], setup, timeoutMs);
+  return capture("unshare", ["--user", "--map-root-user", "--mount", "--net", "--fork", "--pid", "--mount-proc", "bash", "-s", "--", folder], setup, timeoutMs, { signal });
 }
 
-async function runBwrap(folder: string, timeoutMs: number): Promise<SandboxResult> {
+async function runBwrap(folder: string, timeoutMs: number, signal?: AbortSignal): Promise<Captured> {
   const scratch = path.join(folder, ".tmp");
   await mkdir(scratch, { recursive: true });
   const passwd = path.join(scratch, "passwd");
@@ -122,7 +191,7 @@ async function runBwrap(folder: string, timeoutMs: number): Promise<SandboxResul
   await writeFile(passwd, "root:x:0:0:root:/work:/bin/sh\n");
   await writeFile(group, "root:x:0:\n");
   const args = ["--die-with-parent", "--unshare-user", "--uid", "0", "--gid", "0", "--unshare-net", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"];
-  for (const dir of ["/usr", "/bin", "/lib", "/lib64"]) {
+  for (const dir of ["/usr", "/usr/local", "/bin", "/lib", "/lib64"]) {
     if (await exists(dir)) args.push("--ro-bind", dir, dir);
   }
   args.push("--tmpfs", "/etc", "--ro-bind", passwd, "/etc/passwd", "--ro-bind", group, "/etc/group", "--bind", folder, "/work");
@@ -136,7 +205,7 @@ async function runBwrap(folder: string, timeoutMs: number): Promise<SandboxResul
     "--clearenv",
     "--setenv",
     "PATH",
-    "/usr/bin:/bin",
+    sandboxEnvironment().PATH,
     "--setenv",
     "HOME",
     "/work",
@@ -152,11 +221,14 @@ async function runBwrap(folder: string, timeoutMs: number): Promise<SandboxResul
     "--setenv",
     "PYTHONDONTWRITEBYTECODE",
     "1",
+    "--setenv",
+    "PYTHONUNBUFFERED",
+    "1",
     "--",
     "bash",
     "/work/.tmp/cmd.sh",
   );
-  return capture("bwrap", args, "", timeoutMs);
+  return capture("bwrap", args, "", timeoutMs, { signal });
 }
 
 async function exists(file: string) {
@@ -168,7 +240,7 @@ async function exists(file: string) {
   }
 }
 
-async function runMac(folder: string, timeoutMs: number): Promise<SandboxResult> {
+async function runMac(folder: string, timeoutMs: number, signal?: AbortSignal): Promise<Captured> {
   const profile = `
 (version 1)
 (deny default)
@@ -184,13 +256,15 @@ async function runMac(folder: string, timeoutMs: number): Promise<SandboxResult>
 `;
   return capture("sandbox-exec", ["-p", profile, "bash", path.join(folder, ".tmp", "cmd.sh")], "", timeoutMs, {
     cwd: folder,
+    signal,
     env: {
       ...process.env,
-      PATH: "/usr/bin:/bin:/opt/homebrew/bin",
+      PATH: sandboxEnvironment().PATH,
       HOME: folder,
       TMPDIR: path.join(folder, ".tmp"),
       LANG: "C.UTF-8",
       PYTHONDONTWRITEBYTECODE: "1",
+      PYTHONUNBUFFERED: "1",
     },
   });
 }
@@ -199,20 +273,43 @@ function plist(value: string) {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
+type Captured = { code: number; stdout: string; stderr: string; signal: string | null };
+
+function killGroup(child: ChildProcess, signal: NodeJS.Signals) {
+  if (child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The child is not a process-group leader.
+    }
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    // Already gone.
+  }
+}
+
 function capture(
   command: string,
   args: string[],
   input: string,
   timeoutMs: number,
-  extra: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
-): Promise<SandboxResult> {
+  extra: { cwd?: string; env?: NodeJS.ProcessEnv; signal?: AbortSignal } = {},
+): Promise<Captured> {
   return new Promise((resolve, reject) => {
-    let child;
+    if (extra.signal?.aborted) {
+      resolve({ code: 130, stdout: "", stderr: "The command was cancelled before it started.\n", signal: "SIGTERM" });
+      return;
+    }
+    let child: ChildProcess;
     try {
       child = spawn(command, args, {
         cwd: extra.cwd,
-        env: extra.env ?? { ...process.env, PATH: "/usr/bin:/bin", LANG: "C.UTF-8" },
+        env: extra.env ?? { ...process.env, PATH: sandboxEnvironment().PATH, LANG: "C.UTF-8", PYTHONUNBUFFERED: "1" },
         stdio: ["pipe", "pipe", "pipe"],
+        detached: process.platform !== "win32",
       });
     } catch (error) {
       reject(error);
@@ -222,6 +319,21 @@ function capture(
     const stderr: Buffer[] = [];
     let outBytes = 0;
     let errBytes = 0;
+    let settled = false;
+    const finish = (result: Captured) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      extra.signal?.removeEventListener("abort", onAbort);
+      resolve(result);
+    };
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      extra.signal?.removeEventListener("abort", onAbort);
+      reject(error);
+    };
     child.stdout?.on("data", (chunk: Buffer) => {
       if (outBytes < 1_000_000) {
         stdout.push(chunk);
@@ -234,22 +346,30 @@ function capture(
         errBytes += chunk.length;
       }
     });
-    const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
+    const onAbort = () => {
+      killGroup(child, "SIGTERM");
+      const kill = setTimeout(() => killGroup(child, "SIGKILL"), 200);
+      kill.unref?.();
+    };
+    extra.signal?.addEventListener("abort", onAbort);
+    const timer = setTimeout(() => killGroup(child, "SIGKILL"), timeoutMs);
     child.on("error", (error) => {
-      clearTimeout(timer);
       const code = (error as NodeJS.ErrnoException).code;
-      if (code === "ENOENT") reject(new Error("Running commands needs a sandbox, and this computer doesn't have one Inline can use."));
-      else reject(error);
+      if (code === "ENOENT") fail(new Error("Running commands needs a sandbox, and this computer doesn't have one Inline can use."));
+      else fail(error);
     });
     child.on("close", (code, signal) => {
-      clearTimeout(timer);
       const out = Buffer.concat(stdout).toString("utf8");
       const err = Buffer.concat(stderr).toString("utf8");
-      if (signal === "SIGKILL") {
-        resolve({ code: 124, stdout: clip(out), stderr: clip(`${err}\nThe command was stopped because it ran too long or wrote too much.`) });
+      if (extra.signal?.aborted) {
+        finish({ code: 130, stdout: clip(out), stderr: clip(`${err}${err && !err.endsWith("\n") ? "\n" : ""}The command was cancelled.`), signal: signal ?? "SIGTERM" });
         return;
       }
-      resolve({ code: code ?? 1, stdout: clip(out), stderr: clip(err) });
+      if (signal === "SIGKILL") {
+        finish({ code: 124, stdout: clip(out), stderr: clip(`${err}\nThe command was stopped because it ran too long or wrote too much.`), signal: "SIGKILL" });
+        return;
+      }
+      finish({ code: code ?? 1, stdout: clip(out), stderr: clip(err), signal });
     });
     // The sandbox often closes stdin without reading it. A write then raises
     // EPIPE with no listener, which fails the test run even when the command

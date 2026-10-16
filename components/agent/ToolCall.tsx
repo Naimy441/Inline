@@ -225,6 +225,14 @@ export function describeTool(part: ToolPart): Described {
       return { icon: <FileText size={14} />, verb: "Deleted", target: str(field("path"), 40) || "a file", live: "Deleting" };
     case "run_command":
       return { icon: <Terminal size={14} />, verb: "Ran", target: str(field("command"), 48) ? `“${str(field("command"), 48)}”` : "a command", live: "Running" };
+    case "start_job":
+      return { icon: <Terminal size={14} />, verb: "Started", target: str(field("tool"), 40) ? `“${str(field("tool"), 40)}” in the background` : "a background job", live: "Starting" };
+    case "get_job":
+      return { icon: <Terminal size={14} />, verb: "Checked", target: str(field("job_id"), 24) || "a job", live: "Checking" };
+    case "stop_job":
+      return { icon: <Terminal size={14} />, verb: "Stopped", target: str(field("job_id"), 24) || "a job", live: "Stopping" };
+    case "start_jobs":
+      return { icon: <Terminal size={14} />, verb: "Ran", target: "jobs together", live: "Running jobs together" };
     case "read_draft":
       return { icon: <FileText size={14} />, verb: "Read", target: "the revision", live: "Reading" };
     case "edit_draft":
