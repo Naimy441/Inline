@@ -111,13 +111,24 @@ test("the usage meter shows plan limits, the chat's cost and the limit Claude pa
   await openWithClaude(page, request, "Alpha beta gamma.");
   await ask(page, 'replace "Alpha" with "First"');
   await expect(lastReply(page)).toContainText("Replaced Alpha with First.");
+  await expect(page.getByRole("button", { name: "Context" })).toHaveCount(0);
   await page.getByRole("button", { name: "Usage" }).click();
   const meter = page.locator(".usage-popover");
   await expect(meter.getByRole("progressbar", { name: "Session" })).toBeVisible();
   await expect(meter.getByRole("progressbar", { name: "Weekly · all models" })).toBeVisible();
   await expect(meter).toContainText("This chat");
-  await meter.getByRole("radio", { name: "75%" }).click();
-  await expect(meter.getByRole("radio", { name: "75%" })).toHaveAttribute("aria-checked", "true");
+  await expect(meter).toContainText("Messages");
+  await expect(meter.getByText("12%", { exact: true })).toBeVisible();
+  const slider = meter.getByRole("slider", { name: "Pause Claude at" });
+  await expect(slider).toHaveAttribute("min", "34");
+  await expect(slider).toHaveValue("100");
+  const saved = page.waitForResponse((response) => response.url().includes("/api/agent/chats/") && response.request().method() === "PATCH" && response.ok());
+  await slider.fill("50");
+  await saved;
+  await expect(slider).toHaveValue("50");
+  // Weekly usage in the scripted plan is already past 50%, so the next message pauses.
+  await ask(page, "hello");
+  await expect(lastReply(page).locator(".msg-error")).toContainText(/weekly usage is at 61% and your limit is 50%/);
 });
 
 test("a linked document can be a writing sample of chosen pages, or the whole document as context", async ({ page, request }) => {

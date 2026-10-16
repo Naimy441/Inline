@@ -11,7 +11,7 @@ import { DocumentSession, geometryFor, type ClientCommand, type DocumentUiState,
 import { useTheme } from "@/lib/client/theme";
 import { useShortcut } from "@/lib/client/platform";
 import { docPlainText, docWordCount, followedDocumentTitle, wordCount } from "@/lib/doc/editing";
-import { type DocComment, type DocumentMeta } from "@/lib/doc/settings";
+import { cleanTitle, type DocComment, type DocumentMeta } from "@/lib/doc/settings";
 import { insertImage, insertText } from "@/lib/editor/commands";
 import { AgentPanel, type AgentPanelHandle } from "@/components/agent/AgentPanel";
 import { Spark } from "@/components/agent/Activity";
@@ -34,12 +34,13 @@ import { addTab, rememberedRoot, takeScroll, useTabs } from "@/lib/client/tabs";
 import { documentMenus, MenuBar, type MenuActions } from "@/components/workspace/MenuBar";
 import { OutlinePanel } from "@/components/workspace/OutlinePanel";
 import { PageCanvas } from "@/components/workspace/PageCanvas";
+import { Ruler } from "@/components/workspace/Ruler";
 import { PageSetupDialog } from "@/components/workspace/PageSetupDialog";
 import { ReviewBar } from "@/components/workspace/ReviewBar";
 import { EDITOR_MODES, modeMenuItems } from "@/components/workspace/modes";
 import { COMPACT_QUERY, isCompact, useMediaQuery, useVisualViewportVars } from "@/lib/client/viewport";
 import { DEFAULT_PREFERENCES, loadPreferences, preferences, setPreference } from "@/lib/client/preferences";
-import { anchorAt, clampZoom, horizontalPan, manualZoomOrigin, pinchBox, pinchTransform, scrollForAnchor, stepPinch, touchDistance, touchMidpoint, zoomFromPinch, zoomFromWheel, type PinchFrame, type ZoomAnchor } from "@/lib/client/zoom";
+import { anchorAt, clampZoom, horizontalPan, pinchBox, pinchTransform, scrollForAnchor, stepPinch, touchDistance, viewCenter, zoomFromPinch, zoomFromWheel, type PinchFrame, type ZoomAnchor } from "@/lib/client/zoom";
 import { PictureBar } from "@/components/workspace/PictureBar";
 import { SelectionBubble } from "@/components/workspace/SelectionBubble";
 import { ShortcutsDialog } from "@/components/workspace/ShortcutsDialog";
@@ -252,7 +253,7 @@ export function Workspace({ documentId }: { documentId: string }) {
   committedZoom.current = effectiveZoom;
   if (!gestureActive.current) zoomNow.current = effectiveZoom;
 
-  const setZoom = (value: Zoom, origin?: { x: number; y: number }, visual?: { left: number; top: number; width: number; height: number }) => {
+  const setZoom = (value: Zoom, visual?: { left: number; top: number; width: number; height: number }) => {
     const canvas = canvasRef.current;
     // A menu zoom during a pinch drops the preview. The pinch passes `visual` and commits itself.
     if (!visual && gestureActive.current && livePinch.current) {
@@ -272,12 +273,8 @@ export function Workspace({ documentId }: { documentId: string }) {
     const from = zoomNow.current;
     if (canvas && (visual || frame instanceof HTMLElement) && Math.abs(numeric - from) > 0.0005) {
       const box = visual ?? (frame as HTMLElement).getBoundingClientRect();
-      let point = origin;
-      if (!point) {
-        const canvasBox = canvas.getBoundingClientRect();
-        const frameTop = frame instanceof HTMLElement ? frame.getBoundingClientRect().top : box.top;
-        point = manualZoomOrigin({ scrollTop: canvas.scrollTop, left: canvasBox.left, top: canvasBox.top, width: canvasBox.width, height: canvasBox.height }, frameTop);
-      }
+      // Toolbar, pinch, and ctrl+scroll share this. The pointer is not the anchor.
+      const point = viewCenter(canvas.getBoundingClientRect());
       zoomAnchor.current = anchorAt(box, point.x, point.y);
       zoomNow.current = numeric;
     } else {
@@ -288,10 +285,9 @@ export function Workspace({ documentId }: { documentId: string }) {
     store(ZOOM_KEY, String(stored));
   };
 
-  // After the scaled frame is in the DOM, scroll so the anchored point stays put.
-  // A menu zoom anchors on the middle of the page; a pinch anchors under the fingers.
-  // The page is centered only when its whole width fits. A wider page keeps its
-  // place, and the gutters grow so that place isn't clamped off the scroll range.
+  // After the scaled frame is in the DOM, keep the middle of the view on the same
+  // point of the page. The page is centered only by layout, when it is narrower
+  // than the view. A wider page does not snap back to center.
   // PageCanvas calls this in its own layout effect, which runs before comments measure.
   const zoomCommit = useRef<(() => void) | null>(null);
   zoomCommit.current = () => {
@@ -342,7 +338,8 @@ export function Workspace({ documentId }: { documentId: string }) {
     if (!canvas) return;
     let pinch: { distance: number; zoom: number } | null = null;
     let gestureZoom = 0;
-    let origin = { x: 0, y: 0 };
+
+    const centerOfView = () => viewCenter(canvas.getBoundingClientRect());
 
     const paint = (frame: PinchFrame & { stack: HTMLElement }) => {
       frame.stack.style.transformOrigin = "0 0";
@@ -389,7 +386,7 @@ export function Workspace({ documentId }: { documentId: string }) {
       // Measure the anchor against the preview, then let React catch the scroll size up
       // before paint, so the page doesn't jump when the live translate is dropped.
       zoomNow.current = committedZoom.current;
-      flushSync(() => setZoomRef.current(value, origin, visual));
+      flushSync(() => setZoomRef.current(value, visual));
     };
 
     const settle = () => {
@@ -397,21 +394,20 @@ export function Workspace({ documentId }: { documentId: string }) {
       pinchSettle.current = window.setTimeout(commit, 80);
     };
 
-    const apply = (next: number, point: { x: number; y: number }) => {
+    const apply = (next: number) => {
       const value = clampZoom(next);
       if (Math.abs(value - zoomNow.current) < 0.0005) return;
       const frame = begin();
       if (!frame) {
-        setZoomRef.current(value, point);
+        setZoomRef.current(value);
         return;
       }
-      const stepped = stepPinch(frame, point, value);
+      const stepped = stepPinch(frame, centerOfView(), value);
       frame.tx = stepped.tx;
       frame.ty = stepped.ty;
       frame.scale = stepped.scale;
       paint(frame);
       zoomNow.current = value;
-      origin = point;
     };
 
     const onWheel = (event: WheelEvent) => {
@@ -419,7 +415,7 @@ export function Workspace({ documentId }: { documentId: string }) {
       if (!event.ctrlKey || event.altKey || gestureZoom || pinch) return;
       if (!event.cancelable) return;
       event.preventDefault();
-      apply(zoomFromWheel(zoomNow.current, event.deltaY, event.deltaMode), { x: event.clientX, y: event.clientY });
+      apply(zoomFromWheel(zoomNow.current, event.deltaY, event.deltaMode));
       settle();
     };
 
@@ -428,18 +424,11 @@ export function Workspace({ documentId }: { documentId: string }) {
       gestureZoom = zoomNow.current;
     };
     const onGestureChange = (event: Event) => {
-      const gesture = event as Event & { scale?: number; clientX?: number; clientY?: number };
+      const gesture = event as Event & { scale?: number };
       event.preventDefault();
       // A finger pinch is handled from the touch points; Safari also emits gesture events for it.
       if (pinch || !gestureZoom || !gesture.scale) return;
-      let x = gesture.clientX;
-      let y = gesture.clientY;
-      if (x === undefined || y === undefined) {
-        const box = canvas.getBoundingClientRect();
-        x = box.left + box.width / 2;
-        y = box.top + box.height / 2;
-      }
-      apply(zoomFromPinch(gestureZoom, 1, gesture.scale), { x, y });
+      apply(zoomFromPinch(gestureZoom, 1, gesture.scale));
       settle();
     };
     const onGestureEnd = () => {
@@ -455,8 +444,7 @@ export function Workspace({ documentId }: { documentId: string }) {
     const onTouchMove = (event: TouchEvent) => {
       if (!pinch || event.touches.length !== 2) return;
       if (event.cancelable) event.preventDefault();
-      const points = Array.from(event.touches);
-      apply(zoomFromPinch(pinch.zoom, pinch.distance, touchDistance(points)), touchMidpoint(points));
+      apply(zoomFromPinch(pinch.zoom, pinch.distance, touchDistance(Array.from(event.touches))));
       settle();
     };
     const onTouchEnd = (event: TouchEvent) => {
@@ -988,7 +976,8 @@ export function Workspace({ documentId }: { documentId: string }) {
             <WithEditorState session={session}>{(state) => <OutlinePanel session={session} state={state} meta={meta} readOnly={ui.mode === "viewing"} onClose={toggleOutline} />}</WithEditorState>
           </>
         )}
-        <div className="canvas-frame" style={{ ["--text-inset-right" as string]: `${textInsetRight}px` }}>
+        <div className={`canvas-frame${prefs.showRuler && !((versionShown && shownPanel === "history") || draftPreview) ? " has-ruler" : ""}`} style={{ ["--text-inset-right" as string]: `${textInsetRight}px` }}>
+        {prefs.showRuler && !((versionShown && shownPanel === "history") || draftPreview) && <Ruler session={session} canvasRef={canvasRef} geometry={geometry} zoom={effectiveZoom} />}
         <main
           ref={canvasRef}
           className={`canvas${(versionShown && shownPanel === "history") || draftPreview ? " is-previewing" : ""}${!shownPanel && (draftComment || ui.comments.some((comment) => !comment.resolved)) && marginFits(canvasRef.current) ? " with-comments" : ""}`}
@@ -1046,7 +1035,7 @@ export function Workspace({ documentId }: { documentId: string }) {
           {versionShown && shownPanel === "history" && <VersionPreview key={versionShown.id} session={session} version={versionShown} onClose={() => setVersionShown(null)} />}
           {draftPreview && ui.draft && !versionShown && <DraftPreview session={session} />}
           <div className="page-stack-slot">
-            <PageCanvas session={session} meta={meta} pages={ui.pages} zoom={effectiveZoom} printing={ui.printing} flow={false} zoomCommit={zoomCommit} showRuler={prefs.showRuler} />
+            <PageCanvas session={session} meta={meta} pages={ui.pages} zoom={effectiveZoom} printing={ui.printing} flow={false} zoomCommit={zoomCommit} />
           </div>
           {!shownPanel && (
             <WithEditorState session={session}>
@@ -1205,9 +1194,14 @@ function WithEditorState({ session, children }: { session: DocumentSession; chil
 
 function TitleInput({ meta, session, onRename }: { meta: DocumentMeta | null; session: DocumentSession; onRename: (title: string) => void }) {
   const editorState = useSyncExternalStore(session.editor.subscribe, session.editor.get, session.editor.get);
-  // Follow the first Title block as it is typed. A title the user typed themselves stays put.
-  const live = meta?.autoTitle && editorState ? followedDocumentTitle(editorState.doc) : null;
-  const shown = live ?? meta?.title ?? "";
+  // The name the user just typed, shown until the server agrees they named the document.
+  const [pinned, setPinned] = useState<string | null>(null);
+  useEffect(() => {
+    if (pinned != null && meta?.autoTitle === false) setPinned(null);
+  }, [meta, pinned]);
+  // Follow the first line as it is typed. A name the user set stays put, including while that save is still on its way.
+  const live = pinned == null && meta?.autoTitle && editorState ? (followedDocumentTitle(editorState.doc) ?? "Untitled document") : null;
+  const shown = live ?? pinned ?? meta?.title ?? "";
   const [draft, setDraft] = useState<string | null>(null);
   const value = draft ?? shown;
   useLayoutEffect(() => {
@@ -1226,7 +1220,11 @@ function TitleInput({ meta, session, onRename }: { meta: DocumentMeta | null; se
       }}
       onChange={(event) => setDraft(event.target.value)}
       onBlur={() => {
-        if (draft != null && draft.trim() && draft.trim() !== shown) onRename(draft.trim());
+        const next = draft?.trim() ? cleanTitle(draft) : "";
+        if (next && next !== shown) {
+          setPinned(next);
+          onRename(next);
+        }
         setDraft(null);
       }}
       onKeyDown={(event) => {

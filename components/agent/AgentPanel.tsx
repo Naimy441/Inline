@@ -12,7 +12,6 @@ import { Composer, type ComposerHandle } from "@/components/agent/Composer";
 import { MessageList, type TurnHunk } from "@/components/agent/MessageView";
 import { Button, IconButton } from "@/components/ui/Button";
 import { ChatHistory } from "@/components/agent/ChatHistory";
-import { ContextPanel } from "@/components/agent/ContextPanel";
 import { UsageMeter } from "@/components/agent/UsageMeter";
 import { Dialog } from "@/components/ui/Dialog";
 import { toast } from "@/components/ui/Toast";
@@ -103,7 +102,10 @@ export const AgentPanel = forwardRef<
   const historyButton = useRef<HTMLButtonElement>(null);
   const composer = useRef<ComposerHandle>(null);
   const scroller = useRef<HTMLDivElement>(null);
+  const footer = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  // The composer floats over the thread, so the scroller keeps a pad of the same height.
+  const [footerSpace, setFooterSpace] = useState(0);
   const prompted = useRef(false);
 
   /** A session the panel created for a new chat; it is already showing the first message. */
@@ -170,7 +172,16 @@ export const AgentPanel = forwardRef<
   useLayoutEffect(() => {
     const element = scroller.current;
     if (element && stick.current) element.scrollTop = element.scrollHeight;
-  }, [chat, ui.error]);
+  }, [chat, ui.error, footerSpace]);
+  useEffect(() => {
+    const node = footer.current;
+    if (!node) return;
+    const measure = () => setFooterSpace((current) => (current === node.offsetHeight ? current : node.offsetHeight));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
 
   const warm = useCallback(() => {
     if (!ready) return;
@@ -326,7 +337,6 @@ export const AgentPanel = forwardRef<
           <span className="panel-title-text">{chat?.title && chat.messages.length ? chat.title : "New chat"}</span>
         </div>
         <div className="panel-actions">
-          <ContextPanel context={chat?.context} />
           {devOptions && chat && chat.messages.length > 0 && (
             <IconButton label="Copy chat history" size="sm" onClick={copyHistory}>
               <Copy size={15} />
@@ -394,9 +404,10 @@ export const AgentPanel = forwardRef<
         ) : (
           <EmptyState home={!documentId} onPick={(prompt) => composer.current?.setText(prompt)} />
         )}
+        <div className="panel-scroll-pad" style={{ height: footerSpace }} aria-hidden />
       </div>
 
-      <div className="panel-footer">
+      <div className="panel-footer" ref={footer}>
         {showTodos && <TodoList todos={todos} running={Boolean(chat?.running)} />}
         {chat && chat.queue.length > 0 && (
           <div className="queue">

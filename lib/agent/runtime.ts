@@ -1311,7 +1311,7 @@ export function usageLimitReason(usage: PlanUsage | null, limit: number, now = D
   if (!over) return null;
   const name = over.id === "five_hour" ? "5-hour session" : "weekly";
   const resets = over.resetsAt ? ` It resets ${formatReset(over.resetsAt, now)}.` : "";
-  return `Paused at your usage limit: your ${name} usage is at ${Math.round(over.utilization)}% and your limit is ${limit}%.${resets} Raise or turn off the limit from the usage meter below the message box to keep going.`;
+  return `Paused at your usage limit: your ${name} usage is at ${Math.round(over.utilization)}% and your limit is ${limit}%.${resets} Raise the limit from the usage meter below the message box to keep going.`;
 }
 
 let workspaceCache: string | null = null;
@@ -1476,7 +1476,11 @@ class AgentRuntime {
   }
 
   setDefaults(patch: Partial<ChatSettings>) {
-    this.defaultSettings = { ...this.defaultSettings, ...patch };
+    // A pause limit belongs to the chat that set it. New chats stay at 100% until one is chosen there.
+    const { usageLimit: _limit, ...rest } = patch;
+    const next = { ...this.defaultSettings, ...rest };
+    delete next.usageLimit;
+    this.defaultSettings = next;
   }
 
   /** Plan usage seen within `maxAgeMs`, or null. */

@@ -1,263 +1,284 @@
 "use client";
 
-import { useLayoutEffect, useRef, useState, useSyncExternalStore, type PointerEvent, type ReactNode } from "react";
-import type { EditorView } from "prosemirror-view";
+import { useLayoutEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import type { EditorState } from "prosemirror-state";
+import type { Node as PMNode } from "prosemirror-model";
 import type { DocumentSession } from "@/lib/client/documentSession";
-import type { TabStop } from "@/lib/doc/schema";
-import { edgesToAttrs, indentEdges, paragraphAtSelection, setParagraphIndents, type IndentEdges } from "@/lib/editor/indents";
+import {
+  dragGeometry,
+  indentGeometry,
+  markerPositions,
+  paragraphsInSelection,
+  roundInches,
+  setParagraphIndents,
+  shiftIndent,
+  snapInches,
+  writeIndentPreview,
+  ZERO_INDENT,
+  type IndentGeometry,
+  type MarkerKind,
+} from "@/lib/editor/ruler";
 
-const PX_PER_IN = 96;
-const PX_PER_PT = 96 / 72;
-
-type DragKind = "first" | "body" | "both" | "end";
-
-type Markers = { first: number; body: number; end: number };
+const MARKERS: Array<{ kind: MarkerKind; label: string; className: string }> = [
+  { kind: "first", label: "First-line indent", className: "is-first" },
+  { kind: "left", label: "Left indent", className: "is-left" },
+  { kind: "margin", label: "Left margin", className: "is-margin" },
+  { kind: "right", label: "Right indent", className: "is-right" },
+];
 
 /**
- * The horizontal ruler above the page (View → Show ruler). Margin bands mark
- * the page margins. The markers are the current paragraph's first-line, left
- * and right indents; dragging one writes that paragraph's existing indent
- * attributes. Tab stops already on the paragraph are drawn, not edited.
+ * A horizontal ruler above the page, in the document's inches. It lines up
+ * with the page and grows with the zoom. The markers belong to the paragraph
+ * the caret is in (or every paragraph in the selection, when one is dragged).
  */
 export function Ruler({
   session,
+  canvasRef,
+  geometry,
   zoom,
-  pageWidth,
-  marginLeft,
-  marginRight,
-  tabStop,
 }: {
   session: DocumentSession;
+  canvasRef: RefObject<HTMLElement | null>;
+  geometry: { pageWidth: number; marginLeft: number; marginRight: number };
   zoom: number;
-  /** Page size and margins in CSS px at 100% zoom. */
-  pageWidth: number;
-  marginLeft: number;
-  marginRight: number;
-  tabStop: number;
 }) {
-  const state = useSyncExternalStore(session.editor.subscribe, session.editor.get, session.editor.get);
-  const block = state ? paragraphAtSelection(state) : null;
-  const rtl = block?.node.attrs.dir === "rtl";
-  const edges = indentEdges(Number(block?.node.attrs.indent) || 0, (block?.node.attrs.textIndent as number | null) ?? null, Number(block?.node.attrs.rightIndent) || 0);
-  const contentInches = Math.max(0.5, (pageWidth - marginLeft - marginRight) / PX_PER_IN);
-  const width = pageWidth * zoom;
-  const [measured, setMeasured] = useState<Markers | null>(null);
-  const [dragging, setDragging] = useState<DragKind | null>(null);
-  const drag = useRef<{ kind: DragKind; startX: number; start: IndentEdges; rtl: boolean } | null>(null);
-  const root = useRef<HTMLDivElement>(null);
+  const state = useSyncExternalStore(session.editor.subscribe, session.editor.get, () => null);
+  const barRef = useRef<HTMLDivElement>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const dragging = useRef(false);
+  const [box, setBox] = useState({ left: 0, width: 0 });
+  const [inset, setInset] = useState<IndentGeometry>(ZERO_INDENT);
+  const [drag, setDrag] = useState<IndentGeometry | null>(null);
+  const [active, setActive] = useState<MarkerKind | null>(null);
 
   useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    const bar = barRef.current;
+    if (!canvas || !bar) return;
+    const measure = () => {
+      const frame = canvas.querySelector(".page-stack-frame");
+      if (!frame) return;
+      const next = frame.getBoundingClientRect();
+      const origin = bar.getBoundingClientRect();
+      const left = next.left - origin.left;
+      const width = next.width;
+      setBox((current) => (Math.abs(current.left - left) < 0.5 && Math.abs(current.width - width) < 0.5 ? current : { left, width }));
+    };
+    measure();
+    canvas.addEventListener("scroll", measure, { passive: true });
+    const observer = new ResizeObserver(measure);
+    observer.observe(canvas);
+    for (const selector of [".page-stack-wrap", ".page-stack-frame"]) {
+      const node = canvas.querySelector(selector);
+      if (node) observer.observe(node);
+    }
+    window.addEventListener("resize", measure);
+    return () => {
+      canvas.removeEventListener("scroll", measure);
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [canvasRef, zoom, geometry.pageWidth, geometry.marginLeft, geometry.marginRight]);
+
+  const head = state ? headBlock(state) : null;
+  const model = head ? indentGeometry(head.node.attrs) : ZERO_INDENT;
+  const rtl = head?.node.attrs.dir === "rtl";
+  const contentWidth = Math.max(0.5, (geometry.pageWidth - geometry.marginLeft - geometry.marginRight) / 96);
+
+  useLayoutEffect(() => {
+    if (dragging.current) return;
     const view = session.view;
-    if (!view || !block) {
-      setMeasured(null);
+    if (!view || !head || rtl) {
+      setInset((current) => (current === ZERO_INDENT ? current : ZERO_INDENT));
       return;
     }
-    const next = measureMarkers(view, block.pos);
-    setMeasured((prev) => (prev && next && near(prev, next) ? prev : next));
-  }, [session, block, state, zoom, pageWidth, marginLeft, marginRight]);
+    const next = measureInset(view.dom, view.nodeDOM(head.pos), model);
+    setInset((current) => (sameGeometry(current, next) ? current : next));
+  }, [session, head, model, rtl, zoom, box.width]);
 
-  const fallback = modelMarkers(edges, pageWidth, marginLeft, marginRight, zoom, rtl);
-  const markers = measured ?? fallback;
-  const editable = Boolean(session.view?.editable && block);
-  const tabs = tabMarks(block?.node.attrs.tabs as TabStop[] | null, tabStop, pageWidth, marginLeft, marginRight, zoom);
+  const shown = drag ?? model;
+  const display = shiftIndent(shown, inset, 1);
+  const positions = markerPositions(display, contentWidth, rtl);
+  const pageInches = geometry.pageWidth / 96;
+  const pxPerInch = box.width > 0 && pageInches > 0 ? box.width / pageInches : 96 * zoom;
 
-  const move = (kind: DragKind, clientX: number) => {
-    const current = drag.current;
+  const onPointerDown = (kind: MarkerKind) => (event: ReactPointerEvent<HTMLButtonElement>) => {
     const view = session.view;
-    if (!current || current.kind !== kind || !view) return;
-    const delta = (clientX - current.startX) / (PX_PER_IN * zoom);
-    const startSign = current.rtl ? -1 : 1;
-    const next: IndentEdges = {
-      body: current.start.body + (kind === "body" || kind === "both" ? startSign * delta : 0),
-      first: current.start.first + (kind === "first" || kind === "both" ? startSign * delta : 0),
-      right: current.start.right + (kind === "end" ? (current.rtl ? 1 : -1) * delta : 0),
-    };
-    const attrs = edgesToAttrs(next.body, next.first, next.right, contentInches);
-    setParagraphIndents(attrs)(view.state, (tr) => session.dispatch(tr));
-  };
-
-  const begin = (kind: DragKind, event: PointerEvent<HTMLButtonElement>) => {
-    if (!editable || !block) return;
+    if (!view?.editable || !state || !head) return;
     event.preventDefault();
     event.stopPropagation();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    drag.current = { kind, startX: event.clientX, start: edges, rtl: Boolean(rtl) };
-    setDragging(kind);
-  };
-
-  const end = () => {
-    drag.current = null;
-    setDragging(null);
+    const handle = event.currentTarget;
+    handle.setPointerCapture(event.pointerId);
+    const startModel = indentGeometry(head.node.attrs);
+    const startRtl = head.node.attrs.dir === "rtl";
+    const startInset = startRtl ? ZERO_INDENT : measureInset(view.dom, view.nodeDOM(head.pos), startModel);
+    const startDisplay = shiftIndent(startModel, startInset, 1);
+    const origin = markerPositions(startDisplay, contentWidth, startRtl)[kind];
+    const previews = paragraphsInSelection(state).flatMap(({ pos, node }) => {
+      const dom = view.nodeDOM(pos);
+      if (!(dom instanceof HTMLElement)) return [];
+      return [{ dom, style: dom.getAttribute("style"), rtl: node.attrs.dir === "rtl" }];
+    });
+    dragging.current = true;
+    setActive(kind);
+    let latest = startModel;
+    let moved = false;
+    const apply = (clientX: number) => {
+      const pointer = pointerInches(clientX, trackRef.current, pageInches, geometry.marginLeft / 96);
+      const snapped = snapInches(pointer);
+      const delta = snapped === snapInches(origin) && Math.abs(pointer - origin) < 0.125 ? 0 : snapped - origin;
+      const nextDisplay = dragGeometry(startDisplay, kind, delta, contentWidth, startRtl);
+      latest = shiftIndent(nextDisplay, startInset, -1);
+      latest = {
+        first: Math.max(0, latest.first),
+        left: Math.max(0, latest.left),
+        right: Math.max(0, latest.right),
+      };
+      if (delta !== 0) moved = true;
+      for (const preview of previews) writeIndentPreview(preview.dom, latest, preview.rtl);
+      setDrag(latest);
+    };
+    const end = (endEvent: PointerEvent) => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", cancel);
+      apply(endEvent.clientX);
+      for (const preview of previews) {
+        if (preview.style == null) preview.dom.removeAttribute("style");
+        else preview.dom.setAttribute("style", preview.style);
+      }
+      dragging.current = false;
+      setActive(null);
+      setDrag(null);
+      if (moved && view.editable) setParagraphIndents(latest)(view.state, (tr) => session.dispatch(tr), view);
+    };
+    const move = (moveEvent: PointerEvent) => apply(moveEvent.clientX);
+    const cancel = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", cancel);
+      for (const preview of previews) {
+        if (preview.style == null) preview.dom.removeAttribute("style");
+        else preview.dom.setAttribute("style", preview.style);
+      }
+      dragging.current = false;
+      setActive(null);
+      setDrag(null);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", cancel);
   };
 
   return (
-    <div className="ruler-row">
-      <div ref={root} className="ruler" style={{ width }} role="group" aria-label="Ruler">
-        <svg className="ruler-scale" width={width} height={24} aria-hidden>
-          <rect className="ruler-margin" x={0} y={0} width={Math.max(0, marginLeft * zoom)} height={24} />
-          <rect className="ruler-margin" x={(pageWidth - marginRight) * zoom} y={0} width={Math.max(0, marginRight * zoom)} height={24} />
-          {ticks(pageWidth, marginLeft, marginRight, zoom).map((tick) => (
-            <g key={tick.x}>
-              {tick.label != null ? (
-                <text className="ruler-label" x={tick.x} y={12} textAnchor="middle">
-                  {tick.label}
-                </text>
-              ) : (
-                <line className="ruler-tick" x1={tick.x} x2={tick.x} y1={0} y2={tick.size} />
-              )}
-            </g>
-          ))}
-          {tabs.map((tab) => (
-            <TabMark key={`${tab.custom ? "c" : "d"}-${tab.x}-${tab.align}`} x={tab.x} align={tab.align} custom={tab.custom} />
-          ))}
-        </svg>
-        <Marker kind="first" label="First line indent" x={markers.first} disabled={!editable} dragging={dragging === "first"} onBegin={begin} onMove={move} onEnd={end}>
-          <path d="M1 1h10L6 8z" />
-        </Marker>
-        <Marker kind="body" label="Hanging indent" x={markers.body} disabled={!editable} dragging={dragging === "body"} onBegin={begin} onMove={move} onEnd={end}>
-          <path d="M6 1L11 8H1z" />
-        </Marker>
-        <Marker kind="both" label="Left indent" x={markers.body} disabled={!editable} dragging={dragging === "both"} onBegin={begin} onMove={move} onEnd={end}>
-          <rect x="1" y="1" width="10" height="4" />
-        </Marker>
-        <Marker kind="end" label="Right indent" x={markers.end} disabled={!editable} dragging={dragging === "end"} onBegin={begin} onMove={move} onEnd={end}>
-          <path d="M6 1L11 8H1z" />
-        </Marker>
-      </div>
+    <div ref={barRef} className="doc-ruler-bar" role="region" aria-label="Ruler, inches" onPointerDown={(event) => event.preventDefault()}>
+      {box.width > 0 && (
+        <div ref={trackRef} className="doc-ruler-track" style={{ transform: `translateX(${box.left}px)`, width: box.width }} data-page-inches={pageInches}>
+          <div className="doc-ruler-shade is-left" style={{ width: (geometry.marginLeft / 96) * pxPerInch }} />
+          <div className="doc-ruler-shade is-right" style={{ width: (geometry.marginRight / 96) * pxPerInch }} />
+          <Ticks width={box.width} pageInches={pageInches} marginLeft={geometry.marginLeft / 96} contentWidth={contentWidth} pxPerInch={pxPerInch} />
+          {head &&
+            MARKERS.map((marker) => (
+              <button
+                key={marker.kind}
+                type="button"
+                role="slider"
+                className={`doc-ruler-marker ${marker.className}${active === marker.kind ? " is-dragging" : ""}`}
+                style={{ left: (geometry.marginLeft / 96 + positions[marker.kind]) * pxPerInch }}
+                aria-label={marker.label}
+                aria-valuemin={0}
+                aria-valuemax={Math.round(contentWidth * 8) / 8}
+                aria-valuenow={roundInches(marker.kind === "right" ? shown.right : marker.kind === "first" ? shown.first : shown.left)}
+                aria-valuetext={`${roundInches(marker.kind === "right" ? shown.right : marker.kind === "first" ? shown.first : shown.left)} inches`}
+                title={marker.label}
+                onMouseDown={(event) => event.preventDefault()}
+                onPointerDown={onPointerDown(marker.kind)}
+              >
+                <MarkerShape kind={marker.kind} />
+              </button>
+            ))}
+        </div>
+      )}
     </div>
   );
 }
 
-function Marker({
-  kind,
-  label,
-  x,
-  disabled,
-  dragging,
-  onBegin,
-  onMove,
-  onEnd,
-  children,
-}: {
-  kind: DragKind;
-  label: string;
-  x: number;
-  disabled: boolean;
-  dragging: boolean;
-  onBegin: (kind: DragKind, event: PointerEvent<HTMLButtonElement>) => void;
-  onMove: (kind: DragKind, clientX: number) => void;
-  onEnd: () => void;
-  children: ReactNode;
-}) {
-  const name = kind === "both" ? "left" : kind === "body" ? "hanging" : kind === "end" ? "right" : "first";
+function Ticks({ width, pageInches, marginLeft, contentWidth, pxPerInch }: { width: number; pageInches: number; marginLeft: number; contentWidth: number; pxPerInch: number }) {
+  const eighth = pxPerInch / 8 >= 5;
+  const quarter = pxPerInch / 4 >= 4;
+  const lines: Array<{ x: number; h: number }> = [];
+  const labels: Array<{ x: number; n: number }> = [];
+  const steps = Math.round(pageInches * 8);
+  for (let i = 0; i <= steps; i += 1) {
+    const inches = i / 8;
+    const fromContent = inches - marginLeft;
+    const major = i % 8 === 0;
+    const half = i % 4 === 0;
+    const q = i % 2 === 0;
+    if (!major && !half && !q && !eighth) continue;
+    if (!major && !half && !quarter) continue;
+    const x = inches * pxPerInch;
+    if (x < 0 || x > width + 0.5) continue;
+    lines.push({ x, h: major ? 12 : half ? 8 : q ? 5 : 3 });
+    if (major && fromContent >= -0.01 && fromContent <= contentWidth + 0.01 && pxPerInch >= 28) labels.push({ x, n: Math.round(fromContent) });
+  }
   return (
-    <button
-      type="button"
-      className={`ruler-marker is-${name}${dragging ? " is-dragging" : ""}`}
-      style={{ left: x }}
-      aria-label={label}
-      title={label}
-      data-indent={name}
-      disabled={disabled}
-      onMouseDown={(event) => event.preventDefault()}
-      onPointerDown={(event) => onBegin(kind, event)}
-      onPointerMove={(event) => {
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) onMove(kind, event.clientX);
-      }}
-      onPointerUp={onEnd}
-      onPointerCancel={onEnd}
-    >
-      <svg width="12" height="9" viewBox="0 0 12 9" aria-hidden>
-        {children}
-      </svg>
-    </button>
+    <svg className="doc-ruler-ticks" width={width} height={28} aria-hidden>
+      {lines.map((line) => (
+        <line key={`${line.x}-${line.h}`} x1={line.x} x2={line.x} y1={0} y2={line.h} />
+      ))}
+      {labels.map((label) => (
+        <text key={label.n} x={label.x + 3} y={11}>
+          {label.n}
+        </text>
+      ))}
+    </svg>
   );
 }
 
-function TabMark({ x, align, custom }: { x: number; align: TabStop["align"]; custom: boolean }) {
-  const bar = align === "right" || align === "decimal" ? -5 : align === "center" ? -2.5 : 0;
-  return (
-    <g className={custom ? "ruler-tab is-custom" : "ruler-tab"} transform={`translate(${x} 16)`}>
-      <line x1={0} x2={0} y1={0} y2={7} />
-      <line x1={bar} x2={bar + 5} y1={0} y2={0} />
-      {align === "decimal" && <circle cx={2} cy={5} r={0.9} />}
-    </g>
-  );
+function MarkerShape({ kind }: { kind: MarkerKind }) {
+  if (kind === "margin") return <svg viewBox="0 0 12 6" aria-hidden><rect width="12" height="6" rx="0.5" /></svg>;
+  if (kind === "first") return <svg viewBox="0 0 12 8" aria-hidden><path d="M0 0h12L6 8z" /></svg>;
+  return <svg viewBox="0 0 12 8" aria-hidden><path d="M0 8h12L6 0z" /></svg>;
 }
 
-function ticks(pageWidth: number, marginLeft: number, marginRight: number, zoom: number) {
-  const eighth = (PX_PER_IN / 8) * zoom;
-  const contentStart = marginLeft * zoom;
-  const contentEnd = (pageWidth - marginRight) * zoom;
-  const out: Array<{ x: number; size: number; label?: string }> = [];
-  if (eighth < 1) return out;
-  for (let i = 0, x = 0; x <= pageWidth * zoom + 0.5; i += 1, x = i * eighth) {
-    const eighths = i % 8;
-    const fromMargin = (x - contentStart) / (PX_PER_IN * zoom);
-    const inContent = x >= contentStart - 0.5 && x <= contentEnd + 0.5;
-    if (eighths === 0) {
-      const label = inContent && fromMargin >= -0.01 ? String(Math.round(fromMargin)) : undefined;
-      out.push({ x, size: label ? 0 : 8, ...(label ? { label } : {}) });
-    }
-    else if (eighths === 4) out.push({ x, size: 7 });
-    else out.push({ x, size: 4 });
+function headBlock(state: EditorState): { node: PMNode; pos: number } | null {
+  const $pos = state.selection.$head;
+  for (let depth = $pos.depth; depth > 0; depth -= 1) {
+    const node = $pos.node(depth);
+    if (node.isTextblock && "indent" in node.attrs) return { node, pos: $pos.before(depth) };
   }
-  return out;
+  return null;
 }
 
-function tabMarks(tabs: TabStop[] | null, tabStop: number, pageWidth: number, marginLeft: number, marginRight: number, zoom: number) {
-  const contentPt = ((pageWidth - marginLeft - marginRight) / PX_PER_IN) * 72;
-  const step = Math.max(1, tabStop);
-  const custom = (tabs ?? []).filter((tab) => tab.pos > 0 && tab.pos < contentPt + step);
-  const out: Array<{ x: number; align: TabStop["align"]; custom: boolean }> = [];
-  for (let pos = step; pos < contentPt - 1; pos += step) {
-    if (custom.some((tab) => Math.abs(tab.pos - pos) < step / 2)) continue;
-    out.push({ x: (marginLeft + pos * PX_PER_PT) * zoom, align: "left", custom: false });
-  }
-  for (const tab of custom) out.push({ x: (marginLeft + tab.pos * PX_PER_PT) * zoom, align: tab.align, custom: true });
-  return out;
+function pointerInches(clientX: number, track: HTMLElement | null, pageInches: number, marginLeft: number) {
+  if (!track) return 0;
+  const rect = track.getBoundingClientRect();
+  if (rect.width <= 0) return 0;
+  return ((clientX - rect.left) / rect.width) * pageInches - marginLeft;
 }
 
-function modelMarkers(edges: IndentEdges, pageWidth: number, marginLeft: number, marginRight: number, zoom: number, rtl: boolean): Markers {
-  const inch = PX_PER_IN * zoom;
-  if (rtl) {
-    const start = (pageWidth - marginRight) * zoom;
-    return { first: start - edges.first * inch, body: start - edges.body * inch, end: marginLeft * zoom + edges.right * inch };
-  }
-  return {
-    first: marginLeft * zoom + edges.first * inch,
-    body: marginLeft * zoom + edges.body * inch,
-    end: (pageWidth - marginRight) * zoom - edges.right * inch,
-  };
-}
-
-/** Marker positions in ruler pixels, from the paragraph as laid out on the page. */
-function measureMarkers(view: EditorView, pos: number): Markers | null {
-  const page = view.dom.closest(".page-stack");
-  if (!(page instanceof HTMLElement) || !page.offsetWidth) return null;
-  const dom = view.nodeDOM(pos);
-  if (!(dom instanceof HTMLElement)) return null;
-  const pageBox = page.getBoundingClientRect();
-  if (!pageBox.width) return null;
-  const scale = pageBox.width / page.offsetWidth;
-  const local = (x: number) => (x - pageBox.left) / scale;
-  const box = dom.getBoundingClientRect();
+/** How much further right the paragraph is drawn than its own indent says (a list, a quote, a table cell). */
+function measureInset(editor: HTMLElement, dom: unknown, model: IndentGeometry): IndentGeometry {
+  const page = editor.closest(".page-content");
+  if (!(dom instanceof HTMLElement) || !(page instanceof HTMLElement)) return ZERO_INDENT;
+  const pageRect = page.getBoundingClientRect();
+  const rect = dom.getBoundingClientRect();
+  const scale = page.offsetWidth > 0 ? pageRect.width / page.offsetWidth : 1;
   const style = getComputedStyle(dom);
-  const rtl = style.direction === "rtl";
   const padLeft = parseFloat(style.paddingLeft) || 0;
   const padRight = parseFloat(style.paddingRight) || 0;
   const borderLeft = parseFloat(style.borderLeftWidth) || 0;
   const borderRight = parseFloat(style.borderRightWidth) || 0;
   const textIndent = parseFloat(style.textIndent) || 0;
-  const toRuler = (localX: number) => localX * scale;
-  if (!rtl) {
-    const body = local(box.left) + borderLeft + padLeft;
-    return { body: toRuler(body), first: toRuler(body + textIndent), end: toRuler(local(box.right) - borderRight - padRight) };
-  }
-  const body = local(box.right) - borderRight - padRight;
-  return { body: toRuler(body), first: toRuler(body - textIndent), end: toRuler(local(box.left) + borderLeft + padLeft) };
+  const inches = (screenPx: number) => screenPx / scale / 96;
+  const body = inches(rect.left + (borderLeft + padLeft) * scale - pageRect.left);
+  const first = inches(rect.left + (borderLeft + padLeft + textIndent) * scale - pageRect.left);
+  const right = inches(pageRect.right - (rect.right - (borderRight + padRight) * scale));
+  const tidy = (value: number) => (Math.abs(value) < 0.02 ? 0 : roundInches(value));
+  return { first: tidy(first - model.first), left: tidy(body - model.left), right: tidy(right - model.right) };
 }
 
-function near(a: Markers, b: Markers) {
-  return Math.abs(a.first - b.first) < 0.5 && Math.abs(a.body - b.body) < 0.5 && Math.abs(a.end - b.end) < 0.5;
+function sameGeometry(a: IndentGeometry, b: IndentGeometry) {
+  return a.first === b.first && a.left === b.left && a.right === b.right;
 }

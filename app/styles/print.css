@@ -30,7 +30,6 @@
 
   .titlebar,
   .toolbar,
-  .ruler-row,
   .status-corner,
   .outline,
   .panel-shell,
@@ -42,7 +41,8 @@
   .canvas-loading,
   .dialog-backdrop,
   .popover,
-  .menu {
+  .menu,
+  .doc-ruler-bar {
     display: none !important;
   }
 

@@ -3,7 +3,7 @@ type Token = ReturnType<InstanceType<typeof MarkdownIt>["parse"]>[number];
 import markPlugin from "markdown-it-mark";
 import { Fragment, type Mark, type Node as PMNode } from "prosemirror-model";
 import { ALIGNMENTS, MARKDOWN_MARKS, MATH_LANGUAGE, MAX_INDENT, cssSizeToPt, footnoteLabel, safeHref, schema, type Align, type BorderLine, type Borders, type TabStop } from "@/lib/doc/schema";
-import { cropToken, parseCropToken, pictureCrop, pictureRotate, pictureWrap } from "@/lib/doc/picture";
+import { cropToken, parseCropToken, pictureCrop, pictureRotate, pictureWidth, pictureWrap } from "@/lib/doc/picture";
 import { tocMarkdown, tocMarkdownMatch, withSyncedTocs } from "@/lib/doc/toc";
 
 /**
@@ -14,7 +14,6 @@ import { tocMarkdown, tocMarkdownMatch, withSyncedTocs } from "@/lib/doc/toc";
  *
  *   # Annual report {.title}        title / subtitle styles, alignment, indent,
  *   Text {first-line=0.5}            first-line (or hanging=0.5) indent in inches
- *   Text {right=0.5}                 right indent in inches
  *   ==highlight==  <u>underline</u>  <sup>sup</sup>  <sub>sub</sub>
  *   <cite>(Author, Year)</cite>      an inline citation (the text is the citation)
  *   [^1]  and  [^1]: The note.       a footnote marker and its note
@@ -141,20 +140,25 @@ function blockAttrTokens(node: PMNode, context: BlockContext): string[] {
   const align = node.attrs.align as Align | undefined;
   if (!context.inTable && align && align !== "left") tokens.push(`align=${align}`);
   const indent = Number(node.attrs.indent) || 0;
-  if (indent > 0) tokens.push(`indent=${indent}`);
+  if (indent > 0) tokens.push(`indent=${formatInches(indent)}`);
   if (node.attrs.bibliography) tokens.push(".bibliography");
   const textIndent = Number(node.attrs.textIndent) || 0;
-  if (textIndent > 0) tokens.push(`first-line=${textIndent}`);
+  if (textIndent > 0) tokens.push(`first-line=${formatInches(textIndent)}`);
   // A bibliography entry's usual half-inch hang is implied by {.bibliography}.
-  if (textIndent < 0 && !(node.attrs.bibliography && textIndent === -0.5)) tokens.push(`hanging=${-textIndent}`);
-  const rightIndent = Number(node.attrs.rightIndent) || 0;
-  if (rightIndent > 0) tokens.push(`right=${rightIndent}`);
+  if (textIndent < 0 && !(node.attrs.bibliography && textIndent === -0.5)) tokens.push(`hanging=${formatInches(-textIndent)}`);
+  const right = Number(node.attrs.rightIndent) || 0;
+  if (right > 0) tokens.push(`right=${formatInches(right)}`);
   if (node.attrs.dir === "rtl") tokens.push("dir=rtl");
   return tokens;
 }
 
 function attrSuffix(tokens: string[]) {
   return tokens.length ? ` {${tokens.join(" ")}}` : "";
+}
+
+/** An inch measurement without trailing zeros, so 2 and 0.125 both round-trip. */
+function formatInches(value: number) {
+  return String(Math.round(value * 1000) / 1000);
 }
 
 function pictureTokens(node: PMNode) {
@@ -171,7 +175,11 @@ function pictureTokens(node: PMNode) {
 function serializeImage(node: PMNode) {
   const alt = escapeLinkText(node.attrs.alt || "");
   const title = node.attrs.title ? ` "${String(node.attrs.title).replace(/"/g, '\\"')}"` : "";
-  const tokens = [...(node.attrs.width ? [`width=${node.attrs.width}`] : []), ...(node.attrs.align && node.attrs.align !== "center" ? [`align=${node.attrs.align}`] : []), ...pictureTokens(node)];
+  const width = pictureWidth(node.attrs.width);
+  // Center is the default, but a width written with an alignment keeps both.
+  // Dropping `align=center` next to a width made a later edit look like it never happened.
+  const align = node.attrs.align && (node.attrs.align !== "center" || width) ? `align=${node.attrs.align}` : "";
+  const tokens = [...(width ? [`width=${width}`] : []), align, ...pictureTokens(node)].filter(Boolean);
   return `![${alt}](${formatUrl(node.attrs.src || "")}${title})${tokens.length ? `{${tokens.join(" ")}}` : ""}`;
 }
 
@@ -860,7 +868,7 @@ class BlockBuilder {
         src: image.attrGet("src") ?? "",
         alt: image.children?.map((child) => child.content).join("") || image.content || "",
         title: image.attrGet("title") ?? "",
-        width: spec.values.width ?? null,
+        width: pictureWidth(spec.values.width),
         align: align && ALIGNMENTS.includes(align) ? align : "center",
         wrap: pictureWrap(spec.values.wrap),
         crop: parseCropToken(spec.values.crop),
@@ -887,7 +895,9 @@ class BlockBuilder {
       const align = spec.values.align as Align | undefined;
       if (align && ALIGNMENTS.includes(align)) nodeAttrs.align = align;
       const indent = Number(spec.values.indent);
-      if (Number.isFinite(indent) && indent > 0) nodeAttrs.indent = Math.min(MAX_INDENT, Math.round(indent));
+      if (Number.isFinite(indent) && indent > 0) nodeAttrs.indent = Math.min(MAX_INDENT, Math.round(indent * 1000) / 1000);
+      const right = Number(spec.values.right);
+      if (Number.isFinite(right) && right > 0) nodeAttrs.rightIndent = Math.min(12, Math.round(right * 1000) / 1000);
       const firstLine = Number(spec.values["first-line"]);
       const hanging = Number(spec.values.hanging);
       if (Number.isFinite(firstLine) && firstLine > 0) nodeAttrs.textIndent = Math.min(3, firstLine);
@@ -1067,7 +1077,6 @@ function hexColor(value: string | undefined) {
  *   before=12 after=6  space above and below, in points
  *   line=1.2           line height, a multiple of the size
  *   left=36            left indent in points
- *   right=0.5          right indent in inches
  *   .box               a box around it (neighbours with the same box share it), or
  *   border=bottom      some sides: border="top bottom", with border-width=0.5 (pt),
  *                      border-color=#000, border-space=3 (pt from the text) and
@@ -1087,8 +1096,6 @@ export function layoutAttrs(spec: { classes: string[]; values: Record<string, st
   if (line !== null) attrs.lineHeight = String(Math.round(line * 1000) / 1000);
   const left = numberIn(values.left, 0, 576);
   if (left !== null) attrs.indent = Math.min(MAX_INDENT, Math.round((left / 36) * 1000) / 1000);
-  const right = numberIn(values.right, 0, 8);
-  if (right !== null) attrs.rightIndent = right > 0 ? Math.round(right * 100) / 100 : 0;
   const all = spec.classes.includes("box") || values.border === "box" || values.border === "all";
   const sides = all ? ["top", "bottom", "left", "right"] : (values.border ?? "").split(/[\s,]+/).filter((side) => ["top", "bottom", "left", "right"].includes(side));
   if (sides.length) {

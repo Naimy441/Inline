@@ -5,6 +5,7 @@ import { Transform } from "prosemirror-transform";
 import {
   docPlainText,
   docWordCount,
+  followedDocumentTitle,
   wordCount,
   applyBlockStyle,
   applyFormat,
@@ -41,6 +42,24 @@ function runs(node: PMNode) {
   });
   return out;
 }
+
+describe("followed document title", () => {
+  it("uses the first line of text, whatever its style", () => {
+    assert.equal(followedDocumentTitle(markdownToDoc("Meeting notes")), "Meeting notes");
+    assert.equal(followedDocumentTitle(markdownToDoc("# Section")), "Section");
+    assert.equal(followedDocumentTitle(markdownToDoc("# Big {.title}")), "Big");
+  });
+
+  it("ignores a title below the first line and a blank title above the text", () => {
+    assert.equal(followedDocumentTitle(markdownToDoc("Notes\n\n# Big {.title}")), "Notes");
+    const blankTitle = schema.node("doc", null, [schema.node("title"), schema.node("paragraph", null, [schema.text("Still here")])]);
+    assert.equal(followedDocumentTitle(blankTitle), "Still here");
+  });
+
+  it("has no name when the document is empty", () => {
+    assert.equal(followedDocumentTitle(schema.node("doc", null, [schema.node("paragraph")])), null);
+  });
+});
 
 describe("markdown round trip", () => {
   const cases = [
@@ -203,6 +222,27 @@ describe("whole-document operations", () => {
     assert.equal(tr.doc.child(0).attrs.id, source.child(0).attrs.id);
     assert.equal(tr.doc.child(2).attrs.id, source.child(2).attrs.id);
     assert.equal(tr.doc.childCount, 4);
+  });
+
+  it("accepts a displayed equation from write_document and insert_content", () => {
+    const empty = schema.node("doc", null, [schema.node("paragraph")]);
+    for (const markdown of ["$$y = x^2 - 2x - 3$$", "$$\ny = x^2 - 2x - 3\n$$"]) {
+      const written = writeDocument(empty, markdown);
+      const fixes = ensureBlockIds(written.doc);
+      fixes.check();
+      assert.equal(fixes.child(0).type.name, "code_block");
+      assert.equal(fixes.child(0).attrs.language, "math");
+      assert.equal(fixes.child(0).textContent, "y = x^2 - 2x - 3");
+      assert.equal(fixes.child(0).firstChild?.marks.length ?? 0, 0);
+      const inserted = insertMarkdown(empty, markdown, { at: "end" });
+      ensureBlockIds(inserted.doc).check();
+      assert.equal(inserted.doc.child(0).attrs.language, "math");
+    }
+    const prose = insertMarkdown(empty, "See $y = x^2$.", { at: "end" });
+    const equation = runs(prose.doc).find(([text]) => text === "y = x^2");
+    assert.ok(equation);
+    assert.ok(equation[1].split(",").includes("math"));
+    assert.ok(equation[1].split(",").includes("agent"));
   });
 
   it("inserts at the end, after a line, and into an empty document", () => {

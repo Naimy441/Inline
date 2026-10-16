@@ -134,12 +134,11 @@ export type ChatSettings = {
   mode: AgentMode;
   /** Most tool-use rounds Claude may take for one message (default DEFAULT_MAX_TURNS). */
   maxTurns?: number | null;
-  /** Stop Claude when the 5-hour or weekly plan usage reaches this percent; null for no limit. */
+  /** Stop Claude when the 5-hour or weekly plan usage reaches this percent. Unset shows as 100% until the user chooses one. */
   usageLimit?: number | null;
 };
 
 export const DEFAULT_MAX_TURNS = 100;
-export const USAGE_LIMIT_OPTIONS = [null, 50, 75, 90] as const;
 
 /** One plan usage window (the 5-hour session, the week, a model's week). */
 export type UsageWindow = { id: string; label: string; utilization: number; resetsAt: number | null };

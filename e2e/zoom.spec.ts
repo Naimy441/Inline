@@ -20,6 +20,24 @@ async function chooseZoom(page: Page, label: string) {
   await expect(page.locator(".tb-zoom")).toContainText(label);
 }
 
+/** Ctrl+wheel on the canvas. The point is the left side of the view, which zoom must not chase. */
+async function ctrlWheel(page: Page, deltaY: number) {
+  await page.locator(".canvas").evaluate((canvas, deltaY) => {
+    const box = canvas.getBoundingClientRect();
+    canvas.dispatchEvent(
+      new WheelEvent("wheel", {
+        deltaY,
+        deltaMode: 0,
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+        clientX: box.left + Math.min(48, box.width / 4),
+        clientY: box.top + box.height / 2,
+      }),
+    );
+  }, deltaY);
+}
+
 test("manual zoom stays centered and the zoomed page scrolls on both axes", async ({ page, request }) => {
   await openDocument(page, await createDocument(request, "Zoom memo", MEMO));
   const toggle = page.locator(".claude-toggle");
@@ -110,13 +128,14 @@ test("manual zoom stays centered and the zoomed page scrolls on both axes", asyn
   expect(reach.endBottom).toBeLessThan(160);
 });
 
-test("trackpad pinch and a two-finger touch zoom the page under the pointer", async ({ page, request }) => {
+test("trackpad pinch and a two-finger touch zoom around the middle of the view", async ({ page, request }) => {
   await openDocument(page, await createDocument(request, "Pinch memo", MEMO));
   await chooseZoom(page, "100%");
   const sheet = page.locator(".sheet").first();
   const spot = await sheet.boundingBox();
   expect(spot).toBeTruthy();
-  const point = { x: spot!.x + spot!.width * 0.35, y: spot!.y + 160 };
+  // Off to the side on purpose: zoom must not chase this point.
+  const point = { x: spot!.x + spot!.width * 0.2, y: spot!.y + 160 };
   const before = await sheet.evaluate((element) => {
     const box = element.getBoundingClientRect();
     return { left: box.left, top: box.top, width: box.width };
@@ -128,23 +147,26 @@ test("trackpad pinch and a two-finger touch zoom the page under the pointer", as
   await page.keyboard.up("Control");
   await expect(page.locator(".tb-zoom")).toContainText("200%");
 
-  const afterWheel = await page.evaluate(({ x, y }) => {
+  const afterWheel = await page.evaluate(({ x }) => {
     const sheet = document.querySelector<HTMLElement>(".sheet")!.getBoundingClientRect();
     const frame = document.querySelector<HTMLElement>(".page-stack-frame")!.getBoundingClientRect();
     const canvas = document.querySelector<HTMLElement>(".canvas")!;
-    const fx = (x - sheet.left) / sheet.width;
+    const view = canvas.getBoundingClientRect();
     return {
       width: sheet.width,
       aligned: Math.abs(sheet.left - frame.left) < 2 && Math.abs(sheet.width - frame.width) < 2,
-      fx,
+      fx: (x - sheet.left) / sheet.width,
+      centerGap: Math.abs(sheet.left + sheet.width / 2 - (view.left + view.width / 2)),
       overflowX: canvas.scrollWidth - canvas.clientWidth,
     };
   }, point);
   expect(afterWheel.width).toBeGreaterThan(before.width + 20);
   expect(afterWheel.aligned).toBe(true);
   expect(afterWheel.overflowX).toBeGreaterThan(0);
+  // The page started centered, so the middle of the view is the middle of the page.
+  expect(afterWheel.centerGap).toBeLessThan(24);
   const beforeFx = (point.x - before.left) / before.width;
-  expect(Math.abs(afterWheel.fx - beforeFx)).toBeLessThan(0.04);
+  expect(Math.abs(afterWheel.fx - beforeFx)).toBeGreaterThan(0.04);
 
   await chooseZoom(page, "100%");
   const touch = await page.evaluate(() => {
@@ -178,58 +200,89 @@ test("trackpad pinch and a two-finger touch zoom the page under the pointer", as
   }
 });
 
-test("an off-center pinch stays put, still scrolls to both edges, and centers once the page fits", async ({ page, request }) => {
+test("zooming again from the left edge does not jump back to center", async ({ page, request }) => {
   await openDocument(page, await createDocument(request, "Pan memo", MEMO));
-  const toggle = page.locator(".claude-toggle");
-  if (((await toggle.getAttribute("class")) ?? "").includes("is-active")) await toggle.click();
-  await chooseZoom(page, "100%");
+  await chooseZoom(page, "150%");
 
-  const canvasWidth = await page.locator(".canvas").evaluate((canvas) => canvas.clientWidth);
-  expect(canvasWidth).toBeGreaterThan(1200);
+  const canvas = page.locator(".canvas");
+  // Stay under 200% so the next zoom still has room to grow. Small steps if 150% still fits.
+  for (let step = 0; step < 8; step += 1) {
+    const state = await canvas.evaluate((node) => ({
+      overflow: node.scrollWidth - node.clientWidth,
+      label: document.querySelector(".tb-zoom")?.textContent ?? "",
+    }));
+    if (state.overflow > 80 && !state.label.includes("200%")) break;
+    await ctrlWheel(page, -15);
+    await page.waitForTimeout(120);
+  }
+  if ((await page.locator(".tb-zoom").innerText()).includes("200%")) {
+    await ctrlWheel(page, 40);
+    await page.waitForTimeout(200);
+  }
+  await expect.poll(() => canvas.evaluate((node) => node.scrollWidth - node.clientWidth)).toBeGreaterThan(80);
+  await expect(page.locator(".tb-zoom")).not.toContainText("200%");
 
-  const spot = await page.locator(".sheet").first().boundingBox();
-  expect(spot).toBeTruthy();
-  const point = { x: spot!.x + spot!.width * 0.12, y: spot!.y + 180 };
-  const beforeFx = (point.x - spot!.x) / spot!.width;
-
-  await page.mouse.move(point.x, point.y);
-  await page.keyboard.down("Control");
-  await page.mouse.wheel(0, -240);
-  await page.keyboard.up("Control");
-  await expect(page.locator(".tb-zoom")).toContainText("200%");
-
-  const zoomed = await page.evaluate(({ x }) => {
+  await canvas.evaluate((node) => {
+    node.scrollLeft = 0;
+  });
+  const atEdge = await page.evaluate(() => {
     const canvas = document.querySelector<HTMLElement>(".canvas")!;
     const sheet = document.querySelector<HTMLElement>(".sheet")!.getBoundingClientRect();
     const view = canvas.getBoundingClientRect();
-    const centerGap = Math.abs(sheet.left + sheet.width / 2 - (view.left + view.width / 2));
+    return {
+      centerGap: Math.abs(sheet.left + sheet.width / 2 - (view.left + view.width / 2)),
+      sheetLeft: sheet.left - view.left,
+      overflow: canvas.scrollWidth - canvas.clientWidth,
+    };
+  });
+  expect(atEdge.overflow).toBeGreaterThan(80);
+  expect(atEdge.sheetLeft).toBeGreaterThan(-1);
+  expect(atEdge.sheetLeft).toBeLessThan(80);
+  expect(atEdge.centerGap).toBeGreaterThan(80);
+
+  // Ctrl+scroll, with the pointer on the left. Zoom must ignore it and must not recenter.
+  await ctrlWheel(page, -120);
+  await expect(page.locator(".tb-zoom")).toContainText("200%");
+
+  const again = await page.evaluate(() => {
+    const canvas = document.querySelector<HTMLElement>(".canvas")!;
+    const sheet = document.querySelector<HTMLElement>(".sheet")!.getBoundingClientRect();
+    const view = canvas.getBoundingClientRect();
     canvas.scrollLeft = 0;
     const start = document.querySelector<HTMLElement>(".sheet")!.getBoundingClientRect().left - canvas.getBoundingClientRect().left;
     canvas.scrollLeft = canvas.scrollWidth;
     const endView = canvas.getBoundingClientRect();
     const endSheet = document.querySelector<HTMLElement>(".sheet")!.getBoundingClientRect();
     return {
-      fx: (x - sheet.left) / sheet.width,
-      centerGap,
-      overflow: canvas.scrollWidth - canvas.clientWidth,
+      centerGap: Math.abs(sheet.left + sheet.width / 2 - (view.left + view.width / 2)),
+      sheetLeft: sheet.left - view.left,
       start,
       endRight: endView.right - endSheet.right,
-      max: canvas.scrollLeft,
     };
-  }, point);
-  expect(Math.abs(zoomed.fx - beforeFx)).toBeLessThan(0.04);
-  expect(zoomed.centerGap).toBeGreaterThan(80);
-  expect(zoomed.overflow).toBeGreaterThan(40);
-  expect(zoomed.start).toBeGreaterThan(-1);
-  expect(zoomed.start).toBeLessThan(zoomed.max);
-  expect(zoomed.endRight).toBeGreaterThan(-1);
-  expect(zoomed.endRight).toBeLessThan(80);
+  });
+  expect(again.centerGap).toBeGreaterThan(80);
+  expect(again.sheetLeft).toBeLessThan(atEdge.sheetLeft + 80);
+  expect(again.start).toBeGreaterThan(-1);
+  expect(again.start).toBeLessThan(120);
+  expect(again.endRight).toBeGreaterThan(-1);
+  expect(again.endRight).toBeLessThan(80);
 
-  await page.mouse.move(point.x, point.y);
-  await page.keyboard.down("Control");
-  await page.mouse.wheel(0, 400);
-  await page.keyboard.up("Control");
-  await expect(page.locator(".tb-zoom")).toContainText("50%");
+  // The toolbar uses the same anchor. A wider page stays where it was; a page that fits centers.
+  await chooseZoom(page, "150%");
+  const toolbar = await page.evaluate(() => {
+    const canvas = document.querySelector<HTMLElement>(".canvas")!;
+    const sheet = document.querySelector<HTMLElement>(".sheet")!.getBoundingClientRect();
+    const view = canvas.getBoundingClientRect();
+    return {
+      overflow: canvas.scrollWidth - canvas.clientWidth,
+      centerGap: Math.abs(sheet.left + sheet.width / 2 - (view.left + view.width / 2)),
+    };
+  });
+  if (toolbar.overflow > 80) expect(toolbar.centerGap).toBeGreaterThan(80);
+  else expect(toolbar.centerGap).toBeLessThan(24);
+
+  await ctrlWheel(page, 400);
+  await expect(page.locator(".tb-zoom")).toHaveText(/^50%/);
 
   const fitted = await page.evaluate(() => {
     const canvas = document.querySelector<HTMLElement>(".canvas")!;

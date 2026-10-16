@@ -1,8 +1,8 @@
 import { GapCursor } from "prosemirror-gapcursor";
 import type { Node as PMNode } from "prosemirror-model";
-import { NodeSelection, Plugin, Selection, type EditorState } from "prosemirror-state";
+import { NodeSelection, Plugin, Selection, TextSelection, type EditorState } from "prosemirror-state";
 import type { EditorView, NodeView } from "prosemirror-view";
-import { croppedFrame, cropToken, cssPx, pictureCrop, pictureRotate, pictureWrap } from "@/lib/doc/picture";
+import { croppedFrame, cropToken, cssPx, pictureCrop, pictureRotate, pictureWidth, pictureWrap } from "@/lib/doc/picture";
 
 const MIN_WIDTH = 48;
 
@@ -89,12 +89,17 @@ export class ImageView implements NodeView {
     this.img.alt = attrs.alt;
     if (attrs.title) this.img.title = attrs.title;
     else this.img.removeAttribute("title");
-    // A percentage width needs a definite float width; a pixel width shrink-wraps to the picture.
-    this.dom.style.width = wrap === "square" && typeof attrs.width === "string" && attrs.width.endsWith("%") ? attrs.width : "";
+    const width = pictureWidth(attrs.width);
+    const percent = Boolean(width?.endsWith("%"));
+    // The figure stays inside the text column. A percent is that share of the column;
+    // a pixel width larger than the column shrinks to it (max-width on the frame and image).
+    this.dom.style.maxWidth = "100%";
+    this.frame.style.maxWidth = "100%";
+    this.dom.style.width = wrap === "square" && percent && width ? width : "";
     const natural = this.img.naturalWidth > 0 && this.img.naturalHeight > 0;
     if (crop && natural) {
       const container = this.view.dom.getBoundingClientRect().width || this.img.naturalWidth;
-      const box = croppedFrame(cssPx(attrs.width, container, this.img.naturalWidth), this.img.naturalWidth, this.img.naturalHeight, crop);
+      const box = croppedFrame(cssPx(width, container, this.img.naturalWidth), this.img.naturalWidth, this.img.naturalHeight, crop);
       this.frame.style.width = `${box.frameWidth}px`;
       this.frame.style.height = `${box.frameHeight}px`;
       this.turn.style.display = "block";
@@ -113,13 +118,13 @@ export class ImageView implements NodeView {
       this.img.style.transform = "";
       return;
     }
-    this.frame.style.width = "";
+    this.frame.style.width = percent && width ? (wrap === "square" ? "100%" : width) : "";
     this.frame.style.height = "";
     this.turn.style.cssText = "";
     this.cropBox.style.cssText = "";
-    this.img.style.width = attrs.width ?? "";
-    this.img.style.height = "";
-    this.img.style.maxWidth = "";
+    this.img.style.width = percent ? "100%" : (width ?? "");
+    this.img.style.height = "auto";
+    this.img.style.maxWidth = "100%";
     this.img.style.marginLeft = "";
     this.img.style.marginTop = "";
     this.img.style.transform = rotate != null ? `rotate(${rotate}deg)` : "";
@@ -251,6 +256,47 @@ function moveCursorOffPhoto(view: EditorView, imagePos: number) {
   return true;
 }
 
+function preferredSide(view: EditorView, imagePos: number, event: MouseEvent, fallback: "before" | "after"): "before" | "after" {
+  const dom = view.nodeDOM(imagePos);
+  const rect = dom instanceof HTMLElement ? dom.getBoundingClientRect() : null;
+  if (!rect || rect.height < 1 || typeof event.clientY !== "number") return fallback;
+  if (event.clientY > rect.bottom - 1) return "after";
+  if (event.clientY < rect.top + 1) return "before";
+  return event.clientY >= rect.top + rect.height / 2 ? "after" : "before";
+}
+
+/**
+ * A click in the gap beside a picture. The line under a picture is a paragraph
+ * when one is there; otherwise it becomes one, so the caret is a text caret
+ * and typing works. A gap cursor is a horizontal bar and cannot hold text.
+ */
+function placeCaretByPhoto(view: EditorView, boundary: number, side: "before" | "after"): boolean {
+  if (!view.editable || view.isDestroyed) return false;
+  const $pos = view.state.doc.resolve(boundary);
+  const photo = side === "after" ? $pos.nodeBefore : $pos.nodeAfter;
+  if (!photo || !PHOTO_TYPES.has(photo.type.name)) return false;
+  const toward = side === "after" ? $pos.nodeAfter : $pos.nodeBefore;
+  if (toward?.isTextblock) {
+    const caret = side === "after" ? boundary + 1 : boundary - 1;
+    const text = TextSelection.create(view.state.doc, caret);
+    if (text.eq(view.state.selection)) return true;
+    view.dispatch(view.state.tr.setSelection(text).scrollIntoView().setMeta("pointer", true));
+    return true;
+  }
+  if (toward) {
+    const found = Selection.findFrom($pos, side === "after" ? 1 : -1, true);
+    if (found instanceof TextSelection) {
+      if (!found.eq(view.state.selection)) view.dispatch(view.state.tr.setSelection(found).scrollIntoView().setMeta("pointer", true));
+      return true;
+    }
+  }
+  const paragraph = view.state.schema.nodes.paragraph!.create();
+  const tr = view.state.tr.insert(boundary, paragraph);
+  tr.setSelection(TextSelection.create(tr.doc, boundary + 1)).scrollIntoView().setMeta("pointer", true);
+  view.dispatch(tr);
+  return true;
+}
+
 /** A click outside the editor does not update ProseMirror's click tracker, so the next click on the photo would count as a double-click and not select it. */
 function forgetRecentClick(view: EditorView) {
   const input = (view as unknown as { input?: { lastClick?: { time: number } } }).input;
@@ -288,11 +334,47 @@ export function imageSelectionPlugin() {
           return true;
         },
       },
+      createSelectionBetween(view, $anchor, $head) {
+        if ($anchor.pos !== $head.pos || $anchor.parent.isTextblock) return null;
+        const before = $anchor.nodeBefore;
+        const after = $anchor.nodeAfter;
+        if (after && PHOTO_TYPES.has(after.type.name) && before?.isTextblock) return TextSelection.create(view.state.doc, $anchor.pos - 1);
+        if (before && PHOTO_TYPES.has(before.type.name) && after?.isTextblock) return TextSelection.create(view.state.doc, $anchor.pos + 1);
+        return null;
+      },
+      handleClick(view, pos, event) {
+        if (event.button !== 0 || event.shiftKey || eventOnPhoto(event.target)) return false;
+        const $pos = view.state.doc.resolve(pos);
+        if ($pos.parent.isTextblock) return false;
+        const before = $pos.nodeBefore;
+        const after = $pos.nodeAfter;
+        const photoBefore = Boolean(before && PHOTO_TYPES.has(before.type.name));
+        const photoAfter = Boolean(after && PHOTO_TYPES.has(after.type.name));
+        if (!photoBefore && !photoAfter) return false;
+        const imagePos = photoBefore ? pos - before!.nodeSize : pos;
+        const side = preferredSide(view, imagePos, event, photoBefore ? "after" : "before");
+        const boundary = side === "after" ? imagePos + (view.state.doc.nodeAt(imagePos)?.nodeSize ?? 1) : imagePos;
+        return placeCaretByPhoto(view, boundary, side);
+      },
+      handleTextInput(view, from, to, text) {
+        if (!(view.state.selection instanceof GapCursor) || from !== to) return false;
+        const $pos = view.state.doc.resolve(from);
+        const beside = ($pos.nodeBefore && PHOTO_TYPES.has($pos.nodeBefore.type.name)) || ($pos.nodeAfter && PHOTO_TYPES.has($pos.nodeAfter.type.name));
+        if (!beside) return false;
+        const paragraph = view.state.schema.nodes.paragraph!.create();
+        const tr = view.state.tr.insert(from, paragraph);
+        tr.insertText(text, from + 1);
+        tr.setSelection(TextSelection.create(tr.doc, from + 1 + text.length)).scrollIntoView();
+        view.dispatch(tr);
+        return true;
+      },
       handleClickOn(view, _pos, node, nodePos, event) {
         // Right-click keeps the editor's own menu; shift-click still extends a text selection.
         if (event.button !== 0 || event.shiftKey) return false;
         if (!PHOTO_TYPES.has(node.type.name) || eventOnPhoto(event.target)) return false;
-        return moveCursorOffPhoto(view, nodePos);
+        const side = preferredSide(view, nodePos, event, "after");
+        const boundary = side === "after" ? nodePos + node.nodeSize : nodePos;
+        return placeCaretByPhoto(view, boundary, side);
       },
     },
     view(editorView) {

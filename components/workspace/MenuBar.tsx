@@ -81,7 +81,7 @@ export type MenuActions = {
   setMode: (mode: EditorMode) => void;
   showInvisibles: boolean;
   toggleInvisibles: () => void;
-  /** View → Show ruler. */
+  /** View → Show ruler. Off until the reader turns it on. */
   showRuler: boolean;
   toggleRuler: () => void;
   /** Red spelling underlines in the document. */

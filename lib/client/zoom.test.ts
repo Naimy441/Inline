@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { anchorAt, clampZoom, horizontalPan, manualZoomOrigin, pinchBox, pinchTransform, scrollForAnchor, stepPinch, touchDistance, touchMidpoint, zoomFromPinch, zoomFromWheel, type PinchFrame } from "./zoom";
+import { anchorAt, clampZoom, horizontalPan, pinchBox, pinchTransform, scrollForAnchor, stepPinch, touchDistance, touchMidpoint, viewCenter, zoomFromPinch, zoomFromWheel, type PinchFrame } from "./zoom";
 
 describe("document zoom", () => {
   it("stays inside the same range as the zoom menu", () => {
@@ -90,9 +90,27 @@ describe("document zoom", () => {
     });
   });
 
-  it("holds the top of the page when the reader hasn't scrolled, and the middle of the view when they have", () => {
-    assert.deepEqual(manualZoomOrigin({ scrollTop: 0, left: 100, top: 80, width: 800, height: 600 }, 108), { x: 500, y: 108 });
-    assert.deepEqual(manualZoomOrigin({ scrollTop: 240, left: 100, top: 80, width: 800, height: 600 }, 108), { x: 500, y: 380 });
+  it("scales around the middle of the view, so a page scrolled aside does not jump back to center", () => {
+    assert.deepEqual(viewCenter({ left: 100, top: 80, width: 800, height: 600 }), { x: 500, y: 380 });
+    const canvasWidth = 1000;
+    const pageWidth = 1632;
+    const mid = viewCenter({ left: 0, top: 0, width: canvasWidth, height: 800 }).x;
+    // Flushed to the left edge at 150%, then zoomed to 200% around the view's middle.
+    const fromWidth = 1224;
+    const nextLeft = mid - ((mid - 40) / fromWidth) * pageWidth;
+    const centered = (canvasWidth - pageWidth) / 2;
+    assert.ok(Math.abs(nextLeft - centered) > 100, `kept ${nextLeft}, centered would be ${centered}`);
+    const pan = horizontalPan({ canvasWidth, pageWidth, padLeft: 40, padRight: 40, pageLeft: nextLeft });
+    assert.ok(Math.abs(pan.padLeft - pan.scrollLeft - nextLeft) < 0.5);
+    const content = pan.padLeft + pageWidth + pan.padRight;
+    const max = content - canvasWidth;
+    assert.ok(pan.padLeft - 40 >= -0.01 && pan.padLeft - 40 <= max + 0.01, "the left edge is still in the scroll range");
+    // Zooming back out until the page fits returns to the centered layout.
+    assert.deepEqual(horizontalPan({ canvasWidth, pageWidth: 800, padLeft: 40, padRight: 40, pageLeft: nextLeft }), {
+      padLeft: 40,
+      padRight: 40,
+      scrollLeft: 0,
+    });
   });
 
   it("keeps the finger point fixed across pinch steps without measuring layout", () => {

@@ -66,11 +66,11 @@ const p = (text: string, props = "", runProps = "") => `<w:p>${props ? `<w:pPr>$
 
 describe("reading Word documents", () => {
   it("round-trips a document Inline exported", async () => {
-    const source = "# Plan {.title}\n\n## Goals\n\nIntro with **bold**, *italic*, ~~gone~~ and a [link](https://example.com).\n\n- one\n- two\n\n1. first\n2. second\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\nCentered {align=center}\n\nInset {right=0.5}";
+    const source = "# Plan {.title}\n\n## Goals\n\nIntro with **bold**, *italic*, ~~gone~~ and a [link](https://example.com).\n\n- one\n- two\n\n1. first\n2. second\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\nCentered {align=center}";
     const docx = await documentToDocx(markdownToDoc(source), meta, async () => null);
     const doc = await docxToDoc(readZip(docx));
     const markdown = docToMarkdown(doc);
-    for (const piece of ["# Plan {.title}", "## Goals", "**bold**", "*italic*", "~~gone~~", "[link](https://example.com)", "- one", "- two", "1. first", "2. second", "| A | B |", "| 1 | 2 |", "Centered {align=center}", "Inset {right=0.5}"]) {
+    for (const piece of ["# Plan {.title}", "## Goals", "**bold**", "*italic*", "~~gone~~", "[link](https://example.com)", "- one", "- two", "1. first", "2. second", "| A | B |", "| 1 | 2 |", "Centered {align=center}"]) {
       assert.ok(markdown.includes(piece), `${piece} in:\n${markdown}`);
     }
   });
@@ -173,7 +173,7 @@ describe("reading Word documents", () => {
         "word/document.xml": `<w:document ${W}><w:body>${[
           p("Green", '<w:pStyle w:val="Heading1"/>'),
           p("Plain heading", '<w:pStyle w:val="Heading2"/>'),
-          p("Indented", '<w:spacing w:before="240" w:after="0"/><w:ind w:firstLine="720" w:right="720"/>'),
+          p("Indented", '<w:spacing w:before="240" w:after="0"/><w:ind w:firstLine="720"/>'),
           p("Works cited", '<w:ind w:left="720" w:hanging="720"/>'),
           p("Calibri", "", '<w:rFonts w:ascii="Calibri"/><w:highlight w:val="yellow"/>'),
           p("Shaded", "", '<w:shd w:val="clear" w:fill="D9EAD3"/>'),
@@ -188,7 +188,6 @@ describe("reading Word documents", () => {
     assert.deepEqual(marks(1), {}, "Heading 2 at its usual 16pt needs no marks");
     assert.equal(doc.child(2).attrs.spaceBefore, 12);
     assert.equal(doc.child(2).attrs.textIndent, 0.5);
-    assert.equal(doc.child(2).attrs.rightIndent, 0.5);
     assert.equal(doc.child(3).attrs.indent, 0);
     assert.equal(doc.child(3).attrs.textIndent, -0.5, "a hanging indent");
     assert.deepEqual(marks(4), { font_family: "Calibri, sans-serif", highlight: "#ffff00" });
