@@ -36,6 +36,7 @@ import { PageSetupDialog } from "@/components/workspace/PageSetupDialog";
 import { ReviewBar } from "@/components/workspace/ReviewBar";
 import { EDITOR_MODES, modeMenuItems } from "@/components/workspace/modes";
 import { COMPACT_QUERY, isCompact, useMediaQuery, useVisualViewportVars } from "@/lib/client/viewport";
+import { anchorAt, clampZoom, manualZoomOrigin, scrollForAnchor, touchDistance, touchMidpoint, zoomFromPinch, zoomFromWheel, type ZoomAnchor } from "@/lib/client/zoom";
 import { DEFAULT_PREFERENCES, preferences, setPreference } from "@/lib/client/preferences";
 import { SelectionBubble } from "@/components/workspace/SelectionBubble";
 import { ShortcutsDialog } from "@/components/workspace/ShortcutsDialog";
@@ -86,6 +87,10 @@ export function Workspace({ documentId }: { documentId: string }) {
   const [zoom, setZoomState] = useState<Zoom>("fit");
   const [canvasWidth, setCanvasWidth] = useState(0);
   const canvasRef = useRef<HTMLElement>(null);
+  /** Screen point to hold still across the next zoom commit. */
+  const zoomAnchor = useRef<ZoomAnchor | null>(null);
+  /** Latest scale, updated synchronously so a burst of pinch events compounds. */
+  const zoomNow = useRef(1);
   // Below this width, or when they don't fit beside the title, the menu bar and labelled buttons fold into a "More" menu.
   const titlebarRef = useRef<HTMLElement>(null);
   const narrow = useMediaQuery(COMPACT_QUERY);
@@ -141,11 +146,6 @@ export function Workspace({ documentId }: { documentId: string }) {
       }),
     [],
   );
-
-  const setZoom = (value: Zoom) => {
-    setZoomState(value);
-    store(ZOOM_KEY, String(value));
-  };
 
   // "Fit" zoom shrinks pages that are wider than the canvas (narrow windows, tablets, an open panel).
   useEffect(() => {
@@ -211,6 +211,120 @@ export function Workspace({ documentId }: { documentId: string }) {
   const pageWidth = geometryFor(meta).pageWidth;
   const fitZoom = canvasWidth ? Math.max(0.25, Math.min(1, Math.floor(((canvasWidth - canvasPad * 2) / pageWidth) * 100) / 100)) : 1;
   const effectiveZoom = zoom === "fit" ? fitZoom : zoom;
+  zoomNow.current = effectiveZoom;
+
+  const setZoom = (value: Zoom, origin?: { x: number; y: number }) => {
+    const canvas = canvasRef.current;
+    const frame = canvas?.querySelector(".page-stack-frame");
+    const numeric = value === "fit" ? fitZoom : clampZoom(value);
+    // A burst of wheel events can land before React renders the previous one.
+    const from = zoomNow.current;
+    if (canvas && frame instanceof HTMLElement && Math.abs(numeric - from) > 0.0005) {
+      const box = canvas.getBoundingClientRect();
+      const frameBox = frame.getBoundingClientRect();
+      const point = origin ?? manualZoomOrigin({ scrollTop: canvas.scrollTop, left: box.left, top: box.top, width: box.width, height: box.height }, frameBox.top);
+      zoomAnchor.current = anchorAt(frameBox, point.x, point.y);
+      zoomNow.current = numeric;
+    } else {
+      zoomAnchor.current = null;
+    }
+    const stored: Zoom = value === "fit" ? "fit" : numeric;
+    setZoomState(stored);
+    store(ZOOM_KEY, String(stored));
+  };
+
+  // After the scaled frame is in the DOM, scroll so the anchored point stays put.
+  // A menu zoom anchors on the middle of the page; a pinch anchors under the fingers.
+  // PageCanvas calls this in its own layout effect, which runs before comments measure.
+  const zoomCommit = useRef<(() => void) | null>(null);
+  zoomCommit.current = () => {
+    const anchor = zoomAnchor.current;
+    const canvas = canvasRef.current;
+    zoomNow.current = effectiveZoom;
+    if (!anchor || !canvas) return;
+    zoomAnchor.current = null;
+    const frame = canvas.querySelector(".page-stack-frame");
+    if (!(frame instanceof HTMLElement)) return;
+    const next = scrollForAnchor(canvas, frame.getBoundingClientRect(), anchor);
+    canvas.scrollLeft = next.scrollLeft;
+    canvas.scrollTop = next.scrollTop;
+  };
+  const setZoomRef = useRef(setZoom);
+  setZoomRef.current = setZoom;
+
+  // Pinch and ctrl+wheel zoom the page. A plain wheel keeps scrolling it.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    let pinch: { distance: number; zoom: number } | null = null;
+    let gestureZoom = 0;
+
+    const apply = (next: number, origin: { x: number; y: number }) => {
+      const value = clampZoom(next);
+      if (Math.abs(value - zoomNow.current) < 0.0005) return;
+      setZoomRef.current(value, origin);
+    };
+
+    const onWheel = (event: WheelEvent) => {
+      // Trackpad pinch arrives as a wheel with ctrlKey set. Plain scrolling must not zoom.
+      if (!event.ctrlKey || event.altKey || gestureZoom || pinch) return;
+      if (!event.cancelable) return;
+      event.preventDefault();
+      apply(zoomFromWheel(zoomNow.current, event.deltaY, event.deltaMode), { x: event.clientX, y: event.clientY });
+    };
+
+    const onGestureStart = (event: Event) => {
+      event.preventDefault();
+      gestureZoom = zoomNow.current;
+    };
+    const onGestureChange = (event: Event) => {
+      const gesture = event as Event & { scale?: number; clientX?: number; clientY?: number };
+      event.preventDefault();
+      // A finger pinch is handled from the touch points; Safari also emits gesture events for it.
+      if (pinch || !gestureZoom || !gesture.scale) return;
+      const box = canvas.getBoundingClientRect();
+      apply(gestureZoom * gesture.scale, {
+        x: gesture.clientX ?? box.left + box.width / 2,
+        y: gesture.clientY ?? box.top + box.height / 2,
+      });
+    };
+    const onGestureEnd = () => {
+      gestureZoom = 0;
+    };
+
+    const onTouchStart = (event: TouchEvent) => {
+      if (event.touches.length !== 2) return;
+      pinch = { distance: touchDistance(Array.from(event.touches)), zoom: zoomNow.current };
+    };
+    const onTouchMove = (event: TouchEvent) => {
+      if (!pinch || event.touches.length !== 2) return;
+      if (event.cancelable) event.preventDefault();
+      const points = Array.from(event.touches);
+      apply(zoomFromPinch(pinch.zoom, pinch.distance, touchDistance(points)), touchMidpoint(points));
+    };
+    const onTouchEnd = (event: TouchEvent) => {
+      if (event.touches.length < 2) pinch = null;
+    };
+
+    canvas.addEventListener("wheel", onWheel, { passive: false, capture: true });
+    canvas.addEventListener("gesturestart", onGestureStart as EventListener, { passive: false });
+    canvas.addEventListener("gesturechange", onGestureChange as EventListener, { passive: false });
+    canvas.addEventListener("gestureend", onGestureEnd);
+    canvas.addEventListener("touchstart", onTouchStart, { passive: true });
+    canvas.addEventListener("touchmove", onTouchMove, { passive: false });
+    canvas.addEventListener("touchend", onTouchEnd);
+    canvas.addEventListener("touchcancel", onTouchEnd);
+    return () => {
+      canvas.removeEventListener("wheel", onWheel, { capture: true });
+      canvas.removeEventListener("gesturestart", onGestureStart as EventListener);
+      canvas.removeEventListener("gesturechange", onGestureChange as EventListener);
+      canvas.removeEventListener("gestureend", onGestureEnd);
+      canvas.removeEventListener("touchstart", onTouchStart);
+      canvas.removeEventListener("touchmove", onTouchMove);
+      canvas.removeEventListener("touchend", onTouchEnd);
+      canvas.removeEventListener("touchcancel", onTouchEnd);
+    };
+  }, []);
 
   useEffect(() => {
     if (meta) document.title = `${meta.title} · Inline`;
@@ -722,7 +836,7 @@ export function Workspace({ documentId }: { documentId: string }) {
             </div>
           )}
           {versionShown && panel === "history" && <VersionPreview key={versionShown.id} session={session} version={versionShown} onClose={() => setVersionShown(null)} />}
-          <PageCanvas session={session} meta={meta} pages={ui.pages} zoom={effectiveZoom} printing={ui.printing} flow={false} />
+          <PageCanvas session={session} meta={meta} pages={ui.pages} zoom={effectiveZoom} printing={ui.printing} flow={false} zoomCommit={zoomCommit} />
           {!panel && (
             <WithEditorState session={session}>
               {(state) => <CommentMargin session={session} state={state} canvas={canvasRef} comments={ui.comments} active={ui.activeComment} draft={draftComment} onDraftDone={endDraft} onAskClaude={askAboutComment} />}

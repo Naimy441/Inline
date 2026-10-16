@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 import { geometryFor, type DocumentSession } from "@/lib/client/documentSession";
 import { lineFactor, lineMetrics } from "@/lib/doc/fontMetrics";
 import { DEFAULT_MATH_SIZE, DEFAULT_TAB_STOP, fillHeaderTokens, headerParts, type DocumentMeta } from "@/lib/doc/settings";
@@ -18,6 +18,7 @@ export const PageCanvas = memo(function PageCanvas({
   zoom,
   printing,
   flow,
+  zoomCommit,
 }: {
   session: DocumentSession;
   meta: DocumentMeta | null;
@@ -26,6 +27,8 @@ export const PageCanvas = memo(function PageCanvas({
   printing: boolean;
   /** Reflow the text to the screen (phones): no sheets, margins or page breaks. */
   flow: boolean;
+  /** Called after the scaled frame is committed, before later layout effects read positions. */
+  zoomCommit?: RefObject<(() => void) | null>;
 }) {
   const mount = useRef<HTMLDivElement>(null);
 
@@ -59,6 +62,11 @@ export const PageCanvas = memo(function PageCanvas({
   // Zoom scales the laid-out pages rather than laying them out again (CSS zoom would): text
   // shaped at another size wraps differently, so the page count would change with the window.
   const scale = printing || flow ? 1 : zoom;
+
+  // Runs before sibling layout effects (comments) so a zoom scroll lands first.
+  useLayoutEffect(() => {
+    zoomCommit?.current?.();
+  }, [scale, pages, zoomCommit]);
 
   // The tree stays the same in both layouts so the editor's DOM is never remounted.
   return (

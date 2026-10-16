@@ -510,6 +510,9 @@
   min-width: 0;
   overflow: auto;
   overscroll-behavior: contain;
+  /* One finger pans the page on both axes. A two-finger pinch is handled by
+     the workspace, so the browser doesn't zoom the whole window instead. */
+  touch-action: pan-x pan-y;
   background: var(--canvas);
 }
 
@@ -538,7 +541,10 @@
 
 .page-stack {
   position: relative;
-  margin: 0 auto;
+  /* Stay at the frame's top-left. Centering the unscaled box (margin: auto)
+     and then scaling from that corner shifts the page to the right, past the
+     frame, so the zoom looks off-center and the far edge can't be scrolled to. */
+  margin: 0;
   transform-origin: 0 0;
 }
 
