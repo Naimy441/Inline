@@ -247,6 +247,34 @@ function randomClientId() {
   return `c${Array.from(bytes, (byte) => byte.toString(36)).join("").slice(0, 14)}`;
 }
 
+/** Claude's own edits, including a PDF conversion (those are applied as system steps). */
+function isAgentEdit(clientIDs: readonly string[]) {
+  return clientIDs.some((id) => id.startsWith("agent:") || id.startsWith("system:pdf-"));
+}
+
+/** The range a batch of steps rewrites, in the document they were based on. */
+function changedRange(steps: readonly Step[]): { from: number; to: number } | null {
+  let from = Number.POSITIVE_INFINITY;
+  let to = Number.NEGATIVE_INFINITY;
+  for (const step of steps) {
+    step.getMap().forEach((start, end) => {
+      if (start < from) from = start;
+      if (end > to) to = end;
+    });
+  }
+  if (from === Number.POSITIVE_INFINITY) return null;
+  return { from, to: Math.max(to, from) };
+}
+
+function pageIndex(pos: number, starts: readonly number[]) {
+  let page = 0;
+  for (const start of starts) {
+    if (pos >= start) page += 1;
+    else break;
+  }
+  return page;
+}
+
 export type SessionCallbacks = {
   onCommand?: (command: ClientCommand) => void;
   onKeyCommand?: (name: "link" | "find" | "replace" | "comment" | "askClaude") => boolean;
@@ -277,6 +305,17 @@ export class DocumentSession {
   view: EditorView | null = null;
   private source: EventSource | null = null;
   private readonly clientID = randomClientId();
+  /** Scroll frozen while an agent edit lands on a page the reader is already looking at. */
+  private heldScroll: { scroller: HTMLElement; top: number; left: number } | null = null;
+  private sawEditOnScreen = false;
+  private pinningScroll = false;
+  private scrollPinEl: HTMLElement | null = null;
+  private holdTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A scroll_to that should run once layout settles, unless the page is already on screen. */
+  private pendingFollow: { from: number; to: number } | null = null;
+  /** A wheel, touch or click means the reader is moving the page; other scroll events are the edit. */
+  private userMovedScroll = false;
+  private gestureTimer: ReturnType<typeof setTimeout> | null = null;
   private inflight = false;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private selectionTimer: ReturnType<typeof setTimeout> | null = null;
@@ -608,7 +647,11 @@ export class DocumentSession {
     this.destroyed = true;
     window.removeEventListener("beforeunload", this.onBeforeUnload);
     this.source?.close();
-    for (const timer of [this.retryTimer, this.selectionTimer, this.layoutTimer, this.reconnectTimer, this.thumbnailTimer]) if (timer) clearTimeout(timer);
+    for (const timer of [this.retryTimer, this.selectionTimer, this.layoutTimer, this.reconnectTimer, this.thumbnailTimer, this.holdTimer, this.gestureTimer]) if (timer) clearTimeout(timer);
+    this.holdTimer = null;
+    this.gestureTimer = null;
+    this.releaseHold(false);
+    this.unbindScrollPin();
     this.view?.destroy();
     this.view = null;
   }
@@ -627,6 +670,10 @@ export class DocumentSession {
         fontLines: () => (this.meta ?? snapshot.meta)?.settings.lineModel === "font",
         styles: () => stylesOf((this.meta ?? snapshot.meta)?.settings ?? {}),
         onPages: (layout) => {
+          if (this.heldScroll) {
+            this.pinHeldScroll();
+            this.armHold();
+          } else this.flushFollow();
           this.latestLayout = layout;
           this.ui.set((ui) => (ui.pages === layout.pages ? ui : { ...ui, pages: layout.pages }));
           this.scheduleLayoutReport(layout);
@@ -678,9 +725,15 @@ export class DocumentSession {
   dispatch(tr: Transaction) {
     const view = this.view;
     if (!view) return;
+    // The reader moved the caret themselves: stop holding the old scroll position.
+    if (this.heldScroll && tr.scrolledIntoView) this.releaseHold(false);
+    const holding = Boolean(this.heldScroll);
+    if (holding) this.pinningScroll = true;
     const state = view.state.apply(tr);
     view.updateState(state);
     this.editor.set(state);
+    if (holding && this.heldScroll) this.pinHeldScroll();
+    this.pinningScroll = false;
     if (tr.docChanged) {
       this.updateSync();
       this.flushSteps();
@@ -851,6 +904,8 @@ export class DocumentSession {
           return;
         }
         const steps = event.steps.map((json) => Step.fromJSON(schema, json));
+        // Before the DOM changes: if this page is already on screen, the edit must not move it.
+        if (isAgentEdit(event.clientIDs)) this.holdViewport(steps);
         let tr = receiveTransaction(view.state, steps, event.clientIDs, { mapSelectionBackward: true });
         if (event.hunks) {
           tr = setHunks(tr, event.hunks, event.version);
@@ -1346,8 +1401,7 @@ export class DocumentSession {
     const size = view.state.doc.content.size;
     const head = Math.min(from, size);
     this.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, head, Math.min(to, size))));
-    let scroller = view.dom.parentElement;
-    while (scroller && !(scroller.scrollHeight > scroller.clientHeight && /(auto|scroll)/.test(getComputedStyle(scroller).overflowY))) scroller = scroller.parentElement;
+    const scroller = this.scrollingRoot();
     if (!scroller) return;
     let coords: { top: number; bottom: number };
     try {
@@ -1358,6 +1412,174 @@ export class DocumentSession {
     const box = scroller.getBoundingClientRect();
     const offset = align === "start" ? Math.min(96, box.height / 5) : (box.height - (coords.bottom - coords.top)) / 2;
     scroller.scrollTo({ top: Math.max(0, scroller.scrollTop + coords.top - box.top - offset) });
+  }
+
+  /**
+   * Bring an agent edit into view once the pages have settled. If the reader is
+   * already looking at that page, leave the scroll position alone.
+   */
+  followEdit(from: number, to: number) {
+    if (this.sawEditOnScreen || this.watchingEdit(from, to)) {
+      this.pendingFollow = null;
+      return;
+    }
+    this.pendingFollow = { from, to };
+    const pending = this.pendingFollow;
+    setTimeout(() => {
+      if (this.pendingFollow === pending) this.flushFollow();
+    }, 400);
+  }
+
+  /** The canvas (or another ancestor) that actually scrolls the pages. */
+  private scrollingRoot() {
+    const view = this.view;
+    if (!view) return null;
+    let scroller = view.dom.parentElement;
+    while (scroller && !(scroller.scrollHeight > scroller.clientHeight && /(auto|scroll)/.test(getComputedStyle(scroller).overflowY))) scroller = scroller.parentElement;
+    return scroller;
+  }
+
+  /** True when `from`–`to` (or the page it sits on) is already inside the canvas. */
+  private watchingEdit(from: number, to: number) {
+    if (this.rangeOnScreen(from, to)) return true;
+    const pages = this.pagesInView();
+    if (!pages.size) return false;
+    const start = this.positionOnPage(from);
+    const end = this.positionOnPage(Math.max(from, to));
+    for (let page = start; page <= end; page += 1) if (pages.has(page)) return true;
+    return false;
+  }
+
+  private rangeOnScreen(from: number, to: number) {
+    const view = this.view;
+    const scroller = this.scrollingRoot();
+    if (!view || !scroller) return false;
+    const size = view.state.doc.content.size;
+    const start = Math.max(0, Math.min(size, from));
+    const end = Math.max(start, Math.min(size, to));
+    try {
+      const a = view.coordsAtPos(start);
+      const b = view.coordsAtPos(end);
+      const top = Math.min(a.top, b.top);
+      const bottom = Math.max(a.bottom, b.bottom);
+      const box = scroller.getBoundingClientRect();
+      return bottom > box.top + 4 && top < box.bottom - 4;
+    } catch {
+      return false;
+    }
+  }
+
+  private positionOnPage(pos: number) {
+    const view = this.view;
+    if (!view) return 0;
+    const size = view.state.doc.content.size;
+    return pageIndex(Math.max(0, Math.min(size, pos)), pageStarts(view.state));
+  }
+
+  private pagesInView() {
+    const view = this.view;
+    const scroller = this.scrollingRoot();
+    const pages = new Set<number>();
+    if (!view || !scroller) return pages;
+    const box = scroller.getBoundingClientRect();
+    const x = box.left + box.width / 2;
+    for (const top of [box.top + 32, (box.top + box.bottom) / 2, box.bottom - 32]) {
+      const found = view.posAtCoords({ left: x, top });
+      if (found) pages.add(this.positionOnPage(found.pos));
+    }
+    return pages;
+  }
+
+  /** Remember the scroll position before an on-screen agent edit replaces the DOM. */
+  private holdViewport(steps: Step[]) {
+    const range = changedRange(steps);
+    if (!range || !this.watchingEdit(range.from, range.to)) return;
+    const scroller = this.scrollingRoot();
+    this.sawEditOnScreen = true;
+    this.pendingFollow = null;
+    if (!scroller) return;
+    this.heldScroll = { scroller, top: scroller.scrollTop, left: scroller.scrollLeft };
+    scroller.style.overflowAnchor = "none";
+    this.bindScrollPin(scroller);
+    this.armHold();
+  }
+
+  private onScrollGesture = () => {
+    this.userMovedScroll = true;
+    if (this.gestureTimer) clearTimeout(this.gestureTimer);
+    // A click that doesn't scroll shouldn't cancel the hold for a later edit.
+    this.gestureTimer = setTimeout(() => {
+      this.gestureTimer = null;
+      this.userMovedScroll = false;
+    }, 300);
+  };
+
+  private bindScrollPin(scroller: HTMLElement) {
+    if (this.scrollPinEl === scroller) return;
+    this.unbindScrollPin();
+    this.scrollPinEl = scroller;
+    scroller.addEventListener("scroll", this.onPinnedScroll, { passive: true });
+    scroller.addEventListener("wheel", this.onScrollGesture, { passive: true });
+    scroller.addEventListener("touchmove", this.onScrollGesture, { passive: true });
+    scroller.addEventListener("pointerdown", this.onScrollGesture);
+  }
+
+  private unbindScrollPin() {
+    const scroller = this.scrollPinEl;
+    if (!scroller) return;
+    scroller.removeEventListener("scroll", this.onPinnedScroll);
+    scroller.removeEventListener("wheel", this.onScrollGesture);
+    scroller.removeEventListener("touchmove", this.onScrollGesture);
+    scroller.removeEventListener("pointerdown", this.onScrollGesture);
+    this.scrollPinEl = null;
+  }
+
+  private armHold() {
+    if (this.holdTimer) clearTimeout(this.holdTimer);
+    this.holdTimer = setTimeout(() => this.releaseHold(true), 600);
+  }
+
+  private onPinnedScroll = () => {
+    if (this.pinningScroll || !this.heldScroll) return;
+    if (this.userMovedScroll) {
+      this.userMovedScroll = false;
+      this.releaseHold(false);
+      return;
+    }
+    this.pinHeldScroll();
+  };
+
+  private pinHeldScroll() {
+    const held = this.heldScroll;
+    if (!held) return;
+    if (held.scroller.scrollTop === held.top && held.scroller.scrollLeft === held.left) return;
+    const already = this.pinningScroll;
+    this.pinningScroll = true;
+    held.scroller.scrollTop = held.top;
+    held.scroller.scrollLeft = held.left;
+    if (!already) this.pinningScroll = false;
+  }
+
+  /** Drop the freeze. `follow` runs a queued scroll_to once the reader wasn't watching. */
+  private releaseHold(follow: boolean) {
+    if (this.holdTimer) {
+      clearTimeout(this.holdTimer);
+      this.holdTimer = null;
+    }
+    const scroller = this.heldScroll?.scroller;
+    this.heldScroll = null;
+    this.sawEditOnScreen = false;
+    if (scroller) scroller.style.overflowAnchor = "";
+    if (follow) this.flushFollow();
+    else this.pendingFollow = null;
+  }
+
+  private flushFollow() {
+    const follow = this.pendingFollow;
+    if (!follow || this.heldScroll || this.sawEditOnScreen) return;
+    this.pendingFollow = null;
+    if (this.watchingEdit(follow.from, follow.to)) return;
+    this.scrollTo(follow.from, follow.to);
   }
 }
 

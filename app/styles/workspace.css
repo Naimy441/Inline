@@ -1412,7 +1412,8 @@
   padding: 0;
 }
 
-.canvas.is-previewing > :is(.review-bar, .comment-margin, .agent-locator) {
+.canvas.is-previewing > :is(.review-bar, .comment-margin, .agent-locator),
+.canvas.is-previewing .agent-locator {
   display: none;
 }
 
@@ -2109,15 +2110,25 @@ button.status-item:hover {
   }
 }
 
-/* Connection lost: a notice pinned to the top of the canvas that doesn't push the page down. */
-.canvas-notice {
+/* Notices pinned to the top of the canvas. Height 0 so they overlay the page; the chips stack in a column so none covers another. */
+.canvas-notices {
   position: sticky;
   top: 12px;
   z-index: 16;
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
   height: 0;
-  padding: 0 12px;
+  padding: 0 16px;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.canvas-notices > * {
+  pointer-events: auto;
+  max-width: 100%;
 }
 
 .offline-notice {
@@ -2152,9 +2163,11 @@ button.status-item:hover {
 .pdf-notice {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 9px;
-  max-width: 680px;
+  width: min(680px, 100%);
   height: max-content;
+  box-sizing: border-box;
   padding: 7px 8px 7px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -2187,7 +2200,8 @@ button.status-item:hover {
 }
 
 .pdf-notice-text {
-  flex: 1 1 auto;
+  flex: 1 1 12em;
+  min-width: 0;
 }
 
 .pdf-notice-action {
@@ -2290,6 +2304,15 @@ button.status-item:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* In the notice stack the chip is in normal flow, under the conversion bar, not fixed over it. */
+.canvas-notices > .agent-locator {
+  position: relative;
+  left: auto;
+  top: auto;
+  transform: none;
+  flex: none;
 }
 
 @keyframes tabs-in {
