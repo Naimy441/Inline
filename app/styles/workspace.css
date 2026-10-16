@@ -333,10 +333,6 @@
 }
 
 /* Viewing mode: the editing controls stay visible but inert. */
-.workspace.is-viewing .bubble-edit {
-  display: none;
-}
-
 .toolbar.is-viewing .tb-edit,
 .tb-overflow.is-viewing .tb-edit {
   opacity: 0.4;
@@ -1658,21 +1654,6 @@
   color: var(--text);
 }
 
-.bubble-ask {
-  padding: 0 8px;
-  color: var(--accent-text);
-  font-weight: 500;
-}
-
-.bubble-ask svg {
-  color: var(--accent);
-}
-
-.bubble-ask:hover {
-  background: var(--accent-soft);
-  color: var(--accent-text);
-}
-
 .bubble-sep {
   width: 1px;
   height: 18px;
@@ -1881,9 +1862,7 @@ button.status-item:hover {
 
 /* Focus mode hides everything to do with Claude. */
 
-.workspace.is-focus .claude-toggle,
-.workspace.is-focus .bubble-ask,
-.workspace.is-focus .bubble-ask + .bubble-sep {
+.workspace.is-focus .claude-toggle {
   display: none !important;
 }
 

@@ -729,7 +729,7 @@ export function Workspace({ documentId }: { documentId: string }) {
             </WithEditorState>
           )}
           <ReviewBar session={session} hunks={ui.hunks} />
-          <WithEditorState session={session}>{(state) => <SelectionBubble session={session} state={state} linkEditing={linkEditing} onLinkEditing={setLinkEditing} onAsk={() => askClaude()} onComment={startComment} prompting={prompting} onPrompting={setPrompting} onInlineAsk={inlineAsk} />}</WithEditorState>
+          <WithEditorState session={session}>{(state) => <SelectionBubble session={session} state={state} linkEditing={linkEditing} onLinkEditing={setLinkEditing} prompting={prompting} onPrompting={setPrompting} onInlineAsk={inlineAsk} />}</WithEditorState>
         </main>
 
         {panel && (

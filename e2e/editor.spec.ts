@@ -76,6 +76,23 @@ test("with no side panel open, comments float beside the page and save at once",
   await expect(page.locator(".side-panel")).toHaveCount(0);
 });
 
+test("selecting text does not open a selection action bar", async ({ page }) => {
+  await newBlankDocument(page);
+  await page.locator(".doc-content").click();
+  await page.keyboard.type("A sentence to select.");
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Shift+End");
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("A sentence to select.");
+  await expect(page.locator(".bubble")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Ask Claude" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Comment", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Edit with Claude" })).toHaveCount(0);
+  await expect(page.getByRole("toolbar", { name: "Formatting" }).getByRole("button", { name: "Italic" })).toBeVisible();
+  // The document toolbar still formats the selection.
+  await page.getByRole("toolbar", { name: "Formatting" }).getByRole("button", { name: "Bold" }).click();
+  await expect(page.locator(".doc-content strong")).toHaveText("A sentence to select.");
+});
+
 test("toolbar buttons show tooltips", async ({ page }) => {
   await newBlankDocument(page);
   await page.getByRole("toolbar", { name: "Formatting" }).getByRole("button", { name: "Bold" }).hover();
