@@ -2,7 +2,9 @@
 
 import { useEffect, useLayoutEffect, useMemo, useSyncExternalStore } from "react";
 import { PageCanvas } from "@/components/workspace/PageCanvas";
+import { THEME_KEY } from "@/lib/client/bootScripts";
 import { DocumentSession } from "@/lib/client/documentSession";
+import type { PageAppearance } from "@/lib/pdf/screenAppearance";
 
 /**
  * The editor's page stack with no chrome, so a headless browser can picture a
@@ -18,22 +20,23 @@ function bytesToBase64(bytes: Uint8Array) {
   return btoa(binary);
 }
 
-export function HeadlessPages({ documentId }: { documentId: string }) {
+export function HeadlessPages({ documentId, appearance }: { documentId: string; appearance: PageAppearance }) {
   // Offline: lay the page out without joining the live editor stream, so this
   // picture isn't mistaken for a window the user has open.
   const session = useMemo(() => new DocumentSession(documentId, { offline: true }), [documentId]);
   const ui = useSyncExternalStore(session.ui.subscribe, session.ui.get, session.ui.get);
 
   useLayoutEffect(() => {
-    // Print is the light page. A saved dark theme would paint the paper dark
-    // before the first layout; the exported ink is black either way.
-    document.documentElement.dataset.theme = "light";
+    // No editor is open, so this page uses the appearance it was asked for
+    // (the user's saved one, or the one the screenshot asked for). The picture
+    // is painted in that same appearance.
+    document.documentElement.dataset.theme = appearance;
     try {
-      localStorage.setItem("inline-theme", "light");
+      localStorage.setItem(THEME_KEY, appearance);
     } catch {
       // Private mode: the attribute above is enough for this page.
     }
-  }, []);
+  }, [appearance]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -65,7 +68,7 @@ export function HeadlessPages({ documentId }: { documentId: string }) {
       }
       pictureWindow.__inlinePagePicture = async (page, scale) => {
         try {
-          const shot = await session.picturePage(page - 1, scale);
+          const shot = await session.picturePage(page - 1, scale, appearance);
           if (!shot.png) return { pages: shot.pages, png: null };
           return { pages: shot.pages, png: bytesToBase64(new Uint8Array(await shot.png.arrayBuffer())) };
         } catch (error) {
@@ -78,7 +81,7 @@ export function HeadlessPages({ documentId }: { documentId: string }) {
     // the document's own family and does not wait on the UI font.
     void Promise.race([document.fonts?.ready ?? Promise.resolve(), new Promise((resolve) => setTimeout(resolve, 3000))]).then(() => requestAnimationFrame(arm));
     return disarm;
-  }, [session, ui.status, ui.error]);
+  }, [session, ui.status, ui.error, appearance]);
 
   return (
     <div className="render-pages">

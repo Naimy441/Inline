@@ -1,4 +1,5 @@
 import type { Browser } from "playwright";
+import type { PageAppearance } from "@/lib/pdf/screenAppearance";
 import { serverOrigin } from "@/lib/server/origin";
 
 /**
@@ -18,7 +19,7 @@ export class PageOutOfRangeError extends Error {
   }
 }
 
-type ClosedRender = (doc: { id: string; title: string }, page: number) => Promise<{ png: Uint8Array; pages: number }>;
+type ClosedRender = (doc: { id: string; title: string }, page: number, appearance: PageAppearance) => Promise<{ png: Uint8Array; pages: number }>;
 
 /** Unit tests stand in for the layout browser, per document. Pass null to use the real one. */
 const overrides = new Map<string, ClosedRender>();
@@ -67,15 +68,15 @@ async function layoutBrowser() {
 
 type PictureResult = { pages: number; png: string | null; error?: string };
 
-/** Page `page` (1-based) of a document no editor has open, as a PNG of the laid-out page. */
-export async function renderClosedDocumentPage(doc: { id: string; meta: { title: string } }, page: number): Promise<{ png: Uint8Array; pages: number }> {
+/** Page `page` (1-based) of a document no editor has open, as a PNG of the laid-out page in the app's light or dark appearance. */
+export async function renderClosedDocumentPage(doc: { id: string; meta: { title: string } }, page: number, appearance: PageAppearance = "light"): Promise<{ png: Uint8Array; pages: number }> {
   const hooked = overrides.get(doc.id);
-  if (hooked) return hooked({ id: doc.id, title: doc.meta.title }, page);
+  if (hooked) return hooked({ id: doc.id, title: doc.meta.title }, page, appearance);
   const origin = serverOrigin();
   if (!origin) throw new Error("Couldn't picture the page because this server has no address a browser can open.");
 
   const browser = await layoutBrowser();
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: "light", deviceScaleFactor: 1 });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: appearance, deviceScaleFactor: 1 });
   const token = process.env.INLINE_ACCESS_TOKEN;
   if (token) await context.addCookies([{ name: "inline_token", value: token, url: origin }]);
   const tab = await context.newPage();
@@ -83,7 +84,7 @@ export async function renderClosedDocumentPage(doc: { id: string; meta: { title:
   tab.on("pageerror", (error) => pageErrors.push(error.message));
   tab.setDefaultTimeout(40_000);
   try {
-    await tab.goto(`${origin}/render/${encodeURIComponent(doc.id)}`, { waitUntil: "domcontentloaded", timeout: 40_000 });
+    await tab.goto(`${origin}/render/${encodeURIComponent(doc.id)}?theme=${appearance}`, { waitUntil: "domcontentloaded", timeout: 40_000 });
     await tab.waitForFunction(
       () => {
         const root = document.documentElement;

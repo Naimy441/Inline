@@ -76,7 +76,7 @@ export type ClientCommand =
   | { kind: "download"; url: string; filename: string }
   | { kind: "dictionary"; words: string[] }
   /** Picture these pages (0-based) for Claude and post them to /api/documents/[id]/render (lib/server/renders.ts). */
-  | { kind: "render_pages"; requestId: string; pages: number[]; scale: number; span?: { first: string; last: string } }
+  | { kind: "render_pages"; requestId: string; pages: number[]; scale: number; span?: { first: string; last: string }; /** light or dark page, or the appearance the open editor is using. Omitted for a print-colored picture. */ theme?: "light" | "dark" | "current" }
   /** Measure a page range and post it to /api/documents/[id]/fit (lib/server/fitMeasure.ts). */
   | { kind: "measure_fit"; requestId: string; fromPage: number; toPage: number };
 
