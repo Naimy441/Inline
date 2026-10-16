@@ -22,7 +22,7 @@ import {
   writeDocument,
   type FormatSpec,
 } from "@/lib/doc/editing";
-import { markdownToDoc, serializeDoc } from "@/lib/doc/markdown";
+import { BLOCK_SEPARATOR, markdownToDoc, serializeDoc } from "@/lib/doc/markdown";
 import { changedRanges, isUserSuggestion } from "@/lib/doc/review";
 import { FONT_FAMILIES, googleFontValue, PAPER_SIZES, type DocumentSettings, type PaperSize } from "@/lib/doc/settings";
 import { findGoogleFont, keepGoogleFont } from "@/lib/server/googleFonts";
@@ -33,11 +33,13 @@ import { attachmentText } from "@/lib/agent/attachments";
 import { findUpload, readDictionary, updateDictionary } from "@/lib/server/store";
 import { findMisspellings, speller, type Misspelling } from "@/lib/server/spellcheck";
 import { normalizeWord } from "@/lib/doc/words";
+import { cleanAiTellText, findAiSymbols, formatCleanSummary, formatWriteCheck, mergeSymbolHits, stripInvisible, type AiSymbolHit } from "@/lib/writing/aiTells";
 import { detectAiTropes } from "@/lib/writing/tropes";
 import { describePageStarts, pageCount, pageCountNow } from "@/lib/agent/pages";
+import { RenderUnavailableError, requestPageRenders } from "@/lib/server/renders";
 import { FOLDER_COLORS } from "@/lib/doc/folders";
 import { createFolder, deleteFolder, FolderError, folderPathName, updateFolder } from "@/lib/server/folders";
-import { formatFolderTree, formatLibrary, library, MAX_EXCERPT_WORDS, moveDocuments, resolveFolder } from "@/lib/server/library";
+import { formatFolderTree, formatLibrary, library, MAX_EXCERPT_WORDS, moveDocuments, resolveFolder, searchLibrary } from "@/lib/server/library";
 import { pdfTools } from "@/lib/agent/pdfTools";
 
 /**
@@ -65,6 +67,11 @@ export type ToolContext = {
   attachments?: () => Array<{ id: string; name: string; kind: "image" | "text" | "pdf" }>;
   /** Notified after a tool changes a document. */
   onChange?: (change: { documentId: string; title: string; tool: string; added: number; removed: number }) => void;
+  /**
+   * Show a document when no editor is listening. Set for in-app chats, so a
+   * request from the home page can open a search match.
+   */
+  onOpen?: (documentId: string) => void;
 };
 
 /** A tool's answer: text, and pictures for Claude to see (a PDF page, a comparison). */
@@ -296,6 +303,31 @@ function lineRange(from?: number, to?: number) {
   return { from: start, to: Math.max(start, to ?? from ?? start) };
 }
 
+/** Drop invisible junk from text the model is about to write, and note any AI symbols still in it. */
+function scrubWritten(text: string) {
+  const stripped = stripInvisible(text);
+  return { text: stripped.text, removed: stripped.removed, symbols: findAiSymbols(stripped.text) };
+}
+
+function withWriteCheck(result: ToolResult, scrubs: Array<{ removed: number; symbols: AiSymbolHit[] }>): ToolResult {
+  if (result.isError) return result;
+  const note = formatWriteCheck(
+    scrubs.reduce((sum, scrub) => sum + scrub.removed, 0),
+    mergeSymbolHits(scrubs.map((scrub) => scrub.symbols)),
+  );
+  return note ? { ...result, text: `${result.text}\n${note}` } : result;
+}
+
+function blockHasLock(node: PMNode) {
+  let locked = false;
+  node.descendants((child) => {
+    if (locked) return false;
+    if (child.marks.some((mark) => mark.type.name === "locked")) locked = true;
+    return !locked;
+  });
+  return locked;
+}
+
 // ---------------------------------------------------------------------------
 
 export const TOOLS = [
@@ -304,7 +336,7 @@ export const TOOLS = [
     title: "Read document",
     description:
       "Read a document as Markdown with line numbers (cat -n format), like the Read tool. Read before editing so edit_document's old_string matches exactly.\n\n" +
-      "Markdown conventions in Inline documents: one paragraph per line, blank line between blocks; `# Text {.title}` is the document title style and `Text {.subtitle}` the subtitle; `{align=center|right|justify}` and `{indent=N}` set paragraph alignment and indent; ==highlight==, <u>underline</u>, <sup>x</sup>, <sub>x</sub>; `&nbsp;` is an intentionally empty paragraph; `\\pagebreak` is a page break; images are `![alt](url){width=50%}`. Colors, fonts, comments and locked passages are not shown but are preserved when you edit around them.",
+      "Markdown conventions in Inline documents: one paragraph per line, blank line between blocks; `# Text {.title}` is the document title style and `Text {.subtitle}` the subtitle; `{align=center|right|justify}` and `{indent=N}` set paragraph alignment and indent; ==highlight==, <u>underline</u>, <sup>x</sup>, <sub>x</sub>; <cite>(Author, Year)</cite> is an inline citation; [^1] is a footnote marker and [^1]: The note. is its text; {.bibliography} is a works-cited entry (hanging indent); `&nbsp;` is an intentionally empty paragraph; `\\pagebreak` is a page break; images are `![alt](url){width=50%}`. Colors, fonts, comments and locked passages are not shown but are preserved when you edit around them.",
     shape: {
       document_id: documentId,
       offset: z.number().int().min(1).optional().describe("Line number to start reading from."),
@@ -340,7 +372,12 @@ export const TOOLS = [
     write: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
-      return commitEdit(ctx, doc, "edit_document", (current) => applyStringEdits(current, [args]), args.replace_all ? "Replaced all occurrences" : "Edited");
+      const scrub = scrubWritten(args.new_string);
+      if (scrub.text === args.old_string && scrub.removed) {
+        return ok(`Deleted ${scrub.removed} invisible character${scrub.removed === 1 ? "" : "s"} from the replacement. The remaining text matches the document, so nothing else changed.`);
+      }
+      const result = await commitEdit(ctx, doc, "edit_document", (current) => applyStringEdits(current, [{ ...args, new_string: scrub.text }]), args.replace_all ? "Replaced all occurrences" : "Edited");
+      return withWriteCheck(result, [scrub]);
     },
   }),
 
@@ -365,7 +402,15 @@ export const TOOLS = [
     write: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
-      return commitEdit(ctx, doc, "multi_edit_document", (current) => applyStringEdits(current, args.edits), `Applied ${args.edits.length} edit${args.edits.length === 1 ? "" : "s"}`);
+      const prepared = args.edits.map((edit) => ({ edit, scrub: scrubWritten(edit.new_string) }));
+      const applicable = prepared.filter((item) => item.scrub.text !== item.edit.old_string);
+      if (!applicable.length) {
+        const removed = prepared.reduce((sum, item) => sum + item.scrub.removed, 0);
+        if (removed) return ok(`Deleted ${removed} invisible character${removed === 1 ? "" : "s"} from the edits. The remaining text matches the document, so nothing else changed.`);
+      }
+      const edits = (applicable.length ? applicable : prepared).map((item) => ({ ...item.edit, new_string: item.scrub.text }));
+      const result = await commitEdit(ctx, doc, "multi_edit_document", (current) => applyStringEdits(current, edits), `Applied ${edits.length} edit${edits.length === 1 ? "" : "s"}`);
+      return withWriteCheck(result, prepared.map((item) => item.scrub));
     },
   }),
 
@@ -382,7 +427,15 @@ export const TOOLS = [
     destructive: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
-      return commitEdit(ctx, doc, "write_document", (current) => writeDocument(current, args.content), "Rewrote the document");
+      const scrub = scrubWritten(args.content);
+      if (!scrub.text.trim() && scrub.removed) {
+        return ok(`Deleted ${scrub.removed} invisible character${scrub.removed === 1 ? "" : "s"}. No visible text was left to write, so the document was not replaced.`);
+      }
+      if (scrub.text === serializeDoc(doc.doc).markdown && scrub.removed) {
+        return ok(`Deleted ${scrub.removed} invisible character${scrub.removed === 1 ? "" : "s"} from the replacement. The document already matches, so nothing else changed.`);
+      }
+      const result = await commitEdit(ctx, doc, "write_document", (current) => writeDocument(current, scrub.text), "Rewrote the document");
+      return withWriteCheck(result, [scrub]);
     },
   }),
 
@@ -409,7 +462,12 @@ export const TOOLS = [
           : args.position === "after_line"
             ? { afterLine: args.line! }
             : { beforeLine: args.line! };
-      return commitEdit(ctx, doc, "insert_content", (current) => insertMarkdown(current, args.content, position), "Inserted content");
+      const scrub = scrubWritten(args.content);
+      if (!scrub.text.trim() && scrub.removed) {
+        return ok(`Deleted ${scrub.removed} invisible character${scrub.removed === 1 ? "" : "s"}. Nothing visible was left to insert.`);
+      }
+      const result = await commitEdit(ctx, doc, "insert_content", (current) => insertMarkdown(current, scrub.text, position), "Inserted content");
+      return withWriteCheck(result, [scrub]);
     },
   }),
 
@@ -560,6 +618,53 @@ export const TOOLS = [
   }),
 
   defineTool({
+    name: "screenshot_page",
+    title: "Screenshot page",
+    description:
+      "A picture of one page as the user's editor lays it out (the way it would print), so you can see layout the Markdown does not show: a crowded or split table, an image that is too big, uneven spacing, a stray font, or a last page with only a line or two. Home-page thumbnails are only a small picture of the first page; this is the page itself. Needs the document open in Inline. Page numbers are 1-based.\n\n" +
+      "Use it when the user wants the document to look good and the picture is the right signal. get_page_count is enough for how many pages there are and how full the last page is. After you change a page you judged from a picture, call screenshot_page again.",
+    shape: {
+      document_id: documentId,
+      page: z.number().int().min(1).describe("Page number to picture (1-based)."),
+    },
+    write: false,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      const count = pageCountNow(doc);
+      const visible = count.showing ?? count.pages;
+      if (count.measured && args.page > visible) {
+        return fail(`"${doc.meta.title}" is ${visible} page${visible === 1 ? "" : "s"} in the editor. Pass a page from 1 to ${visible}.`);
+      }
+      const start = args.page <= 1 ? 0 : count.starts?.[args.page - 2];
+      const end = count.starts?.[args.page - 1];
+      showActivity(ctx, doc, {
+        chatId: ctx.author,
+        status: "reading",
+        label: `Looking at page ${args.page}`,
+        ...(count.measured && start !== undefined ? { range: { from: start, to: Math.max(start + 1, end ?? doc.doc.content.size) } } : {}),
+      });
+      let rendered;
+      try {
+        rendered = await requestPageRenders(doc, [args.page - 1], { scale: 1.5 });
+      } catch (error) {
+        if (error instanceof RenderUnavailableError) return fail(error.message);
+        throw error;
+      }
+      const shot = rendered.find((item) => item.page === args.page - 1) ?? rendered[0];
+      if (!shot?.png.byteLength) return fail(`Page ${args.page} isn't in the document, or the editor couldn't picture it.`);
+      const of = count.measured ? ` of ${visible}` : "";
+      return {
+        text: [
+          `Page ${args.page}${of} of "${doc.meta.title}" (id ${doc.id}), as the editor lays it out.`,
+          "The picture is what the user sees on that page, including spacing, fonts, images and where a table or heading breaks. Text still struck through for review is still on the page.",
+          "Look at the picture, then fix the document. Markdown does not show fonts or most spacing.",
+        ].join("\n"),
+        images: [{ data: Buffer.from(shot.png).toString("base64"), mimeType: "image/png" }],
+      };
+    },
+  }),
+
+  defineTool({
     name: "format_text",
     title: "Format text",
     description:
@@ -615,7 +720,7 @@ export const TOOLS = [
     name: "set_paragraph_style",
     title: "Set paragraph style",
     description:
-      "Change the paragraph style of the blocks on the given lines: type (paragraph, heading with level 1-6, title, subtitle), alignment, indent level, first-line or hanging indent, line spacing and space before/after. Lists, tables and quotes are changed with edit_document instead.",
+      "Change the paragraph style of the blocks on the given lines: type (paragraph, heading with level 1-6, title, subtitle), alignment, indent level, first-line or hanging indent, line spacing, space before/after, and whether the paragraph is a bibliography entry. Lists, tables and quotes are changed with edit_document instead. Footnotes and inline citations are written in Markdown with edit_document ([^1], [^1]: note, <cite>…</cite>).",
     shape: {
       document_id: documentId,
       from_line: z.number().int().min(1),
@@ -628,6 +733,7 @@ export const TOOLS = [
       space_before: z.number().min(0).max(144).nullable().optional().describe("Points of space before, or null for default."),
       space_after: z.number().min(0).max(144).nullable().optional().describe("Points of space after, or null for default."),
       text_indent: z.number().min(-3).max(3).nullable().optional().describe("First-line indent in inches (0.5 for essays); negative for a hanging indent (-0.5 for works cited); null for none."),
+      bibliography: z.boolean().nullable().optional().describe("true marks a works-cited entry and hangs the first line 0.5in when it has no indent of its own; false clears that mark."),
     },
     write: true,
     async handler(args, ctx) {
@@ -1042,7 +1148,7 @@ export const TOOLS = [
     name: "analyze_writing",
     title: "Analyze writing",
     description:
-      "Writing diagnostics for a document or a line range: word, sentence and paragraph counts, reading ease, grade level, vocabulary diversity, long sentences, and common AI-writing tropes (em-dash overuse, clichés like \"delve\", hidden watermark characters).",
+      "Writing diagnostics for a document or a line range: word, sentence and paragraph counts, reading ease, grade level, vocabulary diversity, long sentences, and common AI-writing tropes (em dashes, bullet glyphs that are not real lists, ellipsis characters, clichés like \"delve\", hidden watermark characters).",
     shape: { document_id: documentId, from_line: z.number().int().min(1).optional(), to_line: z.number().int().min(1).optional() },
     write: false,
     async handler(args, ctx) {
@@ -1069,10 +1175,45 @@ export const TOOLS = [
   }),
 
   defineTool({
+    name: "clean_ai_tells",
+    title: "Clean AI tells",
+    description:
+      "Clean a document so it is less likely to be flagged as AI-written. Deletes unimportant invisible characters immediately (zero-width spaces and other non-printing junk). Rewrites em dashes, en dashes used as pauses, bullet glyphs that are not real list items, and ellipsis characters into normal punctuation and Markdown lists (- item). Curly quotes and apostrophes are left as written. Real line breaks, real lists, and joiners that belong to a script (Arabic, Indic, Thai, emoji) are kept. Locked text is left unchanged. edit_document, write_document, insert_content, and multi_edit_document already delete invisible characters in text you write and flag any AI symbols that remain.",
+    shape: { document_id: documentId },
+    write: true,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      const serialized = serializeDoc(doc.doc);
+      let removed = 0;
+      const rewrites: AiSymbolHit[] = [];
+      const locked: AiSymbolHit[] = [];
+      const parts = serialized.blocks.map((block) => {
+        if (blockHasLock(block.node)) {
+          locked.push(...findAiSymbols(block.markdown));
+          return block.markdown;
+        }
+        const cleaned = cleanAiTellText(block.markdown);
+        removed += cleaned.removedInvisible;
+        rewrites.push(...cleaned.rewrites);
+        return cleaned.text;
+      });
+      const markdown = parts.join(BLOCK_SEPARATOR);
+      if (markdown === serialized.markdown) {
+        const summary = formatCleanSummary(0, [], locked);
+        return ok(summary || `No invisible characters or AI symbols to clean in "${doc.meta.title}".`);
+      }
+      const result = await commitEdit(ctx, doc, "clean_ai_tells", (current) => writeDocument(current, markdown), "Cleaned AI tells");
+      if (result.isError) return result;
+      const summary = formatCleanSummary(removed, rewrites, locked);
+      return summary ? { ...result, text: `${result.text}\n${summary}` } : result;
+    },
+  }),
+
+  defineTool({
     name: "check_spelling",
     title: "Check spelling",
     description:
-      "Find the words the editor underlines in red as misspelled: each word with its line, the text around it and suggested corrections. Code, equations and words in the user's dictionary are skipped. Fix real typos with edit_document; for names, places and invented words that are spelled as intended (a character or a fictional town), use add_to_dictionary so the user stops seeing the underline. The editor's underlines come from the user's browser, so a few may differ from this list.",
+      "Find the words the editor underlines in red as misspelled: each word with its line, the text around it and suggested corrections. Code, equations and words in the user's dictionary are skipped. Fix real typos with edit_document; for names, places and invented words that are spelled as intended (a character or a fictional town), use add_to_dictionary so the user stops seeing the underline. The editor underlines with this same dictionary, so the list matches the red underlines.",
     shape: { document_id: documentId, from_line: z.number().int().min(1).optional(), to_line: z.number().int().min(1).optional() },
     write: false,
     async handler(args, ctx) {
@@ -1138,6 +1279,35 @@ export const TOOLS = [
       const offset = args.offset ?? 0;
       const listing = formatLibrary(folders, documents, { folderId, excerptWords: args.excerpt_words ?? 15, limit: args.limit ?? 200, offset, openId: ctx.documentId ?? null });
       return ok(offset ? listing : `Folders:\n${formatFolderTree(folders, documents)}\n\nDocuments: ${listing}`);
+    },
+  }),
+
+  defineTool({
+    name: "search_documents",
+    title: "Search documents",
+    description:
+      "Search the user's documents for a word or phrase, in titles and the full text (not just the opening excerpt list_library shows). Returns each match's id, folder and the matching lines. Use it when the user asks to find a document, then open_document with the id to show it. search_document searches one document you already have; this searches the library.",
+    shape: {
+      query: z.string().min(1).describe("Text or regular expression to find."),
+      regex: z.boolean().optional().describe("Treat query as a JavaScript regular expression."),
+      case_sensitive: z.boolean().optional(),
+      folder: z.string().optional().describe('Only documents in this folder and the folders inside it: an id or a path like "Work/Q3".'),
+      limit: z.number().int().min(1).max(20).optional().describe("How many matching documents to return (default 8)."),
+    },
+    write: false,
+    async handler(args) {
+      const folderId = args.folder ? (await resolveFolder(args.folder, { create: false })).id : undefined;
+      if (args.folder && !folderId) return fail("Name a folder, or leave folder out to search the whole library.");
+      const hits = await searchLibrary(args.query, { regex: args.regex, caseSensitive: args.case_sensitive, folderId, limit: args.limit ?? 8 });
+      if (!hits.length) return ok(`No documents match "${args.query}".`);
+      const lines = hits.map((hit) => {
+        const where = [hit.tab ? `tab "${hit.tab}"` : "", hit.folder ? `in ${hit.folder}` : "unfiled"].filter(Boolean).join(" · ");
+        const found = hit.titleMatch ? "title match" : `${hit.matches} matching line${hit.matches === 1 ? "" : "s"}${hit.snippets.length ? `: "${hit.snippets.join(" / ")}"` : ""}`;
+        return `- ${hit.id} · "${hit.title}" · ${where} · ${found}`;
+      });
+      return ok(
+        `${hits.length} document${hits.length === 1 ? "" : "s"} match "${args.query}". Pass an id to open_document to show it.\n${lines.join("\n")}`,
+      );
     },
   }),
 
@@ -1357,13 +1527,20 @@ export const TOOLS = [
   defineTool({
     name: "open_document",
     title: "Open document",
-    description: "Show a document in the user's editor, switching the editor to it. Use it after create_document, or when the user asks to see another document.",
+    description:
+      "Show a document in the user's editor, switching the editor to it. On the home page, where no document is open, this opens the document there. Use it after create_document, when the user asks to see a document, or with an id search_documents returned.",
     shape: { document_id: z.string() },
     write: false,
     async handler(args, ctx) {
       const hub = documentHub();
       const target = await hub.get(args.document_id);
       if (!target || target.meta.trashedAt) return fail(`Document "${args.document_id}" was not found.`);
+      // A home-page chat has no document of its own. Open it in that page rather than
+      // whichever document happens to be focused in another tab.
+      if (!ctx.documentId && ctx.onOpen) {
+        ctx.onOpen(target.id);
+        return ok(`Opened "${target.meta.title}" (id ${target.id}).`);
+      }
       const current = ctx.documentId ? await hub.get(ctx.documentId) : await hub.active();
       const viewers = (current ?? target).sendCommand({ kind: "open_document", documentId: target.id });
       return ok(viewers ? `Opened "${target.meta.title}" in the editor.` : `"${target.meta.title}" is ready; the user has no editor open to show it in.`);

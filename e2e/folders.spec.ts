@@ -118,6 +118,26 @@ test("shift-click picks several items to drag into a folder or move together", a
   for (const title of titles) await expect(card(title)).toBeVisible();
 });
 
+test("opening a document from search, Back returns to its folder", async ({ page, request }) => {
+  const stamp = Date.now();
+  const folderName = `Recipes ${stamp}`;
+  const title = `Sourdough ${stamp}`;
+  const folder = ((await (await request.post("/api/folders", { data: { name: folderName } })).json()) as { folder: { id: string } }).folder;
+  const response = await request.post("/api/documents", { data: { title, markdown: `# ${title}\n\nStarter and salt.`, folderId: folder.id } });
+  expect(response.status()).toBe(201);
+  await page.goto("/");
+
+  await page.getByLabel("Search documents").fill(title);
+  await page.locator(".doc-card", { hasText: title }).click();
+  await expect(page).toHaveURL(/\/d\//);
+  await expect(page.locator(".doc-content")).toContainText("Starter and salt.");
+
+  await page.goBack();
+  await expect(page).toHaveURL(new RegExp(`[?&]folder=${folder.id}`));
+  await expect(page.locator(".crumb.is-current")).toHaveText(folderName);
+  await expect(page.locator(".doc-card", { hasText: title })).toBeVisible();
+});
+
 test("move a document with the Move dialog, making a new folder on the way", async ({ page, request }) => {
   const title = `Report ${Date.now()}`;
   await createDocument(request, title);

@@ -2,7 +2,7 @@
 
 import { redo, undo } from "prosemirror-history";
 import { AllSelection } from "prosemirror-state";
-import { createRef, useRef, useState, type RefObject } from "react";
+import { createRef, useEffect, useRef, useState, type RefObject } from "react";
 import type { DocumentSession, EditorMode } from "@/lib/client/documentSession";
 import { currentRevealLabel } from "@/lib/client/fileManager";
 import { desktop } from "@/lib/client/desktop";
@@ -10,6 +10,9 @@ import { modeMenuItems } from "@/components/workspace/modes";
 import {
   changeCase,
   clearFormatting,
+  insertBibliography,
+  insertCitation,
+  insertFootnote,
   insertHorizontalRule,
   insertTableOfContents,
   insertPageBreak,
@@ -23,6 +26,7 @@ import {
 import { addColumnAfter, addColumnBefore, addRowAfter, addRowBefore, deleteColumn, deleteRow, deleteTable, isInTable, toggleHeaderRow } from "prosemirror-tables";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { insertEquation } from "@/lib/editor/math";
+import { BUILTIN_COMMANDS } from "@/lib/agent/commands";
 
 export type MenuActions = {
   newDocument: () => void;
@@ -49,6 +53,9 @@ export type MenuActions = {
   connectClaudeCode: () => void;
   wordCount: () => void;
   ask: (prompt: string) => void;
+  /** Help → Developer options. When on, Claude chats can copy a turn or the whole history. */
+  devOptions: boolean;
+  toggleDevOptions: () => void;
   /** Spelling and grammar for the selection or the current paragraph. */
   checkSpelling: () => void;
   specialCharacters: () => void;
@@ -65,7 +72,7 @@ export type MenuActions = {
   setMode: (mode: EditorMode) => void;
   showInvisibles: boolean;
   toggleInvisibles: () => void;
-  /** The browser's spelling underlines. */
+  /** Red spelling underlines in the document. */
   spellcheck: boolean;
   toggleSpellcheck: () => void;
   substitutions: boolean;
@@ -81,17 +88,33 @@ const MENU_TIPS: Record<string, string> = {
   File: "New, copy, download, print and history",
   Edit: "Undo, clipboard and find",
   View: "Zoom, mode, panels and theme",
-  Insert: "Links, images, tables and breaks",
+  Insert: "Links, images, citations, tables and breaks",
   Format: "Text, paragraph and list styles",
   Tools: "Spelling, word count and Claude",
-  Help: "Shortcuts and connecting Claude Code",
+  Help: "Shortcuts, Claude Code and developer options",
 };
+
+function menuTip(name: string, focusMode: boolean) {
+  if (!focusMode) return MENU_TIPS[name];
+  if (name === "Tools") return "Spelling and word count";
+  if (name === "Help") return "Keyboard shortcuts";
+  return MENU_TIPS[name];
+}
 
 export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSession; actions: MenuActions; zoom: number; hunks: number }) {
   const [open, setOpen] = useState<string | null>(null);
   const anchors = useRef<Record<string, RefObject<HTMLButtonElement | null>>>({});
   const anchor = (name: string) => (anchors.current[name] ??= createRef<HTMLButtonElement>());
   const menus = documentMenus(session, actions, zoom, hunks);
+  // With a menu open, moving into its first rows can cross the next title (Format's
+  // "Text" sits under Tools). Switch only after the pointer actually rests there.
+  const switchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelSwitch = () => {
+    if (switchTimer.current === null) return;
+    clearTimeout(switchTimer.current);
+    switchTimer.current = null;
+  };
+  useEffect(() => cancelSwitch, []);
 
   return (
     <nav className="menubar" aria-label="Menu">
@@ -103,10 +126,21 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
             className={`menubar-item${open === name ? " is-open" : ""}`}
             aria-haspopup="menu"
             aria-expanded={open === name}
-            data-tip={open ? undefined : MENU_TIPS[name]}
+            data-tip={open ? undefined : menuTip(name, actions.focusMode)}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => setOpen((value) => (value === name ? null : name))}
-            onMouseEnter={() => open && open !== name && setOpen(name)}
+            onClick={() => {
+              cancelSwitch();
+              setOpen((value) => (value === name ? null : name));
+            }}
+            onMouseEnter={() => {
+              if (!open || open === name) return;
+              cancelSwitch();
+              switchTimer.current = setTimeout(() => {
+                switchTimer.current = null;
+                setOpen(name);
+              }, 250);
+            }}
+            onMouseLeave={cancelSwitch}
           >
             {name}
           </button>
@@ -169,7 +203,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       { label: "Find", shortcut: `⌘F`, onSelect: () => actions.find(false) },
       { label: "Find and replace", shortcut: `⌘H`, onSelect: () => actions.find(true) },
       { kind: "separator" },
-      { label: "Keep all pending changes", hint: "Claude's edits and suggestions", disabled: !hunks, onSelect: () => void session.review("accept", "all") },
+      { label: "Keep all pending changes", hint: actions.focusMode ? "Pending edits and suggestions" : "Claude's edits and suggestions", disabled: !hunks, onSelect: () => void session.review("accept", "all") },
       { label: "Undo all pending changes", disabled: !hunks, onSelect: () => void session.review("reject", "all") },
       { label: "Next change", shortcut: "⌥]", disabled: !hunks, onSelect: () => session.gotoChange(1) },
     ],
@@ -184,7 +218,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       { label: "Tabs & outline", onSelect: actions.toggleOutline },
       { kind: "separator" },
       ...(actions.focusMode ? [] : [{ label: "Claude panel", shortcut: `⌘J`, onSelect: actions.toggleAgent }]),
-      { label: "Focus mode", hint: "Hide Claude while you write", checked: actions.focusMode, onSelect: actions.toggleFocusMode },
+      { label: "Focus mode", hint: "Hide AI tools while you write", checked: actions.focusMode, onSelect: actions.toggleFocusMode },
       { label: "Show non-printing characters", shortcut: `⌘⇧P`, checked: actions.showInvisibles, onSelect: actions.toggleInvisibles },
       { label: "Show spelling underlines", checked: actions.spellcheck, onSelect: actions.toggleSpellcheck },
       ...(actions.pdfAnnotations === null ? [] : [{ label: "Show PDF annotations", hint: "As they were on the original pages", checked: actions.pdfAnnotations, onSelect: actions.togglePdfAnnotations }]),
@@ -210,6 +244,10 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       },
       { label: "Special characters…", onSelect: actions.specialCharacters },
       { label: "Table of contents", onSelect: () => !run(insertTableOfContents) && actions.notice("Add some headings first; the table of contents lists them.") },
+      { kind: "separator" },
+      { label: "Footnote", onSelect: () => !run(insertFootnote) && actions.notice("Put the cursor in a paragraph to add a footnote.") },
+      { label: "Citation", onSelect: () => !run(insertCitation) && actions.notice("Put the cursor in a paragraph to add a citation.") },
+      { label: "Bibliography", onSelect: () => run(insertBibliography) },
       { kind: "separator" },
       { label: "Horizontal line", onSelect: () => run(insertHorizontalRule) },
       { label: "Page break", shortcut: `⌘⏎`, onSelect: () => run(insertPageBreak) },
@@ -308,6 +346,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
         : ([
             { kind: "separator" },
             { label: "Check spelling & grammar here", shortcut: `⌘⌥X`, onSelect: actions.checkSpelling },
+            { label: "Ask Claude to add citations", onSelect: () => actions.ask(BUILTIN_COMMANDS.find((command) => command.name === "cite")!.prompt) },
             { label: "Ask Claude to proofread", onSelect: () => actions.ask("Proofread the document and fix spelling, grammar and punctuation. Don't change the meaning or voice.") },
             { label: "Ask Claude for feedback", onSelect: () => actions.ask("Read the document and give me your three most important suggestions to improve it. Don't edit yet.") },
             {
@@ -323,7 +362,9 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
     ],
     Help: [
       { label: "Keyboard shortcuts", shortcut: `⌘/`, onSelect: actions.shortcuts },
-      { label: "Connect Claude Code…", hint: "Copy the command to use Inline from your terminal", onSelect: actions.connectClaudeCode },
+      ...(actions.focusMode ? [] : [{ label: "Connect Claude Code…", hint: "Copy the command to use Inline from your terminal", onSelect: actions.connectClaudeCode }]),
+      { kind: "separator" },
+      { label: "Developer options", hint: "Copy a turn or the whole chat for debugging", checked: actions.devOptions, onSelect: actions.toggleDevOptions },
     ],
   };
   return menus;

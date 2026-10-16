@@ -4,7 +4,7 @@ import { installMenus } from "./menu.mjs";
 import { dataDir, logFile, serverRunning, startServer, stopServer } from "./server.mjs";
 import { flushSettings } from "./settings.mjs";
 import { checkForUpdatesNow, startUpdates } from "./updates.mjs";
-import { appOrigin, applyChrome, createWindow, isAppUrl, setOrigin } from "./windows.mjs";
+import { appOrigin, applyChrome, createWindow, isAppUrl, openExternal, setOrigin } from "./windows.mjs";
 
 /**
  * Inline's desktop app: starts Inline's server on this computer, then shows
@@ -73,6 +73,9 @@ function main() {
     });
 
     ipcMain.on("inline:open-in-browser", (event, pathname) => openInBrowser(pathname ?? undefined, event.sender.getURL()));
+    ipcMain.on("inline:open-external", (_event, url) => {
+      if (typeof url === "string") openExternal(url);
+    });
     ipcMain.on("inline:chrome", (event, chrome) => {
       const window = BrowserWindow.fromWebContents(event.sender);
       if (window) applyChrome(window, chrome);

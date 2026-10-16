@@ -73,8 +73,10 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   reply_to_comment: { comment_id: "missing", reply: "Done." },
   resolve_comment: { comment_id: "missing" },
   analyze_writing: {},
+  clean_ai_tells: {},
   count_words: {},
   get_page_count: {},
+  screenshot_page: { page: 1 },
   list_documents: {},
   create_document: { title: "Another" },
   open_document: { document_id: "missing" },
@@ -93,6 +95,7 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   check_spelling: {},
   add_to_dictionary: { words: ["Zorblat"] },
   list_library: {},
+  search_documents: { query: "fox" },
   list_folders: {},
   move_documents: { moves: [{ folder: "Archive" }] },
   create_folder: { name: "Projects" },
@@ -723,6 +726,32 @@ describe("set_paragraph_style", () => {
     assert.match(settings.text, /align=justify/);
   });
 
+  test("bibliography marks a works-cited entry and hangs it", async () => {
+    const { doc, ctx } = await setup();
+    const result = await runTool("set_paragraph_style", { from_line: 3, bibliography: true }, ctx);
+    assert.equal(result.isError, undefined, result.text);
+    assert.equal(doc.doc.child(1).attrs.bibliography, true);
+    assert.equal(doc.doc.child(1).attrs.textIndent, -0.5);
+    assert.match(md(doc), /\{\.bibliography\}/);
+  });
+
+  test("edit_document inserts a citation, a footnote and a bibliography entry", async () => {
+    const { doc, ctx } = await setup();
+    const result = await runTool(
+      "edit_document",
+      {
+        old_string: "The quick brown fox jumps over the lazy dog.",
+        new_string: "The quick brown fox jumps over the lazy dog.<cite>(Smith, 2020)</cite>[^1]\n\n[^1]: Smith, Ada. *Foxes*. 2020.\n\n## References\n\nSmith, Ada. *Foxes*. Publisher, 2020. {.bibliography}",
+      },
+      ctx,
+    );
+    assert.equal(result.isError, undefined, result.text);
+    const text = md(doc);
+    assert.match(text, /<cite>\(Smith, 2020\)<\/cite>\[\^1\]/);
+    assert.match(text, /\[\^1\]: Smith, Ada\. \*Foxes\*\. 2020\./);
+    assert.match(text, /Smith, Ada\. \*Foxes\*\. Publisher, 2020\. \{\.bibliography\}/);
+  });
+
   test("a range restyles every block in it", async () => {
     const { doc, ctx } = await setup();
     const result = await runTool("set_paragraph_style", { from_line: 1, to_line: 3, align: "center" }, ctx);
@@ -1039,6 +1068,70 @@ describe("analyze_writing", () => {
     assert.match(result.text, /\(lines 7-8\)/);
     assert.match(result.text, /Words: 6/);
   });
+
+  test("reports bullet glyphs that are not real lists", async () => {
+    const { ctx } = await setup({}, "Pack • towels.");
+    const result = await runTool("analyze_writing", {}, ctx);
+    assert.match(result.text, /bullet glyph/);
+  });
+});
+
+describe("AI tells on write and clean", () => {
+  test("edit_document deletes invisible characters and flags AI symbols", async () => {
+    const { doc, ctx } = await setup();
+    const result = await runTool("edit_document", { old_string: "lazy dog", new_string: "lazy\u200B dog — really" }, ctx);
+    assert.equal(result.isError, undefined, result.text);
+    assert.match(md(doc), /lazy dog — really/);
+    assert.doesNotMatch(md(doc), /\u200B/);
+    assert.match(result.text, /Deleted 1 invisible character/);
+    assert.match(result.text, /AI-tell check/);
+    assert.match(result.text, /1 em dash/);
+  });
+
+  test("a real Markdown list is not flagged", async () => {
+    const { doc, ctx } = await setup();
+    const result = await runTool("edit_document", { old_string: "lazy dog", new_string: "a short list:\n\n- towels\n- sunscreen" }, ctx);
+    assert.equal(result.isError, undefined, result.text);
+    assert.doesNotMatch(result.text, /AI-tell check/);
+    assert.match(md(doc), /- towels\n- sunscreen/);
+  });
+
+  test("clean_ai_tells rewrites symbols and keeps real lists, ranges and script joiners", async () => {
+    const arabic = "ن\u200Cم";
+    const { doc, ctx } = await setup({}, `Bring these.\n\n• Towels\n\n• Sunscreen\n\nThe plan\u200B — done…\n\nPages 12–14.\n\n- Already a list\n\n${arabic}`);
+    const result = await runTool("clean_ai_tells", {}, ctx);
+    assert.equal(result.isError, undefined, result.text);
+    const markdown = md(doc);
+    assert.match(markdown, /- Towels\n- Sunscreen/);
+    assert.match(markdown, /The plan - done\.\.\./);
+    assert.match(markdown, /Pages 12–14/);
+    assert.match(markdown, /- Already a list/);
+    assert.ok(markdown.includes(arabic));
+    assert.doesNotMatch(markdown, /[•—…\u200B]/);
+    assert.match(result.text, /Deleted 1 invisible character/);
+    assert.match(result.text, /em dash/);
+  });
+
+  test("clean_ai_tells leaves a clean document unchanged", async () => {
+    const { doc, ctx } = await setup();
+    const before = md(doc);
+    const result = await runTool("clean_ai_tells", {}, ctx);
+    assert.equal(result.isError, undefined, result.text);
+    assert.match(result.text, /No invisible characters or AI symbols/);
+    assert.equal(md(doc), before);
+    assert.equal(doc.hunks.length, 0);
+  });
+
+  test("clean_ai_tells does not change locked text", async () => {
+    const { doc, ctx } = await setup({}, "Open — text.\n\nLocked — text.");
+    lock(doc, "Locked — text.");
+    const result = await runTool("clean_ai_tells", {}, ctx);
+    assert.equal(result.isError, undefined, result.text);
+    const markdown = md(doc);
+    assert.match(markdown, /Open - text/);
+    assert.match(markdown, /Locked — text/);
+    assert.match(result.text, /Locked text was left unchanged/);
+  });
 });
 
 describe("count_words", () => {
@@ -1127,6 +1220,51 @@ describe("get_page_count", () => {
       setTimeout(() => doc.setLayout({ version: doc.version, pages: 3, starts: [], lastPageFill: 0.5 }), 50);
       const result = await runTool("get_page_count", {}, ctx);
       assert.match(result.text, /fills 3 pages, as laid out/);
+    } finally {
+      stop();
+    }
+  });
+});
+
+describe("screenshot_page", () => {
+  /** A 1×1 PNG. The editor posts real page pictures; the tool only needs bytes it can hand to Claude. */
+  const png = Uint8Array.from(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"));
+
+  test("needs the document open in an editor", async () => {
+    const { ctx } = await setup();
+    const result = await runTool("screenshot_page", { page: 1 }, ctx);
+    assert.equal(result.isError, true);
+    assert.match(result.text, /open/);
+    assert.equal(result.images, undefined);
+  });
+
+  test("refuses a page the editor has already measured past the end", async () => {
+    const { doc, ctx } = await setup();
+    doc.setLayout({ version: doc.version, pages: 1, starts: [], lastPageFill: 0.4 });
+    const result = await runTool("screenshot_page", { page: 2 }, ctx);
+    assert.equal(result.isError, true);
+    assert.match(result.text, /1 page/);
+    assert.match(result.text, /Pass a page from 1 to 1/);
+  });
+
+  test("returns the picture the editor sends", async () => {
+    const { doc, ctx } = await setup();
+    const { deliverPageRenders } = await import("@/lib/server/renders");
+    doc.setLayout({ version: doc.version, pages: 2, starts: [findText(doc.doc, "Findings")], lastPageFill: 0.2 });
+    const stop = doc.subscribe((event) => {
+      if (event.type !== "command" || event.command.kind !== "render_pages") return;
+      assert.deepEqual(event.command.pages, [1]);
+      assert.equal(event.command.scale, 1.5);
+      deliverPageRenders(doc.id, event.command.requestId, [{ page: 1, png }]);
+    });
+    try {
+      const result = await runTool("screenshot_page", { page: 2 }, ctx);
+      assert.equal(result.isError, undefined, result.text);
+      assert.match(result.text, /Page 2 of 2 of "Field notes"/);
+      assert.match(result.text, /Look at the picture, then fix/);
+      assert.equal(result.images?.length, 1);
+      assert.equal(result.images?.[0]?.mimeType, "image/png");
+      assert.equal(result.images?.[0]?.data, Buffer.from(png).toString("base64"));
     } finally {
       stop();
     }

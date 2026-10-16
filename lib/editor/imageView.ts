@@ -1,4 +1,6 @@
+import { GapCursor } from "prosemirror-gapcursor";
 import type { Node as PMNode } from "prosemirror-model";
+import { NodeSelection, Plugin, Selection, type EditorState } from "prosemirror-state";
 import type { EditorView, NodeView } from "prosemirror-view";
 
 const MIN_WIDTH = 48;
@@ -118,4 +120,85 @@ export class ImageView implements NodeView {
   ignoreMutation() {
     return true;
   }
+}
+
+const PHOTO_TYPES = new Set(["image", "inline_image"]);
+
+function isPhotoSelection(state: EditorState): state is EditorState & { selection: NodeSelection } {
+  return state.selection instanceof NodeSelection && PHOTO_TYPES.has(state.selection.node.type.name);
+}
+
+/** The pointer is on the photo or a resize handle, not the block around it. */
+function eventOnPhoto(target: EventTarget | null): boolean {
+  const element =
+    target && typeof target === "object" && "closest" in target && typeof (target as Element).closest === "function"
+      ? (target as Element)
+      : target && typeof target === "object" && "parentElement" in target
+        ? ((target as Node).parentElement ?? null)
+        : null;
+  return Boolean(element?.closest("img, .image-handle"));
+}
+
+/**
+ * A cursor that is not the photo. Text beside it when there is any, otherwise
+ * a gap cursor (a document that is only a photo has nowhere else to put one).
+ */
+function cursorOffImage(state: EditorState, imagePos: number): Selection | null {
+  const before = Selection.findFrom(state.doc.resolve(imagePos), -1, true);
+  if (before) return before;
+  const node = state.doc.nodeAt(imagePos);
+  const afterPos = imagePos + (node?.nodeSize ?? 1);
+  const after = afterPos <= state.doc.content.size ? Selection.findFrom(state.doc.resolve(afterPos), 1, true) : null;
+  if (after) return after;
+  // `valid` is runtime API; the type marks it internal.
+  const gap = GapCursor as unknown as { valid($pos: ReturnType<EditorState["doc"]["resolve"]>): boolean };
+  const $at = state.doc.resolve(imagePos);
+  if (gap.valid($at)) return new GapCursor($at);
+  const $after = state.doc.resolve(Math.min(state.doc.content.size, afterPos));
+  return gap.valid($after) ? new GapCursor($after) : null;
+}
+
+function moveCursorOffPhoto(view: EditorView, imagePos: number) {
+  if (view.isDestroyed) return false;
+  const next = cursorOffImage(view.state, imagePos);
+  if (!next || next.eq(view.state.selection)) return false;
+  view.dispatch(view.state.tr.setSelection(next).setMeta("pointer", true));
+  return true;
+}
+
+/** A click outside the editor does not update ProseMirror's click tracker, so the next click on the photo would count as a double-click and not select it. */
+function forgetRecentClick(view: EditorView) {
+  const input = (view as unknown as { input?: { lastClick?: { time: number } } }).input;
+  if (input?.lastClick) input.lastClick.time = 0;
+}
+
+/**
+ * Node selections stay visible when the editor blurs, so a click on the page
+ * or the app background would leave a photo selected. Clicks on the photo
+ * (and its resize handles) still select it. Clicks inside the document are
+ * left to ProseMirror, which places the text caret.
+ */
+export function imageSelectionPlugin() {
+  return new Plugin({
+    props: {
+      handleClickOn(view, _pos, node, nodePos, event) {
+        // Right-click keeps the editor's own menu; shift-click still extends a text selection.
+        if (event.button !== 0 || event.shiftKey) return false;
+        if (!PHOTO_TYPES.has(node.type.name) || eventOnPhoto(event.target)) return false;
+        return moveCursorOffPhoto(view, nodePos);
+      },
+    },
+    view(editorView) {
+      const onClick = (event: Event) => {
+        if (!("button" in event) || (event as MouseEvent).button !== 0) return;
+        if (!isPhotoSelection(editorView.state)) return;
+        const target = event.target;
+        if (target && typeof (target as Node).nodeType === "number" && editorView.dom.contains(target as Node)) return;
+        if (!moveCursorOffPhoto(editorView, editorView.state.selection.from)) return;
+        forgetRecentClick(editorView);
+      };
+      editorView.root.addEventListener("click", onClick);
+      return { destroy: () => editorView.root.removeEventListener("click", onClick) };
+    },
+  });
 }

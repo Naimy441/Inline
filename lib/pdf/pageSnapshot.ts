@@ -377,7 +377,8 @@ export function snapshotPages(
 
     if (el.tagName === "A") {
       const href = el.getAttribute("href");
-      if (href && /^(https?:|mailto:)/i.test(href)) {
+      // File links are PDF link annotations, so a reader outside Inline can open them.
+      if (href && /^(https?:|mailto:|file:)/i.test(href)) {
         for (const box of measure.boxes(el)) {
           if (!box.width || !box.height) continue;
           const at = place(box);

@@ -1,9 +1,12 @@
 import { lift, setBlockType, toggleMark, wrapIn } from "prosemirror-commands";
-import type { Attrs, MarkType, Node as PMNode, NodeType } from "prosemirror-model";
+import { Fragment, type Attrs, type MarkType, type Node as PMNode, type NodeType } from "prosemirror-model";
 import { liftListItem, sinkListItem, wrapInList } from "prosemirror-schema-list";
 import { NodeSelection, TextSelection, type Command, type EditorState } from "prosemirror-state";
 import { isInTable } from "prosemirror-tables";
-import { MAX_INDENT, safeHref, schema, type Align } from "@/lib/doc/schema";
+import { fileLinkHref, MAX_INDENT, safeHref, schema, type Align } from "@/lib/doc/schema";
+
+const CITATION_PLACEHOLDER = "(Author, Year)";
+const BIBLIOGRAPHY_PLACEHOLDER = "Author. Title. Publisher, Year.";
 
 /** Editing commands shared by the toolbar, menus, keymap and command palette. */
 
@@ -288,6 +291,63 @@ function insertBlock(node: PMNode, enter = false): Command {
 export const insertHorizontalRule = insertBlock(nodes.horizontal_rule!.create());
 export const insertPageBreak = insertBlock(nodes.page_break!.create());
 
+function nextFootnoteLabel(doc: PMNode) {
+  let max = 0;
+  doc.descendants((node) => {
+    const raw = node.type.name === "footnote_ref" ? node.attrs.label : node.attrs.footnote;
+    const n = typeof raw === "string" && /^\d+$/.test(raw) ? Number(raw) : 0;
+    if (n > max) max = n;
+  });
+  return String(max + 1);
+}
+
+/** Insert a numbered footnote marker and its note, and put the cursor in the note. */
+export const insertFootnote: Command = (state, dispatch) => {
+  const { $from } = state.selection;
+  if (!$from.parent.isTextblock || $from.parent.type.spec.code) return false;
+  const label = nextFootnoteLabel(state.doc);
+  const ref = nodes.footnote_ref!.create({ label });
+  const note = nodes.paragraph!.create({ footnote: label });
+  if (!dispatch) return true;
+  const tr = state.tr.insert(state.selection.to, ref);
+  const at = tr.doc.content.size;
+  tr.insert(at, note);
+  tr.setSelection(TextSelection.create(tr.doc, at + 1));
+  dispatch(tr.scrollIntoView());
+  return true;
+};
+
+/** Insert a parenthetical citation and select the placeholder so it can be typed over. */
+export const insertCitation: Command = (state, dispatch) => {
+  const { $from } = state.selection;
+  if (!$from.parent.isTextblock || $from.parent.type.spec.code) return false;
+  const mark = schema.marks.citation!.create();
+  if (!dispatch) return true;
+  const from = state.selection.from;
+  const tr = state.tr.replaceSelectionWith(schema.text(CITATION_PLACEHOLDER, [mark]), false);
+  tr.setSelection(TextSelection.create(tr.doc, from + 1, from + CITATION_PLACEHOLDER.length - 1));
+  tr.setStoredMarks([mark]);
+  dispatch(tr.scrollIntoView());
+  return true;
+};
+
+/** Append a References heading and one hanging bibliography entry. */
+export const insertBibliography: Command = (state, dispatch) => {
+  const heading = nodes.heading!.create({ level: 2 }, schema.text("References"));
+  const entry = nodes.paragraph!.create({ bibliography: true, textIndent: -0.5 }, schema.text(BIBLIOGRAPHY_PLACEHOLDER));
+  if (!dispatch) return true;
+  const onlyEmpty = state.doc.childCount === 1 && state.doc.firstChild?.isTextblock && state.doc.firstChild.content.size === 0;
+  const tr = state.tr;
+  const at = onlyEmpty ? 0 : state.doc.content.size;
+  const block = Fragment.from([heading, entry]);
+  if (onlyEmpty) tr.replaceWith(0, state.doc.content.size, block);
+  else tr.insert(at, block);
+  const from = at + heading.nodeSize + 1;
+  tr.setSelection(TextSelection.create(tr.doc, from, from + BIBLIOGRAPHY_PLACEHOLDER.length));
+  dispatch(tr.scrollIntoView());
+  return true;
+};
+
 export function insertImage(src: string, alt = "", width: string | null = null): Command {
   return insertBlock(nodes.image!.create({ src, alt, width, align: "center" }));
 }
@@ -345,8 +405,16 @@ export function linkAt(state: EditorState): { from: number; to: number; href: st
   return { from: start0 + Math.max(0, start), to: start0 + end, href: mark.attrs.href as string };
 }
 
+/** The href stored for text the user typed into the link field, or null when Inline refuses it. */
+export function linkHrefFromInput(raw: string): string | null {
+  const trimmed = raw.trim();
+  const candidate = fileLinkHref(trimmed) ?? (/^[\w.-]+\.[a-z]{2,}(\/|$)/i.test(trimmed) ? `https://${trimmed}` : trimmed);
+  const href = safeHref(candidate);
+  return href ? normalizeHref(href) : null;
+}
+
 export function setLink(rawHref: string | null, text?: string): Command {
-  const href = rawHref === null ? null : safeHref(/^[\w.-]+\.[a-z]{2,}(\/|$)/i.test(rawHref.trim()) ? `https://${rawHref.trim()}` : rawHref);
+  const href = rawHref === null ? null : linkHrefFromInput(rawHref);
   return (state, dispatch) => {
     if (rawHref !== null && !href) return false;
     if (!dispatch) return true;
@@ -360,7 +428,7 @@ export function setLink(rawHref: string | null, text?: string): Command {
     }
     if (from === to) return false;
     tr.removeMark(from, to, type);
-    if (href) tr.addMark(from, to, type.create({ href: normalizeHref(href) }));
+    if (href) tr.addMark(from, to, type.create({ href }));
     dispatch(tr.scrollIntoView());
     return true;
   };
@@ -368,6 +436,8 @@ export function setLink(rawHref: string | null, text?: string): Command {
 
 export function normalizeHref(href: string) {
   const trimmed = href.trim();
+  const file = fileLinkHref(trimmed);
+  if (file) return file;
   if (/^(https?:|mailto:|tel:|#|\/)/i.test(trimmed)) return trimmed;
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return `mailto:${trimmed}`;
   return `https://${trimmed}`;
@@ -488,7 +558,22 @@ export function blockPosById(doc: PMNode, id: string): number | null {
   return found;
 }
 
-/** Follow a link: in-document anchors (#block-id) move the cursor there, others open in a new tab. */
+/**
+ * Open a link that leaves the document. File links go through the desktop
+ * app when it is there, because a browser will not open `file://` itself.
+ * Web, mail and phone links open in a new tab (the desktop app hands those
+ * to the system too).
+ */
+export function openDocumentLink(href: string) {
+  const bridge = typeof window !== "undefined" ? window.inlineDesktop?.openExternal : undefined;
+  if (/^file:/i.test(href) && bridge) {
+    bridge(href);
+    return;
+  }
+  window.open(href, "_blank", "noopener,noreferrer");
+}
+
+/** Follow a link: in-document anchors (#block-id) move the cursor there, others open outside the document. */
 export function followLink(href: string): Command {
   return (state, dispatch) => {
     if (href.startsWith("#")) {
@@ -497,7 +582,7 @@ export function followLink(href: string): Command {
       dispatch?.(state.tr.setSelection(TextSelection.near(state.doc.resolve(pos + 1))).scrollIntoView());
       return true;
     }
-    if (dispatch) window.open(href, "_blank", "noopener,noreferrer");
+    if (dispatch) openDocumentLink(href);
     return true;
   };
 }

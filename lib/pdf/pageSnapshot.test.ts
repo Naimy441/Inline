@@ -189,6 +189,20 @@ describe("snapshotPages", () => {
     assert.deepEqual(fills[0], [1, 1, 0]);
   });
 
+  it("writes a file link as a PDF link annotation", () => {
+    const html = `
+      <div class="page-stack">
+        <div class="sheet" data-box="0 0 408 528"></div>
+        <div class="page-content doc-content" data-box="48 48 312 400">
+          <p data-box="48 48 200 16"><a href="file:///tmp/notes.pdf" data-box="48 48 80 16">notes</a></p>
+        </div>
+      </div>`;
+    const dom = new JSDOM(html);
+    const model = snapshotPages(dom.window.document.querySelector<HTMLElement>(".page-stack")!, "Notes", fakeMeasurer());
+    const link = model.pages[0]!.items.find((item) => item.kind === "link");
+    assert.equal(link?.kind === "link" && link.uri, "file:///tmp/notes.pdf");
+  });
+
   it("draws underlines, link targets, table borders and images", () => {
     const items = snapshot().pages[0].items;
     const under = find(items, "under")!;

@@ -1,6 +1,6 @@
 import { Node as PMNode } from "prosemirror-model";
 import { Step, Transform } from "prosemirror-transform";
-import { docPlainText, docWordCount, rangeMarkTexts, wordCount } from "@/lib/doc/editing";
+import { docPlainText, docWordCount, openingLine, rangeMarkTexts, wordCount } from "@/lib/doc/editing";
 import { blockIdFixes, ensureBlockIds, newId } from "@/lib/doc/ids";
 import { markdownToDoc } from "@/lib/doc/markdown";
 import { acceptHunks, hunkFromJSON, hunkToJSON, mapHunks, recordAgentChange, rejectHunks, USER_AUTHOR, type Hunk, type HunkJSON } from "@/lib/doc/review";
@@ -277,6 +277,8 @@ export class LiveDocument {
     this.meta = { ...this.meta, updatedAt: Date.now() };
     this.dirtySinceVersion = true;
     this.lastUsed = Date.now();
+    // The title follows the first line as the letters arrive, not after the save delay.
+    this.syncAutoTitle();
     this.schedulePersist();
   }
 
@@ -584,26 +586,20 @@ export class LiveDocument {
     }, PERSIST_DELAY_MS);
   }
 
+  /** While the document is still untitled, keep its name on the first line, already shortened. */
+  private syncAutoTitle() {
+    if (!this.meta.autoTitle) return;
+    const title = titleFromText(openingLine(this.doc));
+    if (!title || title === this.meta.title) return;
+    this.meta = { ...this.meta, title };
+    this.emit({ type: "meta", meta: this.meta });
+    this.onRetitle?.(title);
+  }
+
   async persist() {
     if (this.deleted) return;
     this.meta = { ...this.meta, wordCount: docWordCount(this.doc), preview: docPreview(this.doc) };
-    if (this.meta.autoTitle) {
-      let firstLine = "";
-      this.doc.descendants((node) => {
-        if (firstLine) return false;
-        if (node.isTextblock) {
-          firstLine = node.textContent.trim();
-          return false;
-        }
-        return true;
-      });
-      const title = titleFromText(firstLine);
-      if (title && title !== this.meta.title) {
-        this.meta = { ...this.meta, title };
-        this.emit({ type: "meta", meta: this.meta });
-        this.onRetitle?.(title);
-      }
-    }
+    this.syncAutoTitle();
     await writeDocumentFile(this.toFile());
     libraryChanged();
     if (this.dirtySinceVersion && Date.now() - this.lastAutoVersion > AUTO_VERSION_INTERVAL_MS) {

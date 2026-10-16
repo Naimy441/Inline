@@ -7,6 +7,57 @@ async function newBlankDocument(page: Page) {
   await expect(page.locator(".doc-content")).toBeVisible();
 }
 
+test("a web link and a file link can be inserted, opened, and survive a reload", async ({ page }) => {
+  await newBlankDocument(page);
+  const doc = page.locator(".doc-content");
+  await doc.click();
+  await page.keyboard.type("See the notes and the file.");
+  await expect(doc.locator("p").first()).toHaveText("See the notes and the file.");
+
+  const selectWord = async (word: string) => {
+    await doc.click();
+    await page.keyboard.press("Home");
+    const index = "See the notes and the file.".indexOf(word);
+    for (let i = 0; i < index; i += 1) await page.keyboard.press("ArrowRight");
+    for (let i = 0; i < word.length; i += 1) await page.keyboard.press("Shift+ArrowRight");
+  };
+
+  await selectWord("notes");
+  await page.getByRole("button", { name: "Insert link" }).click();
+  await page.getByPlaceholder("Paste or type a link").fill("https://example.com/notes");
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect(doc.locator('a[href="https://example.com/notes"]')).toHaveText("notes");
+
+  await selectWord("file");
+  await page.getByRole("button", { name: "Insert link" }).click();
+  await page.getByPlaceholder("Paste or type a link").fill("file:///tmp/notes.pdf");
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect(doc.locator('a[href="file:///tmp/notes.pdf"]')).toHaveText("file");
+
+  await expect(page.locator(".sync-status")).toHaveText(/Saved/);
+  await page.reload();
+  await expect(doc.locator('a[href="https://example.com/notes"]')).toHaveText("notes");
+  await expect(doc.locator('a[href="file:///tmp/notes.pdf"]')).toHaveText("file");
+
+  await page.evaluate(() => {
+    const opened: string[] = [];
+    (window as unknown as { __opened: string[] }).__opened = opened;
+    window.open = ((url?: string | URL) => {
+      opened.push(String(url ?? ""));
+      return null;
+    }) as typeof window.open;
+  });
+  await doc.locator('a[href="https://example.com/notes"]').click({ modifiers: ["Control"] });
+  await doc.locator('a[href="file:///tmp/notes.pdf"]').click({ modifiers: ["Control"] });
+  await doc.locator('a[href="file:///tmp/notes.pdf"]').click();
+  await page.locator("a.bubble-url").click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __opened?: string[] }).__opened ?? [])).toEqual([
+    "https://example.com/notes",
+    "file:///tmp/notes.pdf",
+    "file:///tmp/notes.pdf",
+  ]);
+});
+
 test("typing is saved and survives a reload", async ({ page }) => {
   await newBlankDocument(page);
   await page.locator(".doc-content").click();
@@ -46,7 +97,7 @@ test("long documents flow onto a second page", async ({ page }) => {
 test("comments attach to the selected text", async ({ page }) => {
   await newBlankDocument(page);
   await page.locator(".doc-content").click();
-  await page.keyboard.type("Commentable sentence here.");
+  await page.keyboard.type("A sentence worth a source.");
   await page.keyboard.press("Home");
   await page.keyboard.press("Shift+End");
   await page.keyboard.press("Control+Alt+m");
@@ -76,24 +127,85 @@ test("with no side panel open, comments float beside the page and save at once",
   await expect(page.locator(".side-panel")).toHaveCount(0);
 });
 
+test("selecting text does not open a selection action bar", async ({ page }) => {
+  await newBlankDocument(page);
+  await page.locator(".doc-content").click();
+  await page.keyboard.type("A sentence to select.");
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Shift+End");
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("A sentence to select.");
+  await expect(page.locator(".bubble")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Ask Claude" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Comment", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Edit with Claude" })).toHaveCount(0);
+  await expect(page.getByRole("toolbar", { name: "Formatting" }).getByRole("button", { name: "Italic" })).toBeVisible();
+  // The document toolbar still formats the selection.
+  await page.getByRole("toolbar", { name: "Formatting" }).getByRole("button", { name: "Bold" }).click();
+  await expect(page.locator(".doc-content strong")).toHaveText("A sentence to select.");
+});
+
 test("toolbar buttons show tooltips", async ({ page }) => {
   await newBlankDocument(page);
   await page.getByRole("toolbar", { name: "Formatting" }).getByRole("button", { name: "Bold" }).hover();
   await expect(page.getByRole("tooltip")).toHaveText(/^Bold\s+(Ctrl|⌘)\+?B$/);
 });
 
-test("spelling underlines can be hidden, and a word added to the dictionary", async ({ page }) => {
+test("spelling underlines misspellings as you type, and a word can be added to the dictionary", async ({ page }) => {
   await newBlankDocument(page);
   const doc = page.locator(".doc-content");
   await doc.click();
-  await page.keyboard.type("Zorblat is here.");
-  // Right-click on the word itself.
-  await doc.locator("p").first().click({ button: "right", position: { x: 12, y: 8 } });
-  await page.getByRole("menuitem", { name: /Add “Zorblat” to dictionary/ }).click();
-  await expect(doc.locator('[spellcheck="false"]')).toHaveText("Zorblat");
+  await page.keyboard.type("The righteois path.");
+  const underlined = doc.locator(".spelling-error");
+  // Hunspell loads with the document; the line shows up without a reload.
+  // Only the misspelling is marked. "The" and "path" stay plain.
+  await expect(underlined).toHaveText("righteois", { timeout: 15_000 });
+  await underlined.click({ button: "right" });
+  await expect(page.getByText("Shift+right-click for spelling suggestions")).toHaveCount(0);
+  await page.getByRole("menuitem", { name: /Add “righteois” to dictionary/ }).click();
+  await expect(doc.locator(".spelling-error")).toHaveCount(0);
+  await expect(doc.locator('[spellcheck="false"]')).toHaveText("righteois");
   await doc.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Hide spelling underlines" }).click();
   await expect(doc).toHaveAttribute("spellcheck", "false");
+  await expect(doc.locator(".spelling-error")).toHaveCount(0);
+});
+
+test("right-clicking a word opens definitions and synonyms", async ({ page }) => {
+  await page.route("**/api/dictionary/lookup**", async (route) => {
+    const word = new URL(route.request().url()).searchParams.get("word");
+    if (word === "ephemeral") {
+      await route.fulfill({
+        json: {
+          found: true,
+          word: "ephemeral",
+          meanings: [{ partOfSpeech: "adjective", definitions: ["Lasting for a short period of time."] }],
+          synonyms: ["fleeting"],
+        },
+      });
+      return;
+    }
+    await route.fulfill({ json: { found: false } });
+  });
+  await newBlankDocument(page);
+  const doc = page.locator(".doc-content");
+  await doc.click();
+  await page.keyboard.type("ephemeral");
+  await doc.locator("p").first().click({ button: "right", position: { x: 12, y: 8 } });
+  await expect(page.getByText("Shift+right-click for spelling suggestions")).toHaveCount(0);
+  await page.getByRole("menuitem", { name: /Look up “ephemeral”/ }).click();
+  const card = page.getByRole("dialog", { name: "Dictionary for ephemeral" });
+  await expect(card).toContainText("Lasting for a short period of time.");
+  await card.getByRole("button", { name: "Replace with fleeting" }).click();
+  await expect(doc.locator("p").first()).toHaveText("fleeting");
+
+  await page.keyboard.press("Control+a");
+  await page.keyboard.type("Zorblat");
+  await doc.locator("p").first().click({ button: "right", position: { x: 12, y: 8 } });
+  await page.getByRole("menuitem", { name: /Look up “Zorblat”/ }).click();
+  const missing = page.getByRole("dialog", { name: "Dictionary for Zorblat" });
+  await expect(missing).toContainText("No dictionary entry for “Zorblat”.");
+  await missing.getByRole("button", { name: "Ask Claude about “Zorblat”" }).click();
+  await expect(page.getByLabel("Message Claude")).toHaveValue(/Define “Zorblat”/);
 });
 
 test("document tabs can be added, renamed, reordered, exported and deleted", async ({ page }) => {
@@ -156,6 +268,19 @@ test("an untitled document takes its title from the first line", async ({ page }
   await expect(page.locator(".title-input")).toHaveValue("Quarterly planning notes", { timeout: 10_000 });
 });
 
+test("a long first line stays a short title while it is typed", async ({ page }) => {
+  await newBlankDocument(page);
+  await page.locator(".doc-content").click();
+  const title = page.locator(".title-input");
+  await expect(title).toHaveValue("Untitled document");
+  await page.keyboard.type("This opening sentence keeps");
+  await expect(title).toHaveValue("This opening sentence keeps");
+  await page.keyboard.type(" going well past the point where a title would still be readable in a list");
+  await expect(title).toHaveValue("This opening sentence keeps going well past the…");
+  await page.keyboard.type(" and then some more words after that");
+  await expect(title).toHaveValue("This opening sentence keeps going well past the…");
+});
+
 test("right-click opens the editor menu", async ({ page }) => {
   await newBlankDocument(page);
   await page.locator(".doc-content").click();
@@ -195,10 +320,97 @@ test("capitalization, special characters and table of contents", async ({ page }
 test("focus mode hides Claude", async ({ page }) => {
   await newBlankDocument(page);
   await expect(page.locator(".claude-toggle")).toBeVisible();
+  await expect(page.locator(".doc-content .is-empty")).toBeVisible();
+  const placeholder = () => page.locator(".doc-content .is-empty").evaluate((el) => getComputedStyle(el, "::before").content);
+  expect(await placeholder()).toContain("ask Claude");
+
   await page.locator(".menubar-item", { hasText: "View" }).click();
   await page.locator(".menu-item", { hasText: "Focus mode" }).click();
   await expect(page.locator(".claude-toggle")).toBeHidden();
   await expect(page.locator(".agent-panel")).toHaveCount(0);
+  await expect(page.locator(".usage-ring")).toHaveCount(0);
+  expect(await placeholder()).toBe('"Start writing…"');
+
+  await page.locator(".doc-content").click();
+  await page.keyboard.type("Some words to select");
+  await page.keyboard.press("ControlOrMeta+a");
+  // Selecting text never opens the action bar, including while focus mode is on.
+  await expect(page.locator(".bubble")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Ask Claude" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Edit with Claude" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Comment", exact: true })).toHaveCount(0);
+
+  await page.locator(".menubar-item", { hasText: "View" }).click();
+  await expect(page.locator(".menu-item", { hasText: "Claude panel" })).toHaveCount(0);
+  await expect(page.locator(".menu-item", { hasText: "Focus mode" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await page.locator(".menubar-item", { hasText: "Tools" }).click();
+  await expect(page.locator(".menu-item", { hasText: "Ask Claude" })).toHaveCount(0);
+  await expect(page.locator(".menu-item", { hasText: "Check for AI-sounding writing" })).toHaveCount(0);
+  await expect(page.locator(".menu-item", { hasText: "Word count" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await page.locator(".menubar-item", { hasText: "Help" }).click();
+  await expect(page.locator(".menu-item", { hasText: "Connect Claude Code" })).toHaveCount(0);
+  await page.locator(".menu-item", { hasText: "Keyboard shortcuts" }).click();
+  const shortcuts = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+  await expect(shortcuts).toBeVisible();
+  await expect(shortcuts).not.toContainText("Ask Claude");
+  await expect(shortcuts).not.toContainText("Show or hide Claude");
+  await expect(shortcuts).toContainText("Keep the change at the cursor");
+  await expect(shortcuts).toContainText("Bold");
+  await page.keyboard.press("Escape");
+
+  await page.locator(".doc-content").click({ button: "right" });
+  await expect(page.locator(".menu .menu-item", { hasText: "Ask Claude" })).toHaveCount(0);
+  await expect(page.locator(".menu .menu-item", { hasText: "Lock from Claude" })).toHaveCount(0);
+  await expect(page.locator(".menu .menu-item", { hasText: "Comment" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await page.locator(".doc-content").click();
+  await page.keyboard.press("ControlOrMeta+j");
+  await page.keyboard.press("ControlOrMeta+l");
+  await page.keyboard.press("ControlOrMeta+Alt+x");
+  await expect(page.locator(".agent-panel")).toHaveCount(0);
+  await expect(page.getByLabel("Ask Claude to edit")).toHaveCount(0);
+  // ⌘K is the link shortcut again while AI tools are hidden.
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(page.getByLabel("Ask Claude to edit")).toHaveCount(0);
+  const linkField = page.getByPlaceholder("Paste or type a link");
+  await expect(linkField).toBeVisible();
+  await linkField.press("Escape");
+  await expect(linkField).toHaveCount(0);
+
+  await page.locator(".doc-content").click();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.press("Control+Alt+m");
+  await page.keyboard.type("A note.");
+  await page.keyboard.press("Control+Enter");
+  const card = page.locator(".comment-card", { hasText: "A note." });
+  await expect(card).toBeVisible();
+  await card.getByRole("button", { name: "More" }).click();
+  await expect(page.locator(".menu-item", { hasText: "Ask Claude to address this" })).toHaveCount(0);
+  await expect(page.locator(".menu-item", { hasText: "Delete" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await page.locator(".menubar-item", { hasText: "View" }).click();
+  await page.locator(".menu-item", { hasText: "Focus mode" }).click();
+  await expect(page.locator(".claude-toggle")).toBeVisible();
+  await page.locator(".doc-content").click();
+  await page.keyboard.press("ControlOrMeta+a");
+  await expect(page.locator(".bubble")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Ask Claude" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Edit with Claude" })).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(page.getByLabel("Ask Claude to edit")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByLabel("Ask Claude to edit")).toHaveCount(0);
+  await page.locator(".menubar-item", { hasText: "Help" }).click();
+  await expect(page.locator(".menu-item", { hasText: "Connect Claude Code" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await card.getByRole("button", { name: "More" }).click();
+  await expect(page.locator(".menu-item", { hasText: "Ask Claude to address this" })).toBeVisible();
 });
 
 test("suggesting mode records edits for review and viewing mode is read-only", async ({ page }) => {

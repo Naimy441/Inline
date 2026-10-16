@@ -10,14 +10,19 @@ import {
   currentAlign,
   currentLineHeight,
   indent,
+  insertBibliography,
+  insertCitation,
+  insertFootnote,
   insertHorizontalRule,
   insertPageBreak,
   insertTable,
+  followLink,
   insertText,
   linkAt,
   listKind,
   markActive,
   normalizeHref,
+  openDocumentLink,
   outdent,
   setAlign,
   setBlock,
@@ -91,6 +96,9 @@ describe("links", () => {
     assert.equal(normalizeHref("https://example.com/x"), "https://example.com/x");
     assert.equal(normalizeHref("mailto:a@b.co"), "mailto:a@b.co");
     assert.equal(normalizeHref("#section"), "#section");
+    assert.equal(normalizeHref("file:///tmp/notes.pdf"), "file:///tmp/notes.pdf");
+    assert.equal(normalizeHref("C:\\Docs\\notes.docx"), "file:///C:/Docs/notes.docx");
+    assert.equal(normalizeHref("\\\\server\\share\\notes.docx"), "file://server/share/notes.docx");
   });
 
   it("adds, finds and removes a link", () => {
@@ -104,6 +112,41 @@ describe("links", () => {
   it("inserts linked text when nothing is selected", () => {
     const { md } = run(stateFor("Go", 3), setLink("example.com", "here"));
     assert.equal(md, "Go[here](https://example.com)");
+  });
+
+  it("stores a file link and reloads it from the document", () => {
+    const linked = run(select(stateFor("Open the notes"), "notes"), setLink("file:///tmp/notes.pdf"));
+    assert.equal(linked.md, "Open the [notes](file:///tmp/notes.pdf)");
+    assert.equal(linkAt(linked.state)?.href, "file:///tmp/notes.pdf");
+    const reloaded = markdownToDoc(linked.md);
+    assert.match(docToMarkdown(reloaded), /\[notes\]\(file:\/\/\/tmp\/notes\.pdf\)/);
+    const drive = run(select(stateFor("Open the notes"), "notes"), setLink("C:\\Docs\\notes.docx"));
+    assert.equal(drive.md, "Open the [notes](file:///C:/Docs/notes.docx)");
+    assert.equal(run(select(stateFor("Open the notes"), "notes"), setLink("javascript:alert(1)")).ok, false);
+  });
+
+  it("opens a clicked link, and a file link through the desktop app", () => {
+    const opened: string[] = [];
+    const previous = globalThis.window;
+    globalThis.window = { open: (url: string) => opened.push(String(url)) } as unknown as Window & typeof globalThis;
+    try {
+      const state = stateFor("Open the notes");
+      assert.equal(followLink("https://example.com/a")(state, () => undefined), true);
+      assert.deepEqual(opened, ["https://example.com/a"]);
+      assert.equal(followLink("file:///tmp/notes.pdf")(state, () => undefined), true);
+      assert.deepEqual(opened, ["https://example.com/a", "file:///tmp/notes.pdf"]);
+      const desktop: string[] = [];
+      globalThis.window = {
+        open: (url: string) => opened.push(String(url)),
+        inlineDesktop: { platform: "linux", version: "test", openInBrowser: () => undefined, openExternal: (url: string) => desktop.push(url) },
+      } as unknown as Window & typeof globalThis;
+      assert.equal(followLink("file:///tmp/notes.pdf")(state, () => undefined), true);
+      openDocumentLink("https://example.com/b");
+      assert.deepEqual(desktop, ["file:///tmp/notes.pdf"]);
+      assert.deepEqual(opened, ["https://example.com/a", "file:///tmp/notes.pdf", "https://example.com/b"]);
+    } finally {
+      globalThis.window = previous;
+    }
   });
 });
 
@@ -169,5 +212,26 @@ describe("blocks", () => {
     assert.equal(cells, 6);
     assert.equal(table.state.selection.$from.parent.type.name, "paragraph");
     assert.equal(table.state.selection.$from.node(-1).type.name, "table_header", "the cursor lands in the first cell");
+  });
+
+  it("inserts a footnote marker and its note", () => {
+    const first = run(stateFor("Claim here.", 12), insertFootnote);
+    assert.match(first.md, /Claim here\.\[\^1\]/);
+    assert.match(first.md, /\[\^1\]:/);
+    assert.equal(first.state.selection.$from.parent.attrs.footnote, "1");
+    const second = run(first.state, insertFootnote);
+    assert.match(second.md, /\[\^2\]/);
+    assert.equal(second.state.selection.$from.parent.attrs.footnote, "2");
+  });
+
+  it("inserts a citation and a bibliography entry", () => {
+    const cited = run(stateFor("Claim here.", 11), insertCitation);
+    assert.match(cited.md, /<cite>\(Author, Year\)<\/cite>/);
+    assert.equal(cited.state.selection.$from.parent.textContent.includes("Author, Year"), true);
+    const listed = run(stateFor("Body.", 1), insertBibliography);
+    assert.match(listed.md, /## References/);
+    assert.match(listed.md, /Author\. Title\. Publisher, Year\. \{\.bibliography\}/);
+    assert.equal(listed.state.doc.lastChild?.attrs.bibliography, true);
+    assert.equal(listed.state.doc.lastChild?.attrs.textIndent, -0.5);
   });
 });

@@ -12,7 +12,8 @@ import { useRef, useState, type DragEvent } from "react";
 
 export type DragItem = { kind: "document" | "folder"; id: string; title: string };
 
-const TYPE = "application/x-inline-item";
+/** Drag payload for documents and folders moving around the home page. File drops use "Files" instead. */
+export const ITEM_DRAG_TYPE = "application/x-inline-item";
 let current: DragItem[] = [];
 
 const same = (a: DragItem, b: DragItem) => a.kind === b.kind && a.id === b.id;
@@ -25,7 +26,7 @@ export function dragSource(item: DragItem, enabled = true, group: DragItem[] = [
     onDragStart: (event: DragEvent) => {
       current = group.length > 1 && group.some((entry) => same(entry, item)) ? group : [item];
       event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData(TYPE, JSON.stringify(current));
+      event.dataTransfer.setData(ITEM_DRAG_TYPE, JSON.stringify(current));
       event.dataTransfer.setData("text/plain", current.map((entry) => entry.title).join("\n"));
       (event.currentTarget as HTMLElement).classList.add("is-dragging");
     },
@@ -44,7 +45,7 @@ export function dragSource(item: DragItem, enabled = true, group: DragItem[] = [
 export function useDropTarget(accepts: (item: DragItem) => boolean, onDrop: (items: DragItem[]) => void) {
   const [over, setOver] = useState(false);
   const depth = useRef(0);
-  const allowed = (event: DragEvent) => current.length > 0 && event.dataTransfer.types.includes(TYPE) && current.some(accepts);
+  const allowed = (event: DragEvent) => current.length > 0 && event.dataTransfer.types.includes(ITEM_DRAG_TYPE) && current.some(accepts);
   return {
     over,
     props: {

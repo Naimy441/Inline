@@ -2,7 +2,7 @@ import { Mark, type Node as PMNode } from "prosemirror-model";
 import { Transform } from "prosemirror-transform";
 import { BLOCK_SEPARATOR, parseMarkdown, serializeBlock, serializeDoc, type BlockSpan, type SerializedDoc } from "@/lib/doc/markdown";
 import { LockedContentError, replaceTopLevelBlocks } from "@/lib/doc/merge";
-import { ALIGNMENTS, MAX_INDENT, safeHref, cssSizeToPt, isTextblockType, schema, type Align } from "@/lib/doc/schema";
+import { ALIGNMENTS, fileLinkHref, MAX_INDENT, safeHref, cssSizeToPt, isTextblockType, schema, type Align } from "@/lib/doc/schema";
 
 /**
  * Document operations in the vocabulary the agent uses: Markdown text with
@@ -130,6 +130,20 @@ const blockWords = new WeakMap<PMNode, number>();
  * node. Blocks an edit didn't touch are the same objects in the new document,
  * so a keystroke recounts one paragraph instead of the whole document.
  */
+/** The first non-empty text block, trimmed. Blank lines at the top don't become the title. */
+export function openingLine(doc: PMNode): string {
+  let line = "";
+  doc.descendants((node) => {
+    if (line) return false;
+    if (node.isTextblock) {
+      line = node.textContent.trim();
+      return false;
+    }
+    return true;
+  });
+  return line;
+}
+
 export function docWordCount(doc: PMNode): number {
   let total = 0;
   doc.forEach((child) => {
@@ -482,8 +496,8 @@ export function applyFormat(tr: Transform, from: number, to: number, spec: Forma
   if (spec.link !== undefined) {
     tr.removeMark(from, to, schema.marks.link);
     if (spec.link) {
-      const href = safeHref(spec.link);
-      if (!href) throw new EditError(`"${spec.link}" isn't a link Inline allows. Use an http, https, mailto or tel URL.`);
+      const href = safeHref(fileLinkHref(spec.link) ?? spec.link);
+      if (!href) throw new EditError(`"${spec.link}" isn't a link Inline allows. Use an http, https, mailto, tel or file URL.`);
       tr.addMark(from, to, schema.mark("link", { href }));
     }
   }
@@ -520,6 +534,8 @@ export type BlockStyle = {
   space_after?: number | null;
   /** First-line indent in inches; negative for a hanging indent; null for none. */
   text_indent?: number | null;
+  /** Mark (true) or clear (false) a works-cited entry. Marking hangs the line half an inch when it has no indent of its own. */
+  bibliography?: boolean | null;
 };
 
 export function applyBlockStyle(tr: Transform, lines: { from: number; to: number }, style: BlockStyle): number {
@@ -542,6 +558,10 @@ export function applyBlockStyle(tr: Transform, lines: { from: number; to: number
     if (style.space_before !== undefined) attrs.spaceBefore = style.space_before;
     if (style.space_after !== undefined) attrs.spaceAfter = style.space_after;
     if (style.text_indent !== undefined) attrs.textIndent = style.text_indent ? Math.max(-3, Math.min(3, style.text_indent)) : null;
+    if (style.bibliography != null) {
+      attrs.bibliography = style.bibliography;
+      if (style.bibliography && style.text_indent === undefined && !attrs.textIndent) attrs.textIndent = -0.5;
+    }
     tr.setNodeMarkup(range.pos, type, attrs, node.marks);
   }
   return ranges.length;

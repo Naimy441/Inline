@@ -120,6 +120,41 @@ test("the usage meter shows plan limits, the chat's cost and the limit Claude pa
   await expect(meter.getByRole("radio", { name: "75%" })).toHaveAttribute("aria-checked", "true");
 });
 
+test("a linked document can be a writing sample of chosen pages, or the whole document as context", async ({ page, request }) => {
+  const title = `Voice sample ${Date.now()}`;
+  await request.post("/api/documents", {
+    data: { title, markdown: "The formal page keeps its distance.\n\n\\pagebreak\n\nThe warm page talks like a friend." },
+  });
+  await openWithClaude(page, request, "Write the next paragraph.");
+
+  await page.getByRole("button", { name: "Link a document" }).click();
+  const dialog = page.getByRole("dialog", { name: "Link a document" });
+  await dialog.getByLabel("Search documents").fill("Voice sample");
+  await dialog.getByRole("option", { name: title, exact: true }).click();
+  await dialog.getByRole("radio", { name: "Match the voice" }).click();
+  const pageTwo = dialog.getByRole("checkbox", { name: "Page 2", exact: true });
+  await expect(pageTwo).toBeVisible();
+  await pageTwo.check();
+  await dialog.getByRole("button", { name: "Link document" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator(".composer .chip")).toContainText(`Voice · ${title} · p. 2`);
+
+  await ask(page, "what did I link");
+  await expect(page.locator(".msg-user").last().locator(".chip")).toContainText("p. 2");
+  await expect(lastReply(page)).toContainText("The warm page talks like a friend.");
+  await expect(lastReply(page)).not.toContainText("The formal page keeps its distance.");
+
+  await page.getByRole("button", { name: "Link a document" }).click();
+  await dialog.getByLabel("Search documents").fill("Voice sample");
+  await dialog.getByRole("option", { name: title, exact: true }).click();
+  await dialog.getByRole("radio", { name: "Use as context" }).click();
+  await dialog.getByRole("button", { name: "Link document" }).click();
+  await expect(page.locator(".composer .chip")).toContainText(`Context · ${title}`);
+  await ask(page, "what did I link");
+  await expect(lastReply(page)).toContainText("The formal page keeps its distance.");
+  await expect(lastReply(page)).toContainText("The warm page talks like a friend.");
+});
+
 test("typing @ suggests other documents and inserts the mention", async ({ page, request }) => {
   const title = `Mention target ${Date.now()}`;
   await request.post("/api/documents", { data: { title, markdown: "Other text." } });
@@ -193,18 +228,24 @@ test("follow-ups queue while Claude works, and Stop ends the turn", async ({ pag
 });
 
 test("a message shows at once, with a live line saying what Claude is doing", async ({ page, request }) => {
-  await openWithClaude(page, request, "A long document.");
   // Hold the request back: the message and Claude's activity must show before the server answers.
   let release = () => undefined as void;
   const held = new Promise<void>((resolve) => (release = resolve));
+  // Usage numbers arrive late; the ring still has to be on screen while Claude works.
+  await page.route("**/api/agent/usage**", async (route) => {
+    await held;
+    await route.continue();
+  });
   await page.route("**/api/agent/chats", async (route) => {
     if (route.request().method() === "POST" && route.request().postDataJSON()?.message) await held;
     await route.continue();
   });
+  await openWithClaude(page, request, "A long document.");
   await ask(page, "Review everything, take your time");
   await expect(page.locator(".msg-user-text")).toHaveText("Review everything, take your time");
   await expect(page.locator(".activity")).toBeVisible();
   await expect(page.locator(".activity .spark")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Usage" })).toBeVisible();
   release();
   await expect(lastReply(page)).toContainText("Starting a long review.");
   // While text streams, its writing dot is the sign of life; the waiting line steps aside.
@@ -241,6 +282,100 @@ test("an error explains itself and Retry runs the message again", async ({ page,
   await lastReply(page).getByRole("button", { name: "Retry" }).click();
   await expect(lastReply(page)).toContainText("You said: Please fail once");
   await expect(page.locator(".msg-assistant")).toHaveCount(1);
+});
+
+test("arrow keys recall the previous prompt only while the draft is empty", async ({ page, request }) => {
+  await openWithClaude(page, request, "Text.");
+  await ask(page, "First prompt");
+  await expect(lastReply(page)).toContainText("You said: First prompt");
+  await ask(page, "Second prompt");
+  await expect(lastReply(page)).toContainText("You said: Second prompt");
+
+  const composer = page.getByLabel("Message Claude");
+  await composer.focus();
+  await composer.press("ArrowUp");
+  await expect(composer).toHaveValue("Second prompt");
+  // The recalled prompt is a draft now: arrows move the caret and leave the text alone.
+  await composer.press("ArrowUp");
+  await expect(composer).toHaveValue("Second prompt");
+  await composer.press("ArrowDown");
+  await expect(composer).toHaveValue("Second prompt");
+
+  await composer.fill("");
+  await composer.press("ArrowUp");
+  await expect(composer).toHaveValue("First prompt");
+  await composer.fill("");
+  await composer.press("ArrowDown");
+  await expect(composer).toHaveValue("Second prompt");
+
+  await composer.fill("Still writing\nacross lines");
+  await composer.press("ArrowUp");
+  await expect(composer).toHaveValue("Still writing\nacross lines");
+  await composer.press("ArrowDown");
+  await expect(composer).toHaveValue("Still writing\nacross lines");
+
+  // A fresh empty draft: ArrowDown loads the previous prompt too.
+  await composer.fill("");
+  await composer.press("ArrowDown");
+  await expect(composer).toHaveValue("Second prompt");
+});
+
+test("copy prompt and copy response are separate", async ({ page, request, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await openWithClaude(page, request, "The meeting is on Tuesday.");
+  await ask(page, 'replace "Tuesday" with "Thursday"');
+  await expect(lastReply(page)).toContainText("Replaced Tuesday with Thursday.");
+
+  await page.locator(".msg-user").getByRole("button", { name: "Copy prompt" }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('replace "Tuesday" with "Thursday"');
+
+  await lastReply(page).getByRole("button", { name: "Copy response" }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("Replaced Tuesday with Thursday.");
+  await expect(lastReply(page).getByRole("button", { name: "Copy prompt" })).toHaveCount(0);
+  await expect(page.locator(".msg-user").getByRole("button", { name: "Copy response" })).toHaveCount(0);
+});
+
+test("developer options copy one turn or the whole chat, and hide those actions when off", async ({ page, request }) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await openWithClaude(page, request, "The meeting is on Tuesday.");
+  await ask(page, 'replace "Tuesday" with "Thursday"');
+  await expect(lastReply(page)).toContainText("Replaced Tuesday with Thursday.");
+  await expect(lastReply(page).locator(".change-card")).toContainText("Edited");
+  await expect(page.getByRole("button", { name: "Copy turn" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Copy chat history" })).toHaveCount(0);
+
+  await page.locator(".menubar-item", { hasText: "Help" }).click();
+  const devOptions = page.getByRole("menuitemcheckbox", { name: /Developer options/ });
+  await expect(devOptions).toHaveAttribute("aria-checked", "false");
+  await devOptions.click();
+
+  await expect(page.getByRole("button", { name: "Copy turn" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Copy chat history" })).toBeVisible();
+  await page.getByRole("button", { name: "Copy turn" }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("Replaced Tuesday with Thursday.");
+  const turn = await page.evaluate(() => navigator.clipboard.readText());
+  expect(turn).toContain('Prompt:\nreplace "Tuesday" with "Thursday"');
+  expect(turn).toContain("Thoughts:\nI'll read the document, then make the edit.");
+  expect(turn).toContain("read_document");
+  expect(turn).toContain("edit_document");
+  expect(turn).toContain("Tool calls:");
+  expect(turn).not.toContain("Turn 2");
+
+  await ask(page, "Say hello back");
+  await expect(lastReply(page)).toContainText("You said: Say hello back");
+  await page.getByRole("button", { name: "Copy chat history" }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("Turn 2");
+  const history = await page.evaluate(() => navigator.clipboard.readText());
+  expect(history).toContain("Turn 1");
+  expect(history).toContain('replace "Tuesday" with "Thursday"');
+  expect(history).toContain("Turn 2");
+  expect(history).toContain("Prompt:\nSay hello back");
+  expect(history).toContain("Response:\nYou said: Say hello back");
+
+  await page.locator(".menubar-item", { hasText: "Help" }).click();
+  await page.getByRole("menuitemcheckbox", { name: /Developer options/ }).click();
+  await expect(page.getByRole("button", { name: "Copy turn" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Copy chat history" })).toHaveCount(0);
 });
 
 test("the conversation survives a reload", async ({ page, request }) => {

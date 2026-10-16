@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { query, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createInlineSdkServer, mcpToolName } from "@/lib/agent/mcp";
 import { systemPrompt } from "@/lib/agent/prompt";
+import { PAGE_LAYOUT_PLUGIN_DIR, PAGE_LAYOUT_SKILL } from "@/lib/agent/skills";
 import { documentListing, type ToolContext } from "@/lib/agent/tools";
 import type {
   AgentStatus,
@@ -28,6 +29,7 @@ import type {
   UserMessage,
   UsageWindow,
   DocumentMention,
+  LinkedDocument,
 } from "@/lib/agent/types";
 import { DEFAULT_MAX_TURNS } from "@/lib/agent/types";
 import { documentHub, type LiveDocument } from "@/lib/server/hub";
@@ -39,6 +41,7 @@ import { chatFilePath, deleteChatFile, FileSummaryCache, findUpload, listChatIds
 import { isUserSuggestion } from "@/lib/doc/review";
 import { log } from "@/lib/server/log";
 import { attachmentText } from "@/lib/agent/attachments";
+import { linkedDocumentContext } from "@/lib/agent/references";
 import { pagesLeft, settlePdfConversion } from "@/lib/server/pdfImports";
 import { compactPages } from "@/lib/agent/pdfTools";
 
@@ -97,6 +100,8 @@ export type SendInput = {
   selection?: SelectionContext;
   attachments?: Attachment[];
   mentions?: DocumentMention[];
+  /** Documents the user linked: selected pages as a writing sample, or a whole document as context. */
+  links?: LinkedDocument[];
   /** Ids the panel already gave the message and the reply it shows right away, so the server's copies replace them in place. */
   ids?: { user: string; assistant: string };
   /** Sent from the home page: the folder the user is looking at (null for the top level). */
@@ -419,12 +424,12 @@ class ChatRuntime {
     if (input.home) this.home = input.home;
     const ids = input.ids && !this.state.messages.some((message) => message.id === input.ids!.user || message.id === input.ids!.assistant) ? input.ids : undefined;
     if (this.state.running) {
-      const queued: QueuedMessage = { id: ids?.user ?? randomUUID(), text, createdAt: Date.now(), selection: input.selection, attachments: input.attachments, mentions: input.mentions };
+      const queued: QueuedMessage = { id: ids?.user ?? randomUUID(), text, createdAt: Date.now(), selection: input.selection, attachments: input.attachments, mentions: input.mentions, links: input.links };
       this.state.queue.push(queued);
       this.emit({ type: "queue", queue: this.state.queue });
       return { queued: true, id: queued.id };
     }
-    await this.startTurn({ text, selection: input.selection, attachments: input.attachments, mentions: input.mentions, ids });
+    await this.startTurn({ text, selection: input.selection, attachments: input.attachments, mentions: input.mentions, links: input.links, ids });
     return { queued: false, id: this.state.messages[this.state.messages.length - 2]!.id };
   }
 
@@ -438,7 +443,7 @@ class ChatRuntime {
     this.lastUsed = Date.now();
     if (this.idleTimer) clearTimeout(this.idleTimer);
     const now = Date.now();
-    const user: UserMessage = { id: input.ids?.user ?? randomUUID(), role: "user", text: input.text, createdAt: now, selection: input.selection, attachments: input.attachments, mentions: input.mentions };
+    const user: UserMessage = { id: input.ids?.user ?? randomUUID(), role: "user", text: input.text, createdAt: now, selection: input.selection, attachments: input.attachments, mentions: input.mentions, links: input.links };
     const assistant: AssistantMessage = { id: input.ids?.assistant ?? randomUUID(), role: "assistant", createdAt: now, parts: [], status: "streaming", model: this.state.settings.model ?? undefined };
     if (!this.state.messages.length || this.state.title === "New chat") {
       this.state.title = clip(input.text || input.attachments?.[0]?.name || "New chat", 60);
@@ -565,7 +570,7 @@ class ChatRuntime {
       const { folders, documents } = await library();
       const unfiled = documents.filter((item) => !item.folderId || !folders.has(item.folderId)).length;
       const where = this.home.folderId && folders.has(this.home.folderId) ? `the folder "${folderPathName(folders, this.home.folderId)}" (id ${this.home.folderId})` : "all documents (the top level)";
-      context.push(`The user is on the home page, not in a document, looking at ${where}. Their library has ${documents.length} document${documents.length === 1 ? "" : "s"} (${unfiled} unfiled) and ${folders.size} folder${folders.size === 1 ? "" : "s"}. Use list_library to see them.`);
+      context.push(`The user is on the home page, not in a document, looking at ${where}. Their library has ${documents.length} document${documents.length === 1 ? "" : "s"} (${unfiled} unfiled) and ${folders.size} folder${folders.size === 1 ? "" : "s"}. Use search_documents to find a document by words in its text, then open_document to show it. Use list_library to see the library.`);
     } else {
       context.push("No document is open.");
     }
@@ -584,6 +589,24 @@ class ChatRuntime {
     if (input.mentions?.length) {
       context.push(
         `The user mentioned ${input.mentions.length === 1 ? "this document" : "these documents"}: ${input.mentions.map((item) => `"${item.title}" (id ${item.id})`).join(", ")}. Read ${input.mentions.length === 1 ? "it" : "them"} with read_document and the document_id when relevant.`,
+      );
+    }
+    for (const link of input.links ?? []) {
+      const linked = await documentHub().get(link.id);
+      const live = linked && !linked.meta.trashedAt ? linked : null;
+      context.push(
+        linkedDocumentContext(
+          live
+            ? {
+                id: live.id,
+                title: live.meta.title,
+                doc: live.doc,
+                settings: live.meta.settings,
+                layout: live.layoutIsCurrent() && live.layout ? { starts: live.layout.starts } : null,
+              }
+            : null,
+          link,
+        ),
       );
     }
     if (input.attachments?.length) {
@@ -696,6 +719,10 @@ class ChatRuntime {
         this.wroteThisTurn.set(doc.id, await doc.checkpoint("Before Claude's edits"));
       },
       onChange: (change) => this.recordChange(change),
+      onOpen: (documentId) => {
+        if (this.state.documentId) return;
+        this.emit({ type: "open", documentId });
+      },
     };
   }
 
@@ -743,6 +770,9 @@ class ChatRuntime {
         mcpServers: { inline: createInlineSdkServer(() => this.toolContext()) },
         // Only Inline's tools: none of the user's own MCP servers or claude.ai connectors (Google Drive and so on).
         strictMcpConfig: true,
+        // The page-layout skill, and no other skills. The plugin path is absolute because cwd is the data folder.
+        plugins: [{ type: "local", path: PAGE_LAYOUT_PLUGIN_DIR, skipMcpDiscovery: true }],
+        skills: [PAGE_LAYOUT_SKILL],
         settings: { disableClaudeAiConnectors: true },
         env: { ...process.env, ENABLE_CLAUDEAI_MCP_SERVERS: "false" },
         settingSources: [],
@@ -1168,7 +1198,7 @@ class ChatRuntime {
       this.state.messages.splice(this.state.messages.length - 2, 2);
       this.emit({ type: "snapshot", chat: this.state });
     }
-    await this.startTurn({ text: lastUser.text, selection: lastUser.selection, attachments: lastUser.attachments, mentions: lastUser.mentions });
+    await this.startTurn({ text: lastUser.text, selection: lastUser.selection, attachments: lastUser.attachments, mentions: lastUser.mentions, links: lastUser.links });
   }
 
   /**

@@ -89,20 +89,17 @@ test.describe("phone", () => {
     await expect(page.locator(".doc-content strong")).toHaveText("Hello world");
   });
 
-  test("the selection bubble stays on screen and comments from a tap", async ({ page, request }) => {
+  test("selecting text does not show a selection action bar", async ({ page, request }) => {
     await openDocument(page, await createDocument(request, "Phone bubble", "The meeting is on Friday at the main office."));
     await page.locator(".doc-content p").first().click();
     await page.keyboard.press("End");
     await page.keyboard.press("Shift+Home");
-    const bubble = page.locator(".bubble");
-    await expect(bubble).toBeVisible();
-    const box = (await bubble.boundingBox())!;
-    expect(box.x).toBeGreaterThanOrEqual(0);
-    expect(box.x + box.width).toBeLessThanOrEqual(390);
-    await bubble.getByRole("button", { name: "Comment" }).click();
-    await page.keyboard.type("Confirm the room.");
-    await page.keyboard.press("Control+Enter");
-    await expect(page.locator(".doc-content .comment-hl")).toHaveCount(1);
+    expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toContain("The meeting is on Friday at the main office.");
+    await expect(page.locator(".bubble")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Ask Claude" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Comment", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Edit with Claude" })).toHaveCount(0);
+    await expect(page.locator(".doc-content")).toHaveText("The meeting is on Friday at the main office.");
   });
 
   test("the More menu opens as a sheet and drills into the menus", async ({ page, request }) => {

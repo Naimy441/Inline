@@ -859,7 +859,7 @@ async function readInline(node: XmlElement, ctx: Context, run: RunContext, out: 
       case "w:hyperlink": {
         const rel = item.attrs["r:id"] ? ctx.rels.get(item.attrs["r:id"]) : undefined;
         const href = rel?.target ?? (item.attrs["w:anchor"] ? `#${item.attrs["w:anchor"]}` : "");
-        // Web, mail and phone links, and links within the document.
+        // Web, mail, phone and file links, and links within the document.
         const safe = href.startsWith("#") ? href : safeHref(href);
         const link = safe ? schema.marks.link!.create({ href: safe }) : run.link;
         await readInline(item, ctx, { ...run, link }, out);

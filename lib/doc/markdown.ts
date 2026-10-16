@@ -2,7 +2,7 @@ import MarkdownIt from "markdown-it";
 type Token = ReturnType<InstanceType<typeof MarkdownIt>["parse"]>[number];
 import markPlugin from "markdown-it-mark";
 import { Fragment, type Mark, type Node as PMNode } from "prosemirror-model";
-import { ALIGNMENTS, MARKDOWN_MARKS, MATH_LANGUAGE, MAX_INDENT, cssSizeToPt, safeHref, schema, type Align, type BorderLine, type Borders, type TabStop } from "@/lib/doc/schema";
+import { ALIGNMENTS, MARKDOWN_MARKS, MATH_LANGUAGE, MAX_INDENT, cssSizeToPt, footnoteLabel, safeHref, schema, type Align, type BorderLine, type Borders, type TabStop } from "@/lib/doc/schema";
 
 /**
  * Markdown is the agent's view of a document. Each top-level block becomes one
@@ -13,6 +13,9 @@ import { ALIGNMENTS, MARKDOWN_MARKS, MATH_LANGUAGE, MAX_INDENT, cssSizeToPt, saf
  *   # Annual report {.title}        title / subtitle styles, alignment, indent,
  *   Text {first-line=0.5}            first-line (or hanging=0.5) indent in inches
  *   ==highlight==  <u>underline</u>  <sup>sup</sup>  <sub>sub</sub>
+ *   <cite>(Author, Year)</cite>      an inline citation (the text is the citation)
+ *   [^1]  and  [^1]: The note.       a footnote marker and its note
+ *   Entry. {.bibliography}           a works-cited entry (hanging indent)
  *   &nbsp;                           an intentionally empty paragraph
  *   \pagebreak                       a page break
  *   ![alt](src){width=50%}           image size and alignment
@@ -77,6 +80,11 @@ export function serializeBlock(node: PMNode, context: BlockContext = {}): string
     case "paragraph": {
       const text = serializeInline(node, { atLineStart: true });
       const suffix = attrSuffix(blockAttrTokens(node, context));
+      const note = footnoteLabel(node.attrs.footnote);
+      if (note) {
+        const body = text && text !== EMPTY_PARAGRAPH ? ` ${text}` : "";
+        return `[^${note}]:${body}${suffix}`;
+      }
       if (!text) return suffix ? `${EMPTY_PARAGRAPH}${suffix}` : EMPTY_PARAGRAPH;
       if (text === PAGE_BREAK) return `\\${text}`;
       return `${text}${suffix}`;
@@ -128,9 +136,11 @@ function blockAttrTokens(node: PMNode, context: BlockContext): string[] {
   if (!context.inTable && align && align !== "left") tokens.push(`align=${align}`);
   const indent = Number(node.attrs.indent) || 0;
   if (indent > 0) tokens.push(`indent=${indent}`);
+  if (node.attrs.bibliography) tokens.push(".bibliography");
   const textIndent = Number(node.attrs.textIndent) || 0;
   if (textIndent > 0) tokens.push(`first-line=${textIndent}`);
-  if (textIndent < 0) tokens.push(`hanging=${-textIndent}`);
+  // A bibliography entry's usual half-inch hang is implied by {.bibliography}.
+  if (textIndent < 0 && !(node.attrs.bibliography && textIndent === -0.5)) tokens.push(`hanging=${-textIndent}`);
   if (node.attrs.dir === "rtl") tokens.push("dir=rtl");
   return tokens;
 }
@@ -228,7 +238,7 @@ function longestRun(text: string, char: string) {
 
 type InlineOptions = { atLineStart: boolean; inTable?: boolean };
 
-const MARK_ORDER = ["link", "bold", "italic", "strike", "underline", "highlight", "superscript", "subscript", "code"];
+const MARK_ORDER = ["citation", "link", "bold", "italic", "strike", "underline", "highlight", "superscript", "subscript", "code"];
 
 function markRank(mark: Mark) {
   const index = MARK_ORDER.indexOf(mark.type.name);
@@ -278,6 +288,8 @@ function openDelimiter(mark: Mark): string {
       return "<sup>";
     case "subscript":
       return "<sub>";
+    case "citation":
+      return "<cite>";
     case "link":
       return "[";
     default:
@@ -301,6 +313,8 @@ function closeDelimiter(mark: Mark): string {
       return "</sup>";
     case "subscript":
       return "</sub>";
+    case "citation":
+      return "</cite>";
     case "link": {
       const title = mark.attrs.title ? ` "${String(mark.attrs.title).replace(/"/g, '\\"')}"` : "";
       return `](${formatUrl(mark.attrs.href || "")}${title})`;
@@ -310,7 +324,7 @@ function closeDelimiter(mark: Mark): string {
   }
 }
 
-type InlinePiece = { kind: "text"; text: string; marks: Mark[] } | { kind: "break"; marks: Mark[] } | { kind: "image"; markdown: string; marks: Mark[] };
+type InlinePiece = { kind: "text"; text: string; marks: Mark[] } | { kind: "break"; marks: Mark[] } | { kind: "image"; markdown: string; marks: Mark[] } | { kind: "footnote"; markdown: string; marks: Mark[] };
 
 export function serializeInline(node: PMNode, options: InlineOptions): string {
   const pieces: InlinePiece[] = [];
@@ -320,6 +334,10 @@ export function serializeInline(node: PMNode, options: InlineOptions): string {
     else if (child.type.name === "hard_break") pieces.push({ kind: "break", marks });
     // A picture in a line of text (an icon) is written where it sits; its size and fade come back from the old one when Claude edits.
     else if (child.type.name === "inline_image") pieces.push({ kind: "image", markdown: `![${escapeLinkText(String(child.attrs.alt || ""))}](${formatUrl(String(child.attrs.src || ""))})`, marks });
+    else if (child.type.name === "footnote_ref") {
+      const label = footnoteLabel(child.attrs.label);
+      if (label) pieces.push({ kind: "footnote", markdown: `[^${label}]`, marks });
+    }
   });
   // Markdown can't open or close emphasis at spaces alone, so a space formatted unlike the text around it (as
   // Google Docs often leaves one) keeps only the formatting it shares with the text on both sides.
@@ -385,7 +403,7 @@ export function serializeInline(node: PMNode, options: InlineOptions): string {
       out += "<br>";
       return;
     }
-    if (piece.kind === "image") {
+    if (piece.kind === "image" || piece.kind === "footnote") {
       out += piece.markdown;
       return;
     }
@@ -455,6 +473,11 @@ function escapeText(text: string, options: { atLineStart: boolean; inTable?: boo
         out += prev === ch || next === ch ? `\\${ch}` : ch;
         break;
       case "[":
+        // `[^1]` is a footnote marker. A literal one is written escaped so it stays text.
+        if (/^\[\^[A-Za-z0-9][A-Za-z0-9._-]{0,39}\]/.test(text.slice(i))) {
+          out += "\\[";
+          break;
+        }
         out += /^\[[^\]]*\]\(/.test(text.slice(i)) || /^\[[^\]]*\]$/.test(text.slice(i)) ? "\\[" : ch;
         break;
       case "!":
@@ -511,8 +534,32 @@ function markdownParser() {
     parser.enable(["table", "strikethrough"]);
     parser.use(markPlugin);
     parser.use(mathPlugin);
+    parser.use(footnotePlugin);
+    // markdown-it refuses file: links. A document link to a local file is a real target, not a script.
+    const refuse = /^(vbscript|javascript|data):/i;
+    const imageData = /^data:image\/(gif|png|jpeg|webp);/i;
+    parser.validateLink = (url: string) => {
+      const trimmed = url.trim();
+      if (/^file:/i.test(trimmed)) return safeHref(trimmed) !== null;
+      return refuse.test(trimmed) ? imageData.test(trimmed) : true;
+    };
   }
   return parser;
+}
+
+/** `[^label]` in the source, after escapes, so a written `\[^1]` stays ordinary text. */
+function footnotePlugin(md: InstanceType<typeof MarkdownIt>) {
+  md.inline.ruler.after("escape", "footnote_ref", (state, silent) => {
+    if (state.src.charCodeAt(state.pos) !== 0x5b || state.src.charCodeAt(state.pos + 1) !== 0x5e) return false;
+    const match = /^\[\^([A-Za-z0-9][A-Za-z0-9._-]{0,39})\]/.exec(state.src.slice(state.pos));
+    if (!match) return false;
+    if (!silent) {
+      const token = state.push("footnote_ref", "sup", 0);
+      token.content = match[1]!;
+    }
+    state.pos += match[0].length;
+    return true;
+  });
 }
 
 /**
@@ -804,6 +851,10 @@ class BlockBuilder {
       if (Number.isFinite(firstLine) && firstLine > 0) nodeAttrs.textIndent = Math.min(3, firstLine);
       else if (Number.isFinite(hanging) && hanging > 0) nodeAttrs.textIndent = -Math.min(3, hanging);
       if (spec.values.dir === "rtl") nodeAttrs.dir = "rtl";
+      if (nodeType === "paragraph" && spec.classes.includes("bibliography")) {
+        nodeAttrs.bibliography = true;
+        if (nodeAttrs.textIndent == null) nodeAttrs.textIndent = -0.5;
+      }
     }
     if (nodeType !== "heading") delete nodeAttrs.level;
     let content = this.inline(tokens);
@@ -814,6 +865,13 @@ class BlockBuilder {
       Object.assign(nodeAttrs, layoutAttrs(spec));
       const marks = blockMarks(spec);
       if (marks.length) content = markText(content, marks);
+    }
+    if (nodeType === "paragraph") {
+      const note = footnoteDefinition(content);
+      if (note) {
+        nodeAttrs.footnote = note.label;
+        content = note.content;
+      }
     }
     return schema.nodes[nodeType]!.create(nodeAttrs, content);
   }
@@ -891,6 +949,11 @@ class BlockBuilder {
         case "link_close":
           remove("link");
           break;
+        case "footnote_ref": {
+          const label = footnoteLabel(token.content);
+          if (label) nodes.push(schema.nodes.footnote_ref!.create({ label }));
+          break;
+        }
         case "image": {
           // A picture in a line of text stays in the line.
           const alt = token.children?.map((child) => child.content).join("") || token.content;
@@ -902,8 +965,8 @@ class BlockBuilder {
         case "html_inline": {
           const raw = token.content.trim();
           const tag = raw.toLowerCase();
-          const open = tag.match(/^<(u|ins|sup|sub|mark|s|del|strike|b|strong|i|em)(\s[^>]*)?>$/);
-          const close = tag.match(/^<\/(u|ins|sup|sub|mark|s|del|strike|b|strong|i|em)\s*>$/);
+          const open = tag.match(/^<(u|ins|sup|sub|mark|s|del|strike|b|strong|i|em|cite)(\s[^>]*)?>$/);
+          const close = tag.match(/^<\/(u|ins|sup|sub|mark|s|del|strike|b|strong|i|em|cite)\s*>$/);
           if (/^<br\s*\/?>$/.test(tag)) nodes.push(schema.node("hard_break"));
           else if (open) add(schema.mark(htmlMarkName(open[1]!)));
           else if (close) remove(htmlMarkName(close[1]!));
@@ -1093,11 +1156,33 @@ function inlineImage(tag: string, marks: Mark[]): PMNode | null {
   return schema.nodes.inline_image!.create({ src, alt: htmlAttr(tag, "alt") ?? "", width: size("width"), height: size("height") }, null, marks.filter((mark) => mark.type.name === "link"));
 }
 
+/**
+ * A paragraph that starts `[^label]: text` is the footnote's text, not a marker
+ * followed by a colon. The marker stays inline everywhere else.
+ */
+function footnoteDefinition(content: Fragment): { label: string; content: Fragment } | null {
+  const first = content.firstChild;
+  const label = first?.type.name === "footnote_ref" ? footnoteLabel(first.attrs.label) : null;
+  if (!first || !label) return null;
+  const rest: PMNode[] = [];
+  content.forEach((node, offset) => {
+    if (offset > 0) rest.push(node);
+  });
+  const head = rest[0];
+  if (!head?.isText || !head.text?.startsWith(":")) return null;
+  const stripped = head.text.slice(1).replace(/^ /, "");
+  if (stripped) rest[0] = schema.text(stripped, head.marks);
+  else rest.shift();
+  return { label, content: Fragment.fromArray(rest) };
+}
+
 function htmlMarkName(tag: string) {
   switch (tag) {
     case "u":
     case "ins":
       return "underline";
+    case "cite":
+      return "citation";
     case "sup":
       return "superscript";
     case "sub":

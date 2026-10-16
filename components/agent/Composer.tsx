@@ -1,8 +1,9 @@
 "use client";
 
-import { ArrowUp, Brain, ChevronDown, FileText, Image as ImageIcon, MessageCircleQuestion, Paperclip, PenLine, Square, TextQuote, X } from "lucide-react";
+import { ArrowUp, Brain, ChevronDown, FileText, Image as ImageIcon, Link2, MessageCircleQuestion, Paperclip, PenLine, Square, TextQuote, X } from "lucide-react";
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import type { AgentMode, Attachment, ChatSettings, DocumentMention, Effort, ModelOption, SelectionContext } from "@/lib/agent/types";
+import { linkedDocumentLabel, type AgentMode, type Attachment, type ChatSettings, type DocumentMention, type Effort, type LinkedDocument, type ModelOption, type SelectionContext } from "@/lib/agent/types";
+import { LinkDocumentDialog } from "@/components/agent/LinkDocumentDialog";
 import { api, uploadFile } from "@/lib/client/api";
 import { MenuButton } from "@/components/ui/Menu";
 import { CommandsDialog, useCommands } from "@/components/agent/CommandsDialog";
@@ -10,6 +11,7 @@ import { expandSlashCommand, matchCommands, matchDocuments, type SlashCommand } 
 import { toast } from "@/components/ui/Toast";
 import { Shortcut } from "@/components/ui/Button";
 import { loadDraft, saveDraft } from "@/lib/client/drafts";
+import { recallPrompt, type PromptCursor } from "@/lib/client/promptHistory";
 
 /** Titles of the user's other documents, for @-mentions (loaded once per panel). */
 function useDocumentTitles(exclude: string | null) {
@@ -44,13 +46,17 @@ export const Composer = forwardRef<
     onClearSelection: () => void;
     /** The open document, left out of @-mention suggestions. The unsent message is remembered per document. */
     documentId?: string | null;
-    onSend: (input: { text: string; attachments: Attachment[]; mentions: DocumentMention[] }) => Promise<void> | void;
+    onSend: (input: { text: string; attachments: Attachment[]; mentions: DocumentMention[]; links: LinkedDocument[] }) => Promise<void> | void;
     onStop: () => void;
     onSettings: (patch: Partial<ChatSettings>) => void;
+    /** Prompts already sent in this chat, oldest first. Arrow keys recall them when the draft is empty. */
+    prompts?: string[];
+    /** The open chat. Recall starts again from the newest prompt when it changes. */
+    historyKey?: string | null;
     /** The user is writing a message: a chance to start Claude Code before it's sent. */
     onWarm?: () => void;
   }
->(function Composer({ running, disabled, disabledReason, settings, models, meter, selection, documentId, onClearSelection, onSend, onStop, onSettings, onWarm }, ref) {
+>(function Composer({ running, disabled, disabledReason, settings, models, meter, selection, documentId, onClearSelection, onSend, onStop, onSettings, onWarm, prompts = [], historyKey = null }, ref) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(0);
@@ -59,6 +65,8 @@ export const Composer = forwardRef<
   const [commandsHidden, setCommandsHidden] = useState(false);
   const [managing, setManaging] = useState(false);
   const [mentions, setMentions] = useState<DocumentMention[]>([]);
+  const [links, setLinks] = useState<LinkedDocument[]>([]);
+  const [linking, setLinking] = useState(false);
   const [caret, setCaret] = useState(0);
 
   // Pick up the message left unsent when the panel was last closed. Read after
@@ -74,6 +82,7 @@ export const Composer = forwardRef<
     setText(draft.text);
     setAttachments(draft.attachments);
     setMentions(draft.mentions);
+    setLinks(draft.links);
     setCaret(draft.text.length);
   }, [documentId]);
   useEffect(() => {
@@ -81,8 +90,8 @@ export const Composer = forwardRef<
       skipSave.current = false;
       return;
     }
-    if (documentId && restored.current === documentId) saveDraft(documentId, { text, attachments, mentions });
-  }, [documentId, text, attachments, mentions]);
+    if (documentId && restored.current === documentId) saveDraft(documentId, { text, attachments, mentions, links });
+  }, [documentId, text, attachments, mentions, links]);
 
   const documents = useDocumentTitles(documentId ?? null);
   const slash = /^\/([a-z0-9-]*)$/i.exec(text);
@@ -111,6 +120,15 @@ export const Composer = forwardRef<
   };
   const textarea = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const promptsRef = useRef(prompts);
+  promptsRef.current = prompts;
+  // Where the empty draft sits in prompt history. Null is the blank after the newest prompt.
+  const cursorRef = useRef<PromptCursor>(null);
+  const historyKeyRef = useRef(historyKey);
+  if (historyKeyRef.current !== historyKey) {
+    historyKeyRef.current = historyKey;
+    cursorRef.current = null;
+  }
 
   // Text set from outside (a suggestion) puts the caret at its end as soon as it's on screen,
   // not a frame later, when it could undo a selection the user (or a test) has just made.
@@ -165,16 +183,19 @@ export const Composer = forwardRef<
     if ((!value && !attachments.length) || disabled || uploading) return;
     setText("");
     const sent = attachments;
+    const sentLinks = links;
     // Only documents whose @-mention is still in the text.
     const mentioned = mentions.filter((doc) => value.includes(`@${doc.title.replace(/\s+/g, " ")}`));
     setAttachments([]);
     setMentions([]);
+    setLinks([]);
     try {
-      await onSend({ text: value, attachments: sent, mentions: mentioned });
+      await onSend({ text: value, attachments: sent, mentions: mentioned, links: sentLinks });
     } catch {
       setText(value);
       setAttachments(sent);
       setMentions(mentioned);
+      setLinks(sentLinks);
     }
   };
 
@@ -194,7 +215,7 @@ export const Composer = forwardRef<
         void attach(event.dataTransfer.files);
       }}
     >
-      {(selection || attachments.length > 0 || uploading > 0) && (
+      {(selection || attachments.length > 0 || links.length > 0 || uploading > 0) && (
         <div className="composer-chips">
           {selection && (
             <span className="chip chip-quote" title={selection.text}>
@@ -210,6 +231,15 @@ export const Composer = forwardRef<
               {attachment.kind === "image" ? <ImageIcon size={12} /> : <FileText size={12} />}
               <span className="chip-text">{attachment.name}</span>
               <button type="button" className="chip-x" aria-label={`Remove ${attachment.name}`} onClick={() => setAttachments((list) => list.filter((item) => item.id !== attachment.id))}>
+                <X size={12} />
+              </button>
+            </span>
+          ))}
+          {links.map((link) => (
+            <span key={link.id} className="chip" title={linkedDocumentLabel(link)}>
+              <Link2 size={12} />
+              <span className="chip-text">{linkedDocumentLabel(link)}</span>
+              <button type="button" className="chip-x" aria-label={`Remove ${linkedDocumentLabel(link)}`} onClick={() => setLinks((list) => list.filter((item) => item.id !== link.id))}>
                 <X size={12} />
               </button>
             </span>
@@ -278,6 +308,8 @@ export const Composer = forwardRef<
         disabled={disabled}
         onFocus={() => onWarm?.()}
         onChange={(event) => {
+          // Editing a draft abandons the recall walk. Clearing it does not, so the next arrow can step further.
+          if (event.target.value) cursorRef.current = null;
           if (event.target.value.trim()) onWarm?.();
           setText(event.target.value);
           setCaret(event.target.selectionStart ?? event.target.value.length);
@@ -309,6 +341,24 @@ export const Composer = forwardRef<
             if (event.key === "Escape") {
               event.preventDefault();
               setCommandsHidden(true);
+              return;
+            }
+          }
+          // Prompt history only while the draft is empty. A draft the user is editing keeps normal arrow keys.
+          if ((event.key === "ArrowUp" || event.key === "ArrowDown") && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey && !event.nativeEvent.isComposing) {
+            const recall = recallPrompt(promptsRef.current, cursorRef.current, event.key, text);
+            if (recall.handled) {
+              event.preventDefault();
+              cursorRef.current = recall.cursor;
+              if (recall.text === text) {
+                placeCaretAtEnd();
+              } else {
+                caretToEnd.current = true;
+                setText(recall.text);
+                setCaret(recall.text.length);
+                setCommandIndex(0);
+                setCommandsHidden(false);
+              }
               return;
             }
           }
@@ -377,6 +427,15 @@ export const Composer = forwardRef<
         </div>
         <div className="composer-actions">
           {meter}
+          <button type="button" className="icon-btn icon-btn-sm" aria-label="Link a document" data-tip="Link a document for voice or context" onClick={() => setLinking(true)} disabled={disabled}>
+            <Link2 size={15} />
+          </button>
+          <LinkDocumentDialog
+            open={linking}
+            excludeId={documentId ?? null}
+            onClose={() => setLinking(false)}
+            onLink={(link) => setLinks((list) => [...list.filter((item) => item.id !== link.id), link].slice(-8))}
+          />
           <button type="button" className="icon-btn icon-btn-sm" aria-label="Attach files" data-tip="Attach images, PDFs or text files" onClick={() => fileInput.current?.click()} disabled={disabled}>
             <Paperclip size={15} />
           </button>
