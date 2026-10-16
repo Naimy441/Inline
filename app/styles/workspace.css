@@ -1963,10 +1963,21 @@ button.status-item:hover {
 
 /* Special characters */
 
+.charmap-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .charmap {
   max-height: 52vh;
   margin-top: 12px;
   overflow-y: auto;
+}
+
+.charmap section {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 280px;
 }
 
 .charmap h4 {
@@ -1990,9 +2001,11 @@ button.status-item:hover {
 
 .charmap-cell {
   height: 38px;
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface);
+  font-family: "Noto Sans Symbols 2", "Noto Sans Symbols", "Segoe UI Symbol", "Apple Symbols", "DejaVu Sans", var(--font-ui);
   font-size: 18px;
   line-height: 1;
 }

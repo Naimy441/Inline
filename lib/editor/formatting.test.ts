@@ -11,8 +11,6 @@ import {
   currentAlign,
   currentLineHeight,
   indent,
-  insertBibliography,
-  insertCitation,
   insertFootnote,
   insertHorizontalRule,
   insertPageBreak,
@@ -223,17 +221,6 @@ describe("blocks", () => {
     const second = run(first.state, insertFootnote);
     assert.match(second.md, /\[\^2\]/);
     assert.equal(second.state.selection.$from.parent.attrs.footnote, "2");
-  });
-
-  it("inserts a citation and a bibliography entry", () => {
-    const cited = run(stateFor("Claim here.", 11), insertCitation);
-    assert.match(cited.md, /<cite>\(Author, Year\)<\/cite>/);
-    assert.equal(cited.state.selection.$from.parent.textContent.includes("Author, Year"), true);
-    const listed = run(stateFor("Body.", 1), insertBibliography);
-    assert.match(listed.md, /## References/);
-    assert.match(listed.md, /Author\. Title\. Publisher, Year\. \{\.bibliography\}/);
-    assert.equal(listed.state.doc.lastChild?.attrs.bibliography, true);
-    assert.equal(listed.state.doc.lastChild?.attrs.textIndent, -0.5);
   });
 });
 

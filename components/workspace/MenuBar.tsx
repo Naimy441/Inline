@@ -10,8 +10,6 @@ import { modeMenuItems } from "@/components/workspace/modes";
 import {
   changeCase,
   clearFormatting,
-  insertBibliography,
-  insertCitation,
   insertFootnote,
   insertHorizontalRule,
   insertTableOfContents,
@@ -289,23 +287,10 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       },
       { label: "Special characters…", onSelect: actions.specialCharacters },
       { label: "Table of contents", onSelect: () => !run(insertTableOfContents) && actions.notice("Add some headings first; the table of contents lists them.") },
-      { kind: "separator" },
       { label: "Footnote", onSelect: () => !run(insertFootnote) && actions.notice("Put the cursor in a paragraph to add a footnote.") },
-      { label: "Citation", onSelect: () => !run(insertCitation) && actions.notice("Put the cursor in a paragraph to add a citation.") },
-      { label: "Bibliography", onSelect: () => run(insertBibliography) },
       { kind: "separator" },
       { label: "Horizontal line", onSelect: () => run(insertHorizontalRule) },
       { label: "Page break", shortcut: `⌘⏎`, onSelect: () => run(insertPageBreak) },
-      {
-        label: "Date",
-        onSelect: () => {
-          const view = session.view;
-          if (!view) return;
-          const text = new Date().toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
-          session.dispatch(view.state.tr.insertText(text));
-          view.focus();
-        },
-      },
     ],
     Format: [
       {

@@ -1,14 +1,11 @@
 import { chainCommands, lift, setBlockType, splitBlock, toggleMark, wrapIn } from "prosemirror-commands";
-import { Fragment, type Attrs, type MarkType, type Node as PMNode, type NodeType } from "prosemirror-model";
+import { type Attrs, type MarkType, type Node as PMNode, type NodeType } from "prosemirror-model";
 import { liftListItem, sinkListItem, wrapInList } from "prosemirror-schema-list";
 import { NodeSelection, TextSelection, type Command, type EditorState } from "prosemirror-state";
 import { isInTable } from "prosemirror-tables";
 import { pictureCrop, pictureRotate, pictureWrap, type PictureCrop, type PictureWrap } from "@/lib/doc/picture";
 import { fileLinkHref, MAX_INDENT, safeHref, schema, type Align } from "@/lib/doc/schema";
 import { findStyle, nodeStyleId, resolveStyle, storedStyleId, structuralRole, type ParagraphStyle, type StyleRole } from "@/lib/doc/styles";
-
-const CITATION_PLACEHOLDER = "(Author, Year)";
-const BIBLIOGRAPHY_PLACEHOLDER = "Author. Title. Publisher, Year.";
 
 /** Editing commands shared by the toolbar, menus, keymap and command palette. */
 
@@ -495,37 +492,6 @@ export const insertFootnote: Command = (state, dispatch) => {
   return true;
 };
 
-/** Insert a parenthetical citation and select the placeholder so it can be typed over. */
-export const insertCitation: Command = (state, dispatch) => {
-  const { $from } = state.selection;
-  if (!$from.parent.isTextblock || $from.parent.type.spec.code) return false;
-  const mark = schema.marks.citation!.create();
-  if (!dispatch) return true;
-  const from = state.selection.from;
-  const tr = state.tr.replaceSelectionWith(schema.text(CITATION_PLACEHOLDER, [mark]), false);
-  tr.setSelection(TextSelection.create(tr.doc, from + 1, from + CITATION_PLACEHOLDER.length - 1));
-  tr.setStoredMarks([mark]);
-  dispatch(tr.scrollIntoView());
-  return true;
-};
-
-/** Append a References heading and one hanging bibliography entry. */
-export const insertBibliography: Command = (state, dispatch) => {
-  const heading = nodes.heading!.create({ level: 2 }, schema.text("References"));
-  const entry = nodes.paragraph!.create({ bibliography: true, textIndent: -0.5 }, schema.text(BIBLIOGRAPHY_PLACEHOLDER));
-  if (!dispatch) return true;
-  const onlyEmpty = state.doc.childCount === 1 && state.doc.firstChild?.isTextblock && state.doc.firstChild.content.size === 0;
-  const tr = state.tr;
-  const at = onlyEmpty ? 0 : state.doc.content.size;
-  const block = Fragment.from([heading, entry]);
-  if (onlyEmpty) tr.replaceWith(0, state.doc.content.size, block);
-  else tr.insert(at, block);
-  const from = at + heading.nodeSize + 1;
-  tr.setSelection(TextSelection.create(tr.doc, from, from + BIBLIOGRAPHY_PLACEHOLDER.length));
-  dispatch(tr.scrollIntoView());
-  return true;
-};
-
 export function insertImage(src: string, alt = "", width: string | null = null): Command {
   return insertBlock(nodes.image!.create({ src, alt, width, align: "center" }));
 }
@@ -694,7 +660,7 @@ export function changeCase(kind: CaseKind): Command {
   };
 }
 
-/** Insert text at the cursor (special characters, dates). */
+/** Insert text at the cursor, such as a special character. */
 export function insertText(text: string): Command {
   return (state, dispatch) => {
     dispatch?.(state.tr.insertText(text).scrollIntoView());
