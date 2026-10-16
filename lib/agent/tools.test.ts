@@ -73,6 +73,7 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   reply_to_comment: { comment_id: "missing", reply: "Done." },
   resolve_comment: { comment_id: "missing" },
   analyze_writing: {},
+  clean_ai_tells: {},
   count_words: {},
   get_page_count: {},
   list_documents: {},
@@ -1038,6 +1039,70 @@ describe("analyze_writing", () => {
     const result = await runTool("analyze_writing", { from_line: 7, to_line: 8 }, ctx);
     assert.match(result.text, /\(lines 7-8\)/);
     assert.match(result.text, /Words: 6/);
+  });
+
+  test("reports bullet glyphs that are not real lists", async () => {
+    const { ctx } = await setup({}, "Pack • towels.");
+    const result = await runTool("analyze_writing", {}, ctx);
+    assert.match(result.text, /bullet glyph/);
+  });
+});
+
+describe("AI tells on write and clean", () => {
+  test("edit_document deletes invisible characters and flags AI symbols", async () => {
+    const { doc, ctx } = await setup();
+    const result = await runTool("edit_document", { old_string: "lazy dog", new_string: "lazy\u200B dog — really" }, ctx);
+    assert.equal(result.isError, undefined, result.text);
+    assert.match(md(doc), /lazy dog — really/);
+    assert.doesNotMatch(md(doc), /\u200B/);
+    assert.match(result.text, /Deleted 1 invisible character/);
+    assert.match(result.text, /AI-tell check/);
+    assert.match(result.text, /1 em dash/);
+  });
+
+  test("a real Markdown list is not flagged", async () => {
+    const { doc, ctx } = await setup();
+    const result = await runTool("edit_document", { old_string: "lazy dog", new_string: "a short list:\n\n- towels\n- sunscreen" }, ctx);
+    assert.equal(result.isError, undefined, result.text);
+    assert.doesNotMatch(result.text, /AI-tell check/);
+    assert.match(md(doc), /- towels\n- sunscreen/);
+  });
+
+  test("clean_ai_tells rewrites symbols and keeps real lists, ranges and script joiners", async () => {
+    const arabic = "ن\u200Cم";
+    const { doc, ctx } = await setup({}, `Bring these.\n\n• Towels\n\n• Sunscreen\n\nThe plan\u200B — done…\n\nPages 12–14.\n\n- Already a list\n\n${arabic}`);
+    const result = await runTool("clean_ai_tells", {}, ctx);
+    assert.equal(result.isError, undefined, result.text);
+    const markdown = md(doc);
+    assert.match(markdown, /- Towels\n- Sunscreen/);
+    assert.match(markdown, /The plan - done\.\.\./);
+    assert.match(markdown, /Pages 12–14/);
+    assert.match(markdown, /- Already a list/);
+    assert.ok(markdown.includes(arabic));
+    assert.doesNotMatch(markdown, /[•—…\u200B]/);
+    assert.match(result.text, /Deleted 1 invisible character/);
+    assert.match(result.text, /em dash/);
+  });
+
+  test("clean_ai_tells leaves a clean document unchanged", async () => {
+    const { doc, ctx } = await setup();
+    const before = md(doc);
+    const result = await runTool("clean_ai_tells", {}, ctx);
+    assert.equal(result.isError, undefined, result.text);
+    assert.match(result.text, /No invisible characters or AI symbols/);
+    assert.equal(md(doc), before);
+    assert.equal(doc.hunks.length, 0);
+  });
+
+  test("clean_ai_tells does not change locked text", async () => {
+    const { doc, ctx } = await setup({}, "Open — text.\n\nLocked — text.");
+    lock(doc, "Locked — text.");
+    const result = await runTool("clean_ai_tells", {}, ctx);
+    assert.equal(result.isError, undefined, result.text);
+    const markdown = md(doc);
+    assert.match(markdown, /Open - text/);
+    assert.match(markdown, /Locked — text/);
+    assert.match(result.text, /Locked text was left unchanged/);
   });
 });
 
