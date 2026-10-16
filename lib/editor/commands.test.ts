@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { EditorState, TextSelection, type Command } from "prosemirror-state";
+import { EditorState, NodeSelection, TextSelection, type Command } from "prosemirror-state";
 import { ensureBlockIds } from "../doc/ids";
 import { docToMarkdown, markdownToDoc } from "../doc/markdown";
-import { blockPosById, changeCase, goToDocumentEdge, insertTab, insertTableOfContents } from "./commands";
+import { blockPosById, changeCase, goToDocumentEdge, insertTab, insertTableOfContents, removeTableOfContents } from "./commands";
 
 function stateFor(markdown: string) {
   return EditorState.create({ doc: ensureBlockIds(markdownToDoc(markdown)) });
@@ -51,25 +51,36 @@ describe("changeCase", () => {
 });
 
 describe("insertTableOfContents", () => {
-  it("lists headings as links to their blocks", () => {
-    const start = stateFor("Intro text\n\n# One\n\nBody\n\n## Two\n\nMore");
+  it("inserts one contents field whose entries link to the headings", () => {
+    const start = stateFor("Intro text\n\n# One\n\nBody\n\n## Two\n\nMore\n\n### Three\n\n#### Four");
     const { ok, state } = run(start, insertTableOfContents);
     assert.ok(ok);
-    const links: string[] = [];
-    state.doc.descendants((node) => {
-      const link = node.marks.find((mark) => mark.type.name === "link");
-      if (link) links.push(`${node.text}->${String(link.attrs.href)}`);
+    const toc = state.doc.firstChild!;
+    assert.equal(toc.type.name, "toc");
+    const entries: Array<{ text: string; href: string | null }> = [];
+    toc.forEach((node) => {
+      if (node.type.name === "toc_entry") entries.push({ text: String(node.attrs.text), href: node.attrs.href as string | null });
     });
-    assert.equal(links.length, 2);
-    for (const entry of links) {
-      const id = entry.split("->#")[1]!;
-      assert.notEqual(blockPosById(state.doc, id), null);
+    assert.deepEqual(entries.map((entry) => entry.text), ["One", "Two", "Three"]);
+    for (const entry of entries) {
+      assert.ok(entry.href?.startsWith("#"));
+      assert.notEqual(blockPosById(state.doc, entry.href!.slice(1)), null);
     }
-    assert.match(links[0]!, /^One->#/);
+    assert.equal(docToMarkdown(state.doc).split("\n\n")[0], "\\tableofcontents");
+    const again = run(state, insertTableOfContents);
+    assert.equal(again.state.doc.childCount, state.doc.childCount);
+    assert.ok(again.state.selection instanceof NodeSelection);
   });
 
-  it("refuses when there are no headings", () => {
-    assert.equal(run(stateFor("Just text"), insertTableOfContents).ok, false);
+  it("inserts a field with no headings, and removes the whole field", () => {
+    const { ok, state } = run(stateFor("Just text"), insertTableOfContents);
+    assert.equal(ok, true);
+    assert.equal(state.doc.firstChild!.type.name, "toc");
+    assert.equal(state.doc.firstChild!.child(1).attrs.placeholder, true);
+    const removed = run(state, removeTableOfContents);
+    assert.equal(removed.ok, true);
+    assert.notEqual(removed.state.doc.firstChild!.type.name, "toc");
+    assert.equal(run(removed.state, removeTableOfContents).ok, false);
   });
 });
 

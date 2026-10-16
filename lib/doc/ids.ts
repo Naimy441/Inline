@@ -1,5 +1,6 @@
 import type { Node as PMNode } from "prosemirror-model";
 import { Transform } from "prosemirror-transform";
+import { withSyncedTocs } from "@/lib/doc/toc";
 
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 
@@ -40,7 +41,7 @@ export function blockIdFixes(doc: PMNode): Transform | null {
 }
 
 export function ensureBlockIds(doc: PMNode): PMNode {
-  return blockIdFixes(doc)?.doc ?? doc;
+  return withSyncedTocs(blockIdFixes(doc)?.doc ?? doc);
 }
 
 function uniqueId(seen: Set<string>) {

@@ -44,12 +44,28 @@ export type PdfImage = {
   /** An equation's LaTeX (not written into the PDF; for reading the page back, lib/pdf/import/pageLines.ts). */
   tex?: string;
 };
-export type PdfLink = { kind: "link"; x: number; y: number; width: number; height: number; uri: string };
+/**
+ * A link annotation. `uri` opens a web, mail or file address. `dest` goes to
+ * a point on a page of this document (page index, `top` in points from the
+ * top of that page), the way a contents entry opens its heading.
+ */
+export type PdfLink = {
+  kind: "link";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  uri?: string;
+  dest?: { page: number; top: number };
+};
 export type PdfItem = PdfText | PdfRect | PdfLine | PdfImage | PdfLink;
 
+/** One bookmark. `top` is points from the top of `page` (0-based). */
+export type PdfOutlineItem = { title: string; page: number; top: number; children?: PdfOutlineItem[] };
+
 export type PdfPage = { width: number; height: number; items: PdfItem[] };
-/** `fonts` holds TrueType or OpenType data by the names text items use. */
-export type PdfDocumentModel = { title: string; pages: PdfPage[]; fonts?: Record<string, Uint8Array> };
+/** `fonts` holds TrueType or OpenType data by the names text items use. `outline` is the bookmark tree. */
+export type PdfDocumentModel = { title: string; pages: PdfPage[]; fonts?: Record<string, Uint8Array>; outline?: PdfOutlineItem[] };
 
 /** Characters that draw nothing (zero-width spaces and joiners, direction marks, soft hyphens). */
 const INVISIBLE = /[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]/gu;
@@ -157,11 +173,12 @@ export function buildPdf(model: PdfDocumentModel): Uint8Array<ArrayBuffer> {
     return glyphs;
   };
 
-  const pageIds: number[] = [];
-  model.pages.forEach((page) => {
-    const pageId = reserve();
-    const contentId = reserve();
-    pageIds.push(pageId);
+  // Reserved up front so a link or bookmark can point at a later page.
+  const pageIds = model.pages.map(() => reserve());
+  const contentIds = model.pages.map(() => reserve());
+  model.pages.forEach((page, pageIndex) => {
+    const pageId = pageIds[pageIndex]!;
+    const contentId = contentIds[pageIndex]!;
     const ops: string[] = [];
     const images: string[] = [];
     const annots: number[] = [];
@@ -228,10 +245,17 @@ export function buildPdf(model: PdfDocumentModel): Uint8Array<ArrayBuffer> {
         );
         ops.push(`q ${num(item.width)} 0 0 ${num(item.height)} ${num(item.x)} ${num(flip(item.y + item.height))} cm /${name} Do Q`);
       } else if (item.kind === "link") {
+        const dest = item.dest && pageIds[item.dest.page] != null ? item.dest : null;
+        const action = dest
+          ? `/Dest [${pageIds[dest.page]} 0 R /XYZ null ${num(model.pages[dest.page]!.height - dest.top)} null]`
+          : item.uri
+            ? `/A << /S /URI /URI ${pdfString(item.uri)} >>`
+            : "";
+        if (!action) continue;
         const annotId = reserve();
         annots.push(annotId);
         const rect = [item.x, flip(item.y + item.height), item.x + item.width, flip(item.y)].map(num).join(" ");
-        define(annotId, `<< /Type /Annot /Subtype /Link /Rect [${rect}] /Border [0 0 0] /A << /S /URI /URI ${pdfString(item.uri)} >> >>`);
+        define(annotId, `<< /Type /Annot /Subtype /Link /Rect [${rect}] /Border [0 0 0] ${action} >>`);
       }
     }
 
@@ -252,7 +276,8 @@ export function buildPdf(model: PdfDocumentModel): Uint8Array<ArrayBuffer> {
     defineEmbeddedFont(entry, reserve, define, tag++);
   }
 
-  define(catalogId, `<< /Type /Catalog /Pages ${pagesId} 0 R >>`);
+  const outlineId = model.outline?.length ? writeOutline(model.outline, model.pages, pageIds, reserve, define) : 0;
+  define(catalogId, `<< /Type /Catalog /Pages ${pagesId} 0 R${outlineId ? ` /Outlines ${outlineId} 0 R` : ""} >>`);
   define(pagesId, `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pageIds.length} >>`);
   define(infoId, `<< /Title ${pdfTextString(model.title)} /Producer (Inline) /Creator (Inline) >>`);
 
@@ -288,6 +313,61 @@ export function buildPdf(model: PdfDocumentModel): Uint8Array<ArrayBuffer> {
     at += chunk.length;
   }
   return result;
+}
+
+/** How many bookmarks are open under this one, counting it as open. */
+function outlineDescendants(item: PdfOutlineItem): number {
+  return (item.children ?? []).reduce((sum, child) => sum + 1 + outlineDescendants(child), 0);
+}
+
+/**
+ * The document outline (bookmark tree). Every item is open. Destinations
+ * use the same top-left coordinates as the page items.
+ */
+function writeOutline(
+  items: PdfOutlineItem[],
+  pages: PdfPage[],
+  pageIds: number[],
+  reserve: () => number,
+  define: (id: number, ...parts: Array<string | Uint8Array>) => void,
+): number {
+  const top = items.filter((item) => pageIds[item.page] != null);
+  if (!top.length) return 0;
+  const rootId = reserve();
+  type Row = { id: number; parent: number; item: PdfOutlineItem; prev?: number; next?: number; first?: number; last?: number };
+  const rows: Row[] = [];
+  const alloc = (list: PdfOutlineItem[], parent: number) => {
+    const ids = list.map(() => reserve());
+    list.forEach((item, index) => {
+      const kids = item.children?.filter((child) => pageIds[child.page] != null) ?? [];
+      const row: Row = { id: ids[index]!, parent, item, prev: ids[index - 1], next: ids[index + 1] };
+      rows.push(row);
+      if (kids.length) {
+        const childIds = alloc(kids, row.id);
+        row.first = childIds[0];
+        row.last = childIds[childIds.length - 1];
+      }
+    });
+    return ids;
+  };
+  const topIds = alloc(top, rootId);
+  const visible = top.reduce((sum, item) => sum + 1 + outlineDescendants(item), 0);
+  define(
+    rootId,
+    `<< /Type /Outlines /First ${topIds[0]} 0 R /Last ${topIds[topIds.length - 1]} 0 R /Count ${visible} >>`,
+  );
+  for (const row of rows) {
+    const page = pages[row.item.page]!;
+    const topY = page.height - row.item.top;
+    const kids = row.first ? ` /First ${row.first} 0 R /Last ${row.last} 0 R /Count ${outlineDescendants(row.item)}` : "";
+    define(
+      row.id,
+      `<< /Title ${pdfTextString(row.item.title.replace(/\s+/g, " ").trim().slice(0, 200))} /Parent ${row.parent} 0 R` +
+        `${row.prev ? ` /Prev ${row.prev} 0 R` : ""}${row.next ? ` /Next ${row.next} 0 R` : ""}` +
+        ` /Dest [${pageIds[row.item.page]} 0 R /XYZ null ${num(topY)} null]${kids} >>`,
+    );
+  }
+  return rootId;
 }
 
 /**

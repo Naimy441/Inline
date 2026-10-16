@@ -6,6 +6,7 @@ import { canSplit } from "prosemirror-transform";
 import { isInTable } from "prosemirror-tables";
 import { pictureCrop, pictureRotate, pictureWrap, type PictureCrop, type PictureWrap } from "@/lib/doc/picture";
 import { fileLinkHref, MAX_INDENT, safeHref, schema, type Align } from "@/lib/doc/schema";
+import { createToc, findToc } from "@/lib/doc/toc";
 import { findStyle, nodeStyleId, resolveStyle, storedStyleId, structuralRole, type ParagraphStyle, type StyleRole } from "@/lib/doc/styles";
 
 /** Editing commands shared by the toolbar, menus, keymap and command palette. */
@@ -699,31 +700,31 @@ export function insertText(text: string): Command {
 }
 
 /**
- * Insert a table of contents: a list of the document's headings, each linking
- * to its heading by block id (#id), indented by level.
+ * Insert a table of contents before the current block. One field, generated
+ * from the headings. A document has one; inserting again selects it.
  */
 export const insertTableOfContents: Command = (state, dispatch) => {
-  const headings: Array<{ level: number; text: string; id: string | null }> = [];
-  state.doc.forEach((node) => {
-    if (node.type === nodes.heading && node.textContent.trim() && (node.attrs.level as number) <= 3) {
-      headings.push({ level: node.attrs.level as number, text: node.textContent.trim(), id: (node.attrs.id as string | null) ?? null });
-    }
-  });
-  if (!headings.length) return false;
+  const existing = findToc(state.doc);
   if (!dispatch) return true;
-  const top = Math.min(...headings.map((item) => item.level));
-  const paragraphs = headings.map((item) =>
-    nodes.paragraph!.create(
-      { indent: Math.min(MAX_INDENT, item.level - top) },
-      schema.text(item.text, item.id ? [marks.link!.create({ href: `#${item.id}` })] : []),
-    ),
-  );
-  const heading = nodes.paragraph!.create(null, schema.text("Contents", [marks.bold!.create()]));
+  if (existing) {
+    dispatch(state.tr.setSelection(NodeSelection.create(state.doc, existing.pos)).scrollIntoView());
+    return true;
+  }
   const { $from } = state.selection;
   const depth = Math.min(1, $from.depth);
   const at = depth ? $from.before(depth) : state.selection.from;
-  const tr = state.tr.insert(at, [heading, ...paragraphs]);
-  dispatch(tr.scrollIntoView());
+  const tr = state.tr.insert(at, createToc(state.doc));
+  const pos = tr.mapping.map(at, -1);
+  dispatch(tr.setSelection(NodeSelection.create(tr.doc, pos)).scrollIntoView());
+  return true;
+};
+
+/** Remove the table of contents. Selecting the field and pressing Delete does the same. */
+export const removeTableOfContents: Command = (state, dispatch) => {
+  const toc = findToc(state.doc);
+  if (!toc) return false;
+  if (!dispatch) return true;
+  dispatch(state.tr.delete(toc.pos, toc.pos + toc.node.nodeSize).scrollIntoView());
   return true;
 };
 

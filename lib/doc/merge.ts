@@ -237,6 +237,12 @@ export function mergeBlock(old: PMNode, next: PMNode): PMNode {
     case "image":
     case "code_block":
       return next.type.create({ ...next.attrs, id: old.attrs.id }, next.content);
+    case "toc": {
+      // Entries are rebuilt from headings after the merge (they aren't in the Markdown).
+      const depth = Number(next.attrs.depth);
+      const levels = Number.isInteger(depth) && depth >= 1 && depth <= 6 ? depth : old.attrs.depth;
+      return levels === old.attrs.depth ? old : old.type.create({ ...old.attrs, depth: levels }, old.content);
+    }
     default:
       return old.type === next.type ? old : withId(next, old.attrs.id);
   }

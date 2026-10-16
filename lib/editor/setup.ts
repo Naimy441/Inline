@@ -39,6 +39,7 @@ import { spellingPlugin } from "@/lib/editor/spelling";
 import { invisiblesPlugin } from "@/lib/editor/invisibles";
 import { inMath, mathInputRules, mathPlugin } from "@/lib/editor/math";
 import { paginationPlugin, type PageGeometry, type PageLayout } from "@/lib/editor/pagination";
+import { tocSyncPlugin } from "@/lib/editor/tocView";
 import { InlineTableView, tableBorderPlugin, tableFormulaPlugin } from "@/lib/editor/tables";
 import { bordersPlugin } from "@/lib/editor/borders";
 import { lineFitPlugin } from "@/lib/editor/lineFit";
@@ -428,6 +429,7 @@ export function editorPlugins(options: EditorPluginOptions) {
     justifyPlugin(options.fontLines ?? (() => false)),
     // Lines kept from a PDF are spaced once tabs are sized, and before pages are broken.
     lineFitPlugin(),
+    tocSyncPlugin(),
     paginationPlugin(options.geometry, options.onPages),
   ];
 }

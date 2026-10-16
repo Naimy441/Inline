@@ -366,7 +366,7 @@ test("capitalization, special characters and table of contents", async ({ page }
   await page.keyboard.press("Escape");
 
   await page.locator(".menubar-item", { hasText: "Insert" }).click();
-  await page.locator(".menu-item", { hasText: "Table of contents" }).click();
+  await page.getByRole("menuitem", { name: /^Table of contents/ }).click();
   await expect(page.locator('.doc-content a[href^="#"]', { hasText: "first section" })).toHaveCount(1);
 });
 

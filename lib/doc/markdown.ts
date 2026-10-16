@@ -4,6 +4,7 @@ import markPlugin from "markdown-it-mark";
 import { Fragment, type Mark, type Node as PMNode } from "prosemirror-model";
 import { ALIGNMENTS, MARKDOWN_MARKS, MATH_LANGUAGE, MAX_INDENT, cssSizeToPt, footnoteLabel, safeHref, schema, type Align, type BorderLine, type Borders, type TabStop } from "@/lib/doc/schema";
 import { cropToken, parseCropToken, pictureCrop, pictureRotate, pictureWrap } from "@/lib/doc/picture";
+import { tocMarkdown, tocMarkdownMatch, withSyncedTocs } from "@/lib/doc/toc";
 
 /**
  * Markdown is the agent's view of a document. Each top-level block becomes one
@@ -19,6 +20,7 @@ import { cropToken, parseCropToken, pictureCrop, pictureRotate, pictureWrap } fr
  *   Entry. {.bibliography}           a works-cited entry (hanging indent)
  *   &nbsp;                           an intentionally empty paragraph
  *   \pagebreak                       a page break
+ *   \tableofcontents                a table of contents (optional {depth=2})
  *   ![alt](src){width=50% wrap=square crop=10,0,0,0 rotate=90}
  *   $x^2$   $$ … $$                  LaTeX equations, inline and displayed
  *
@@ -117,6 +119,8 @@ export function serializeBlock(node: PMNode, context: BlockContext = {}): string
       return "---";
     case "page_break":
       return PAGE_BREAK;
+    case "toc":
+      return tocMarkdown(Number(node.attrs.depth) || 3);
     case "image":
       return serializeImage(node);
     case "bullet_list":
@@ -672,7 +676,8 @@ export function parseMarkdown(markdown: string): PMNode[] {
 
 export function markdownToDoc(markdown: string): PMNode {
   const blocks = parseMarkdown(markdown);
-  return schema.node("doc", null, blocks.length ? blocks : [schema.node("paragraph")]);
+  const doc = schema.node("doc", null, blocks.length ? blocks : [schema.node("paragraph")]);
+  return withSyncedTocs(doc);
 }
 
 type AttrSpec = { classes: string[]; values: Record<string, string> };
@@ -863,6 +868,9 @@ class BlockBuilder {
     if (children.length === 1 && children[0]!.type === "text" && text === PAGE_BREAK) {
       return schema.node("page_break");
     }
+    const toc = children.length === 1 && children[0]!.type === "text" ? tocMarkdownMatch(text) : null;
+    // Entries are filled once the whole document is parsed (markdownToDoc), so headings after this line count too.
+    if (toc) return schema.node("toc", { depth: toc.depth }, [schema.node("toc_title", { text: "Contents" })]);
     return this.textblock("paragraph", children, {});
   }
 

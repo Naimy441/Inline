@@ -2,6 +2,7 @@ import { Node as PMNode } from "prosemirror-model";
 import { Step, Transform } from "prosemirror-transform";
 import { docPlainText, docWordCount, followedDocumentTitle, rangeMarkTexts, wordCount } from "@/lib/doc/editing";
 import { blockIdFixes, ensureBlockIds, newId } from "@/lib/doc/ids";
+import { syncTocTransform } from "@/lib/doc/toc";
 import { markdownToDoc } from "@/lib/doc/markdown";
 import { acceptHunks, hunkFromJSON, hunkToJSON, mapHunks, recordAgentChange, rejectHunks, USER_AUTHOR, type Hunk, type HunkJSON } from "@/lib/doc/review";
 import { emptyDoc, schema } from "@/lib/doc/schema";
@@ -254,6 +255,9 @@ export class LiveDocument {
     if (!tr.docChanged) return false;
     const fixes = blockIdFixes(tr.doc);
     if (fixes) for (const step of fixes.steps) tr.step(step);
+    // A contents field lists the headings. Keep it in step with them on every server write.
+    const tocSync = syncTocTransform(tr.doc);
+    if (tocSync) for (const step of tocSync.steps) tr.step(step);
     const hunks =
       options.hunks ??
       (origin.kind === "agent" ? recordAgentChange(this.doc, tr, this.hunks, origin.author, Date.now(), origin.turn) : mapHunks(this.hunks, tr.mapping));

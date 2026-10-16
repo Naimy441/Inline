@@ -439,6 +439,16 @@ async function blockXml(node: PMNode, ctx: Context, list?: { numId: number; leve
       return '<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="BFBFBF"/></w:pBdr></w:pPr></w:p>';
     case "page_break":
       return '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+    case "toc": {
+      const tab = Math.max(1, Math.round(ctx.contentWidthPx * 15));
+      let out = `<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Contents</w:t></w:r></w:p>`;
+      node.forEach((child) => {
+        if (child.type.name !== "toc_entry" || child.attrs.placeholder) return;
+        const level = Math.max(1, Math.min(9, Number(child.attrs.level) || 1));
+        out += `<w:p><w:pPr><w:ind w:left="${(level - 1) * 360}"/><w:tabs><w:tab w:val="right" w:leader="dot" w:pos="${tab}"/></w:tabs></w:pPr>${textRun(String(child.attrs.text || ""), [])}<w:r><w:tab/></w:r></w:p>`;
+      });
+      return out;
+    }
     case "image":
       return imageParagraph(node, ctx);
     case "bullet_list":

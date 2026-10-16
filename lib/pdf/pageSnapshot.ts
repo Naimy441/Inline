@@ -3,7 +3,7 @@
 // header/footer chrome), so page breaks, margins and wrapping in the PDF match
 // what the editor shows.
 
-import type { PdfDocumentModel, PdfItem, PdfPage, RGB, StandardFont } from "@/lib/pdf/pdfWriter";
+import type { PdfDocumentModel, PdfItem, PdfOutlineItem, PdfPage, RGB, StandardFont } from "@/lib/pdf/pdfWriter";
 
 export type Box = { left: number; top: number; width: number; height: number };
 
@@ -157,6 +157,17 @@ export function snapshotPages(
       height: (box.height / scale) * PX_TO_PT,
     };
   };
+
+  /** Block ids to the top of that block, so a contents entry can open it. */
+  const destinations = new Map<string, { page: number; top: number }>();
+  editor?.querySelectorAll<HTMLElement>("[data-id]").forEach((el) => {
+    if (el.closest(".doc-toc")) return;
+    const id = el.getAttribute("data-id");
+    const box = id ? measure.box(el) : null;
+    if (!id || !box || (!box.width && !box.height)) return;
+    const at = place(box);
+    destinations.set(id, { page: at.page, top: at.y });
+  });
 
   const add = (page: number, item: PdfItem) => {
     if (page < maxPages) pages[page].items.push(item);
@@ -379,14 +390,28 @@ export function snapshotPages(
       return;
     }
 
+    if (el.classList.contains("doc-toc-leader")) {
+      const box = measure.box(el);
+      if (box.width > 2 && box.height > 0) {
+        const at = place(box);
+        const color = textColor(style) ?? ([0, 0, 0] as RGB);
+        const baseline = at.y + at.height * 0.78;
+        for (let x = at.x + 1; x < at.x + at.width - 1; x += 5) {
+          add(at.page, { kind: "text", x, y: baseline, text: ".", font: "Times-Roman", size: 10, color });
+        }
+      }
+      return;
+    }
+
     if (el.tagName === "A") {
       const href = el.getAttribute("href");
-      // File links are PDF link annotations, so a reader outside Inline can open them.
-      if (href && /^(https?:|mailto:|file:)/i.test(href)) {
+      // File and web links are URI annotations. A contents entry (#block-id) goes to that heading.
+      const dest = href?.startsWith("#") ? destinations.get(href.slice(1)) : undefined;
+      if (dest || (href && /^(https?:|mailto:|file:)/i.test(href))) {
         for (const box of measure.boxes(el)) {
           if (!box.width || !box.height) continue;
           const at = place(box);
-          add(at.page, { kind: "link", x: at.x, y: at.y, width: at.width, height: at.height, uri: href });
+          add(at.page, dest ? { kind: "link", x: at.x, y: at.y, width: at.width, height: at.height, dest } : { kind: "link", x: at.x, y: at.y, width: at.width, height: at.height, uri: href! });
         }
       }
     }
@@ -418,7 +443,35 @@ export function snapshotPages(
 
   for (const child of root.children) walk(child as HTMLElement, { underline: false, strike: false });
 
-  return { title: title.trim() || "Untitled document", pages: pages.slice(0, maxPages) };
+  const outline = outlineFromHeadings(editor, measure, place);
+  return { title: title.trim() || "Untitled document", pages: pages.slice(0, maxPages), ...(outline.length ? { outline } : {}) };
+}
+
+/** Bookmarks for the heading tree, in the order a PDF outline lists them. */
+function outlineFromHeadings(
+  editor: Element | null | undefined,
+  measure: PageMeasurer,
+  place: (box: Box) => { page: number; y: number },
+): PdfOutlineItem[] {
+  if (!editor) return [];
+  const flat: Array<{ title: string; level: number; page: number; top: number }> = [];
+  editor.querySelectorAll<HTMLElement>("h1, h2, h3, h4, h5, h6").forEach((heading) => {
+    if (heading.closest(".doc-toc")) return;
+    const title = (heading.textContent ?? "").replace(/\s+/g, " ").trim();
+    if (!title) return;
+    const at = place(measure.box(heading));
+    flat.push({ title, level: Number(heading.tagName[1]) || 1, page: at.page, top: at.y });
+  });
+  const root: PdfOutlineItem[] = [];
+  const stack: Array<{ level: number; item: PdfOutlineItem }> = [];
+  for (const item of flat) {
+    const entry: PdfOutlineItem = { title: item.title, page: item.page, top: item.top, children: [] };
+    while (stack.length && stack[stack.length - 1]!.level >= item.level) stack.pop();
+    const parent = stack[stack.length - 1]?.item;
+    (parent ? parent.children! : root).push(entry);
+    stack.push({ level: item.level, item: entry });
+  }
+  return root;
 }
 
 /** The text of a CSS content value such as "\"•\"". */
