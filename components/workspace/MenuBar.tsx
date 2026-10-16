@@ -68,7 +68,7 @@ export type MenuActions = {
   setMode: (mode: EditorMode) => void;
   showInvisibles: boolean;
   toggleInvisibles: () => void;
-  /** The browser's spelling underlines. */
+  /** Red spelling underlines in the document. */
   spellcheck: boolean;
   toggleSpellcheck: () => void;
   substitutions: boolean;
