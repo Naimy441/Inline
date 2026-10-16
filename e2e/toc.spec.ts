@@ -77,6 +77,57 @@ test("a table of contents lists headings with leaders and page numbers, and the 
   ).toBe("Methods");
   await expect(page).not.toHaveURL(/#/);
 
+  const title = toc.locator(".doc-toc-title");
+  await title.click();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Shift+End");
+  await page.keyboard.type("Index");
+  await expect(title).toHaveText("Index");
+
+  const caret = () =>
+    page.evaluate(() => {
+      const nav = document.querySelector("nav.doc-toc");
+      const sel = getSelection();
+      const node = sel?.anchorNode;
+      const el = node instanceof Element ? node : node?.parentElement;
+      const where = el?.closest(".doc-toc-title") ? "title" : el?.closest("p, h1, h2, h3") ? "text" : "other";
+      return {
+        gap: Boolean(document.querySelector(".ProseMirror-gapcursor")),
+        outline: nav ? getComputedStyle(nav).outlineStyle : "",
+        selected: nav?.classList.contains("ProseMirror-selectednode") ?? false,
+        where,
+      };
+    });
+
+  await title.click();
+  await expect.poll(caret).toMatchObject({ gap: false, outline: "none", selected: false, where: "title" });
+  // Selecting the field, which Backspace does before it deletes it, stays unoutlined.
+  await expect.poll(async () => {
+    await page.evaluate(() => document.querySelector("nav.doc-toc")?.classList.add("ProseMirror-selectednode"));
+    return caret();
+  }).toMatchObject({ outline: "none" });
+  for (const key of ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "ArrowUp", "ArrowLeft"]) {
+    await page.keyboard.press(key);
+    const state = await caret();
+    expect(state.gap, key).toBe(false);
+    expect(state.outline, key).toBe("none");
+    expect(["title", "text"], key).toContain(state.where);
+  }
+  const box = await toc.boundingBox();
+  expect(box).toBeTruthy();
+  await page.mouse.click(box!.x + 16, box!.y + 4);
+  await expect.poll(caret).toMatchObject({ gap: false, outline: "none" });
+  await page.mouse.click(box!.x + 24, Math.max(8, box!.y - 6));
+  await expect.poll(caret).toMatchObject({ gap: false, outline: "none" });
+  expect((await caret()).where).not.toBe("other");
+
+  await page.locator(".menubar-item", { hasText: "Insert" }).click();
+  const insertItem = page.getByRole("menuitem", { name: "Table of contents", exact: true });
+  await expect(insertItem).toBeVisible();
+  await expect(insertItem).not.toContainText("Headings, leaders and page numbers");
+  await expect(page.getByRole("menuitem", { name: "Remove table of contents" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
   await expect(page.locator(".sync-status")).toContainText("Saved");
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download" }).click();
@@ -102,7 +153,7 @@ test("a table of contents lists headings with leaders and page numbers, and the 
       if (dest != null) linkPages.push(dest);
     }
   }
-  expect(text[0]).toContain("Contents");
+  expect(text[0]).toContain("Index");
   expect(text[0]).toContain("Introduction");
   expect(text.join("\n")).toContain("Methods");
   expect(linkPages).toContain(2);
@@ -120,8 +171,10 @@ test("a table of contents lists headings with leaders and page numbers, and the 
     expect.objectContaining({ title: "Introduction", page: 1 }),
     expect.objectContaining({ title: "Methods", page: 2 }),
   ]));
-  await page.locator(".menubar-item", { hasText: "Insert" }).click();
-  await page.getByRole("menuitem", { name: "Remove table of contents" }).click();
+  await title.click({ clickCount: 3 });
+  await page.keyboard.press("Backspace");
+  await page.keyboard.press("Backspace");
   await expect(doc.locator("nav.doc-toc")).toHaveCount(0);
   await expect(doc.locator("h1", { hasText: "Introduction" })).toHaveCount(1);
+  await expect(doc.locator("h1", { hasText: "Methods" })).toHaveCount(1);
 });

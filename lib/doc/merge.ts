@@ -3,6 +3,7 @@ import type { Transform } from "prosemirror-transform";
 import { diffSequences, textSimilarity } from "@/lib/doc/diff";
 import { serializeBlock } from "@/lib/doc/markdown";
 import { MARKDOWN_MARKS, RANGE_MARKS, isTextblockType, schema } from "@/lib/doc/schema";
+import { TOC_TITLE } from "@/lib/doc/toc";
 
 /**
  * Applies new content to a run of blocks while preserving everything the new
@@ -239,9 +240,18 @@ export function mergeBlock(old: PMNode, next: PMNode): PMNode {
       return next.type.create({ ...next.attrs, id: old.attrs.id }, next.content);
     case "toc": {
       // Entries are rebuilt from headings after the merge (they aren't in the Markdown).
+      // A bare \tableofcontents keeps a heading the user renamed. {title="…"} applies that heading.
       const depth = Number(next.attrs.depth);
       const levels = Number.isInteger(depth) && depth >= 1 && depth <= 6 ? depth : old.attrs.depth;
-      return levels === old.attrs.depth ? old : old.type.create({ ...old.attrs, depth: levels }, old.content);
+      const incoming = next.firstChild?.type.name === "toc_title" ? next.firstChild : null;
+      const explicit = incoming != null && incoming.textContent !== TOC_TITLE;
+      if (levels === old.attrs.depth && !explicit) return old;
+      const title = explicit && incoming ? incoming : old.firstChild?.type.name === "toc_title" ? old.firstChild : incoming;
+      const entries: PMNode[] = [];
+      old.forEach((child) => {
+        if (child.type.name === "toc_entry") entries.push(child);
+      });
+      return old.type.create({ ...old.attrs, depth: levels }, title ? [title, ...entries] : entries);
     }
     default:
       return old.type === next.type ? old : withId(next, old.attrs.id);

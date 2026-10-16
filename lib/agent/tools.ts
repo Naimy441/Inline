@@ -1916,7 +1916,7 @@ export const TOOLS = [
     title: "Insert table of contents",
     description:
       "Insert a table of contents generated from the document's headings: each entry is the heading, a dotted leader, and the page that heading falls on, and each entry opens that heading. It updates on its own as headings are added, renamed or removed, and as pages change. Don't type the entries by hand, and don't build one out of paragraphs.\n\n" +
-      "One document has one table of contents. If it already has one, this leaves it and reports the entries. depth is the deepest heading level to list (1–6, default 3). It is written as \\tableofcontents in the Markdown. To remove it, delete that line, or the user can select the field and delete it.",
+      "One document has one table of contents. If it already has one, this leaves it and reports the entries. depth is the deepest heading level to list (1–6, default 3). It is written as \\tableofcontents in the Markdown. The heading starts as Contents; a renamed heading is {title=\"…\"} and must be kept. To remove it, delete that line. The user can also clear the heading and press Backspace.",
     shape: {
       document_id: documentId,
       position: z.enum(["start", "end", "after_line", "before_line"]).optional().describe("Where to insert it. Defaults to the start."),

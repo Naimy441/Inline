@@ -441,7 +441,8 @@ async function blockXml(node: PMNode, ctx: Context, list?: { numId: number; leve
       return '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
     case "toc": {
       const tab = Math.max(1, Math.round(ctx.contentWidthPx * 15));
-      let out = `<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Contents</w:t></w:r></w:p>`;
+      const title = node.firstChild?.type.name === "toc_title" ? node.firstChild.textContent : "Contents";
+      let out = `<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>${textRun(title, [])}</w:p>`;
       node.forEach((child) => {
         if (child.type.name !== "toc_entry" || child.attrs.placeholder) return;
         const level = Math.max(1, Math.min(9, Number(child.attrs.level) || 1));

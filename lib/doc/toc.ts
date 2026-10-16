@@ -1,4 +1,6 @@
+import { GapCursor } from "prosemirror-gapcursor";
 import type { Node as PMNode } from "prosemirror-model";
+import { TextSelection, type Selection } from "prosemirror-state";
 import { Transform } from "prosemirror-transform";
 import { schema } from "@/lib/doc/schema";
 
@@ -22,14 +24,68 @@ export function tocDepth(value: unknown, fallback = TOC_DEPTH_DEFAULT): number {
   return Number.isInteger(depth) && depth >= 1 && depth <= 6 ? depth : fallback;
 }
 
-/** `\tableofcontents` or `\tableofcontents {depth=2}`. */
-export function tocMarkdownMatch(text: string): { depth: number } | null {
-  const match = /^\\tableofcontents(?:\s*\{depth=([1-6])\})?$/.exec(text.trim());
-  return match ? { depth: match[1] ? Number(match[1]) : TOC_DEPTH_DEFAULT } : null;
+/**
+ * `\tableofcontents`, `\tableofcontents {depth=2}`, `{title="Index"}`, or both.
+ * A missing title means the default heading. A title of `null` in the result
+ * is that default; a string, including "", was written in the line.
+ */
+export function tocMarkdownMatch(text: string): { depth: number; title: string | null } | null {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith(TOC_MARKDOWN)) return null;
+  const rest = trimmed.slice(TOC_MARKDOWN.length);
+  if (!rest.trim()) return { depth: TOC_DEPTH_DEFAULT, title: null };
+  const body = /^\s*\{([\s\S]*)\}\s*$/.exec(rest);
+  if (!body) return null;
+  return parseTocAttrs(body[1] ?? "");
 }
 
-export function tocMarkdown(depth: number): string {
-  return depth === TOC_DEPTH_DEFAULT ? TOC_MARKDOWN : `${TOC_MARKDOWN} {depth=${depth}}`;
+function parseTocAttrs(body: string): { depth: number; title: string | null } | null {
+  let rest = body.trim();
+  if (!rest) return { depth: TOC_DEPTH_DEFAULT, title: null };
+  let depth = TOC_DEPTH_DEFAULT;
+  let title: string | null = null;
+  let sawDepth = false;
+  let sawTitle = false;
+  while (rest) {
+    const depthMatch = /^depth=([1-6])(?=\s|$)/.exec(rest);
+    if (depthMatch) {
+      if (sawDepth) return null;
+      sawDepth = true;
+      depth = Number(depthMatch[1]);
+      rest = rest.slice(depthMatch[0].length).trimStart();
+      continue;
+    }
+    const titleMatch = /^title="((?:\\.|[^"\\])*)"(?=\s|$)/.exec(rest);
+    if (titleMatch) {
+      if (sawTitle) return null;
+      sawTitle = true;
+      title = (titleMatch[1] ?? "").replace(/\\(["\\])/g, "$1");
+      rest = rest.slice(titleMatch[0].length).trimStart();
+      continue;
+    }
+    return null;
+  }
+  return { depth, title };
+}
+
+function escapeTocTitle(text: string): string {
+  return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r?\n/g, " ");
+}
+
+/** The Markdown line for a contents field. The default heading is left off, so older lines stay as they were. */
+export function tocMarkdown(node: PMNode): string {
+  const depth = tocDepth(node.attrs.depth);
+  const title = node.firstChild?.type.name === "toc_title" ? node.firstChild.textContent : TOC_TITLE;
+  const bits: string[] = [];
+  if (depth !== TOC_DEPTH_DEFAULT) bits.push(`depth=${depth}`);
+  if (title !== TOC_TITLE) bits.push(`title="${escapeTocTitle(title)}"`);
+  return bits.length ? `${TOC_MARKDOWN} {${bits.join(" ")}}` : TOC_MARKDOWN;
+}
+
+/** A contents heading. `text` defaults to "Contents"; "" is an empty heading. */
+export function tocTitleNode(text: string = TOC_TITLE): PMNode {
+  const type = schema.nodes.toc_title!;
+  return text ? type.create(null, schema.text(text)) : type.create();
 }
 
 /**
@@ -76,9 +132,27 @@ function nodeSignature(toc: PMNode): string {
   return parts.join("\n");
 }
 
-function tocChildren(doc: PMNode, depth: number): PMNode[] {
+/** The heading already on the field, including one stored the old way as an attribute. */
+function titleFrom(existing: PMNode | null | undefined, text?: string | null): PMNode {
+  const current = existing?.type.name === "toc" ? existing.firstChild : existing?.type.name === "toc_title" ? existing : null;
+  if (current?.type.name === "toc_title" && text == null) {
+    const legacy = typeof current.attrs.text === "string" && current.attrs.text ? current.attrs.text : "";
+    if (!legacy) return current;
+    // The words live in the node now. An empty heading stays empty.
+    return tocTitleNode(current.content.size > 0 ? current.textContent : legacy);
+  }
+  return tocTitleNode(text ?? TOC_TITLE);
+}
+
+function titleNeedsMigration(toc: PMNode): boolean {
+  const title = toc.firstChild;
+  if (title?.type.name !== "toc_title") return true;
+  return typeof title.attrs.text === "string" && title.attrs.text.length > 0;
+}
+
+function tocChildren(doc: PMNode, depth: number, existing?: PMNode | null, titleText?: string | null): PMNode[] {
   const headings = collectTocHeadings(doc, depth);
-  const title = schema.nodes.toc_title!.create({ text: TOC_TITLE });
+  const title = titleFrom(existing, titleText);
   if (!headings.length) {
     return [title, schema.nodes.toc_entry!.create({ level: 1, text: TOC_EMPTY, href: null, placeholder: true })];
   }
@@ -108,8 +182,33 @@ export function createToc(doc: PMNode, depth = TOC_DEPTH_DEFAULT): PMNode {
 export function syncedToc(toc: PMNode, doc: PMNode): PMNode {
   const depth = tocDepth(toc.attrs.depth);
   const headings = collectTocHeadings(doc, depth);
-  if (toc.firstChild?.type.name === "toc_title" && nodeSignature(toc) === entrySignature(headings) && toc.attrs.depth === depth) return toc;
-  return schema.nodes.toc!.create({ ...toc.attrs, depth }, tocChildren(doc, depth));
+  if (!titleNeedsMigration(toc) && toc.firstChild?.type.name === "toc_title" && nodeSignature(toc) === entrySignature(headings) && toc.attrs.depth === depth) return toc;
+  return schema.nodes.toc!.create({ ...toc.attrs, depth }, tocChildren(doc, depth, toc));
+}
+
+/** A text caret in the contents heading, for a gap cursor that would otherwise sit beside the field. */
+export function selectionReplacingTocGap(doc: PMNode, selection: Selection): TextSelection | null {
+  if (!(selection instanceof GapCursor)) return null;
+  const $pos = selection.$from;
+  let tocPos: number | null = null;
+  let atEnd = false;
+  if ($pos.nodeAfter?.type.name === "toc") tocPos = $pos.pos;
+  else if ($pos.nodeBefore?.type.name === "toc") {
+    tocPos = $pos.pos - $pos.nodeBefore.nodeSize;
+    atEnd = true;
+  } else if ($pos.parent.type.name === "toc") tocPos = $pos.before();
+  if (tocPos == null) return null;
+  return tocTitleSelection(doc, tocPos, atEnd ? "end" : "start");
+}
+
+/** Caret in the contents heading. The heading is the field's first child. */
+export function tocTitleSelection(doc: PMNode, tocPos: number, edge: "start" | "end" = "start"): TextSelection | null {
+  const toc = doc.nodeAt(tocPos);
+  const title = toc?.firstChild;
+  if (!toc || toc.type.name !== "toc" || !title?.isTextblock) return null;
+  const start = tocPos + 2;
+  const end = start + title.content.size;
+  return TextSelection.create(doc, edge === "end" ? end : start);
 }
 
 /** Steps that rebuild every contents field, or null when they already match the headings. */
@@ -157,7 +256,9 @@ export function describeToc(doc: PMNode, starts?: readonly number[]): string {
   if (!toc) return "This document has no table of contents.";
   const depth = tocDepth(toc.node.attrs.depth);
   const headings = collectTocHeadings(doc, depth);
-  if (!headings.length) return `The table of contents is in the document. There are no headings to list yet (it includes heading levels 1–${depth}).`;
+  const title = toc.node.firstChild?.type.name === "toc_title" ? toc.node.firstChild.textContent : TOC_TITLE;
+  const named = title.trim() ? `“${title}”` : "with a blank heading";
+  if (!headings.length) return `The table of contents ${named} is in the document. There are no headings to list yet (it includes heading levels 1–${depth}).`;
   const top = Math.min(...headings.map((heading) => heading.level));
   const lines = headings.map((heading) => {
     const page = starts ? pageFromStarts(starts, heading.pos) : null;
@@ -167,5 +268,5 @@ export function describeToc(doc: PMNode, starts?: readonly number[]): string {
   const measured = starts
     ? "Page numbers are the pages those headings fall on in the editor."
     : "Page numbers appear in the editor, and in the PDF, once the document is laid out.";
-  return `Table of contents, heading levels 1–${depth} (${headings.length} ${headings.length === 1 ? "entry" : "entries"}):\n${lines.join("\n")}\n${measured}`;
+  return `Table of contents ${named}, heading levels 1–${depth} (${headings.length} ${headings.length === 1 ? "entry" : "entries"}):\n${lines.join("\n")}\n${measured}`;
 }

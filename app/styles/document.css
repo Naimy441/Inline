@@ -211,7 +211,13 @@ img.ProseMirror-separator {
 /* A table of contents: one field, with dotted leaders and page numbers like a PDF. */
 .doc-content .doc-toc {
   margin: 0 0 12pt;
-  user-select: none;
+}
+
+.doc-content .doc-toc,
+.doc-content .doc-toc:focus,
+.doc-content .doc-toc.ProseMirror-selectednode {
+  outline: none;
+  outline-offset: 0;
 }
 
 .doc-content .doc-toc-title {
@@ -219,6 +225,8 @@ img.ProseMirror-separator {
   font-size: 20pt;
   line-height: 1.2;
   font-weight: 400;
+  cursor: text;
+  user-select: text;
 }
 
 .doc-content .doc-toc-entry {
@@ -231,6 +239,7 @@ img.ProseMirror-separator {
   text-decoration: none;
   line-height: 1.4;
   cursor: pointer;
+  user-select: none;
 }
 
 .doc-content .doc-toc-entry.is-placeholder {
@@ -267,12 +276,6 @@ img.ProseMirror-separator {
   font-variant-numeric: tabular-nums;
   min-width: 1.25em;
   text-align: right;
-}
-
-.doc-content .doc-toc.ProseMirror-selectednode {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
-  border-radius: 2px;
 }
 
 .doc-content h1 {
