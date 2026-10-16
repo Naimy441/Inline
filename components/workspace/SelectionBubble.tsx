@@ -88,10 +88,12 @@ export function SelectionBubble({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [linkEditing]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!prompting) return;
     setInstruction("");
-    requestAnimationFrame(() => promptInput.current?.focus());
+    // Focus before paint. A key pressed as soon as the field is visible (Escape
+    // to dismiss it) otherwise lands in the document and leaves the prompt open.
+    promptInput.current?.focus();
   }, [prompting]);
 
   if (!state || !view) return null;
