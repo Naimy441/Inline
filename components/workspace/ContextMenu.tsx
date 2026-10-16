@@ -11,15 +11,15 @@ import { clearFormatting } from "@/lib/editor/commands";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { toast } from "@/components/ui/Toast";
 import { isTouch } from "@/lib/client/viewport";
-import { selectedWord } from "@/lib/editor/spelling";
-import { preferences } from "@/lib/client/preferences";
+import { hasSpellingUnderline, selectedWord } from "@/lib/editor/spelling";
 import { normalizeWord } from "@/lib/doc/words";
 import { matchCase } from "@/lib/dictionary/lookup";
 import { DictionaryCard } from "@/components/workspace/DictionaryCard";
 
 /**
- * The editor's right-click menu. A word can be looked up here (definitions and
- * synonyms). Shift+right-click still opens the browser's own menu.
+ * The editor's right-click menu. A word can be looked up here. Spelling
+ * actions appear only on a word that has a red underline. Shift+right-click
+ * still opens the browser's own menu.
  */
 export function ContextMenu({
   session,
@@ -73,8 +73,8 @@ export function ContextMenu({
       .then(() => toast(lock ? "Locked. Claude can't change this text." : "Unlocked. Claude can edit this text again."))
       .catch((error: Error) => toast(error.message, { tone: "error" }));
   const word = session.view ? selectedWord(session.view) : null;
-  const spellcheck = preferences.get().spellcheck;
   const shown = word && word.text.length > 24 ? `${word.text.slice(0, 23)}…` : word?.text;
+  const underlined = Boolean(state && word && hasSpellingUnderline(state, word.from, word.to));
   const selectWord = (target: { from: number; to: number }) =>
     session.run((state, dispatch) => {
       if (target.to > state.doc.content.size) return false;
@@ -101,7 +101,6 @@ export function ContextMenu({
       ? ([
           {
             label: `Look up “${shown}”`,
-            hint: "Definitions and synonyms",
             icon: <BookOpen size={14} />,
             onSelect: () => {
               // A selected word would also raise the formatting bubble on top of the card.
@@ -163,9 +162,9 @@ export function ContextMenu({
       : []),
     { kind: "separator" },
     { label: "Clear formatting", icon: <RemoveFormatting size={14} />, shortcut: `⌘\\`, disabled: !hasSelection || readOnly, onSelect: () => run(clearFormatting) },
-    { kind: "separator" },
-    ...(word && spellcheck
-      ? [
+    ...(underlined && word
+      ? ([
+          { kind: "separator" },
           {
             label: `Add “${shown}” to dictionary`,
             hint: "Stop underlining this word",
@@ -175,9 +174,9 @@ export function ContextMenu({
               toast(`“${word.text}” won't be underlined again.`);
             },
           },
-        ]
+          { label: "Hide spelling underlines", onSelect: () => session.setSpellcheck(false) },
+        ] as MenuItem[])
       : []),
-    { label: spellcheck ? "Hide spelling underlines" : "Show spelling underlines", onSelect: () => session.setSpellcheck(!spellcheck) },
   ];
 
   return (

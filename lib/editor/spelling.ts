@@ -145,6 +145,13 @@ export function wordAt(state: EditorState, pos: number): { from: number; to: num
   return null;
 }
 
+/** Whether a red spelling underline currently covers this range. */
+export function hasSpellingUnderline(state: EditorState, from: number, to: number) {
+  const decorations = spellingKey.getState(state)?.decorations;
+  if (!decorations || from >= to) return false;
+  return decorations.find(from, to).some((decoration) => decoration.spec.spelling === "spelling-error" && decoration.from < to && decoration.to > from);
+}
+
 /** The word under the selection: a selected single word, or the word the cursor is in. */
 export function selectedWord(view: EditorView) {
   const { from, to, empty } = view.state.selection;
