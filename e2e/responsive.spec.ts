@@ -82,7 +82,13 @@ test.describe("phone", () => {
     await page.keyboard.press("End");
     await page.keyboard.type(" world");
     await expect(page.locator(".doc-content")).toHaveText("Hello world");
+    // Shift+Home can sit on the page before the editor hears selectionchange.
+    // Hold that report so Bold has to read the range itself. That is the flake on a busy runner.
+    await page.evaluate(() => {
+      document.addEventListener("selectionchange", (event) => event.stopImmediatePropagation(), true);
+    });
     await page.keyboard.press("Shift+Home");
+    await expect.poll(() => page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("Hello world");
     // Tools that don't fit the narrow toolbar are under "More tools".
     await page.getByRole("button", { name: "More tools" }).click();
     await page.locator(".tb-overflow").getByRole("button", { name: "Bold", exact: true }).click();
