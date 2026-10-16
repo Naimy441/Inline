@@ -5,7 +5,16 @@ import { EditorState } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 
 import { schema } from "@/lib/doc/schema";
-import { keepVisibleSelection } from "./domSync";
+import { keepVisibleSelection, retainHeldSelection } from "./domSync";
+
+describe("retainHeldSelection", () => {
+  it("keeps a range the next toolbar press can no longer see, until the caret moves", () => {
+    const held = retainHeldSelection(null, { from: 1, to: 12 }, { from: 12, empty: true });
+    assert.deepEqual(held, { from: 1, to: 12, anchor: 12 });
+    assert.equal(retainHeldSelection(held, null, { from: 12, empty: true }), held);
+    assert.equal(retainHeldSelection(held, null, { from: 4, empty: true }), null);
+  });
+});
 
 describe("keepVisibleSelection", () => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>");
