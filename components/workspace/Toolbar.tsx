@@ -29,7 +29,7 @@ import {
 } from "lucide-react";
 import { redo, redoDepth, undo, undoDepth } from "prosemirror-history";
 import type { EditorState } from "prosemirror-state";
-import { memo, useCallback, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { memo, useCallback, useLayoutEffect, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
 import type { DocumentSession, EditorMode } from "@/lib/client/documentSession";
 import { EDITOR_MODES, modeMenuItems } from "@/components/workspace/modes";
 import { FONT_FAMILIES, type DocumentMeta } from "@/lib/doc/settings";
@@ -181,6 +181,12 @@ const ToolbarView = memo(function ToolbarView({
   const moreRef = useRef<HTMLButtonElement>(null);
   const [moreOpen, setMoreOpen] = useState(false);
   const closeMore = useCallback(() => setMoreOpen(false), []);
+  // A touch can blur the document on pointerdown, before mousedown's preventDefault
+  // runs and before the click reads the selection. Remember the range first.
+  const rememberTouchSelection = (event: PointerEvent) => {
+    if (event.pointerType === "mouse" || event.button !== 0) return;
+    session.captureDomSelection();
+  };
 
   const alignIcon = { left: <AlignLeft size={16} />, center: <AlignCenter size={16} />, right: <AlignRight size={16} />, justify: <AlignJustify size={16} /> }[align];
 
@@ -340,7 +346,7 @@ const ToolbarView = memo(function ToolbarView({
   ];
 
   return (
-    <div ref={rowRef} className={`toolbar${viewing ? " is-viewing" : ""}`} role="toolbar" aria-label="Formatting">
+    <div ref={rowRef} className={`toolbar${viewing ? " is-viewing" : ""}`} role="toolbar" aria-label="Formatting" onPointerDown={rememberTouchSelection} onMouseDown={keepEditorSelection}>
       {groups.slice(0, fit)}
       {fit < groups.length && (
         <Group edit={false} className="tb-more-group">
@@ -354,7 +360,7 @@ const ToolbarView = memo(function ToolbarView({
         {EDITOR_MODES[mode].icon(15)}
         <span className="tb-select-text">{EDITOR_MODES[mode].label}</span> <ChevronDown size={13} />
       </MenuButton>
-      <Popover open={moreOpen && fit < groups.length} onClose={closeMore} anchor={moreRef} placement="bottom-end" role="toolbar" className={`tb-overflow${viewing ? " is-viewing" : ""}`}>
+      <Popover open={moreOpen && fit < groups.length} onClose={closeMore} anchor={moreRef} placement="bottom-end" role="toolbar" className={`tb-overflow${viewing ? " is-viewing" : ""}`} onPointerDown={rememberTouchSelection} onMouseDown={keepEditorSelection}>
         {groups.slice(fit)}
       </Popover>
     </div>
@@ -401,6 +407,17 @@ function useFittingGroups(row: RefObject<HTMLDivElement | null>, count: number) 
     return () => observer.disconnect();
   }, [row, count, fit]);
   return fit;
+}
+
+/**
+ * Pressing a toolbar control must not take focus. Otherwise the document
+ * selection collapses on mousedown, and the click formats a caret.
+ */
+function keepEditorSelection(event: MouseEvent) {
+  if (event.button !== 0) return;
+  const target = event.target;
+  if (target instanceof Element && target.closest("input, textarea, select")) return;
+  event.preventDefault();
 }
 
 /** A group of controls; editing groups are disabled in viewing mode. */

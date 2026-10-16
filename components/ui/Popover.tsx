@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, type ReactNode, type RefObject } from "react";
+import { useEffect, useRef, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { useAnchoredPosition, type Placement } from "./floating";
 
@@ -14,6 +14,8 @@ export function Popover({
   children,
   role = "dialog",
   label,
+  onMouseDown,
+  onPointerDown,
 }: {
   open: boolean;
   onClose: () => void;
@@ -24,6 +26,8 @@ export function Popover({
   role?: string;
   /** Accessible name when `role` is dialog. */
   label?: string;
+  onMouseDown?: (event: ReactMouseEvent) => void;
+  onPointerDown?: (event: ReactPointerEvent) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const style = useAnchoredPosition(open, anchor, ref, placement);
@@ -54,7 +58,7 @@ export function Popover({
   }, [open, onClose, anchor]);
   if (!open || typeof document === "undefined") return null;
   return createPortal(
-    <div ref={ref} role={role} aria-label={label} className={`popover${className ? ` ${className}` : ""}`} style={{ position: "fixed", ...style }}>
+    <div ref={ref} role={role} aria-label={label} className={`popover${className ? ` ${className}` : ""}`} style={{ position: "fixed", ...style }} onMouseDown={onMouseDown} onPointerDown={onPointerDown}>
       {children}
     </div>,
     document.body,
