@@ -357,8 +357,10 @@ function paragraphProps(node: PMNode, options: { style?: string; numbering?: { n
   if (spacing.length) props.push(`<w:spacing ${spacing.join(" ")}/>`);
   const textIndent = Number(node.attrs.textIndent) || 0;
   const indent = Math.round((Number(node.attrs.indent) || 0) * 720) + (options.indentTwips ?? 0) + (textIndent < 0 ? Math.round(-textIndent * 1440) : 0);
+  const rightTwips = Math.round((Number(node.attrs.rightIndent) || 0) * 1440);
+  const right = rightTwips > 0 ? ` w:right="${rightTwips}"` : "";
   const first = textIndent > 0 ? ` w:firstLine="${Math.round(textIndent * 1440)}"` : textIndent < 0 ? ` w:hanging="${Math.round(-textIndent * 1440)}"` : "";
-  if (indent || first) props.push(`<w:ind w:left="${indent}"${first}/>`);
+  if (indent || right || first) props.push(`<w:ind w:left="${indent}"${right}${first}/>`);
   const align = node.attrs.align as string | undefined;
   if (align && align !== "left") props.push(`<w:jc w:val="${align === "justify" ? "both" : align}"/>`);
   // The paragraph mark's size: how tall the paragraph is when it's empty.

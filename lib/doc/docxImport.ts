@@ -1,7 +1,7 @@
 import type { Mark, Node as PMNode } from "prosemirror-model";
 import { newId } from "@/lib/doc/ids";
 import { pictureCrop, pictureWrap, rotateFromWord, srcRectToCrop, type PictureCrop, type PictureWrap } from "@/lib/doc/picture";
-import { defaultListNumbering, normalizeFormula, safeHref, sameBorders, schema, type Align, type BorderLine, type Borders, type CellBorders, type ListMarker, type ListNumbering, type TableBorders, type TableLine, type TabStop } from "@/lib/doc/schema";
+import { defaultListNumbering, MAX_INDENT, normalizeFormula, safeHref, sameBorders, schema, type Align, type BorderLine, type Borders, type CellBorders, type ListMarker, type ListNumbering, type TableBorders, type TableLine, type TabStop } from "@/lib/doc/schema";
 import { primaryFamily } from "@/lib/doc/fontMetrics";
 import { DEFAULT_SETTINGS, DEFAULT_TAB_STOP, FONT_FAMILIES, PAPER_SIZES, type CommentAuthor, type DocComment, type DocumentSettings, type HorizontalAlign, type PaperSize } from "@/lib/doc/settings";
 import { findStyle, firstFontName, isDefaultStyleFont, resolveStyle, storedStyleId, stylesFromWord, stylesOf, type StyleRole, type WordStyleSnapshot } from "@/lib/doc/styles";
@@ -136,6 +136,8 @@ type ParaProps = {
   align?: Align;
   /** Twips. */
   left?: number;
+  /** Twips in from the right margin. */
+  right?: number;
   firstLine?: number;
   hanging?: number;
   before?: number;
@@ -212,6 +214,8 @@ function readParaProps(pPr: XmlElement | undefined): ParaProps {
   const ind = child(pPr, "w:ind");
   const left = numAttr(ind, "w:left") ?? numAttr(ind, "w:start");
   if (left !== undefined) props.left = left;
+  const right = numAttr(ind, "w:right") ?? numAttr(ind, "w:end");
+  if (right !== undefined && right > 0) props.right = right;
   const firstLine = numAttr(ind, "w:firstLine");
   const hanging = numAttr(ind, "w:hanging");
   if (firstLine !== undefined || hanging !== undefined) {
@@ -1001,10 +1005,14 @@ function blockLayout(ctx: Context, para: ParaProps, kind: BlockKind, level: numb
     const firstLine = para.firstLine ?? 0;
     // Word's left indent is where the lines after the first start; Inline's is where the first line starts.
     const left = (para.left ?? 0) - hanging;
-    attrs.indent = Math.max(0, Math.min(8, exact ? Math.round((left / 720) * 1000) / 1000 : Math.round(left / 720)));
+    attrs.indent = Math.max(0, Math.min(MAX_INDENT, exact ? Math.round((left / 720) * 1000) / 1000 : Math.round(left / 720)));
     const textIndent = hanging ? -hanging / 1440 : firstLine / 1440;
     const rounded = Math.round(Math.max(-3, Math.min(3, textIndent)) * 100) / 100;
     if (Math.abs(rounded) >= (exact ? 0.005 : 0.05)) attrs.textIndent = rounded;
+    if (para.right && para.right > 0) {
+      const inches = Math.round((para.right / 1440) * 1000) / 1000;
+      if (inches >= 0.01) attrs.rightIndent = Math.min(12, inches);
+    }
   }
   if (para.bidi) attrs.dir = "rtl";
   return attrs;

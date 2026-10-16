@@ -80,6 +80,9 @@ export type MenuActions = {
   setMode: (mode: EditorMode) => void;
   showInvisibles: boolean;
   toggleInvisibles: () => void;
+  /** View → Show ruler. Off until the reader turns it on. */
+  showRuler: boolean;
+  toggleRuler: () => void;
   /** Red spelling underlines in the document. */
   spellcheck: boolean;
   toggleSpellcheck: () => void;
@@ -239,6 +242,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       { kind: "separator" },
       ...(actions.focusMode ? [] : [{ label: "Claude panel", shortcut: `⌘J`, onSelect: actions.toggleAgent }]),
       { label: "Focus mode", hint: "Hide AI tools while you write", checked: actions.focusMode, onSelect: actions.toggleFocusMode },
+      { label: "Show ruler", checked: actions.showRuler, onSelect: actions.toggleRuler },
       { label: "Show non-printing characters", shortcut: `⌘⇧P`, checked: actions.showInvisibles, onSelect: actions.toggleInvisibles },
       { label: "Show spelling underlines", checked: actions.spellcheck, onSelect: actions.toggleSpellcheck },
       ...(actions.pdfAnnotations === null ? [] : [{ label: "Show PDF annotations", hint: "As they were on the original pages", checked: actions.pdfAnnotations, onSelect: actions.togglePdfAnnotations }]),

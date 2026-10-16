@@ -41,7 +41,8 @@
   .canvas-loading,
   .dialog-backdrop,
   .popover,
-  .menu {
+  .menu,
+  .doc-ruler-bar {
     display: none !important;
   }
 

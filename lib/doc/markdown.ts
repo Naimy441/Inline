@@ -140,18 +140,25 @@ function blockAttrTokens(node: PMNode, context: BlockContext): string[] {
   const align = node.attrs.align as Align | undefined;
   if (!context.inTable && align && align !== "left") tokens.push(`align=${align}`);
   const indent = Number(node.attrs.indent) || 0;
-  if (indent > 0) tokens.push(`indent=${indent}`);
+  if (indent > 0) tokens.push(`indent=${formatInches(indent)}`);
   if (node.attrs.bibliography) tokens.push(".bibliography");
   const textIndent = Number(node.attrs.textIndent) || 0;
-  if (textIndent > 0) tokens.push(`first-line=${textIndent}`);
+  if (textIndent > 0) tokens.push(`first-line=${formatInches(textIndent)}`);
   // A bibliography entry's usual half-inch hang is implied by {.bibliography}.
-  if (textIndent < 0 && !(node.attrs.bibliography && textIndent === -0.5)) tokens.push(`hanging=${-textIndent}`);
+  if (textIndent < 0 && !(node.attrs.bibliography && textIndent === -0.5)) tokens.push(`hanging=${formatInches(-textIndent)}`);
+  const right = Number(node.attrs.rightIndent) || 0;
+  if (right > 0) tokens.push(`right=${formatInches(right)}`);
   if (node.attrs.dir === "rtl") tokens.push("dir=rtl");
   return tokens;
 }
 
 function attrSuffix(tokens: string[]) {
   return tokens.length ? ` {${tokens.join(" ")}}` : "";
+}
+
+/** An inch measurement without trailing zeros, so 2 and 0.125 both round-trip. */
+function formatInches(value: number) {
+  return String(Math.round(value * 1000) / 1000);
 }
 
 function pictureTokens(node: PMNode) {
@@ -888,7 +895,9 @@ class BlockBuilder {
       const align = spec.values.align as Align | undefined;
       if (align && ALIGNMENTS.includes(align)) nodeAttrs.align = align;
       const indent = Number(spec.values.indent);
-      if (Number.isFinite(indent) && indent > 0) nodeAttrs.indent = Math.min(MAX_INDENT, Math.round(indent));
+      if (Number.isFinite(indent) && indent > 0) nodeAttrs.indent = Math.min(MAX_INDENT, Math.round(indent * 1000) / 1000);
+      const right = Number(spec.values.right);
+      if (Number.isFinite(right) && right > 0) nodeAttrs.rightIndent = Math.min(12, Math.round(right * 1000) / 1000);
       const firstLine = Number(spec.values["first-line"]);
       const hanging = Number(spec.values.hanging);
       if (Number.isFinite(firstLine) && firstLine > 0) nodeAttrs.textIndent = Math.min(3, firstLine);
