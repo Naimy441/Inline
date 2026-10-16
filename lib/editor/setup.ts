@@ -20,6 +20,7 @@ import {
   followLink,
   indent,
   insertTab,
+  goToDocumentEdge,
   insertPageBreak,
   outdent,
   setAlign,
@@ -39,6 +40,7 @@ import { bordersPlugin } from "@/lib/editor/borders";
 import { lineFitPlugin } from "@/lib/editor/lineFit";
 import { tabsPlugin } from "@/lib/editor/tabs";
 import { endWithTextblock, pasteIntoEmptyTextblock, transformPastedHtml } from "@/lib/editor/paste";
+import { syncDomSelection } from "@/lib/editor/domSync";
 import { imageClipboardPlugin } from "@/lib/editor/imageClipboard";
 import { justifyPlugin } from "@/lib/editor/justify";
 import { placeholderPlugin } from "@/lib/editor/placeholder";
@@ -193,6 +195,11 @@ function buildKeymap(extra: Record<string, Command>) {
     "Mod-Shift-9": toggleList("task"),
     "Mod-Shift-.": toggleBlockquote,
     "Mod-Enter": insertPageBreak,
+    // Ctrl/⌘+End (and ⌘+Down on a Mac) move the caret in the editor state itself.
+    // The browser's own move can land after Enter has already split at the old caret.
+    "Mod-End": goToDocumentEdge("end"),
+    "Mod-Home": goToDocumentEdge("start"),
+    ...(mac ? { "Mod-ArrowDown": goToDocumentEdge("end"), "Mod-ArrowUp": goToDocumentEdge("start") } : {}),
     "Shift-Enter": insertHardBreak,
     Enter: chainCommands(splitListItem(nodes.list_item!), liftEmptyBlock),
     // Tab and Shift-Tab never fall through to the browser, which would move focus out of the document.
@@ -206,6 +213,18 @@ function buildKeymap(extra: Record<string, Command>) {
     ...extra,
   };
   return keymap(bindings);
+}
+
+/** Read the browser caret into the editor state before key commands, so Enter follows Ctrl/⌘+End. */
+function readSelectionPlugin() {
+  return new Plugin({
+    props: {
+      handleKeyDown(view) {
+        syncDomSelection(view);
+        return false;
+      },
+    },
+  });
 }
 
 /** Views whose paste in progress starts with a whole Google Docs paragraph (lib/editor/paste.ts). */
@@ -296,6 +315,8 @@ export function editorPlugins(options: EditorPluginOptions) {
   return [
     readOnlyPlugin(options.readOnly ?? (() => false)),
     buildInputRules(options.substitutions ?? (() => true)),
+    // Before the keymaps: the browser caret is in state before Enter or an arrow command reads it.
+    readSelectionPlugin(),
     // Before the keymaps: Enter and the arrows mean something else around an equation.
     mathPlugin(),
     buildKeymap(options.keys ?? {}),

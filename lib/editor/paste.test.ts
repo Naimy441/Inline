@@ -3,9 +3,11 @@ import { describe, it } from "node:test";
 import { JSDOM } from "jsdom";
 import { DOMParser as PMDOMParser, type Node as PMNode } from "prosemirror-model";
 import { Slice } from "prosemirror-model";
+import { splitBlock } from "prosemirror-commands";
 import { EditorState, TextSelection } from "prosemirror-state";
 
 import { schema } from "@/lib/doc/schema";
+import { goToDocumentEdge } from "@/lib/editor/commands";
 import { endWithTextblock, fixGoogleDocsHtml, pasteIntoEmptyTextblock, transformPastedHtml } from "@/lib/editor/paste";
 import { GOOGLE_PASSAGE, googleClipboard, googleParagraph } from "../../tests/support/googleClipboard";
 
@@ -123,6 +125,46 @@ describe("pasting a picture", () => {
     assert.equal(result.doc.lastChild!.textContent, "cd");
     assert.equal(result.selection.$from.parentOffset, 0);
     assert.equal(result.selection.$from.parent, result.doc.lastChild);
+  });
+
+  it("reads a pasted picture the way the clipboard parser does, and leaves the caret after it", () => {
+    const { window } = new JSDOM(`<img src="/api/uploads/a.png">`);
+    const parsed = PMDOMParser.fromSchema(schema).parseSlice(window.document.body, { preserveWhitespace: false });
+    const slice = Slice.maxOpen(parsed.content, true);
+    const doc = schema.node("doc", null, [schema.node("paragraph", null, [schema.text("Before.")]), schema.node("paragraph")]);
+    const state = EditorState.create({ doc, selection: TextSelection.create(doc, 10) });
+    const ended = endWithTextblock(slice, state);
+    const tr = state.tr.replaceSelection(ended ?? slice);
+    const kinds: string[] = [];
+    tr.doc.forEach((node) => kinds.push(`${node.type.name}:${node.textContent}`));
+    assert.deepEqual(kinds, ["paragraph:Before.", "image:", "paragraph:"]);
+    assert.equal(tr.selection.$from.parent, tr.doc.lastChild);
+    assert.equal(tr.selection.$from.parentOffset, 0);
+    assert.ok(tr.selection instanceof TextSelection);
+  });
+
+  it("pasted at the end of a paragraph leaves the caret on the following line", () => {
+    const doc = schema.node("doc", null, [schema.node("paragraph", { id: "a" }, [schema.text("Before.")])]);
+    const result = paste(doc, 8, new Slice(schema.node("doc", null, [image()]).content, 0, 0));
+    assert.deepEqual(result.kinds, ["paragraph", "image", "paragraph"]);
+    assert.equal(result.doc.firstChild!.textContent, "Before.");
+    assert.equal(result.doc.lastChild!.textContent, "");
+    assert.equal(result.selection.$from.parent, result.doc.lastChild);
+    assert.equal(result.selection.$from.parentOffset, 0);
+  });
+
+  it("Ctrl+End then Enter still pastes the picture onto the following line when the caret started at the beginning", () => {
+    const doc = schema.node("doc", null, [schema.node("paragraph", null, [schema.text("Before.")])]);
+    let state = EditorState.create({ doc, selection: TextSelection.create(doc, 1) });
+    goToDocumentEdge("end")(state, (tr) => (state = state.apply(tr)));
+    splitBlock(state, (tr) => (state = state.apply(tr)));
+    const ended = endWithTextblock(new Slice(schema.node("doc", null, [image()]).content, 0, 0), state);
+    const tr = state.tr.replaceSelection(ended!);
+    const kinds: string[] = [];
+    tr.doc.forEach((node) => kinds.push(`${node.type.name}:${node.textContent}`));
+    assert.deepEqual(kinds, ["paragraph:Before.", "image:", "paragraph:"]);
+    assert.equal(tr.selection.$from.parent, tr.doc.lastChild);
+    assert.equal(tr.selection.$from.parent.textContent, "");
   });
 
   it("leaves pastes that end in text alone", () => {

@@ -285,6 +285,15 @@ function insertBlock(node: PMNode, enter = false): Command {
   };
 }
 
+/** Caret to the start or end of the document. Always handled, so the browser doesn't move it on its own. */
+export function goToDocumentEdge(edge: "start" | "end"): Command {
+  return (state, dispatch) => {
+    const selection = edge === "end" ? TextSelection.atEnd(state.doc) : TextSelection.atStart(state.doc);
+    if (!state.selection.eq(selection)) dispatch?.(state.tr.setSelection(selection).scrollIntoView());
+    return true;
+  };
+}
+
 export const insertHorizontalRule = insertBlock(nodes.horizontal_rule!.create());
 export const insertPageBreak = insertBlock(nodes.page_break!.create());
 

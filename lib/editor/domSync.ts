@@ -7,11 +7,16 @@ import type { EditorView } from "prosemirror-view";
  * the stale selection back as "current" and ProseMirror then ignores the
  * user's newer selection, so a just-selected range reads as empty.
  */
+type DomObserver = { flush(): void; forceFlush(): void; flushingSoon: number };
+
+/** Read a browser caret move (Ctrl/⌘+End, then Enter) into the editor state before a command runs. */
 export function syncDomSelection(view: EditorView) {
-  const observer = (view as unknown as { domObserver?: { flush(): void } }).domObserver;
+  const observer = (view as unknown as { domObserver?: DomObserver }).domObserver;
   if (!view.hasFocus() || !observer) return;
   try {
-    observer.flush();
+    // A flush already waiting returns immediately from flush(); run it now.
+    if (observer.flushingSoon > -1) observer.forceFlush();
+    else observer.flush();
   } catch {
     // Internal API; reading the selection a moment later is harmless.
   }
