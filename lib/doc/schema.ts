@@ -89,6 +89,13 @@ export type BorderLine = { style: "solid" | "double" | "dotted" | "dashed"; widt
 /** `between` is drawn between neighbouring paragraphs with the same borders, which otherwise share one box. */
 export type Borders = Partial<Record<"top" | "bottom" | "left" | "right" | "between", BorderLine>>;
 
+/** A table or cell edge. `nil` is an edge the user turned off. Width is in points; color is `#rrggbb` or null for the text's. */
+export type TableLineStyle = "solid" | "double" | "dotted" | "dashed" | "nil";
+export type TableLine = { style: TableLineStyle; width: number; color: string | null };
+export type TableBorders = Partial<Record<"top" | "left" | "bottom" | "right" | "insideH" | "insideV", TableLine>>;
+export type CellBorders = Partial<Record<"top" | "right" | "bottom" | "left", TableLine>>;
+export type RowHeightRule = "atLeast" | "exact";
+
 /** The smallest text Google Docs draws (3px); smaller sizes are drawn at this size. */
 export const MIN_FONT_PT = 2.25;
 
@@ -126,6 +133,59 @@ const blockAttrs = {
 };
 
 const BORDER_SIDES = ["top", "bottom", "left", "right"] as const;
+
+const TABLE_LINE_STYLES = new Set<TableLineStyle>(["solid", "double", "dotted", "dashed", "nil"]);
+
+function tableLineFrom(value: unknown): TableLine | null {
+  if (!value || typeof value !== "object") return null;
+  const line = value as TableLine;
+  if (!TABLE_LINE_STYLES.has(line.style)) return null;
+  const width = Number(line.width);
+  if (!Number.isFinite(width) || width < 0 || width > 48) return null;
+  if (line.color != null && (typeof line.color !== "string" || !/^#[0-9a-f]{6}$/i.test(line.color))) return null;
+  return { style: line.style, width, color: line.color ? line.color.toLowerCase() : null };
+}
+
+function linesFrom<K extends string>(value: unknown, sides: readonly K[]): Partial<Record<K, TableLine>> | null {
+  if (!value || typeof value !== "object") return null;
+  const out: Partial<Record<K, TableLine>> = {};
+  for (const side of sides) {
+    if (!(side in (value as object))) continue;
+    const line = tableLineFrom((value as Record<string, unknown>)[side]);
+    if (!line) return null;
+    out[side] = line;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+export function tableBordersFrom(value: unknown): TableBorders | null {
+  return linesFrom(value, ["top", "left", "bottom", "right", "insideH", "insideV"]);
+}
+
+export function cellBordersFrom(value: unknown): CellBorders | null {
+  return linesFrom(value, ["top", "right", "bottom", "left"]);
+}
+
+/** A table edge as CSS. `nil` draws nothing; a hairline is still a pixel, as the page draws paragraph borders. */
+export function tableLineCss(line: TableLine | undefined): string {
+  if (!line || line.style === "nil") return "none";
+  const px = Math.max(1, Math.round((line.width * 96) / 72));
+  return `${px}px ${line.style} ${line.color ?? "currentColor"}`;
+}
+
+export function cellBorderCss(borders: CellBorders): string {
+  return (["top", "right", "bottom", "left"] as const)
+    .filter((side) => borders[side])
+    .map((side) => `border-${side}: ${tableLineCss(borders[side])}`)
+    .join("; ");
+}
+
+/** A formula Inline evaluates in a table cell: SUM of a rectangle or of the cells above, below, left or right. */
+export function normalizeFormula(raw: string): string | null {
+  const match = /^\s*=?\s*SUM\s*\(\s*([A-Za-z]+\d+\s*:\s*[A-Za-z]+\d+|[A-Za-z]+\d+|above|below|left|right)\s*\)\s*$/i.exec(raw.trim());
+  if (!match) return null;
+  return `SUM(${match[1]!.toUpperCase().replace(/\s+/g, "")})`;
+}
 
 /** A border as CSS: whole pixels, as Google Docs draws them, at least one wide. */
 function borderCss(line: BorderLine) {
@@ -539,6 +599,35 @@ const nodes: Record<string, NodeSpec> = {
           if (value) attrs.style = `${attrs.style || ""}background-color: ${value};`;
         },
       },
+      /** Edges of this cell, when they aren't the table's. */
+      borders: {
+        default: null as CellBorders | null,
+        getFromDOM: (dom) => {
+          const raw = (dom as HTMLElement).getAttribute("data-cell-borders");
+          if (!raw) return null;
+          try {
+            return cellBordersFrom(JSON.parse(raw));
+          } catch {
+            return null;
+          }
+        },
+        setDOMAttr: (value, attrs) => {
+          const borders = cellBordersFrom(value);
+          if (!borders) return;
+          attrs["data-cell-borders"] = JSON.stringify(borders);
+          const css = cellBorderCss(borders);
+          if (css) attrs.style = attrs.style ? `${attrs.style}; ${css}` : css;
+        },
+      },
+      /** `SUM(A1:B2)` or `SUM(ABOVE)`. The cell's text is the result. */
+      formula: {
+        default: null as string | null,
+        getFromDOM: (dom) => normalizeFormula((dom as HTMLElement).getAttribute("data-formula") ?? "") ?? null,
+        setDOMAttr: (value, attrs) => {
+          const formula = typeof value === "string" ? normalizeFormula(value) : null;
+          if (formula) attrs["data-formula"] = formula;
+        },
+      },
     },
   }),
 
@@ -631,11 +720,59 @@ const nodes: Record<string, NodeSpec> = {
   },
 };
 
-// prosemirror-tables' table node has no id attribute; add one so tables are addressable blocks.
+// prosemirror-tables' table has no id, and its rows have no height. Both are addressable here:
+// borders live on the table (Word's tblBorders), a row's height in points, an id so the table is a block.
 nodes.table = {
   ...nodes.table,
-  attrs: { ...(nodes.table.attrs ?? {}), id: { default: null } },
-  toDOM: (node): DOMOutputSpec => ["table", node.attrs.id ? { "data-id": node.attrs.id } : {}, ["tbody", 0]],
+  attrs: { ...(nodes.table.attrs ?? {}), id: { default: null }, borders: { default: null as TableBorders | null } },
+  parseDOM: [
+    {
+      tag: "table",
+      getAttrs: (dom) => {
+        const el = dom as HTMLElement;
+        const raw = el.getAttribute("data-borders");
+        let borders: TableBorders | null = null;
+        if (raw) {
+          try {
+            borders = tableBordersFrom(JSON.parse(raw));
+          } catch {
+            borders = null;
+          }
+        }
+        return { id: el.getAttribute("data-id"), borders };
+      },
+    },
+  ],
+  toDOM: (node): DOMOutputSpec => {
+    const attrs: Record<string, string> = {};
+    if (node.attrs.id) attrs["data-id"] = node.attrs.id;
+    if (node.attrs.borders) attrs["data-borders"] = JSON.stringify(node.attrs.borders);
+    return ["table", attrs, ["tbody", 0]];
+  },
+};
+
+nodes.table_row = {
+  ...nodes.table_row,
+  attrs: { height: { default: null as number | null }, heightRule: { default: null as RowHeightRule | null } },
+  parseDOM: [
+    {
+      tag: "tr",
+      getAttrs: (dom) => {
+        const el = dom as HTMLElement;
+        const raw = el.style.height;
+        const px = raw.endsWith("px") ? Number.parseFloat(raw) : raw.endsWith("pt") ? (Number.parseFloat(raw) * 96) / 72 : Number.NaN;
+        const points = Number.isFinite(px) && px > 0 ? Math.round(((px * 72) / 96) * 100) / 100 : null;
+        const rule = el.getAttribute("data-height-rule");
+        return { height: points, heightRule: rule === "exact" || rule === "atLeast" ? rule : points ? "atLeast" : null };
+      },
+    },
+  ],
+  toDOM: (node): DOMOutputSpec => {
+    const height = Number(node.attrs.height);
+    const rule = node.attrs.heightRule === "exact" ? "exact" : node.attrs.heightRule === "atLeast" ? "atLeast" : null;
+    if (!height || height <= 0) return ["tr", 0];
+    return ["tr", { style: `height: ${height}pt`, "data-height-rule": rule ?? "atLeast" }, 0];
+  },
 };
 
 const marks: Record<string, MarkSpec> = {

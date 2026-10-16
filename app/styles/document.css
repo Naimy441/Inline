@@ -554,6 +554,32 @@ img.ProseMirror-separator {
   overflow-x: auto;
 }
 
+/* A page break inside a table is a row, so it stays in the table. The repeated header sits at the bottom of that row, on the next page. */
+.doc-content tr.page-gap {
+  display: table-row !important;
+  break-inside: avoid;
+}
+
+.doc-content tr.page-gap > td {
+  display: table-cell;
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  vertical-align: bottom;
+}
+
+.doc-content tr.page-gap .repeated-header {
+  width: 100%;
+  margin: 0;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.doc-content tr[data-height-rule="exact"] > td,
+.doc-content tr[data-height-rule="exact"] > th {
+  overflow: hidden;
+}
+
 /* Images */
 
 .doc-content .doc-image {
