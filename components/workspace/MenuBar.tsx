@@ -2,7 +2,7 @@
 
 import { redo, undo } from "prosemirror-history";
 import { AllSelection } from "prosemirror-state";
-import { createRef, useRef, useState, type RefObject } from "react";
+import { createRef, useEffect, useRef, useState, type RefObject } from "react";
 import type { DocumentSession, EditorMode } from "@/lib/client/documentSession";
 import { currentRevealLabel } from "@/lib/client/fileManager";
 import { desktop } from "@/lib/client/desktop";
@@ -92,6 +92,15 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
   const anchors = useRef<Record<string, RefObject<HTMLButtonElement | null>>>({});
   const anchor = (name: string) => (anchors.current[name] ??= createRef<HTMLButtonElement>());
   const menus = documentMenus(session, actions, zoom, hunks);
+  // With a menu open, moving into its first rows can cross the next title (Format's
+  // "Text" sits under Tools). Switch only after the pointer actually rests there.
+  const switchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelSwitch = () => {
+    if (switchTimer.current === null) return;
+    clearTimeout(switchTimer.current);
+    switchTimer.current = null;
+  };
+  useEffect(() => cancelSwitch, []);
 
   return (
     <nav className="menubar" aria-label="Menu">
@@ -105,8 +114,19 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
             aria-expanded={open === name}
             data-tip={open ? undefined : MENU_TIPS[name]}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => setOpen((value) => (value === name ? null : name))}
-            onMouseEnter={() => open && open !== name && setOpen(name)}
+            onClick={() => {
+              cancelSwitch();
+              setOpen((value) => (value === name ? null : name));
+            }}
+            onMouseEnter={() => {
+              if (!open || open === name) return;
+              cancelSwitch();
+              switchTimer.current = setTimeout(() => {
+                switchTimer.current = null;
+                setOpen(name);
+              }, 250);
+            }}
+            onMouseLeave={cancelSwitch}
           >
             {name}
           </button>
