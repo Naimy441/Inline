@@ -149,6 +149,8 @@ export type PdfImportMeta = {
   status: "pending" | "converting" | "done";
   /** Pages Claude has rebuilt so far. */
   converted: number[];
+  /** Pages compare_pdf_page has checked since they were last written or lined up. */
+  compared: number[];
   /** The chat converting it. */
   chatId?: string;
 };
@@ -165,6 +167,7 @@ export function normalizePdfImportMeta(value: unknown): PdfImportMeta | null {
     showAnnotations: raw.showAnnotations === true,
     status: raw.status === "converting" || raw.status === "done" ? raw.status : "pending",
     converted: list(raw.converted),
+    compared: list(raw.compared),
     ...(typeof raw.chatId === "string" && raw.chatId ? { chatId: raw.chatId } : {}),
   };
 }
