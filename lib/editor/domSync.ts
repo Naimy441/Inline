@@ -23,6 +23,21 @@ export function syncDomSelection(view: EditorView) {
   }
 }
 
+export type HeldRange = { from: number; to: number; anchor: number };
+
+/**
+ * What a toolbar press should format. A range read from the page replaces
+ * anything remembered earlier. An empty read keeps a range captured moments
+ * ago when the caret in the editor state has not moved: the button took focus
+ * and the browser dropped the highlight, but the user has not clicked a new
+ * spot. A caret that has moved is a new insertion point, so the old range goes.
+ */
+export function retainHeldSelection(held: HeldRange | null, read: { from: number; to: number } | null, state: { from: number; empty: boolean }): HeldRange | null {
+  if (read && read.to > read.from) return { from: read.from, to: read.to, anchor: state.from };
+  if (held && held.to > held.from && state.empty && state.from === held.anchor) return held;
+  return null;
+}
+
 /**
  * The range showing on the page, when the editor has not recorded it yet.
  * Null for a caret, or when the browser selection sits outside the document.

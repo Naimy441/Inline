@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { anchorAt, clampZoom, manualZoomOrigin, pinchBox, pinchTransform, scrollForAnchor, stepPinch, touchDistance, touchMidpoint, zoomFromPinch, zoomFromWheel, type PinchFrame } from "./zoom";
+import { anchorAt, clampZoom, horizontalPan, manualZoomOrigin, pinchBox, pinchTransform, scrollForAnchor, stepPinch, touchDistance, touchMidpoint, zoomFromPinch, zoomFromWheel, type PinchFrame } from "./zoom";
 
 describe("document zoom", () => {
   it("stays inside the same range as the zoom menu", () => {
@@ -49,6 +49,45 @@ describe("document zoom", () => {
     assert.ok(Math.abs(screenX - 600) < 0.01);
     assert.ok(Math.abs(screenY - 28) < 0.01);
     assert.ok(next.scrollLeft > 0, "centering a wider page scrolls sideways");
+  });
+
+  it("centers a manual zoom only when both sides of the page fit", () => {
+    // The page fits: the finger spot is ignored and the gutters stay put, so margin can center it.
+    assert.deepEqual(horizontalPan({ canvasWidth: 1440, pageWidth: 816, padLeft: 40, padRight: 40, pageLeft: 108 }), {
+      padLeft: 40,
+      padRight: 40,
+      scrollLeft: 0,
+    });
+    // The page itself fits, but the usual gutters would push a side off. Shrink them and stay centered.
+    const snug = horizontalPan({ canvasWidth: 1440, pageWidth: 1400, padLeft: 40, padRight: 40, pageLeft: 0 });
+    assert.ok(Math.abs(snug.padLeft - 20) < 0.01 && Math.abs(snug.padRight - 20) < 0.01);
+    assert.equal(snug.scrollLeft, 0);
+
+    // Wider than the view, and the finger wants the page further right than the gutter allows.
+    // Growing the left side keeps that spot; scrolling still reaches both edges.
+    const wide = horizontalPan({ canvasWidth: 1440, pageWidth: 1632, padLeft: 40, padRight: 40, pageLeft: 108 });
+    assert.equal(wide.padLeft, 108);
+    assert.equal(wide.padRight, 40);
+    assert.equal(wide.scrollLeft, 0);
+    const content = wide.padLeft + 1632 + wide.padRight;
+    const max = content - 1440;
+    assert.ok(Math.abs(wide.padLeft - wide.scrollLeft - 108) < 0.01, "the finger spot is where it was");
+    assert.ok(wide.padLeft - 40 >= 0 && wide.padLeft - 40 <= max + 0.01, "the left edge can scroll up to the gutter");
+    assert.ok(Math.abs(wide.padLeft - (1440 - 40 - 1632) - max) < 0.01, "the right edge is the far end of the scroll");
+
+    // Toolbar zoom asks for the center. That spot is already in range, so the gutters stay.
+    const centered = (1440 - 1632) / 2;
+    const toolbar = horizontalPan({ canvasWidth: 1440, pageWidth: 1632, padLeft: 40, padRight: 40, pageLeft: centered });
+    assert.equal(toolbar.padLeft, 40);
+    assert.equal(toolbar.padRight, 40);
+    assert.ok(Math.abs(toolbar.padLeft - toolbar.scrollLeft - centered) < 0.01);
+
+    // Zooming back out until the sides fit returns to the centered layout.
+    assert.deepEqual(horizontalPan({ canvasWidth: 1440, pageWidth: 816, padLeft: 40, padRight: 40, pageLeft: 200 }), {
+      padLeft: 40,
+      padRight: 40,
+      scrollLeft: 0,
+    });
   });
 
   it("holds the top of the page when the reader hasn't scrolled, and the middle of the view when they have", () => {

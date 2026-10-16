@@ -39,7 +39,7 @@ import { ReviewBar } from "@/components/workspace/ReviewBar";
 import { EDITOR_MODES, modeMenuItems } from "@/components/workspace/modes";
 import { COMPACT_QUERY, isCompact, useMediaQuery, useVisualViewportVars } from "@/lib/client/viewport";
 import { DEFAULT_PREFERENCES, loadPreferences, preferences, setPreference } from "@/lib/client/preferences";
-import { anchorAt, clampZoom, manualZoomOrigin, pinchBox, pinchTransform, scrollForAnchor, stepPinch, touchDistance, touchMidpoint, zoomFromPinch, zoomFromWheel, type PinchFrame, type ZoomAnchor } from "@/lib/client/zoom";
+import { anchorAt, clampZoom, horizontalPan, manualZoomOrigin, pinchBox, pinchTransform, scrollForAnchor, stepPinch, touchDistance, touchMidpoint, zoomFromPinch, zoomFromWheel, type PinchFrame, type ZoomAnchor } from "@/lib/client/zoom";
 import { PictureBar } from "@/components/workspace/PictureBar";
 import { SelectionBubble } from "@/components/workspace/SelectionBubble";
 import { ShortcutsDialog } from "@/components/workspace/ShortcutsDialog";
@@ -290,6 +290,8 @@ export function Workspace({ documentId }: { documentId: string }) {
 
   // After the scaled frame is in the DOM, scroll so the anchored point stays put.
   // A menu zoom anchors on the middle of the page; a pinch anchors under the fingers.
+  // The page is centered only when its whole width fits. A wider page keeps its
+  // place, and the gutters grow so that place isn't clamped off the scroll range.
   // PageCanvas calls this in its own layout effect, which runs before comments measure.
   const zoomCommit = useRef<(() => void) | null>(null);
   zoomCommit.current = () => {
@@ -305,10 +307,29 @@ export function Workspace({ documentId }: { documentId: string }) {
     if (!anchor || !canvas) return;
     zoomAnchor.current = null;
     const frame = canvas.querySelector(".page-stack-frame");
-    if (!(frame instanceof HTMLElement)) return;
-    const next = scrollForAnchor(canvas, frame.getBoundingClientRect(), anchor);
-    canvas.scrollLeft = next.scrollLeft;
-    canvas.scrollTop = next.scrollTop;
+    const wrap = canvas.querySelector(".page-stack-wrap");
+    if (!(frame instanceof HTMLElement) || !(wrap instanceof HTMLElement)) return;
+    if (wrap.classList.contains("is-flow")) {
+      const next = scrollForAnchor(canvas, frame.getBoundingClientRect(), anchor);
+      canvas.scrollLeft = next.scrollLeft;
+      canvas.scrollTop = next.scrollTop;
+      return;
+    }
+    const pad = Number.parseFloat(canvas.style.getPropertyValue("--canvas-pad")) || 40;
+    const padRight = pad + (canvas.classList.contains("with-comments") ? 296 : 0);
+    const pan = horizontalPan({
+      canvasWidth: canvas.clientWidth,
+      pageWidth: frame.offsetWidth,
+      padLeft: pad,
+      padRight,
+      pageLeft: anchor.clientX - canvas.getBoundingClientRect().left - canvas.clientLeft - anchor.fx * frame.offsetWidth,
+    });
+    wrap.style.paddingLeft = Math.abs(pan.padLeft - pad) < 0.5 ? "" : `${pan.padLeft}px`;
+    wrap.style.paddingRight = Math.abs(pan.padRight - padRight) < 0.5 ? "" : `${pan.padRight}px`;
+    // Padding changes the scroll size. Read it before assigning, or the new offset is clamped to the old range.
+    void wrap.offsetWidth;
+    canvas.scrollLeft = pan.scrollLeft;
+    canvas.scrollTop = scrollForAnchor(canvas, frame.getBoundingClientRect(), anchor).scrollTop;
   };
   const setZoomRef = useRef(setZoom);
   setZoomRef.current = setZoom;

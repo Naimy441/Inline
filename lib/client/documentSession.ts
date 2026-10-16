@@ -13,7 +13,7 @@ import { stylesOf } from "@/lib/doc/styles";
 import { setTabs } from "@/lib/client/tabs";
 import { api, ApiError, del, patch, post, Store, uploadFile } from "@/lib/client/api";
 import { setCommentState } from "@/lib/editor/comments";
-import { keepVisibleSelection, syncDomSelection, visibleTextSelection } from "@/lib/editor/domSync";
+import { keepVisibleSelection, retainHeldSelection, syncDomSelection, visibleTextSelection, type HeldRange } from "@/lib/editor/domSync";
 import type { PdfDocumentModel, PdfImage } from "@/lib/pdf/pdfWriter";
 import { APPEARANCE_PAPER, screenshotPage, type PageAppearance } from "@/lib/pdf/screenAppearance";
 import { fitLinesNow } from "@/lib/editor/lineFit";
@@ -320,7 +320,7 @@ export class DocumentSession {
   private inflight = false;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   /** A range a toolbar press must format, held across the click that would drop it. */
-  private heldSelection: { from: number; to: number } | null = null;
+  private heldSelection: HeldRange | null = null;
   private selectionHoldTimer: ReturnType<typeof setTimeout> | null = null;
   private selectionTimer: ReturnType<typeof setTimeout> | null = null;
   private layoutTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1225,8 +1225,12 @@ export class DocumentSession {
     if (!view) return;
     syncDomSelection(view);
     const visible = visibleTextSelection(view);
-    const selection = visible ?? (view.state.selection.empty ? null : view.state.selection);
-    this.heldSelection = selection ? { from: selection.from, to: selection.to } : null;
+    const stateSel = view.state.selection;
+    const read = visible ?? (stateSel.empty ? null : { from: stateSel.from, to: stateSel.to });
+    // Opening "More tools" captures the range, then Bold's press drops the
+    // highlight. Keep the range when that second press finds nothing and the
+    // caret in the editor state has not moved.
+    this.heldSelection = retainHeldSelection(this.heldSelection, read, { from: stateSel.from, empty: stateSel.empty });
     if (this.selectionHoldTimer) clearTimeout(this.selectionHoldTimer);
     this.selectionHoldTimer = this.heldSelection
       ? setTimeout(() => {

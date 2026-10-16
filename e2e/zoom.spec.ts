@@ -177,3 +177,73 @@ test("trackpad pinch and a two-finger touch zoom the page under the pointer", as
     expect(after).toBeGreaterThan(touch.beforeWidth + 20);
   }
 });
+
+test("an off-center pinch stays put, still scrolls to both edges, and centers once the page fits", async ({ page, request }) => {
+  await openDocument(page, await createDocument(request, "Pan memo", MEMO));
+  const toggle = page.locator(".claude-toggle");
+  if (((await toggle.getAttribute("class")) ?? "").includes("is-active")) await toggle.click();
+  await chooseZoom(page, "100%");
+
+  const canvasWidth = await page.locator(".canvas").evaluate((canvas) => canvas.clientWidth);
+  expect(canvasWidth).toBeGreaterThan(1200);
+
+  const spot = await page.locator(".sheet").first().boundingBox();
+  expect(spot).toBeTruthy();
+  const point = { x: spot!.x + spot!.width * 0.12, y: spot!.y + 180 };
+  const beforeFx = (point.x - spot!.x) / spot!.width;
+
+  await page.mouse.move(point.x, point.y);
+  await page.keyboard.down("Control");
+  await page.mouse.wheel(0, -240);
+  await page.keyboard.up("Control");
+  await expect(page.locator(".tb-zoom")).toContainText("200%");
+
+  const zoomed = await page.evaluate(({ x }) => {
+    const canvas = document.querySelector<HTMLElement>(".canvas")!;
+    const sheet = document.querySelector<HTMLElement>(".sheet")!.getBoundingClientRect();
+    const view = canvas.getBoundingClientRect();
+    const centerGap = Math.abs(sheet.left + sheet.width / 2 - (view.left + view.width / 2));
+    canvas.scrollLeft = 0;
+    const start = document.querySelector<HTMLElement>(".sheet")!.getBoundingClientRect().left - canvas.getBoundingClientRect().left;
+    canvas.scrollLeft = canvas.scrollWidth;
+    const endView = canvas.getBoundingClientRect();
+    const endSheet = document.querySelector<HTMLElement>(".sheet")!.getBoundingClientRect();
+    return {
+      fx: (x - sheet.left) / sheet.width,
+      centerGap,
+      overflow: canvas.scrollWidth - canvas.clientWidth,
+      start,
+      endRight: endView.right - endSheet.right,
+      max: canvas.scrollLeft,
+    };
+  }, point);
+  expect(Math.abs(zoomed.fx - beforeFx)).toBeLessThan(0.04);
+  expect(zoomed.centerGap).toBeGreaterThan(80);
+  expect(zoomed.overflow).toBeGreaterThan(40);
+  expect(zoomed.start).toBeGreaterThan(-1);
+  expect(zoomed.start).toBeLessThan(zoomed.max);
+  expect(zoomed.endRight).toBeGreaterThan(-1);
+  expect(zoomed.endRight).toBeLessThan(80);
+
+  await page.mouse.move(point.x, point.y);
+  await page.keyboard.down("Control");
+  await page.mouse.wheel(0, 400);
+  await page.keyboard.up("Control");
+  await expect(page.locator(".tb-zoom")).toContainText("50%");
+
+  const fitted = await page.evaluate(() => {
+    const canvas = document.querySelector<HTMLElement>(".canvas")!;
+    const sheet = document.querySelector<HTMLElement>(".sheet")!.getBoundingClientRect();
+    const view = canvas.getBoundingClientRect();
+    return {
+      overflow: canvas.scrollWidth - canvas.clientWidth,
+      centerGap: Math.abs(sheet.left + sheet.width / 2 - (view.left + view.width / 2)),
+      left: sheet.left - view.left,
+      right: view.right - sheet.right,
+    };
+  });
+  expect(fitted.overflow).toBeLessThanOrEqual(1);
+  expect(fitted.left).toBeGreaterThan(-1);
+  expect(fitted.right).toBeGreaterThan(-1);
+  expect(fitted.centerGap).toBeLessThan(24);
+});
