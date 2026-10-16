@@ -16,6 +16,13 @@
   outline: none;
 }
 
+/* Text colored plain black (pasted from Google Docs or Word, or picked) is the page's text color, light on a dark page. */
+@media screen {
+  :root[data-theme="dark"] .doc-content .text-black {
+    color: var(--paper-text) !important;
+  }
+}
+
 .doc-content[contenteditable="false"] {
   caret-color: transparent;
 }

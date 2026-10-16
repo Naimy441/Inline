@@ -658,7 +658,8 @@ const marks: Record<string, MarkSpec> = {
   text_color: {
     attrs: { color: {} },
     parseDOM: [{ style: "color", getAttrs: (value) => (value && value !== "inherit" ? { color: value } : false) }],
-    toDOM: (mark): DOMOutputSpec => ["span", { style: `color: ${mark.attrs.color}` }, 0],
+    // Black is the page's own text color, so it turns light with the page in dark mode (document.css).
+    toDOM: (mark): DOMOutputSpec => ["span", { style: `color: ${mark.attrs.color}`, ...(isBlack(mark.attrs.color) ? { class: "text-black" } : {}) }, 0],
   },
 
   font_family: {
@@ -727,6 +728,12 @@ export const TEXTBLOCK_TYPES = new Set(["paragraph", "heading", "title", "subtit
 
 export function isTextblockType(name: string) {
   return TEXTBLOCK_TYPES.has(name);
+}
+
+/** Whether a CSS color is plain black (#000, #000000, rgb(0, 0, 0), black), as Google Docs and Word color default text. */
+export function isBlack(color: unknown) {
+  if (typeof color !== "string") return false;
+  return /^(#(000f?|000000(ff)?)|black|windowtext|rgba?\(0,0,0(,(1|1\.0*|100%))?\))$/.test(color.toLowerCase().replace(/\s+/g, ""));
 }
 
 export function cssSizeToPt(value: string | null | undefined): number | null {

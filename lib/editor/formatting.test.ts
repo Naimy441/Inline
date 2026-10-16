@@ -3,7 +3,8 @@ import { describe, it } from "node:test";
 import { EditorState, TextSelection, type Command } from "prosemirror-state";
 import { ensureBlockIds } from "../doc/ids";
 import { docToMarkdown, markdownToDoc } from "../doc/markdown";
-import { schema } from "../doc/schema";
+import { fragmentToHtml } from "../doc/html";
+import { isBlack, schema } from "../doc/schema";
 import {
   blockKind,
   clearFormatting,
@@ -169,5 +170,18 @@ describe("blocks", () => {
     assert.equal(cells, 6);
     assert.equal(table.state.selection.$from.parent.type.name, "paragraph");
     assert.equal(table.state.selection.$from.node(-1).type.name, "table_header", "the cursor lands in the first cell");
+  });
+});
+
+describe("black text", () => {
+  it("knows black however it's written", () => {
+    for (const color of ["#000", "#000000", "#000000FF", "rgb(0, 0, 0)", "rgba(0,0,0,1)", "black", "Black"]) assert.ok(isBlack(color), color);
+    for (const color of ["#000001", "#202124", "rgba(0, 0, 0, 0.5)", "rgb(0, 0, 1)", "", null]) assert.ok(!isBlack(color), String(color));
+  });
+
+  it("is drawn as the page's text color, so it follows dark mode, and still copies out as black", () => {
+    const html = (color: string) => fragmentToHtml(schema.node("doc", null, [schema.node("paragraph", null, [schema.text("x", [schema.mark("text_color", { color })])])]));
+    assert.equal(html("rgb(0, 0, 0)"), '<p><span style="color: rgb(0, 0, 0)" class="text-black">x</span></p>');
+    assert.equal(html("#ff0000"), '<p><span style="color: #ff0000">x</span></p>');
   });
 });
