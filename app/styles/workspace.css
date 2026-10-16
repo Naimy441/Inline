@@ -602,6 +602,38 @@
   font-family: var(--font-ui);
 }
 
+.doc-ruler-tab {
+  position: absolute;
+  bottom: 1px;
+  width: 1px;
+  height: 5px;
+  margin-left: -0.5px;
+  background: var(--muted);
+  pointer-events: none;
+}
+
+.doc-ruler-tab.is-custom {
+  width: 7px;
+  height: 7px;
+  margin-left: -3.5px;
+  background: transparent;
+  border-bottom: 1.5px solid var(--text);
+}
+
+.doc-ruler-tab.is-custom.is-left {
+  border-left: 1.5px solid var(--text);
+}
+
+.doc-ruler-tab.is-custom.is-right {
+  border-right: 1.5px solid var(--text);
+}
+
+.doc-ruler-tab.is-custom.is-center,
+.doc-ruler-tab.is-custom.is-decimal {
+  border-left: 1.5px solid var(--text);
+  border-right: 1.5px solid var(--text);
+}
+
 .doc-ruler-marker {
   position: absolute;
   z-index: 2;

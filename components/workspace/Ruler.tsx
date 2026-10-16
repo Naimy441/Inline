@@ -4,6 +4,8 @@ import { useLayoutEffect, useRef, useState, useSyncExternalStore, type PointerEv
 import type { EditorState } from "prosemirror-state";
 import type { Node as PMNode } from "prosemirror-model";
 import type { DocumentSession } from "@/lib/client/documentSession";
+import type { TabStop } from "@/lib/doc/schema";
+import { DEFAULT_TAB_STOP } from "@/lib/doc/settings";
 import {
   dragGeometry,
   indentGeometry,
@@ -36,11 +38,14 @@ export function Ruler({
   canvasRef,
   geometry,
   zoom,
+  tabStop = DEFAULT_TAB_STOP,
 }: {
   session: DocumentSession;
   canvasRef: RefObject<HTMLElement | null>;
   geometry: { pageWidth: number; marginLeft: number; marginRight: number };
   zoom: number;
+  /** Default tab stop, in points, from the document's page setup. */
+  tabStop?: number;
 }) {
   const state = useSyncExternalStore(session.editor.subscribe, session.editor.get, () => null);
   const barRef = useRef<HTMLDivElement>(null);
@@ -177,6 +182,13 @@ export function Ruler({
           <div className="doc-ruler-shade is-left" style={{ width: (geometry.marginLeft / 96) * pxPerInch }} />
           <div className="doc-ruler-shade is-right" style={{ width: (geometry.marginRight / 96) * pxPerInch }} />
           <Ticks width={box.width} pageInches={pageInches} marginLeft={geometry.marginLeft / 96} contentWidth={contentWidth} pxPerInch={pxPerInch} />
+          {tabMarks(head?.node.attrs.tabs as TabStop[] | null, tabStop, contentWidth).map((tab) => (
+            <span
+              key={`${tab.custom ? "custom" : "default"}-${tab.align}-${tab.inches}`}
+              className={`doc-ruler-tab${tab.custom ? " is-custom" : ""} is-${tab.align}`}
+              style={{ left: (geometry.marginLeft / 96 + tab.inches) * pxPerInch }}
+            />
+          ))}
           {head &&
             MARKERS.map((marker) => (
               <button
@@ -201,6 +213,21 @@ export function Ruler({
       )}
     </div>
   );
+}
+
+/** Tab stops already on the paragraph, plus the document's default stops. Drawn, not edited. */
+function tabMarks(custom: TabStop[] | null, defaultPt: number, contentWidth: number) {
+  const step = Math.max(1, defaultPt) / 72;
+  const marks: Array<{ inches: number; align: TabStop["align"]; custom: boolean }> = [];
+  for (const tab of custom ?? []) {
+    const inches = tab.pos / 72;
+    if (inches > 0.01 && inches < contentWidth - 0.01) marks.push({ inches, align: tab.align, custom: true });
+  }
+  for (let at = step; at < contentWidth - 0.05; at += step) {
+    if (marks.some((mark) => Math.abs(mark.inches - at) < step / 2)) continue;
+    marks.push({ inches: at, align: "left", custom: false });
+  }
+  return marks;
 }
 
 function Ticks({ width, pageInches, marginLeft, contentWidth, pxPerInch }: { width: number; pageInches: number; marginLeft: number; contentWidth: number; pxPerInch: number }) {

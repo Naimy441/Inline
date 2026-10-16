@@ -11,7 +11,7 @@ import { DocumentSession, geometryFor, type ClientCommand, type DocumentUiState,
 import { useTheme } from "@/lib/client/theme";
 import { useShortcut } from "@/lib/client/platform";
 import { docPlainText, docWordCount, followedDocumentTitle, wordCount } from "@/lib/doc/editing";
-import { cleanTitle, type DocComment, type DocumentMeta } from "@/lib/doc/settings";
+import { cleanTitle, DEFAULT_TAB_STOP, type DocComment, type DocumentMeta } from "@/lib/doc/settings";
 import { insertImage, insertText } from "@/lib/editor/commands";
 import { AgentPanel, type AgentPanelHandle } from "@/components/agent/AgentPanel";
 import { Spark } from "@/components/agent/Activity";
@@ -977,7 +977,7 @@ export function Workspace({ documentId }: { documentId: string }) {
           </>
         )}
         <div className={`canvas-frame${prefs.showRuler && !((versionShown && shownPanel === "history") || draftPreview) ? " has-ruler" : ""}`} style={{ ["--text-inset-right" as string]: `${textInsetRight}px` }}>
-        {prefs.showRuler && !((versionShown && shownPanel === "history") || draftPreview) && <Ruler session={session} canvasRef={canvasRef} geometry={geometry} zoom={effectiveZoom} />}
+        {prefs.showRuler && !((versionShown && shownPanel === "history") || draftPreview) && <Ruler session={session} canvasRef={canvasRef} geometry={geometry} zoom={effectiveZoom} tabStop={meta?.settings.tabStop ?? DEFAULT_TAB_STOP} />}
         <main
           ref={canvasRef}
           className={`canvas${(versionShown && shownPanel === "history") || draftPreview ? " is-previewing" : ""}${!shownPanel && (draftComment || ui.comments.some((comment) => !comment.resolved)) && marginFits(canvasRef.current) ? " with-comments" : ""}`}

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const PARAGRAPH = "The first line of this paragraph is long enough to wrap onto a second line, so a first-line indent and a left indent land in different places.";
+const PARAGRAPH = "The first line of this paragraph is long enough to wrap onto a second line, so a first-line indent and a left indent land in different places. {tabs=\"144:center\"}";
 
 async function createDocument(request: import("@playwright/test").APIRequestContext, title: string, markdown: string) {
   const response = await request.post("/api/documents", { data: { title, markdown } });
@@ -60,6 +60,8 @@ test("the ruler stays off until View turns it on, and indents follow the markers
   await expect(page.getByRole("slider", { name: "Left margin" })).toBeVisible();
   await expect(page.getByRole("slider", { name: "Right indent" })).toBeVisible();
   await expect(page.locator(".doc-ruler-ticks text").filter({ hasText: "1" })).toBeVisible();
+  await expect(page.locator(".doc-ruler-tab.is-custom")).toBeVisible();
+  await expect(page.locator(".doc-ruler-tab:not(.is-custom)").first()).toBeVisible();
 
   const aligned = await page.evaluate(() => {
     const track = document.querySelector(".doc-ruler-track")!.getBoundingClientRect();
@@ -121,6 +123,9 @@ test("the ruler stays off until View turns it on, and indents follow the markers
     };
   });
   expect(indented).toEqual({ paraLeft: 48, first: 48, left: 48 });
+
+  await dragMarker(page, "Right indent", -0.5);
+  await expect(page.locator(".doc-content p").first()).toHaveAttribute("style", /margin-right:\s*0\.5in/);
 
   expect(await page.evaluate(() => localStorage.getItem("inline-preferences"))).toContain('"showRuler":true');
   await page.reload();
