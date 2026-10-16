@@ -53,7 +53,7 @@ import {
   toggleList,
   type BlockKind,
 } from "@/lib/editor/commands";
-import { activeTheme, findStyle, resolveStyle, stylePreview, stylesOf } from "@/lib/doc/styles";
+import { findStyle, resolveStyle, stylePreview, stylesOf } from "@/lib/doc/styles";
 import { IconButton } from "@/components/ui/Button";
 import { MenuButton, type MenuItem } from "@/components/ui/Menu";
 import { Popover } from "@/components/ui/Popover";
@@ -165,7 +165,7 @@ const ToolbarView = memo(function ToolbarView({
   const disabled = !format.ready || viewing;
   const { align, list, family, lineHeight } = format;
   const sheet = stylesOf(meta?.settings ?? {});
-  const theme = activeTheme(meta?.settings ?? { fontFamily: FONT_FAMILIES[0].value });
+  const documentFont = meta?.settings.fontFamily ?? FONT_FAMILIES[0].value;
   const styleName = format.styleId ? (findStyle(sheet, format.styleId)?.name ?? "Normal text") : null;
   const defaultSize = meta?.settings.fontSize ?? 11;
   const size = format.sizeAttr ? Number.parseFloat(format.sizeAttr) : defaultSize;
@@ -223,7 +223,7 @@ const ToolbarView = memo(function ToolbarView({
                 label: item.name,
                 checked: format.styleId === item.id,
                 shortcut: item.id === "Normal" ? "⌘⌥0" : item.id === "Heading1" ? "⌘⌥1" : item.id === "Heading2" ? "⌘⌥2" : item.id === "Heading3" ? "⌘⌥3" : item.id === "Heading4" ? "⌘⌥4" : undefined,
-                labelStyle: resolved ? stylePreview(resolved, theme) : undefined,
+                labelStyle: resolved ? stylePreview(resolved, documentFont) : undefined,
                 onSelect: () => run(applyStyle(item.id, sheet)),
               };
             }),

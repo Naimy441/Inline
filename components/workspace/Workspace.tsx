@@ -48,7 +48,6 @@ import { AgentLocator, OfflineNotice, PdfImportNotice } from "@/components/works
 import { SpecialCharactersDialog } from "@/components/workspace/SpecialCharactersDialog";
 import { StyleDialog } from "@/components/workspace/StyleDialog";
 import { Toolbar } from "@/components/workspace/Toolbar";
-import { themeChoice } from "@/lib/doc/styles";
 
 type Panel = "agent" | "comments" | "history" | null;
 type Zoom = number | "fit";
@@ -707,11 +706,6 @@ export function Workspace({ documentId }: { documentId: string }) {
     reveal: () => void session.whenSaved().then(() => revealOnDisk({ documentId })),
     pageSetup: (tab = "page") => setSetup({ tab }),
     editStyle: (styleId) => setStyleEditor({ id: styleId }),
-    applyTheme: (themeId) => {
-      if (!meta) return;
-      const choice = themeChoice(themeId);
-      void session.updateMeta({ settings: { ...meta.settings, theme: choice.theme, fontFamily: choice.fontFamily } as unknown as Record<string, unknown> }).catch((error: Error) => toast(error.message, { tone: "error" }));
-    },
     settings: meta?.settings,
     history: () => setPanel("history"),
     trash: async () => {

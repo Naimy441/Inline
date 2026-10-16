@@ -22,7 +22,7 @@ import {
   toggleList,
 } from "@/lib/editor/commands";
 import { FONT_FAMILIES, type DocumentSettings } from "@/lib/doc/settings";
-import { DOCUMENT_THEMES, activeTheme, chosenThemeId, resolveStyle, stylePreview, stylesOf } from "@/lib/doc/styles";
+import { resolveStyle, stylePreview, stylesOf } from "@/lib/doc/styles";
 import { addColumnAfter, addColumnBefore, addRowAfter, addRowBefore, deleteColumn, deleteRow, deleteTable, isInTable, toggleHeaderRow } from "prosemirror-tables";
 import { textToTable } from "@/lib/editor/tables";
 import { askTable, tableFormatItems, TABLE_ASK, type TableAsk } from "@/components/workspace/tableMenu";
@@ -44,7 +44,6 @@ export type MenuActions = {
   pageSetup: (tab?: "page" | "text" | "header") => void;
   /** Open the style dialog. Null starts a new style. */
   editStyle: (styleId: string | null) => void;
-  applyTheme: (themeId: string) => void;
   settings: DocumentSettings | undefined;
   history: () => void;
   trash: () => void;
@@ -173,7 +172,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
   const run = session.run.bind(session);
   const inTable = session.view ? isInTable(session.view.state) : false;
   const sheet = stylesOf(actions.settings ?? {});
-  const theme = activeTheme(actions.settings ?? { fontFamily: FONT_FAMILIES[0].value });
+  const documentFont = actions.settings?.fontFamily ?? FONT_FAMILIES[0].value;
   const currentStyle = session.view ? currentStyleId(session.view.state) : null;
   const styleShortcut = (id: string) => (id === "Normal" ? "⌘⌥0" : id === "Heading1" ? "⌘⌥1" : id === "Heading2" ? "⌘⌥2" : id === "Heading3" ? "⌘⌥3" : id === "Heading4" ? "⌘⌥4" : undefined);
 
@@ -319,7 +318,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
               label: item.name,
               checked: currentStyle === item.id,
               shortcut: styleShortcut(item.id),
-              labelStyle: resolved ? stylePreview(resolved, theme) : undefined,
+              labelStyle: resolved ? stylePreview(resolved, documentFont) : undefined,
               onSelect: () => run(applyStyle(item.id, sheet)),
             };
           }),
@@ -327,14 +326,6 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
           { label: "New style…", onSelect: () => actions.editStyle(null) },
           { label: "Modify style…", disabled: !currentStyle, onSelect: () => currentStyle && actions.editStyle(currentStyle) },
         ],
-      },
-      {
-        label: "Theme",
-        submenu: DOCUMENT_THEMES.map((item) => ({
-          label: item.name,
-          checked: chosenThemeId(actions.settings ?? {}) === item.id,
-          onSelect: () => actions.applyTheme(item.id),
-        })),
       },
       {
         label: "Align",

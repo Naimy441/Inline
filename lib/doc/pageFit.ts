@@ -10,7 +10,7 @@ import { schema } from "@/lib/doc/schema";
  * that measurement; nothing here retries sizes against the document.
  *
  * Direct formatting is written onto the blocks in the fitted range only.
- * Named styles, the theme, and the document's default font are not modified,
+ * Named styles and the document's default font are not modified,
  * and neither is text outside the range.
  */
 
@@ -241,7 +241,7 @@ function summaryFor(measurement: FitMeasurement, solution: Omit<FitSolution, "su
       `Paragraph spacing in that range is ${Math.round(solution.spacingScale * 100)}% of what it was, because ${formatPt(MIN_FONT)}pt and ${MIN_LEADING} line spacing were still too tall.`,
     );
   }
-  parts.push("Text in that range with its own size was scaled by the same amount. Named styles, the theme, and text outside that range were not changed.");
+  parts.push("Text in that range with its own size was scaled by the same amount. Named styles and text outside that range were not changed.");
   return parts.join(" ");
 }
 
@@ -362,7 +362,7 @@ function locked(node: PMNode) {
   return found;
 }
 
-/** Apply a solved fit. Styles, theme, and blocks that are not in the plan are left alone. */
+/** Apply a solved fit. Styles and blocks that are not in the plan are left alone. */
 export function applyFit(doc: PMNode, solution: FitSolution): Transform {
   const tr = new Transform(doc);
   if (solution.unchanged || solution.blocked || !solution.blocks.length) return tr;
