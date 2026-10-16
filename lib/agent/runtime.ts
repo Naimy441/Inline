@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { query, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createInlineSdkServer, mcpToolName } from "@/lib/agent/mcp";
+import { contextFromReport } from "@/lib/agent/contextUsage";
 import { systemPrompt } from "@/lib/agent/prompt";
 import { PAGE_LAYOUT_PLUGIN_DIR, PAGE_LAYOUT_SKILL } from "@/lib/agent/skills";
 import { documentListing, type ToolContext } from "@/lib/agent/tools";
@@ -15,6 +16,7 @@ import type {
   ChatSettings,
   ChatState,
   ChatSummary,
+  ContextUsage,
   DocumentChange,
   Effort,
   ModelOption,
@@ -86,6 +88,8 @@ type PersistedChat = {
   rewoundUsd?: number;
   /** "per-message" once each reply's usage.costUsd is its own cost (older files stored Claude Code's running total). */
   costs?: "per-message";
+  /** The last context-window breakdown, so reopening the chat can show it before the next turn. */
+  context?: ContextUsage;
 };
 
 /** Starts a Claude Code session. Tests swap in a scripted stand-in (lib/agent/testing/fakeClaude.ts). */
@@ -269,6 +273,7 @@ class ChatRuntime {
       running: false,
       queue: [],
       ...(file.rewoundUsd ? { rewoundUsd: file.rewoundUsd } : {}),
+      ...(file.context && file.context.maxTokens > 0 ? { context: file.context } : {}),
     };
   }
 
@@ -360,6 +365,7 @@ class ChatRuntime {
       forkFrom: this.forkFrom,
       ...(this.sessionCostUsd != null ? { sessionCostUsd: this.sessionCostUsd } : {}),
       ...(this.state.rewoundUsd ? { rewoundUsd: this.state.rewoundUsd } : {}),
+      ...(this.state.context ? { context: this.state.context } : {}),
       costs: "per-message",
     };
   }
@@ -1145,8 +1151,11 @@ class ChatRuntime {
     if (!q) return;
     try {
       const usage = await q.getContextUsage({ detail: "summary" });
-      this.state.context = { tokens: usage.totalTokens, maxTokens: usage.rawMaxTokens || usage.maxTokens, percentage: usage.percentage };
-      this.emit({ type: "context", context: this.state.context });
+      const context = contextFromReport(usage);
+      if (!context) return;
+      this.state.context = context;
+      this.emit({ type: "context", context });
+      this.persistSoon();
     } catch {
       // Older Claude Code builds don't report context usage.
     }

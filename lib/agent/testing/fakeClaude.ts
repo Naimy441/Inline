@@ -22,6 +22,37 @@ export type FakeTurn = {
 
 export type FakeModel = (turn: FakeTurn, claude: FakeSession) => Promise<void> | void;
 
+/**
+ * The context report a scripted session returns. It matches a real
+ * `getContextUsage` payload: categories this chat has, no autocompact reserve,
+ * and no tools held out of the prompt.
+ */
+export const FAKE_CONTEXT_USAGE = {
+  totalTokens: 24_000,
+  maxTokens: 200_000,
+  rawMaxTokens: 200_000,
+  percentage: 12,
+  model: "claude-sonnet",
+  isAutoCompactEnabled: false,
+  categories: [
+    { name: "Messages", tokens: 8_200, color: "orange", kind: "used" as const },
+    { name: "System tools", tokens: 4_100, color: "cyan", kind: "used" as const },
+    { name: "System prompt", tokens: 6_400, color: "blue", kind: "used" as const },
+    { name: "Skills", tokens: 900, color: "green", kind: "used" as const },
+    { name: "Memory files", tokens: 1_400, color: "yellow", kind: "used" as const },
+    { name: "MCP tools", tokens: 3_000, color: "purple", kind: "used" as const },
+    { name: "Free space", tokens: 176_000, color: "gray", kind: "free" as const },
+  ],
+  memoryFiles: [
+    { path: "/workspace/AGENTS.md", type: "Project", tokens: 900 },
+    { path: "/workspace/CLAUDE.md", type: "Project", tokens: 500 },
+  ],
+  mcpTools: [] as Array<{ name: string; serverName: string; tokens: number; isLoaded?: boolean }>,
+  agents: [] as Array<{ agentType: string; source: string; tokens: number }>,
+  gridRows: [] as Array<Array<Record<string, unknown>>>,
+  apiUsage: null,
+};
+
 type ResultOptions = { subtype?: "success" | "error_max_turns" | "error_during_execution"; isError?: boolean; result?: string; errors?: string[] };
 
 class Channel<T> implements AsyncIterable<T> {
@@ -273,7 +304,7 @@ export function fakeClaude(model: FakeModel): FakeClaude {
         if (settings.effortLevel) fake.effortChanges.push(settings.effortLevel);
       },
       async getContextUsage() {
-        return { totalTokens: 24_000, maxTokens: 200_000, rawMaxTokens: 200_000, percentage: 12 };
+        return FAKE_CONTEXT_USAGE;
       },
       async usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET() {
         const limits = fake.planLimits;

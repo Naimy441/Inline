@@ -184,7 +184,27 @@ export class FakeQuery implements AsyncIterable<Json> {
   }
 
   async getContextUsage() {
-    return { totalTokens: 12_000, maxTokens: 200_000, rawMaxTokens: 200_000, percentage: 6 };
+    return {
+      totalTokens: 12_000,
+      maxTokens: 200_000,
+      rawMaxTokens: 200_000,
+      percentage: 6,
+      model: "claude-sonnet",
+      isAutoCompactEnabled: false,
+      categories: [
+        { name: "Messages", tokens: 4_000, color: "orange", kind: "used" },
+        { name: "System tools", tokens: 3_200, color: "cyan", kind: "used" },
+        { name: "System prompt", tokens: 3_600, color: "blue", kind: "used" },
+        { name: "Skills", tokens: 400, color: "green", kind: "used" },
+        { name: "Memory files", tokens: 800, color: "yellow", kind: "used" },
+        { name: "Free space", tokens: 188_000, color: "gray", kind: "free" },
+      ],
+      memoryFiles: [{ path: "/workspace/AGENTS.md", type: "Project", tokens: 800 }],
+      mcpTools: [],
+      agents: [],
+      gridRows: [],
+      apiUsage: null,
+    };
   }
 
   async initializationResult() {
