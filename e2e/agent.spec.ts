@@ -193,18 +193,24 @@ test("follow-ups queue while Claude works, and Stop ends the turn", async ({ pag
 });
 
 test("a message shows at once, with a live line saying what Claude is doing", async ({ page, request }) => {
-  await openWithClaude(page, request, "A long document.");
   // Hold the request back: the message and Claude's activity must show before the server answers.
   let release = () => undefined as void;
   const held = new Promise<void>((resolve) => (release = resolve));
+  // Usage numbers arrive late; the ring still has to be on screen while Claude works.
+  await page.route("**/api/agent/usage**", async (route) => {
+    await held;
+    await route.continue();
+  });
   await page.route("**/api/agent/chats", async (route) => {
     if (route.request().method() === "POST" && route.request().postDataJSON()?.message) await held;
     await route.continue();
   });
+  await openWithClaude(page, request, "A long document.");
   await ask(page, "Review everything, take your time");
   await expect(page.locator(".msg-user-text")).toHaveText("Review everything, take your time");
   await expect(page.locator(".activity")).toBeVisible();
   await expect(page.locator(".activity .spark")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Usage" })).toBeVisible();
   release();
   await expect(lastReply(page)).toContainText("Starting a long review.");
   // While text streams, its writing dot is the sign of life; the waiting line steps aside.
