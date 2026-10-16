@@ -1,8 +1,8 @@
 "use client";
 
-import { ChevronRight, CircleAlert, FileText, Image as ImageIcon, PenLine, RotateCcw, TextQuote } from "lucide-react";
+import { ChevronRight, CircleAlert, FileText, Image as ImageIcon, Link2, PenLine, RotateCcw, TextQuote } from "lucide-react";
 import { memo, useMemo, useRef, useState } from "react";
-import type { AssistantMessage, AssistantPart, ChatMessage, ThinkingPart, UserMessage } from "@/lib/agent/types";
+import { linkedDocumentLabel, type AssistantMessage, type AssistantPart, type ChatMessage, type ThinkingPart, type UserMessage } from "@/lib/agent/types";
 import { Spark } from "@/components/agent/Activity";
 import { Markdown } from "@/components/agent/Markdown";
 import { ToolCall } from "@/components/agent/ToolCall";
@@ -21,7 +21,7 @@ function formatTokens(count: number) {
 export const UserBubble = memo(function UserBubble({ message }: { message: UserMessage }) {
   return (
     <div className="msg msg-user">
-      {(message.selection?.text.trim() || Boolean(message.attachments?.length)) && (
+      {(message.selection?.text.trim() || Boolean(message.attachments?.length) || Boolean(message.links?.length)) && (
         <div className="msg-context">
           {message.selection?.text.trim() && (
             <span className="chip chip-quote" title={message.selection.text}>
@@ -33,6 +33,12 @@ export const UserBubble = memo(function UserBubble({ message }: { message: UserM
             <span key={attachment.id} className="chip">
               {attachment.kind === "image" ? <ImageIcon size={12} /> : <FileText size={12} />}
               <span className="chip-text">{attachment.name}</span>
+            </span>
+          ))}
+          {message.links?.map((link) => (
+            <span key={link.id} className="chip" title={linkedDocumentLabel(link)}>
+              <Link2 size={12} />
+              <span className="chip-text">{linkedDocumentLabel(link)}</span>
             </span>
           ))}
         </div>

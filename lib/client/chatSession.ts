@@ -12,6 +12,7 @@ import type {
   SequencedChatEvent,
   ToolPart,
   DocumentMention,
+  LinkedDocument,
 } from "@/lib/agent/types";
 import { api, del, patch, post, Store } from "@/lib/client/api";
 
@@ -108,6 +109,7 @@ export type SendInput = {
   selection?: SelectionContext;
   attachments?: Attachment[];
   mentions?: DocumentMention[];
+  links?: LinkedDocument[];
   /** Sent from the home page: the folder the user is looking at. */
   home?: { folderId: string | null };
 };
@@ -231,11 +233,11 @@ export class ChatSession {
     const chat = this.ui.get().chat;
     if (!chat) return () => undefined;
     if (chat.running) {
-      const queued = { id: ids.user, text: input.text, createdAt: now, selection: input.selection, attachments: input.attachments, mentions: input.mentions };
+      const queued = { id: ids.user, text: input.text, createdAt: now, selection: input.selection, attachments: input.attachments, mentions: input.mentions, links: input.links };
       this.ui.set((ui) => (ui.chat ? { ...ui, error: null, chat: { ...ui.chat, queue: [...ui.chat.queue, queued] } } : ui));
       return () => this.ui.set((ui) => (ui.chat ? { ...ui, chat: { ...ui.chat, queue: ui.chat.queue.filter((item) => item.id !== ids.user) } } : ui));
     }
-    const user = { id: ids.user, role: "user" as const, text: input.text, createdAt: now, selection: input.selection, attachments: input.attachments, mentions: input.mentions };
+    const user = { id: ids.user, role: "user" as const, text: input.text, createdAt: now, selection: input.selection, attachments: input.attachments, mentions: input.mentions, links: input.links };
     const assistant: AssistantMessage = { id: ids.assistant, role: "assistant", createdAt: now, parts: [], status: "streaming" };
     this.ui.set((ui) =>
       ui.chat

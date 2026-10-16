@@ -41,6 +41,46 @@ export type Attachment = {
 /** A document the user @-mentioned in a message. */
 export type DocumentMention = { id: string; title: string };
 
+/**
+ * A document the user linked for this message.
+ * `voice` — the pages they chose are a writing sample, so the reply matches that voice.
+ * `context` — the whole document is included because its information is relevant.
+ */
+export type LinkedDocument = {
+  id: string;
+  title: string;
+  purpose: "voice" | "context";
+  /** 1-based page numbers. Set for a writing sample; a context link is always the whole document. */
+  pages?: number[];
+};
+
+/** "2, 4–6" for a set of page numbers. */
+export function formatPageList(pages: number[]) {
+  const sorted = [...new Set(pages)].filter((n) => Number.isInteger(n)).sort((a, b) => a - b);
+  if (!sorted.length) return "";
+  const ranges: string[] = [];
+  let start = sorted[0]!;
+  let end = start;
+  for (const n of sorted.slice(1)) {
+    if (n === end + 1) end = n;
+    else {
+      ranges.push(start === end ? String(start) : `${start}–${end}`);
+      start = n;
+      end = n;
+    }
+  }
+  ranges.push(start === end ? String(start) : `${start}–${end}`);
+  return ranges.join(", ");
+}
+
+/** The chip label for a linked document. */
+export function linkedDocumentLabel(link: LinkedDocument) {
+  const title = link.title.replace(/\s+/g, " ").trim() || "Untitled";
+  if (link.purpose === "context") return `Context · ${title}`;
+  const pages = formatPageList(link.pages ?? []);
+  return pages ? `Voice · ${title} · p. ${pages}` : `Voice · ${title}`;
+}
+
 export type UserMessage = {
   id: string;
   role: "user";
@@ -49,6 +89,7 @@ export type UserMessage = {
   selection?: SelectionContext;
   attachments?: Attachment[];
   mentions?: DocumentMention[];
+  links?: LinkedDocument[];
 };
 
 export type DocumentChange = {
@@ -122,7 +163,7 @@ export type ContextUsage = { tokens: number; maxTokens: number; percentage: numb
 
 export type RateLimit = { status: "allowed" | "allowed_warning" | "rejected"; resetsAt?: number; type?: string; utilization?: number };
 
-export type QueuedMessage = { id: string; text: string; createdAt: number; selection?: SelectionContext; attachments?: Attachment[]; mentions?: DocumentMention[] };
+export type QueuedMessage = { id: string; text: string; createdAt: number; selection?: SelectionContext; attachments?: Attachment[]; mentions?: DocumentMention[]; links?: LinkedDocument[] };
 
 export type ChatState = {
   id: string;

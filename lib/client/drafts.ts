@@ -1,20 +1,26 @@
 "use client";
 
-import type { Attachment, DocumentMention, SelectionContext } from "@/lib/agent/types";
+import type { Attachment, DocumentMention, LinkedDocument, SelectionContext } from "@/lib/agent/types";
 
 /**
  * The message being written to Claude, kept per document so closing the panel
- * (or reloading the page) doesn't lose it. Text, attachments and mentions are
- * remembered in localStorage; the quoted selection only for this tab, since
- * its positions go stale once the page is gone.
+ * (or reloading the page) doesn't lose it. Text, attachments, mentions and
+ * linked documents are remembered in localStorage; the quoted selection only
+ * for this tab, since its positions go stale once the page is gone.
  */
-export type Draft = { text: string; attachments: Attachment[]; mentions: DocumentMention[] };
+export type Draft = { text: string; attachments: Attachment[]; mentions: DocumentMention[]; links: LinkedDocument[] };
 
-const EMPTY: Draft = { text: "", attachments: [], mentions: [] };
+const EMPTY: Draft = { text: "", attachments: [], mentions: [], links: [] };
 const selections = new Map<string, SelectionContext>();
 
 function key(documentId: string) {
   return `inline-draft:${documentId}`;
+}
+
+function isLink(value: unknown): value is LinkedDocument {
+  if (!value || typeof value !== "object") return false;
+  const link = value as LinkedDocument;
+  return typeof link.id === "string" && typeof link.title === "string" && (link.purpose === "voice" || link.purpose === "context");
 }
 
 export function loadDraft(documentId: string): Draft {
@@ -25,6 +31,7 @@ export function loadDraft(documentId: string): Draft {
       text: typeof raw.text === "string" ? raw.text : "",
       attachments: Array.isArray(raw.attachments) ? raw.attachments : [],
       mentions: Array.isArray(raw.mentions) ? raw.mentions : [],
+      links: Array.isArray(raw.links) ? raw.links.filter(isLink) : [],
     };
   } catch {
     return EMPTY;
@@ -33,7 +40,7 @@ export function loadDraft(documentId: string): Draft {
 
 export function saveDraft(documentId: string, draft: Draft) {
   try {
-    if (!draft.text && !draft.attachments.length) window.localStorage.removeItem(key(documentId));
+    if (!draft.text && !draft.attachments.length && !draft.links.length) window.localStorage.removeItem(key(documentId));
     else window.localStorage.setItem(key(documentId), JSON.stringify(draft));
   } catch {
     // Private browsing or storage full: the draft lasts while the panel is open.

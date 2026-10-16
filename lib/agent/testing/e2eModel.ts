@@ -74,6 +74,14 @@ const model: FakeModel = async (turn, claude) => {
     return;
   }
 
+  if (/what did I link/i.test(text)) {
+    const samples = [...turn.context.matchAll(/<writing-sample>([\s\S]*?)<\/writing-sample>/g)].map((match) => match[1]!.trim());
+    const docs = [...turn.context.matchAll(/<linked-document>([\s\S]*?)<\/linked-document>/g)].map((match) => match[1]!.trim());
+    const parts = [...(samples.length ? [`Sample:\n${samples.join("\n")}`] : []), ...(docs.length ? [`Context:\n${docs.join("\n")}`] : [])];
+    claude.say(parts.join("\n\n") || "Nothing linked.");
+    return;
+  }
+
   if (/take your time/i.test(text)) {
     claude.say("Starting a long review.");
     await claude.untilInterrupted();
