@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { GOOGLE_PASSAGE } from "../tests/support/googleClipboard";
 
 /** End-to-end flows across the home page, the editor, exports and collaboration. (MCP flows live in agent-mcp.spec.ts.) */
 
@@ -128,6 +129,86 @@ test.describe("editing", () => {
     await paste(page, { html: `<p>From a web page</p><img src="data:image/png;base64,${PNG}">` });
     await expect(images).toHaveCount(2);
     await expect(images.nth(1)).toHaveAttribute("src", /^\/api\/uploads\//);
+  });
+
+  test("text pasted from Google Docs is spaced, wrapped and colored as Google shows it", async ({ page, request }) => {
+    await openDocument(page, await createDocument(request, "From Google", ""));
+    await page.locator(".doc-content").click();
+    await paste(page, { html: GOOGLE_PASSAGE });
+    const blocks = page.locator(".doc-content > p");
+    await expect(blocks).toHaveCount(6);
+    const layout = await page.locator(".doc-content").evaluate((root) => {
+      const paragraphs = Array.from(root.children) as HTMLElement[];
+      // The text of each line the long paragraph wraps into, from where its letters sit.
+      const lines: string[] = [];
+      let top: number | null = null;
+      const walker = document.createTreeWalker(paragraphs[3]!, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null) {
+        for (let i = 0; i < node.length; i += 1) {
+          const range = document.createRange();
+          range.setStart(node, i);
+          range.setEnd(node, i + 1);
+          const box = range.getClientRects()[0];
+          if (!box) continue;
+          if (top === null || Math.abs(box.top - top) > 3) lines.push("");
+          top = box.top;
+          lines[lines.length - 1] += node.data[i];
+        }
+      }
+      return {
+        texts: paragraphs.map((p) => p.textContent?.slice(0, 8)),
+        lineHeights: paragraphs.map((p) => p.style.lineHeight),
+        margins: paragraphs.map((p) => getComputedStyle(p).marginBottom),
+        heights: paragraphs.map((p) => Math.round(p.getBoundingClientRect().height)),
+        lineEnds: lines.map((line) => line.trim().split(" ").pop()),
+      };
+    });
+    expect(layout.texts).toEqual(["3 parts ", "", "PROLOGUE", "Scene of", "", "Certainl"]);
+    expect(layout.lineHeights).toEqual(Array(6).fill("1.15"));
+    expect(layout.margins).toEqual(Array(6).fill("0px"));
+    // A blank line is one line tall, like a line of text.
+    expect(layout.heights[1]).toBe(layout.heights[2]);
+    expect(layout.heights[4]).toBe(layout.heights[2]);
+    // Where Google Docs breaks the paragraph's lines: a space at the end of a line hangs past the margin.
+    expect(layout.lineEnds).toEqual(["it", "a", "the", "going", "a", "era."]);
+
+    // Google's black is the page's text color, so it turns light in dark mode.
+    await page.locator("html").evaluate((html) => html.setAttribute("data-theme", "dark"));
+    const colors = await page.locator(".doc-content").evaluate((root) => [getComputedStyle(root).color, getComputedStyle(root.querySelector(".text-black")!).color]);
+    expect(colors[1]).toBe(colors[0]);
+    expect(colors[0]).not.toBe("rgb(0, 0, 0)");
+  });
+
+  test("a pasted picture leaves a text caret after it, and copies out as a picture", async ({ page, request }) => {
+    await openDocument(page, await createDocument(request, "Copy a picture", "Before."));
+    await page.locator(".doc-content").click();
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+ArrowDown" : "Control+End");
+    await page.keyboard.press("Enter");
+    await paste(page, { html: `<meta charset="utf-8"><img src="data:image/png;base64,${PNG}">` });
+    const image = page.locator(".doc-content .doc-image img");
+    await expect(image).toHaveAttribute("src", /^\/api\/uploads\//);
+    await expect(page.locator(".doc-content > *")).toHaveCount(3);
+    await expect(page.locator(".ProseMirror-selectednode")).toHaveCount(0);
+    await expect(page.locator(".ProseMirror-gapcursor")).toHaveCount(0);
+    await page.keyboard.type("After");
+    await expect(page.locator(".doc-content > p").last()).toHaveText("After");
+
+    await image.click();
+    await expect(page.locator(".doc-content .doc-image.ProseMirror-selectednode")).toHaveCount(1);
+    const copied = await page.locator(".doc-content").evaluate(async (root) => {
+      const written: Record<string, string | number> = {};
+      navigator.clipboard.write = async (items) => {
+        for (const item of items) for (const type of item.types) written[type] = type === "image/png" ? (await item.getType(type)).size : await (await item.getType(type)).text();
+      };
+      const transfer = new DataTransfer();
+      root.dispatchEvent(new ClipboardEvent("copy", { clipboardData: transfer, bubbles: true, cancelable: true }));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return { html: transfer.getData("text/html"), written };
+    });
+    expect(copied.html).toMatch(/<img src="data:image\/png;base64,[^"]+"/);
+    expect(copied.html).toMatch(/data-inline-src="http:\/\/localhost:\d+\/api\/uploads\//);
+    expect(copied.written["image/png"]).toBeGreaterThan(0);
+    expect(copied.written["text/html"]).toBe(copied.html);
   });
 
   test("a selected image can be resized by dragging its handle", async ({ page, request }) => {
