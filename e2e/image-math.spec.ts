@@ -69,7 +69,7 @@ function caretState(page: Page) {
     const editor = document.querySelector(".doc-content") as HTMLElement;
     const selected = document.querySelector(".doc-image.ProseMirror-selectednode");
     return {
-      gap: editor.classList.contains("ProseMirror-gapcursor"),
+      gap: Boolean(editor.querySelector(".ProseMirror-gapcursor")),
       hidden: editor.classList.contains("ProseMirror-hideselection"),
       selected: Boolean(selected),
     };

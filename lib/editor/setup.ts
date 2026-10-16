@@ -405,8 +405,9 @@ export function editorPlugins(options: EditorPluginOptions) {
     keymap(baseKeymap),
     history(),
     dropCursor({ color: "var(--accent)", width: 2 }),
-    gapCursor(),
+    // Before the gap cursor: a click under a picture is a text caret, which the gap cursor would claim first.
     imageSelectionPlugin(),
+    gapCursor(),
     columnResizing({ View: InlineTableView }),
     tableEditing(),
     tableBorderPlugin(),
