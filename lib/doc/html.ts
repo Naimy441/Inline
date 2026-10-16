@@ -53,8 +53,9 @@ function mathHtml(tex: string, displayMode: boolean) {
 
 export function nodeToHtml(node: PMNode): string {
   if (node.isText) {
-    if (node.marks.some((mark) => mark.type.name === "math")) return renderMarks(node.marks.filter((mark) => mark.type.name !== "math"), mathHtml(node.text ?? "", false));
-    return renderMarks(node.marks, escapeHtml(node.text ?? ""));
+    if (node.marks.some((mark) => mark.type.name === "math")) return renderMarks(node.marks.filter((mark) => mark.type.name !== "math" && mark.type.name !== "agent"), mathHtml(node.text ?? "", false));
+    // The agent mark only tells the editor to skip spellcheck. It is not formatting.
+    return renderMarks(node.marks.filter((mark) => mark.type.name !== "agent"), escapeHtml(node.text ?? ""));
   }
   if (node.type.name === "code_block" && node.attrs.language === MATH_LANGUAGE) return mathHtml(node.textContent, true);
   const toDOM = node.type.spec.toDOM;

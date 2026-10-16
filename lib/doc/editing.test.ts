@@ -84,9 +84,13 @@ describe("applyStringEdit", () => {
     const result = edit(source, "quick brown fox", "slow brown dog").doc;
     assert.equal(result.textContent, "The slow brown dog jumps.");
     assert.deepEqual(runs(result), [
-      ["The slow ", ""],
+      ["The ", ""],
+      ["slow", "agent"],
+      [" ", ""],
       ["brown", "text_color:#ff0000"],
-      [" dog jumps.", ""],
+      [" ", ""],
+      ["dog", "agent"],
+      [" jumps.", ""],
     ]);
   });
 
@@ -99,7 +103,9 @@ describe("applyStringEdit", () => {
     const result = edit(source, "red phrase", "crimson wording").doc;
     assert.deepEqual(runs(result), [
       ["Keep this ", ""],
-      ["crimson wording", "text_color:red"],
+      ["crimson", "text_color:red,agent"],
+      [" ", "text_color:red"],
+      ["wording", "text_color:red,agent"],
       [" please.", ""],
     ]);
   });
@@ -177,7 +183,9 @@ describe("applyStringEdit", () => {
     assert.deepEqual(runs(result), [
       ["Commented ", ""],
       ["words stay", "comment"],
-      [" put.", ""],
+      [" ", ""],
+      ["put", "agent"],
+      [".", ""],
     ]);
   });
 
@@ -201,7 +209,10 @@ describe("whole-document operations", () => {
     const empty = schema.node("doc", null, [schema.node("paragraph")]);
     assert.equal(docToMarkdown(insertMarkdown(empty, "Hello", { at: "end" }).doc), "Hello");
     const source = doc("One\n\nThree");
-    assert.equal(docToMarkdown(insertMarkdown(source, "Two", { afterLine: 1 }).doc), "One\n\nTwo\n\nThree");
+    const inserted = insertMarkdown(source, "Two", { afterLine: 1 }).doc;
+    assert.equal(docToMarkdown(inserted), "One\n\nTwo\n\nThree");
+    assert.equal(runs(inserted)[1]?.[1], "agent");
+    assert.equal(runs(inserted)[0]?.[1], "");
     assert.equal(docToMarkdown(insertMarkdown(source, "Zero", { at: "start" }).doc), "Zero\n\nOne\n\nThree");
   });
 

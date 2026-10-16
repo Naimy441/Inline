@@ -23,9 +23,9 @@ const nextConfig = {
   // `next build` and `next start` are unaffected unless this is set.
   ...(process.env.INLINE_STANDALONE === "1" ? { output: "standalone" } : {}),
   // The Agent SDK launches the Claude Code CLI that ships inside the package,
-  // so it has to be loaded from node_modules rather than bundled. The spelling
-  // dictionary reads its Hunspell files from its package folder the same way.
-  serverExternalPackages: ["@anthropic-ai/claude-agent-sdk", "nspell", "dictionary-en", "playwright", "playwright-core"],
+  // so it has to be loaded from node_modules rather than bundled. nspell is
+  // loaded the same way; its word list is lib/server/hunspell, read from disk.
+  serverExternalPackages: ["@anthropic-ai/claude-agent-sdk", "nspell", "playwright", "playwright-core"],
   // Files read from node_modules at run time, kept in the desktop app's server:
   // pdf.js's data for importing PDFs, and the Computer Modern faces (KaTeX's)
   // that documents typeset in TeX are shown in.
@@ -33,7 +33,9 @@ const nextConfig = {
     "/api/pdfjs/\\[\\.\\.\\.path\\]": ["./node_modules/pdfjs-dist/cmaps/**", "./node_modules/pdfjs-dist/standard_fonts/**", "./node_modules/pdfjs-dist/wasm/**", "./node_modules/pdfjs-dist/iccs/**"],
     "/api/documents/import/pdf": ["./node_modules/katex/dist/fonts/KaTeX_Main-*.ttf"],
     // The page-layout skill is a directory the agent passes to Claude Code, not an import.
-    "/api/agent/**": ["./lib/agent/skills/page-layout/**/*"],
+    "/api/agent/**": ["./lib/agent/skills/page-layout/**/*", "./lib/server/hunspell/**"],
+    "/api/mcp/**": ["./lib/server/hunspell/**"],
+    "/api/spellcheck": ["./lib/server/hunspell/**"],
   },
   // The agent routes' traces take in the whole project folder, which would put
   // the desktop app's own builds (desktop/dist) and the tests inside its server.

@@ -61,18 +61,23 @@
   background: var(--selection);
 }
 
-/* Hunspell misspellings. Drawn by the editor, because the browser's own
-   spelling underlines don't show up reliably as the user types. */
-.doc-content .spelling-error {
+/* Hunspell misspellings. One small dotted line, including the browser's own
+   mark when it draws one, so a misspelling is never a large wave plus a
+   second row of dots. */
+.doc-content .spelling-error,
+.doc-content::spelling-error,
+.doc-content ::spelling-error {
   text-decoration-line: underline;
-  text-decoration-style: wavy;
+  text-decoration-style: dotted;
   text-decoration-color: #d93025;
-  text-decoration-thickness: 1.5px;
-  text-underline-offset: 0.12em;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.05em;
   text-decoration-skip-ink: none;
 }
 
-:root[data-theme="dark"] .doc-content .spelling-error {
+:root[data-theme="dark"] .doc-content .spelling-error,
+:root[data-theme="dark"] .doc-content::spelling-error,
+:root[data-theme="dark"] .doc-content ::spelling-error {
   text-decoration-color: #ff8a80;
 }
 

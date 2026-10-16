@@ -1081,6 +1081,19 @@ const marks: Record<string, MarkSpec> = {
     parseDOM: [{ tag: "span[data-lock-id]", getAttrs: (dom) => ({ id: (dom as HTMLElement).getAttribute("data-lock-id") }) }],
     toDOM: (mark): DOMOutputSpec => ["span", { class: "locked-text", "data-lock-id": mark.attrs.id, title: "Locked from AI edits" }, 0],
   },
+
+  /**
+   * Text an agent inserted. The editor does not spellcheck it (Claude rarely
+   * misspells, and the user should not have to dismiss those underlines).
+   * Typing does not extend it (`inclusive: false`); characters the user then
+   * inserts are unmarked and checked. Not parsed from HTML, so a paste is the
+   * user's text.
+   */
+  agent: {
+    inclusive: false,
+    spanning: false,
+    toDOM: (): DOMOutputSpec => ["span", { "data-agent": "", spellcheck: "false" }, 0],
+  },
 };
 
 export const schema = new Schema({ nodes, marks });
@@ -1093,8 +1106,8 @@ export const MARKDOWN_MARKS = new Set(["bold", "italic", "underline", "strike", 
 /** The code block language that makes it a displayed equation. */
 export const MATH_LANGUAGE = "math";
 
-/** Marks that describe ranges (comments, locks) rather than styling. */
-export const RANGE_MARKS = new Set(["comment", "locked"]);
+/** Marks that describe ranges (comments, locks, text an agent inserted) rather than styling. */
+export const RANGE_MARKS = new Set(["comment", "locked", "agent"]);
 
 export const TEXTBLOCK_TYPES = new Set(["paragraph", "heading", "title", "subtitle"]);
 

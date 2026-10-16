@@ -80,7 +80,7 @@ function applyBlockChanges(tr: Transform, regionStart: number, oldBlocks: PMNode
       assertUnlocked(pair.old);
       deletions.push({ from: pos, to: pos + pair.old.nodeSize });
     } else if (pair.next) {
-      tr.insert(pos, stripIds(pair.next));
+      tr.insert(pos, markAgentText(stripIds(pair.next)));
       changed = true;
     }
   }
@@ -209,7 +209,7 @@ function pairGap(olds: PMNode[], oldKeys: string[], nexts: PMNode[], nextKeys: s
 export function mergeBlock(old: PMNode, next: PMNode): PMNode {
   if (kind(old) !== kind(next)) {
     assertUnlocked(old);
-    return withId(next, old.attrs.id);
+    return withId(markAgentText(next), old.attrs.id);
   }
   if (old.isTextblock) {
     const attrs: Record<string, unknown> = {};
@@ -250,7 +250,7 @@ function mergeChildren(old: PMNode, next: PMNode, mergeChild: (a: PMNode, b: PMN
   const result: PMNode[] = [];
   for (const pair of alignBlocks(olds, nexts)) {
     if (pair.old && pair.next) result.push(mergeChild(pair.old, pair.next));
-    else if (pair.next) result.push(pair.next);
+    else if (pair.next) result.push(markAgentText(pair.next));
     else if (pair.old) assertUnlocked(pair.old);
   }
   return result;
@@ -264,7 +264,7 @@ function mergeTable(old: PMNode, next: PMNode): PMNode {
     nextRow.forEach((nextCell, _c, cellIndex) => {
       const oldCell = oldRow && cellIndex < oldRow.childCount ? oldRow.child(cellIndex) : null;
       if (!oldCell) {
-        cells.push(nextCell);
+        cells.push(markAgentText(nextCell));
         return;
       }
       cells.push(oldCell.type.create(oldCell.attrs, mergeChildren(oldCell, nextCell)));
@@ -273,6 +273,28 @@ function mergeTable(old: PMNode, next: PMNode): PMNode {
   });
   for (let r = next.childCount; r < old.childCount; r += 1) assertUnlocked(old.child(r));
   return old.type.create({ ...old.attrs }, rows);
+}
+
+/** Characters an agent inserted are exempt from spelling until the user types over them. */
+function withAgentMark(marks: readonly Mark[]): readonly Mark[] {
+  const mark = schema.marks.agent.create();
+  return mark.isInSet(marks) ? marks : mark.addToSet(marks);
+}
+
+export function markAgentText(node: PMNode): PMNode {
+  if (node.isText) {
+    const marks = withAgentMark(node.marks);
+    return Mark.sameSet(marks, node.marks) ? node : node.mark(marks);
+  }
+  if (!node.content.size) return node;
+  let changed = false;
+  const children: PMNode[] = [];
+  node.forEach((child) => {
+    const next = markAgentText(child);
+    if (next !== child) changed = true;
+    children.push(next);
+  });
+  return changed ? node.copy(Fragment.from(children)) : node;
 }
 
 function withId(node: PMNode, id: unknown) {
@@ -365,6 +387,8 @@ export function mergeInline(old: PMNode, next: PMNode): Fragment {
       }
       let marks = Mark.setFrom(atom.marks.filter((mark) => MARKDOWN_MARKS.has(mark.type.name)));
       for (const mark of inherited) if (!mark.isInSet(marks) && canAddMark(marks, mark)) marks = mark.addToSet(marks);
+      // Claude wrote this character. Unchanged characters keep whatever mark they had.
+      marks = withAgentMark(marks);
       out.push({ key: atom.key, node: atom.node, marks });
     }
   }

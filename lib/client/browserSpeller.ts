@@ -8,8 +8,8 @@ const BATCH = 2000;
 
 /**
  * Spell checker for the open editor. Words are asked of the server's Hunspell
- * dictionary (nspell + dictionary-en) and cached. `correct` returns null until
- * that answer arrives, so a word is not underlined on a guess.
+ * dictionary and cached. `correct` returns null until that answer arrives, so
+ * a word is not underlined on a guess.
  * Raw verdicts only: possessive folding happens in misspelledSpans.
  */
 export function remoteSpeller(onChange: () => void): SpellChecker {
