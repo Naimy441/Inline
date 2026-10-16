@@ -28,7 +28,7 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     prompt:
       "Find reliable sources for the document's factual claims with web search. Add inline citations in the document's existing style (or (Author, Year) if it has none) and a References section at the end with full entries. Don't change the claims themselves; comment on any you couldn't support.",
   },
-  { name: "deslop", description: "Remove AI-sounding phrasing", prompt: "Run analyze_writing and rewrite any passages that sound generic or AI-written, keeping the meaning and the author's voice." },
+  { name: "deslop", description: "Remove AI-sounding phrasing", prompt: "Run clean_ai_tells on the document. Then rewrite any passages that still sound generic or AI-written, keeping the meaning and the author's voice. Use normal punctuation and real Markdown lists." },
 ];
 
 /** All commands, the user's first so they can override a built-in by name. */

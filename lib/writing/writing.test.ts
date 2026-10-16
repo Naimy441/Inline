@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { lintWriting, PAGE_WORDS, summarizeLint } from "./lint";
+import { cleanAiTellText, findAiSymbols, stripInvisible } from "./aiTells";
 import { cleanAiArtifacts, detectAiTropes, summarizeTropes } from "./tropes";
 
 describe("writing diagnostics", () => {
@@ -85,5 +86,63 @@ describe("AI tropes", () => {
   it("cleans watermarks, disclaimers, hedges and em dashes", () => {
     const cleaned = cleanAiArtifacts("As an AI language model, I think​ it's important to note that cats—dogs differ.");
     assert.equal(cleaned, "I think cats - dogs differ.");
+  });
+
+  it("flags bullet glyphs and ellipsis characters, and leaves curly quotes and real lists alone", () => {
+    const hits = detectAiTropes("Pack • towels.\n\n“Done”… don’t\n\n- Real item\n\nPages 12–14.");
+    const titles = hits.map((hit) => hit.title);
+    assert.ok(titles.some((title) => title.includes("bullet glyph")));
+    assert.ok(titles.some((title) => title.includes("ellipsis")));
+    assert.ok(!titles.some((title) => /quote|apostrophe/i.test(title)));
+    assert.ok(!titles.some((title) => title.includes("en dash")));
+    assert.equal(findAiSymbols("“Hello,” don’t stop.\n- Real item\n- Another").length, 0);
+  });
+
+  it("does not treat a script joiner as a watermark", () => {
+    assert.ok(!detectAiTropes("ن\u200Cم").some((hit) => hit.kind === "watermark"));
+    assert.ok(detectAiTropes("a\u200Cb").some((hit) => hit.kind === "watermark"));
+  });
+});
+
+describe("AI tell cleanup", () => {
+  it("deletes invisible junk and keeps line breaks, tabs and list markers", () => {
+    const text = "a\u200Bb\uFEFFc\u00ADd\u2060e\nf\tg\r\n- item";
+    const stripped = stripInvisible(text);
+    assert.equal(stripped.text, "abcde\nf\tg\r\n- item");
+    assert.equal(stripped.removed, 4);
+  });
+
+  it("keeps joiners that belong to a script and emoji sequences", () => {
+    const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}";
+    const arabic = "ن\u200Cم";
+    const thai = "คำ\u200Bคำ";
+    const heart = "\u2764\uFE0F";
+    assert.equal(stripInvisible(family).text, family);
+    assert.equal(stripInvisible(arabic).text, arabic);
+    assert.equal(stripInvisible(thai).text, thai);
+    assert.equal(stripInvisible(heart).text, heart);
+    assert.equal(stripInvisible("a\u200Db").text, "ab");
+    assert.equal(stripInvisible("a\u200Cb").text, "ab");
+    assert.equal(stripInvisible("ab\u200Fcd").text, "abcd");
+    assert.equal(stripInvisible("مرحبا\u200F").text, "مرحبا\u200F");
+    assert.equal(stripInvisible("\uFE0F").text, "");
+  });
+
+  it("turns em dashes, fake bullets and other AI symbols into plain punctuation and lists", () => {
+    const cleaned = cleanAiTellText("The plan — a short one — is ready.\n\n• Towels\n\n• Sunscreen\n\nSee the note… “quoted” don’t\n\nPages 12–14.\n\ncol·legi\n\n- Real item").text;
+    assert.equal(
+      cleaned,
+      "The plan - a short one - is ready.\n\n- Towels\n\n- Sunscreen\n\nSee the note... “quoted” don’t\n\nPages 12–14.\n\ncol·legi\n\n- Real item",
+    );
+  });
+
+  it("leaves code and math alone", () => {
+    const code = "Before —\n\n```\n— • …\n```\n\nAfter —\n\nUse `$a—b$` here.";
+    const cleaned = cleanAiTellText(code).text;
+    assert.match(cleaned, /```\n— • …\n```/);
+    assert.match(cleaned, /`\$a—b\$`/);
+    assert.match(cleaned, /Before -/);
+    assert.match(cleaned, /After -/);
+    assert.equal(findAiSymbols(code).some((hit) => hit.find.includes("— •")), false);
   });
 });

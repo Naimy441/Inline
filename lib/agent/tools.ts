@@ -22,7 +22,7 @@ import {
   writeDocument,
   type FormatSpec,
 } from "@/lib/doc/editing";
-import { markdownToDoc, serializeDoc } from "@/lib/doc/markdown";
+import { BLOCK_SEPARATOR, markdownToDoc, serializeDoc } from "@/lib/doc/markdown";
 import { changedRanges, isUserSuggestion } from "@/lib/doc/review";
 import { FONT_FAMILIES, googleFontValue, PAPER_SIZES, type DocumentSettings, type PaperSize } from "@/lib/doc/settings";
 import { findGoogleFont, keepGoogleFont } from "@/lib/server/googleFonts";
@@ -33,6 +33,7 @@ import { attachmentText } from "@/lib/agent/attachments";
 import { findUpload, readDictionary, updateDictionary } from "@/lib/server/store";
 import { findMisspellings, speller, type Misspelling } from "@/lib/server/spellcheck";
 import { normalizeWord } from "@/lib/doc/words";
+import { cleanAiTellText, findAiSymbols, formatCleanSummary, formatWriteCheck, mergeSymbolHits, stripInvisible, type AiSymbolHit } from "@/lib/writing/aiTells";
 import { detectAiTropes } from "@/lib/writing/tropes";
 import { describePageStarts, pageCount, pageCountNow } from "@/lib/agent/pages";
 import { RenderUnavailableError, requestPageRenders } from "@/lib/server/renders";
@@ -297,6 +298,31 @@ function lineRange(from?: number, to?: number) {
   return { from: start, to: Math.max(start, to ?? from ?? start) };
 }
 
+/** Drop invisible junk from text the model is about to write, and note any AI symbols still in it. */
+function scrubWritten(text: string) {
+  const stripped = stripInvisible(text);
+  return { text: stripped.text, removed: stripped.removed, symbols: findAiSymbols(stripped.text) };
+}
+
+function withWriteCheck(result: ToolResult, scrubs: Array<{ removed: number; symbols: AiSymbolHit[] }>): ToolResult {
+  if (result.isError) return result;
+  const note = formatWriteCheck(
+    scrubs.reduce((sum, scrub) => sum + scrub.removed, 0),
+    mergeSymbolHits(scrubs.map((scrub) => scrub.symbols)),
+  );
+  return note ? { ...result, text: `${result.text}\n${note}` } : result;
+}
+
+function blockHasLock(node: PMNode) {
+  let locked = false;
+  node.descendants((child) => {
+    if (locked) return false;
+    if (child.marks.some((mark) => mark.type.name === "locked")) locked = true;
+    return !locked;
+  });
+  return locked;
+}
+
 // ---------------------------------------------------------------------------
 
 export const TOOLS = [
@@ -341,7 +367,12 @@ export const TOOLS = [
     write: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
-      return commitEdit(ctx, doc, "edit_document", (current) => applyStringEdits(current, [args]), args.replace_all ? "Replaced all occurrences" : "Edited");
+      const scrub = scrubWritten(args.new_string);
+      if (scrub.text === args.old_string && scrub.removed) {
+        return ok(`Deleted ${scrub.removed} invisible character${scrub.removed === 1 ? "" : "s"} from the replacement. The remaining text matches the document, so nothing else changed.`);
+      }
+      const result = await commitEdit(ctx, doc, "edit_document", (current) => applyStringEdits(current, [{ ...args, new_string: scrub.text }]), args.replace_all ? "Replaced all occurrences" : "Edited");
+      return withWriteCheck(result, [scrub]);
     },
   }),
 
@@ -366,7 +397,15 @@ export const TOOLS = [
     write: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
-      return commitEdit(ctx, doc, "multi_edit_document", (current) => applyStringEdits(current, args.edits), `Applied ${args.edits.length} edit${args.edits.length === 1 ? "" : "s"}`);
+      const prepared = args.edits.map((edit) => ({ edit, scrub: scrubWritten(edit.new_string) }));
+      const applicable = prepared.filter((item) => item.scrub.text !== item.edit.old_string);
+      if (!applicable.length) {
+        const removed = prepared.reduce((sum, item) => sum + item.scrub.removed, 0);
+        if (removed) return ok(`Deleted ${removed} invisible character${removed === 1 ? "" : "s"} from the edits. The remaining text matches the document, so nothing else changed.`);
+      }
+      const edits = (applicable.length ? applicable : prepared).map((item) => ({ ...item.edit, new_string: item.scrub.text }));
+      const result = await commitEdit(ctx, doc, "multi_edit_document", (current) => applyStringEdits(current, edits), `Applied ${edits.length} edit${edits.length === 1 ? "" : "s"}`);
+      return withWriteCheck(result, prepared.map((item) => item.scrub));
     },
   }),
 
@@ -383,7 +422,15 @@ export const TOOLS = [
     destructive: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
-      return commitEdit(ctx, doc, "write_document", (current) => writeDocument(current, args.content), "Rewrote the document");
+      const scrub = scrubWritten(args.content);
+      if (!scrub.text.trim() && scrub.removed) {
+        return ok(`Deleted ${scrub.removed} invisible character${scrub.removed === 1 ? "" : "s"}. No visible text was left to write, so the document was not replaced.`);
+      }
+      if (scrub.text === serializeDoc(doc.doc).markdown && scrub.removed) {
+        return ok(`Deleted ${scrub.removed} invisible character${scrub.removed === 1 ? "" : "s"} from the replacement. The document already matches, so nothing else changed.`);
+      }
+      const result = await commitEdit(ctx, doc, "write_document", (current) => writeDocument(current, scrub.text), "Rewrote the document");
+      return withWriteCheck(result, [scrub]);
     },
   }),
 
@@ -410,7 +457,12 @@ export const TOOLS = [
           : args.position === "after_line"
             ? { afterLine: args.line! }
             : { beforeLine: args.line! };
-      return commitEdit(ctx, doc, "insert_content", (current) => insertMarkdown(current, args.content, position), "Inserted content");
+      const scrub = scrubWritten(args.content);
+      if (!scrub.text.trim() && scrub.removed) {
+        return ok(`Deleted ${scrub.removed} invisible character${scrub.removed === 1 ? "" : "s"}. Nothing visible was left to insert.`);
+      }
+      const result = await commitEdit(ctx, doc, "insert_content", (current) => insertMarkdown(current, scrub.text, position), "Inserted content");
+      return withWriteCheck(result, [scrub]);
     },
   }),
 
@@ -1090,7 +1142,7 @@ export const TOOLS = [
     name: "analyze_writing",
     title: "Analyze writing",
     description:
-      "Writing diagnostics for a document or a line range: word, sentence and paragraph counts, reading ease, grade level, vocabulary diversity, long sentences, and common AI-writing tropes (em-dash overuse, clichés like \"delve\", hidden watermark characters).",
+      "Writing diagnostics for a document or a line range: word, sentence and paragraph counts, reading ease, grade level, vocabulary diversity, long sentences, and common AI-writing tropes (em dashes, bullet glyphs that are not real lists, ellipsis characters, clichés like \"delve\", hidden watermark characters).",
     shape: { document_id: documentId, from_line: z.number().int().min(1).optional(), to_line: z.number().int().min(1).optional() },
     write: false,
     async handler(args, ctx) {
@@ -1113,6 +1165,41 @@ export const TOOLS = [
       return ok(
         [`Writing analysis of "${doc.meta.title}"${lines ? ` (lines ${lines.from}-${lines.to})` : ""}:`, ...stats, issues.length ? `Issues:\n${issues.join("\n")}` : "No structural issues.", trope.length ? `AI-writing tropes:\n${trope.join("\n")}` : "No common AI-writing tropes found."].join("\n"),
       );
+    },
+  }),
+
+  defineTool({
+    name: "clean_ai_tells",
+    title: "Clean AI tells",
+    description:
+      "Clean a document so it is less likely to be flagged as AI-written. Deletes unimportant invisible characters immediately (zero-width spaces and other non-printing junk). Rewrites em dashes, en dashes used as pauses, bullet glyphs that are not real list items, and ellipsis characters into normal punctuation and Markdown lists (- item). Curly quotes and apostrophes are left as written. Real line breaks, real lists, and joiners that belong to a script (Arabic, Indic, Thai, emoji) are kept. Locked text is left unchanged. edit_document, write_document, insert_content, and multi_edit_document already delete invisible characters in text you write and flag any AI symbols that remain.",
+    shape: { document_id: documentId },
+    write: true,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      const serialized = serializeDoc(doc.doc);
+      let removed = 0;
+      const rewrites: AiSymbolHit[] = [];
+      const locked: AiSymbolHit[] = [];
+      const parts = serialized.blocks.map((block) => {
+        if (blockHasLock(block.node)) {
+          locked.push(...findAiSymbols(block.markdown));
+          return block.markdown;
+        }
+        const cleaned = cleanAiTellText(block.markdown);
+        removed += cleaned.removedInvisible;
+        rewrites.push(...cleaned.rewrites);
+        return cleaned.text;
+      });
+      const markdown = parts.join(BLOCK_SEPARATOR);
+      if (markdown === serialized.markdown) {
+        const summary = formatCleanSummary(0, [], locked);
+        return ok(summary || `No invisible characters or AI symbols to clean in "${doc.meta.title}".`);
+      }
+      const result = await commitEdit(ctx, doc, "clean_ai_tells", (current) => writeDocument(current, markdown), "Cleaned AI tells");
+      if (result.isError) return result;
+      const summary = formatCleanSummary(removed, rewrites, locked);
+      return summary ? { ...result, text: `${result.text}\n${summary}` } : result;
     },
   }),
 
