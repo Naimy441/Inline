@@ -3,7 +3,7 @@ type Token = ReturnType<InstanceType<typeof MarkdownIt>["parse"]>[number];
 import markPlugin from "markdown-it-mark";
 import { Fragment, type Mark, type Node as PMNode } from "prosemirror-model";
 import { ALIGNMENTS, MARKDOWN_MARKS, MATH_LANGUAGE, MAX_INDENT, cssSizeToPt, footnoteLabel, safeHref, schema, type Align, type BorderLine, type Borders, type TabStop } from "@/lib/doc/schema";
-import { cropToken, parseCropToken, pictureCrop, pictureRotate, pictureWrap } from "@/lib/doc/picture";
+import { cropToken, parseCropToken, pictureCrop, pictureRotate, pictureWidth, pictureWrap } from "@/lib/doc/picture";
 import { tocMarkdown, tocMarkdownMatch, withSyncedTocs } from "@/lib/doc/toc";
 
 /**
@@ -168,7 +168,11 @@ function pictureTokens(node: PMNode) {
 function serializeImage(node: PMNode) {
   const alt = escapeLinkText(node.attrs.alt || "");
   const title = node.attrs.title ? ` "${String(node.attrs.title).replace(/"/g, '\\"')}"` : "";
-  const tokens = [...(node.attrs.width ? [`width=${node.attrs.width}`] : []), ...(node.attrs.align && node.attrs.align !== "center" ? [`align=${node.attrs.align}`] : []), ...pictureTokens(node)];
+  const width = pictureWidth(node.attrs.width);
+  // Center is the default, but a width written with an alignment keeps both.
+  // Dropping `align=center` next to a width made a later edit look like it never happened.
+  const align = node.attrs.align && (node.attrs.align !== "center" || width) ? `align=${node.attrs.align}` : "";
+  const tokens = [...(width ? [`width=${width}`] : []), align, ...pictureTokens(node)].filter(Boolean);
   return `![${alt}](${formatUrl(node.attrs.src || "")}${title})${tokens.length ? `{${tokens.join(" ")}}` : ""}`;
 }
 
@@ -857,7 +861,7 @@ class BlockBuilder {
         src: image.attrGet("src") ?? "",
         alt: image.children?.map((child) => child.content).join("") || image.content || "",
         title: image.attrGet("title") ?? "",
-        width: spec.values.width ?? null,
+        width: pictureWidth(spec.values.width),
         align: align && ALIGNMENTS.includes(align) ? align : "center",
         wrap: pictureWrap(spec.values.wrap),
         crop: parseCropToken(spec.values.crop),

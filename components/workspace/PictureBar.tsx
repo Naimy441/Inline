@@ -1,16 +1,17 @@
 "use client";
 
+import { BringToFront, RotateCw, SendToBack, Type, WrapText, type LucideIcon } from "lucide-react";
 import { NodeSelection, type EditorState } from "prosemirror-state";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { DocumentSession } from "@/lib/client/documentSession";
 import { parseCropToken, pictureCrop, pictureRotate, pictureWrap, type PictureWrap } from "@/lib/doc/picture";
 import { setImageAttrs } from "@/lib/editor/commands";
 
-const WRAPS: Array<{ wrap: PictureWrap | null; label: string }> = [
-  { wrap: null, label: "In line with text" },
-  { wrap: "square", label: "Square" },
-  { wrap: "behind", label: "Behind text" },
-  { wrap: "front", label: "In front of text" },
+const WRAPS: Array<{ wrap: PictureWrap | null; label: string; icon: LucideIcon }> = [
+  { wrap: null, label: "In line with text", icon: Type },
+  { wrap: "square", label: "Square", icon: WrapText },
+  { wrap: "behind", label: "Behind text", icon: SendToBack },
+  { wrap: "front", label: "In front of text", icon: BringToFront },
 ];
 
 /**
@@ -150,23 +151,28 @@ export function PictureBar({ session, state }: { session: DocumentSession; state
       }}
     >
       {block &&
-        WRAPS.map((item) => (
-          <button
-            key={item.label}
-            type="button"
-            aria-pressed={wrap === item.wrap}
-            onMouseDown={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              session.run(setImageAttrs({ wrap: item.wrap }));
-            }}
-          >
-            {item.label}
-          </button>
-        ))}
+        WRAPS.map((item) => {
+          const Icon = item.icon;
+          return (
+            <button
+              key={item.label}
+              type="button"
+              aria-label={item.label}
+              title={item.label}
+              aria-pressed={wrap === item.wrap}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                session.run(setImageAttrs({ wrap: item.wrap }));
+              }}
+            >
+              <Icon size={15} aria-hidden />
+            </button>
+          );
+        })}
       {block && <span className="picture-sep" />}
-      <label>
-        Rotate
+      <label title="Rotate">
+        <RotateCw size={14} aria-hidden />
         <input
           aria-label="Rotate"
           name="rotate"
@@ -182,14 +188,14 @@ export function PictureBar({ session, state }: { session: DocumentSession; state
       <span className="picture-sep" />
       {(
         [
-          ["crop-left", "Crop from left", crop?.l ?? 0],
-          ["crop-top", "Crop from top", crop?.t ?? 0],
-          ["crop-right", "Crop from right", crop?.r ?? 0],
-          ["crop-bottom", "Crop from bottom", crop?.b ?? 0],
+          ["crop-left", "Crop from left", "L", crop?.l ?? 0],
+          ["crop-top", "Crop from top", "T", crop?.t ?? 0],
+          ["crop-right", "Crop from right", "R", crop?.r ?? 0],
+          ["crop-bottom", "Crop from bottom", "B", crop?.b ?? 0],
         ] as const
-      ).map(([name, label, fraction]) => (
-        <label key={name}>
-          {label.replace("Crop from ", "")}
+      ).map(([name, label, letter, fraction]) => (
+        <label key={name} title={label}>
+          {letter}
           <input aria-label={label} name={name} inputMode="decimal" defaultValue={percent(fraction)} key={`${name}-${percent(fraction)}`} onBlur={applyCrop} />
         </label>
       ))}

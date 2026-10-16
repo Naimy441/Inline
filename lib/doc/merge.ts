@@ -293,6 +293,10 @@ export function markAgentText(node: PMNode): PMNode {
     return Mark.sameSet(marks, node.marks) ? node : node.mark(marks);
   }
   if (!node.content.size) return node;
+  // A code block, including a displayed equation, stores text that cannot hold
+  // marks. The agent mark on that text makes the block invalid and the edit fails.
+  // A document or list does not allow the mark either, but its paragraphs do.
+  if (node.inlineContent && !node.type.allowsMarkType(schema.marks.agent)) return node;
   let changed = false;
   const children: PMNode[] = [];
   node.forEach((child) => {
