@@ -103,8 +103,23 @@ export function ContextMenu({
             hint: "Definitions and synonyms",
             icon: <BookOpen size={14} />,
             onSelect: () => {
-              selectWord(word);
-              setLookup({ word, anchor: point ?? new DOMRect(0, 0, 0, 0) });
+              // A selected word would also raise the formatting bubble on top of the card.
+              const view = session.view;
+              let anchor = point ?? new DOMRect(0, 0, 0, 0);
+              if (view) {
+                try {
+                  const end = view.coordsAtPos(word.to);
+                  anchor = new DOMRect(end.left, end.bottom, 0, 0);
+                } catch {
+                  // Keep the click point when the position is no longer on screen.
+                }
+                const caret = Math.max(word.from, Math.min(view.state.selection.from, word.to));
+                session.run((state, dispatch) => {
+                  dispatch?.(state.tr.setSelection(TextSelection.create(state.doc, caret)));
+                  return true;
+                });
+              }
+              setLookup({ word, anchor });
             },
           },
           { kind: "separator" },
