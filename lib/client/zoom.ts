@@ -30,6 +30,56 @@ export function zoomFromPinch(startZoom: number, startDistance: number, distance
   return clampZoom(startZoom * (distance / startDistance));
 }
 
+/**
+ * A pinch drawn on the page stack before React commits it.
+ * `left`/`top` are the viewport position of the page's top-left (transform-origin
+ * is the top-left, and this ignores the live translate). `width`/`height` are the
+ * unscaled layout size. `tx`/`ty` are screen pixels applied after the scale.
+ */
+export type PinchFrame = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  tx: number;
+  ty: number;
+  scale: number;
+};
+
+/**
+ * Scale the page so `origin` stays on the same screen pixel. Pure arithmetic:
+ * a pinch step must not read layout, or each event waits on the page to reflow.
+ */
+export function stepPinch(frame: PinchFrame, origin: { x: number; y: number }, scale: number): PinchFrame {
+  const safe = frame.scale > 0 ? frame.scale : 1;
+  const lx = (origin.x - frame.left - frame.tx) / safe;
+  const ly = (origin.y - frame.top - frame.ty) / safe;
+  return {
+    ...frame,
+    tx: origin.x - frame.left - lx * scale,
+    ty: origin.y - frame.top - ly * scale,
+    scale,
+  };
+}
+
+/** `translate() scale()` with origin at the top-left. Empty when the page is at 1× and unshifted. */
+export function pinchTransform(frame: PinchFrame): string {
+  const moved = Math.abs(frame.tx) > 0.01 || Math.abs(frame.ty) > 0.01;
+  if (Math.abs(frame.scale - 1) < 0.0005 && !moved) return "";
+  const translate = moved ? `translate(${frame.tx}px, ${frame.ty}px) ` : "";
+  return `${translate}scale(${frame.scale})`;
+}
+
+/** Where the live pinch paints the page, in viewport pixels. */
+export function pinchBox(frame: PinchFrame) {
+  return {
+    left: frame.left + frame.tx,
+    top: frame.top + frame.ty,
+    width: frame.width * frame.scale,
+    height: frame.height * frame.scale,
+  };
+}
+
 export type ZoomAnchor = { clientX: number; clientY: number; fx: number; fy: number };
 
 /** Where `clientX`/`clientY` sits on a frame, as fractions of its box. */

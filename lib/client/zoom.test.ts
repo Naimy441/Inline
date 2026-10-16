@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { anchorAt, clampZoom, manualZoomOrigin, scrollForAnchor, touchDistance, touchMidpoint, zoomFromPinch, zoomFromWheel } from "./zoom";
+import { anchorAt, clampZoom, manualZoomOrigin, pinchBox, pinchTransform, scrollForAnchor, stepPinch, touchDistance, touchMidpoint, zoomFromPinch, zoomFromWheel, type PinchFrame } from "./zoom";
 
 describe("document zoom", () => {
   it("stays inside the same range as the zoom menu", () => {
@@ -42,6 +42,26 @@ describe("document zoom", () => {
   it("holds the top of the page when the reader hasn't scrolled, and the middle of the view when they have", () => {
     assert.deepEqual(manualZoomOrigin({ scrollTop: 0, left: 100, top: 80, width: 800, height: 600 }, 108), { x: 500, y: 108 });
     assert.deepEqual(manualZoomOrigin({ scrollTop: 240, left: 100, top: 80, width: 800, height: 600 }, 108), { x: 500, y: 380 });
+  });
+
+  it("keeps the finger point fixed across pinch steps without measuring layout", () => {
+    const start: PinchFrame = { left: 100, top: 50, width: 800, height: 1000, tx: 0, ty: 0, scale: 1 };
+    const origin = { x: 500, y: 250 };
+    const zoomed = stepPinch(start, origin, 2);
+    const box = pinchBox(zoomed);
+    assert.equal(box.width, 1600);
+    assert.ok(Math.abs(box.left + (400 / 800) * box.width - origin.x) < 1e-6);
+    assert.ok(Math.abs(box.top + (200 / 1000) * box.height - origin.y) < 1e-6);
+    assert.equal(pinchTransform(zoomed), `translate(${zoomed.tx}px, ${zoomed.ty}px) scale(2)`);
+
+    const moved = { x: 520, y: 260 };
+    const again = stepPinch(zoomed, moved, 2.2);
+    const next = pinchBox(again);
+    const localX = (moved.x - zoomed.left - zoomed.tx) / zoomed.scale;
+    const localY = (moved.y - zoomed.top - zoomed.ty) / zoomed.scale;
+    assert.ok(Math.abs(next.left + (localX / again.width) * next.width - moved.x) < 1e-6);
+    assert.ok(Math.abs(next.top + (localY / again.height) * next.height - moved.y) < 1e-6);
+    assert.equal(pinchTransform({ ...start, scale: 1 }), "");
   });
 
   it("reads a two-finger pinch from the midpoint and the spread", () => {

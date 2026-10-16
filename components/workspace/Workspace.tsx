@@ -40,7 +40,7 @@ import { ReviewBar } from "@/components/workspace/ReviewBar";
 import { EDITOR_MODES, modeMenuItems } from "@/components/workspace/modes";
 import { COMPACT_QUERY, isCompact, useMediaQuery, useVisualViewportVars } from "@/lib/client/viewport";
 import { DEFAULT_PREFERENCES, loadPreferences, preferences, setPreference } from "@/lib/client/preferences";
-import { anchorAt, clampZoom, manualZoomOrigin, scrollForAnchor, touchDistance, touchMidpoint, zoomFromPinch, zoomFromWheel, type ZoomAnchor } from "@/lib/client/zoom";
+import { anchorAt, clampZoom, manualZoomOrigin, pinchBox, pinchTransform, scrollForAnchor, stepPinch, touchDistance, touchMidpoint, zoomFromPinch, zoomFromWheel, type PinchFrame, type ZoomAnchor } from "@/lib/client/zoom";
 import { PictureBar } from "@/components/workspace/PictureBar";
 import { SelectionBubble } from "@/components/workspace/SelectionBubble";
 import { ShortcutsDialog } from "@/components/workspace/ShortcutsDialog";
@@ -97,6 +97,12 @@ export function Workspace({ documentId }: { documentId: string }) {
   const zoomAnchor = useRef<ZoomAnchor | null>(null);
   /** Latest scale, updated synchronously so a burst of pinch events compounds. */
   const zoomNow = useRef(1);
+  /** Scale React has committed. A pinch previews ahead of this and must not be overwritten by a render. */
+  const committedZoom = useRef(1);
+  /** A pinch is painting its own transform; renders must not snap it back to the committed scale. */
+  const gestureActive = useRef(false);
+  const livePinch = useRef<(PinchFrame & { stack: HTMLElement }) | null>(null);
+  const pinchSettle = useRef(0);
   // Below this width, or when they don't fit beside the title, the menu bar and labelled buttons fold into a "More" menu.
   const titlebarRef = useRef<HTMLElement>(null);
   const narrow = useMediaQuery(COMPACT_QUERY);
@@ -245,19 +251,36 @@ export function Workspace({ documentId }: { documentId: string }) {
   const pageWidth = geometry.pageWidth;
   const fitZoom = canvasWidth ? Math.max(0.25, Math.min(1, Math.floor(((canvasWidth - canvasPad * 2) / pageWidth) * 100) / 100)) : 1;
   const effectiveZoom = zoom === "fit" ? fitZoom : zoom;
-  zoomNow.current = effectiveZoom;
+  committedZoom.current = effectiveZoom;
+  if (!gestureActive.current) zoomNow.current = effectiveZoom;
 
-  const setZoom = (value: Zoom, origin?: { x: number; y: number }) => {
+  const setZoom = (value: Zoom, origin?: { x: number; y: number }, visual?: { left: number; top: number; width: number; height: number }) => {
     const canvas = canvasRef.current;
+    // A menu zoom during a pinch drops the preview. The pinch passes `visual` and commits itself.
+    if (!visual && gestureActive.current && livePinch.current) {
+      const stack = livePinch.current.stack;
+      gestureActive.current = false;
+      livePinch.current = null;
+      if (pinchSettle.current) {
+        clearTimeout(pinchSettle.current);
+        pinchSettle.current = 0;
+      }
+      zoomNow.current = committedZoom.current;
+      stack.style.transform = committedZoom.current === 1 ? "" : `scale(${committedZoom.current})`;
+    }
     const frame = canvas?.querySelector(".page-stack-frame");
     const numeric = value === "fit" ? fitZoom : clampZoom(value);
     // A burst of wheel events can land before React renders the previous one.
     const from = zoomNow.current;
-    if (canvas && frame instanceof HTMLElement && Math.abs(numeric - from) > 0.0005) {
-      const box = canvas.getBoundingClientRect();
-      const frameBox = frame.getBoundingClientRect();
-      const point = origin ?? manualZoomOrigin({ scrollTop: canvas.scrollTop, left: box.left, top: box.top, width: box.width, height: box.height }, frameBox.top);
-      zoomAnchor.current = anchorAt(frameBox, point.x, point.y);
+    if (canvas && (visual || frame instanceof HTMLElement) && Math.abs(numeric - from) > 0.0005) {
+      const box = visual ?? (frame as HTMLElement).getBoundingClientRect();
+      let point = origin;
+      if (!point) {
+        const canvasBox = canvas.getBoundingClientRect();
+        const frameTop = frame instanceof HTMLElement ? frame.getBoundingClientRect().top : box.top;
+        point = manualZoomOrigin({ scrollTop: canvas.scrollTop, left: canvasBox.left, top: canvasBox.top, width: canvasBox.width, height: canvasBox.height }, frameTop);
+      }
+      zoomAnchor.current = anchorAt(box, point.x, point.y);
       zoomNow.current = numeric;
     } else {
       zoomAnchor.current = null;
@@ -272,6 +295,12 @@ export function Workspace({ documentId }: { documentId: string }) {
   // PageCanvas calls this in its own layout effect, which runs before comments measure.
   const zoomCommit = useRef<(() => void) | null>(null);
   zoomCommit.current = () => {
+    const live = livePinch.current;
+    if (gestureActive.current && live?.stack.isConnected) {
+      live.stack.style.transformOrigin = "0 0";
+      live.stack.style.transform = pinchTransform(live);
+      return;
+    }
     const anchor = zoomAnchor.current;
     const canvas = canvasRef.current;
     zoomNow.current = effectiveZoom;
@@ -287,16 +316,83 @@ export function Workspace({ documentId }: { documentId: string }) {
   setZoomRef.current = setZoom;
 
   // Pinch and ctrl+wheel zoom the page. A plain wheel keeps scrolling it.
+  // The scale is written on the page stack inside the event. Waiting for React
+  // would re-render the workspace and only paint on a later frame.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     let pinch: { distance: number; zoom: number } | null = null;
     let gestureZoom = 0;
+    let origin = { x: 0, y: 0 };
 
-    const apply = (next: number, origin: { x: number; y: number }) => {
+    const paint = (frame: PinchFrame & { stack: HTMLElement }) => {
+      frame.stack.style.transformOrigin = "0 0";
+      frame.stack.style.transform = pinchTransform(frame);
+    };
+
+    const begin = () => {
+      const existing = livePinch.current;
+      if (existing) return existing;
+      const stack = canvas.querySelector(".page-stack");
+      if (!(stack instanceof HTMLElement) || !stack.offsetWidth) return null;
+      const rect = stack.getBoundingClientRect();
+      const frame: PinchFrame & { stack: HTMLElement } = {
+        stack,
+        left: rect.left,
+        top: rect.top,
+        width: stack.offsetWidth,
+        height: stack.offsetHeight,
+        tx: 0,
+        ty: 0,
+        scale: zoomNow.current,
+      };
+      livePinch.current = frame;
+      gestureActive.current = true;
+      return frame;
+    };
+
+    const commit = () => {
+      if (pinchSettle.current) {
+        clearTimeout(pinchSettle.current);
+        pinchSettle.current = 0;
+      }
+      const frame = livePinch.current;
+      if (!frame) return;
+      const value = frame.scale;
+      const visual = pinchBox(frame);
+      livePinch.current = null;
+      gestureActive.current = false;
+      if (Math.abs(value - committedZoom.current) < 0.0005) {
+        frame.stack.style.transform = committedZoom.current === 1 ? "" : `scale(${committedZoom.current})`;
+        zoomNow.current = committedZoom.current;
+        return;
+      }
+      // Measure the anchor against the preview, then let React catch the scroll size up
+      // before paint, so the page doesn't jump when the live translate is dropped.
+      zoomNow.current = committedZoom.current;
+      flushSync(() => setZoomRef.current(value, origin, visual));
+    };
+
+    const settle = () => {
+      if (pinchSettle.current) clearTimeout(pinchSettle.current);
+      pinchSettle.current = window.setTimeout(commit, 80);
+    };
+
+    const apply = (next: number, point: { x: number; y: number }) => {
       const value = clampZoom(next);
       if (Math.abs(value - zoomNow.current) < 0.0005) return;
-      setZoomRef.current(value, origin);
+      const frame = begin();
+      if (!frame) {
+        setZoomRef.current(value, point);
+        return;
+      }
+      const stepped = stepPinch(frame, point, value);
+      frame.tx = stepped.tx;
+      frame.ty = stepped.ty;
+      frame.scale = stepped.scale;
+      paint(frame);
+      zoomNow.current = value;
+      origin = point;
     };
 
     const onWheel = (event: WheelEvent) => {
@@ -305,6 +401,7 @@ export function Workspace({ documentId }: { documentId: string }) {
       if (!event.cancelable) return;
       event.preventDefault();
       apply(zoomFromWheel(zoomNow.current, event.deltaY, event.deltaMode), { x: event.clientX, y: event.clientY });
+      settle();
     };
 
     const onGestureStart = (event: Event) => {
@@ -316,14 +413,20 @@ export function Workspace({ documentId }: { documentId: string }) {
       event.preventDefault();
       // A finger pinch is handled from the touch points; Safari also emits gesture events for it.
       if (pinch || !gestureZoom || !gesture.scale) return;
-      const box = canvas.getBoundingClientRect();
-      apply(gestureZoom * gesture.scale, {
-        x: gesture.clientX ?? box.left + box.width / 2,
-        y: gesture.clientY ?? box.top + box.height / 2,
-      });
+      let x = gesture.clientX;
+      let y = gesture.clientY;
+      if (x === undefined || y === undefined) {
+        const box = canvas.getBoundingClientRect();
+        x = box.left + box.width / 2;
+        y = box.top + box.height / 2;
+      }
+      apply(gestureZoom * gesture.scale, { x, y });
+      settle();
     };
     const onGestureEnd = () => {
+      const fromGesture = gestureZoom !== 0 && !pinch;
       gestureZoom = 0;
+      if (fromGesture) commit();
     };
 
     const onTouchStart = (event: TouchEvent) => {
@@ -335,9 +438,13 @@ export function Workspace({ documentId }: { documentId: string }) {
       if (event.cancelable) event.preventDefault();
       const points = Array.from(event.touches);
       apply(zoomFromPinch(pinch.zoom, pinch.distance, touchDistance(points)), touchMidpoint(points));
+      settle();
     };
     const onTouchEnd = (event: TouchEvent) => {
-      if (event.touches.length < 2) pinch = null;
+      if (event.touches.length >= 2) return;
+      const wasPinch = pinch !== null;
+      pinch = null;
+      if (wasPinch) commit();
     };
 
     canvas.addEventListener("wheel", onWheel, { passive: false, capture: true });
@@ -349,6 +456,7 @@ export function Workspace({ documentId }: { documentId: string }) {
     canvas.addEventListener("touchend", onTouchEnd);
     canvas.addEventListener("touchcancel", onTouchEnd);
     return () => {
+      if (pinchSettle.current) clearTimeout(pinchSettle.current);
       canvas.removeEventListener("wheel", onWheel, { capture: true });
       canvas.removeEventListener("gesturestart", onGestureStart as EventListener);
       canvas.removeEventListener("gesturechange", onGestureChange as EventListener);
