@@ -16,7 +16,8 @@ import { setCommentState } from "@/lib/editor/comments";
 import { syncDomSelection } from "@/lib/editor/domSync";
 import type { CanvasOutput } from "@/lib/doc/canvas";
 import { canvasPdfModel } from "@/lib/doc/canvasPdf";
-import type { PdfDocumentModel } from "@/lib/pdf/pdfWriter";
+import type { PdfDocumentModel, PdfImage } from "@/lib/pdf/pdfWriter";
+import { APPEARANCE_PAPER, screenshotPage, type PageAppearance } from "@/lib/pdf/screenAppearance";
 import { fitLinesNow } from "@/lib/editor/lineFit";
 import { closestFace, documentFonts, ensureFonts, fontData, loadDocumentFonts, type DocumentFont } from "@/lib/client/fonts";
 import { lineMetrics, primaryFamily } from "@/lib/doc/fontMetrics";
@@ -56,7 +57,7 @@ export type ClientCommand =
   | { kind: "download"; url: string; filename: string }
   | { kind: "dictionary"; words: string[] }
   /** Picture these pages (0-based) for Claude and post them to /api/documents/[id]/render (lib/server/renders.ts). */
-  | { kind: "render_pages"; requestId: string; pages: number[]; scale: number; span?: { first: string; last: string } }
+  | { kind: "render_pages"; requestId: string; pages: number[]; scale: number; span?: { first: string; last: string }; theme?: "light" | "dark" | "current" }
   /** Measure a page range and post it to /api/documents/[id]/fit (lib/server/fitMeasure.ts). */
   | { kind: "measure_fit"; requestId: string; fromPage: number; toPage: number };
 
@@ -196,19 +197,41 @@ function settleLayout(pages: () => number) {
   });
 }
 
-/** One page of a laid-out model, drawn the same way an open editor answers a screenshot. */
-async function rasterizeModelPage(model: PdfDocumentModel, index: number, scale: number): Promise<Blob | null> {
-  const page = model.pages[index];
-  if (!page) return null;
+/** Equation pictures are black on white. On a dark page, invert and screen them so the white becomes the paper. */
+async function paintInk(ctx: CanvasRenderingContext2D, images: PdfImage[], pixelsPerPoint: number) {
+  for (const item of images) {
+    try {
+      const bitmap = await createImageBitmap(new Blob([item.jpeg as Uint8Array<ArrayBuffer>], { type: "image/jpeg" }));
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.filter = "invert(1)";
+      ctx.globalCompositeOperation = "screen";
+      ctx.drawImage(bitmap, item.x * pixelsPerPoint, item.y * pixelsPerPoint, item.width * pixelsPerPoint, item.height * pixelsPerPoint);
+      ctx.restore();
+      bitmap.close();
+    } catch {
+      // A picture that can't be read stays off the dark page rather than as a white box.
+    }
+  }
+}
+
+/** One page of a laid-out model. `appearance` paints the app's light or dark page; the default is the print-colored light page. */
+async function rasterizeModelPage(model: PdfDocumentModel, index: number, scale: number, appearance: PageAppearance = "light"): Promise<Blob | null> {
+  const source = model.pages[index];
+  if (!source) return null;
+  const shot = screenshotPage(source, appearance);
   const [{ buildPdf }, { openPdf }] = await Promise.all([import("@/lib/pdf/pdfWriter"), import("@/lib/pdf/import/prepare")]);
-  const { pdf, close } = await openPdf(buildPdf({ ...model, pages: [page] }));
+  const { pdf, close } = await openPdf(buildPdf({ ...model, pages: [shot.page] }));
   try {
     const proxy = await pdf.getPage(1);
     const viewport = proxy.getViewport({ scale: Math.max(0.5, Math.min(4, scale || 2)) });
     const canvas = document.createElement("canvas");
     canvas.width = Math.ceil(viewport.width);
     canvas.height = Math.ceil(viewport.height);
-    await proxy.render({ canvasContext: canvas.getContext("2d")!, canvas, viewport, background: "#ffffff" } as Parameters<typeof proxy.render>[0]).promise;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    await proxy.render({ canvasContext: ctx, canvas, viewport, background: APPEARANCE_PAPER[appearance] } as Parameters<typeof proxy.render>[0]).promise;
+    if (shot.ink.length) await paintInk(ctx, shot.ink, viewport.scale);
     const png = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
     canvas.width = 0;
     canvas.height = 0;
@@ -216,6 +239,12 @@ async function rasterizeModelPage(model: PdfDocumentModel, index: number, scale:
   } finally {
     close();
   }
+}
+
+function screenshotAppearance(theme: "light" | "dark" | "current" | undefined): PageAppearance {
+  if (theme === "dark" || theme === "light") return theme;
+  if (theme === "current") return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+  return "light";
 }
 
 function randomClientId() {
@@ -398,7 +427,7 @@ export class DocumentSession {
    * of text, for Claude to compare with an imported PDF's pages; posted to the
    * server, which is waiting for them (lib/server/renders.ts).
    */
-  async answerRender(command: { requestId: string; pages: number[]; scale: number; span?: { first: string; last: string } }) {
+  async answerRender(command: { requestId: string; pages: number[]; scale: number; span?: { first: string; last: string }; theme?: "light" | "dark" | "current" }) {
     // The pages a run of blocks takes, as laid out for the picture (fonts, pictures and kept lines settled): the first of them is pictured.
     let span: { first: number; last: number } | null = null;
     const blocks: Array<{ id: string; top: number; bottom: number; joined?: boolean; inside?: number }>[] = [];
@@ -424,7 +453,7 @@ export class DocumentSession {
     for (const index of pages) {
       const page = model.pages[index];
       if (!page) continue;
-      const png = await rasterizeModelPage(model, index, command.scale);
+      const png = await rasterizeModelPage(model, index, command.scale, screenshotAppearance(command.theme));
       if (png) form.append(`page-${index}`, png, `page-${index}.png`);
       form.append(`lines-${index}`, JSON.stringify(pageLines(page)));
       form.append(`blocks-${index}`, JSON.stringify(blocks[index] ?? this.blocksOnPage(index)));
@@ -462,11 +491,11 @@ export class DocumentSession {
    * One page (0-based) as a PNG from the editor's own layout. `pages` is how
    * many pages that layout produced; `png` is null when `index` is past the end.
    */
-  async picturePage(index: number, scale = 1.5): Promise<{ pages: number; png: Blob | null }> {
+  async picturePage(index: number, scale = 1.5, appearance: PageAppearance = "light"): Promise<{ pages: number; png: Blob | null }> {
     const model = await this.pdfModel();
     const pages = model.pages.length;
     if (index < 0 || index >= pages) return { pages, png: null };
-    return { pages, png: await rasterizeModelPage(model, index, scale) };
+    return { pages, png: await rasterizeModelPage(model, index, scale, appearance) };
   }
 
   /**

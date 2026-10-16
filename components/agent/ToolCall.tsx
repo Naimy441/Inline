@@ -135,7 +135,9 @@ export function describeTool(part: ToolPart): Described {
     }
     case "screenshot_page": {
       const page = input.page ?? field("page");
-      return { icon: <ImageIcon size={14} />, verb: "Looked at", target: page ? `page ${page}` : "a page", live: "Looking at" };
+      const theme = input.theme ?? field("theme");
+      const look = theme === "light" || theme === "dark" ? ` (${theme})` : "";
+      return { icon: <ImageIcon size={14} />, verb: "Looked at", target: page ? `page ${page}${look}` : `a page${look}`, live: "Looking at" };
     }
     case "format_text":
       return { icon: <Paintbrush size={14} />, verb: "Formatted", target: str(field("text"), 48) ? `“${str(field("text"), 48)}”` : "text", live: "Formatting" };

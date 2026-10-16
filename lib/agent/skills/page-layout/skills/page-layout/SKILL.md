@@ -13,7 +13,7 @@ Do not change the author's wording to solve a layout problem unless spacing, bre
 
 1. read_document (the open document may already be in the message) and get_page_count. get_page_count says how many pages there are, where each page starts, and how full the last page is. Use that before guessing.
 2. get_document_settings when the default font, size, line spacing or paragraph spacing matters.
-3. screenshot_page when the picture is the right signal. It shows one page as the editor lays it out (page is 1-based), including when that document is not open. Markdown hides fonts and most spacing, and it cannot show a crowded table, an image that overflows, or a gap you can only see. After you change a page you judged from a picture, screenshot that page again.
+3. screenshot_page when the picture is the right signal. It shows one page as the editor lays it out (page is 1-based), including when that document is not open, in the light or dark appearance the user is using. Pass theme light or dark when you need the other one. Markdown hides fonts and most spacing, and it cannot show a crowded table, an image that overflows, or a gap you can only see. After you change a page you judged from a picture, screenshot that page again.
 
 Skip a screenshot when get_page_count already answers the question (for example how full the last page is) and you do not need to see how the page looks.
 

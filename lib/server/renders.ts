@@ -32,8 +32,8 @@ const waiting = new Map<string, Waiting>();
 
 export class RenderUnavailableError extends Error {}
 
-/** Ask the open editor for pictures of these pages (0-based), at `scale` pixels per point. */
-export function requestPageRenders(doc: LiveDocument, pages: number[], options: { scale?: number; timeoutMs?: number; span?: { first: string; last: string } } = {}): Promise<RenderedPage[]> {
+/** Ask the open editor for pictures of these pages (0-based), at `scale` pixels per point. `theme` asks for the app's light or dark appearance; PDF comparisons leave it off and stay print-colored. */
+export function requestPageRenders(doc: LiveDocument, pages: number[], options: { scale?: number; timeoutMs?: number; span?: { first: string; last: string }; theme?: "light" | "dark" | "current" } = {}): Promise<RenderedPage[]> {
   const requestId = randomUUID();
   return new Promise<RenderedPage[]>((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -42,7 +42,7 @@ export function requestPageRenders(doc: LiveDocument, pages: number[], options: 
     }, options.timeoutMs ?? 45_000);
     timer.unref?.();
     waiting.set(requestId, { documentId: doc.id, resolve, timer });
-    const viewers = doc.sendCommand({ kind: "render_pages", requestId, pages, scale: options.scale ?? 2, ...(options.span ? { span: options.span } : {}) });
+    const viewers = doc.sendCommand({ kind: "render_pages", requestId, pages, scale: options.scale ?? 2, ...(options.span ? { span: options.span } : {}), ...(options.theme ? { theme: options.theme } : {}) });
     if (!viewers) {
       clearTimeout(timer);
       waiting.delete(requestId);

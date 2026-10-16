@@ -1289,6 +1289,7 @@ describe("screenshot_page", () => {
       assert.equal(result.isError, undefined, result.text);
       assert.match(result.text, /Page 1 of 3 of "Field notes"/);
       assert.match(result.text, /no editor open/);
+      assert.match(result.text, /appearance/);
       assert.equal(result.images?.length, 1);
       assert.equal(result.images?.[0]?.mimeType, "image/png");
       assert.equal(result.images?.[0]?.data, Buffer.from(png).toString("base64"));
@@ -1331,16 +1332,64 @@ describe("screenshot_page", () => {
       if (event.type !== "command" || event.command.kind !== "render_pages") return;
       assert.deepEqual(event.command.pages, [1]);
       assert.equal(event.command.scale, 1.5);
+      assert.equal(event.command.theme, "current");
       deliverPageRenders(doc.id, event.command.requestId, [{ page: 1, png }]);
     });
     try {
       const result = await runTool("screenshot_page", { page: 2 }, ctx);
       assert.equal(result.isError, undefined, result.text);
       assert.match(result.text, /Page 2 of 2 of "Field notes"/);
+      assert.match(result.text, /appearance the user is using/);
       assert.match(result.text, /Look at the picture, then fix/);
       assert.equal(result.images?.length, 1);
       assert.equal(result.images?.[0]?.mimeType, "image/png");
       assert.equal(result.images?.[0]?.data, Buffer.from(png).toString("base64"));
+    } finally {
+      stop();
+    }
+  });
+
+  test("a closed document uses the saved appearance, and an explicit theme overrides it", async () => {
+    const { doc, ctx } = await setup();
+    const { setClosedDocumentRenderer } = await import("@/lib/server/headlessPage");
+    const { setSavedAppearance } = await import("@/lib/server/appearance");
+    setSavedAppearance("dark");
+    const seen: string[] = [];
+    setClosedDocumentRenderer(doc.id, async (_target, _page, appearance) => {
+      seen.push(appearance);
+      return { png, pages: 1 };
+    });
+    try {
+      const saved = await runTool("screenshot_page", { page: 1 }, ctx);
+      assert.equal(saved.isError, undefined, saved.text);
+      assert.match(saved.text, /dark appearance/);
+      assert.match(saved.text, /no editor open/);
+      const asked = await runTool("screenshot_page", { page: 1, theme: "light" }, ctx);
+      assert.equal(asked.isError, undefined, asked.text);
+      assert.match(asked.text, /light appearance/);
+      const dark = await runTool("screenshot_page", { page: 1, theme: "dark" }, ctx);
+      assert.match(dark.text, /dark appearance/);
+      assert.deepEqual(seen, ["dark", "light", "dark"]);
+    } finally {
+      setSavedAppearance(null);
+      setClosedDocumentRenderer(doc.id, null);
+    }
+  });
+
+  test("an open editor is asked for the appearance Claude names", async () => {
+    const { doc, ctx } = await setup();
+    const { deliverPageRenders } = await import("@/lib/server/renders");
+    doc.setLayout({ version: doc.version, pages: 1, starts: [], lastPageFill: 0.4 });
+    const stop = doc.subscribe((event) => {
+      if (event.type !== "command" || event.command.kind !== "render_pages") return;
+      assert.equal(event.command.theme, "light");
+      deliverPageRenders(doc.id, event.command.requestId, [{ page: 0, png }]);
+    });
+    try {
+      const result = await runTool("screenshot_page", { page: 1, theme: "light" }, ctx);
+      assert.equal(result.isError, undefined, result.text);
+      assert.match(result.text, /light appearance/);
+      assert.match(result.text, /as the editor lays it out/);
     } finally {
       stop();
     }

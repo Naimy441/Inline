@@ -17,10 +17,10 @@ async function connect(baseURL: string) {
   return client;
 }
 
-async function screenshot(baseURL: string, documentId: string, page: number): Promise<Shot> {
+async function screenshot(baseURL: string, documentId: string, page: number, theme?: "light" | "dark"): Promise<Shot> {
   const client = await connect(baseURL);
   try {
-    const result = await client.callTool({ name: "screenshot_page", arguments: { document_id: documentId, page } });
+    const result = await client.callTool({ name: "screenshot_page", arguments: { document_id: documentId, page, ...(theme ? { theme } : {}) } });
     const content = (result.content ?? []) as Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
     const image = content.find((item) => item.type === "image" && item.mimeType === "image/png" && item.data);
     return {
@@ -110,9 +110,9 @@ test("a closed document's first page and a later page are pictures of the laid-o
     ["PAGEONE opens the first page of this closed document.", "", "The first page has a second sentence so the picture is not a single word.", "", "\\pagebreak", "", "PAGETWO opens the later page.", "", "The later page has its own paragraph under that line."].join("\n"),
   );
 
-  const first = await screenshot(baseURL!, id, 1);
-  const second = await screenshot(baseURL!, id, 2);
-  const missing = await screenshot(baseURL!, id, 9);
+  const first = await screenshot(baseURL!, id, 1, "light");
+  const second = await screenshot(baseURL!, id, 2, "light");
+  const missing = await screenshot(baseURL!, id, 9, "light");
   expect(first.isError, first.text).toBe(false);
   expect(second.isError, second.text).toBe(false);
   expect(first.text).toMatch(/Page 1 of 2/);
@@ -143,4 +143,110 @@ test("a closed document's first page and a later page are pictures of the laid-o
   expect(missing.text).toMatch(/2 pages/);
   expect(missing.text).toMatch(/Pass a page from 1 to 2/);
   expect(missing.png).toBeNull();
+});
+
+/** Average color of the margin, and how much light or dark ink sits in the text. */
+async function paper(page: Page, png: Buffer) {
+  return page.evaluate(async (base64) => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${base64}`;
+    await image.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("no canvas");
+    ctx.drawImage(image, 0, 0);
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    const at = (x: number, y: number) => {
+      const i = (y * canvas.width + x) * 4;
+      return { r: data[i]!, g: data[i + 1]!, b: data[i + 2]! };
+    };
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    let n = 0;
+    for (let y = 8; y < 48; y += 2) {
+      for (let x = 8; x < 48; x += 2) {
+        const pixel = at(x, y);
+        r += pixel.r;
+        g += pixel.g;
+        b += pixel.b;
+        n += 1;
+      }
+    }
+    let lightInk = 0;
+    let darkInk = 0;
+    for (let y = 150; y < 320; y += 2) {
+      for (let x = 150; x < canvas.width - 150; x += 3) {
+        const pixel = at(x, y);
+        if (pixel.r > 180 && pixel.g > 180 && pixel.b > 170) lightInk += 1;
+        if (pixel.r < 40 && pixel.g < 40 && pixel.b < 40) darkInk += 1;
+      }
+    }
+    return { r: r / n, g: g / n, b: b / n, lightInk, darkInk, width: canvas.width, height: canvas.height };
+  }, png.toString("base64"));
+}
+
+function expectDarkPage(sample: { r: number; g: number; b: number; lightInk: number; darkInk: number }) {
+  expect(sample.r).toBeGreaterThan(20);
+  expect(sample.r).toBeLessThan(70);
+  expect(sample.g).toBeLessThan(70);
+  expect(sample.b).toBeLessThan(70);
+  expect(sample.lightInk).toBeGreaterThan(20);
+}
+
+function expectLightPage(sample: { r: number; g: number; b: number; lightInk: number; darkInk: number }) {
+  expect(sample.r).toBeGreaterThan(240);
+  expect(sample.g).toBeGreaterThan(240);
+  expect(sample.b).toBeGreaterThan(240);
+  expect(sample.darkInk).toBeGreaterThan(20);
+}
+
+test("a dark-mode user gets a dark page, including one that is not open, unless light is asked for", async ({ page, request, baseURL }) => {
+  test.setTimeout(180_000);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Dark theme" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect.poll(async () => ((await (await request.get("/api/preferences")).json()) as { preferences: { appearance?: string } }).preferences.appearance).toBe("dark");
+
+  const closed = await createDocument(request, ["A closed document pictured for a dark-mode user.", "", "The paragraph is long enough that the picture has a line of text to see."].join("\n"));
+  const dark = await screenshot(baseURL!, closed, 1);
+  const light = await screenshot(baseURL!, closed, 1, "light");
+  const again = await screenshot(baseURL!, closed, 1, "dark");
+  expect(dark.isError, dark.text).toBe(false);
+  expect(dark.text).toMatch(/no editor open/);
+  expect(dark.text).toMatch(/dark appearance/);
+  expect(light.text).toMatch(/light appearance/);
+  expect(light.text).toMatch(/no editor open/);
+  expect(again.text).toMatch(/dark appearance/);
+  expectDarkPage(await paper(page, dark.png!));
+  expectLightPage(await paper(page, light.png!));
+  expectDarkPage(await paper(page, again.png!));
+
+  const openId = await createDocument(request, ["An open document pictured in the appearance the user is using.", "", "This line keeps the page from being a single word."].join("\n"));
+  const live = page.waitForResponse((res) => res.url().includes(`/api/documents/${openId}/events`) && res.ok());
+  await page.goto(`/d/${openId}`);
+  await live;
+  await expect(page.locator(".doc-content")).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  const openDark = await screenshot(baseURL!, openId, 1);
+  const openLight = await screenshot(baseURL!, openId, 1, "light");
+  expect(openDark.isError, openDark.text).toBe(false);
+  expect(openDark.text).toMatch(/as the editor lays it out/);
+  expect(openDark.text).not.toMatch(/no editor open/);
+  expect(openDark.text).toMatch(/appearance the user is using/);
+  expect(openLight.text).toMatch(/light appearance/);
+  expectDarkPage(await paper(page, openDark.png!));
+  expectLightPage(await paper(page, openLight.png!));
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Light theme" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect.poll(async () => ((await (await request.get("/api/preferences")).json()) as { preferences: { appearance?: string } }).preferences.appearance).toBe("light");
+  const closedLight = await screenshot(baseURL!, closed, 1);
+  expect(closedLight.isError, closedLight.text).toBe(false);
+  expect(closedLight.text).toMatch(/no editor open/);
+  expect(closedLight.text).toMatch(/light appearance/);
+  expectLightPage(await paper(page, closedLight.png!));
 });

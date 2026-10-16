@@ -8,6 +8,8 @@ const Preferences = z
   .object({
     /** The "bring your Google Docs" tip on the home page. */
     googleImportDismissed: z.boolean().optional(),
+    /** The app's light or dark appearance, so a closed document can be pictured the way the user looks at pages. */
+    appearance: z.enum(["light", "dark"]).optional(),
   })
   .strict();
 
