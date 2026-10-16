@@ -36,6 +36,7 @@ import { normalizeWord } from "@/lib/doc/words";
 import { cleanAiTellText, findAiSymbols, formatCleanSummary, formatWriteCheck, mergeSymbolHits, stripInvisible, type AiSymbolHit } from "@/lib/writing/aiTells";
 import { detectAiTropes } from "@/lib/writing/tropes";
 import { describePageStarts, pageCount, pageCountNow } from "@/lib/agent/pages";
+import { PageOutOfRangeError, renderClosedDocumentPage } from "@/lib/server/headlessPage";
 import { RenderUnavailableError, requestPageRenders } from "@/lib/server/renders";
 import { FOLDER_COLORS } from "@/lib/doc/folders";
 import { createFolder, deleteFolder, FolderError, folderPathName, updateFolder } from "@/lib/server/folders";
@@ -621,7 +622,7 @@ export const TOOLS = [
     name: "screenshot_page",
     title: "Screenshot page",
     description:
-      "A picture of one page as the user's editor lays it out (the way it would print), so you can see layout the Markdown does not show: a crowded or split table, an image that is too big, uneven spacing, a stray font, or a last page with only a line or two. Home-page thumbnails are only a small picture of the first page; this is the page itself. Needs the document open in Inline. Page numbers are 1-based.\n\n" +
+      "A picture of one page as the editor lays it out (the way it would print), so you can see layout the Markdown does not show: a crowded or split table, an image that is too big, uneven spacing, a stray font, or a last page with only a line or two. Home-page thumbnails are only a small picture of the first page; this is the page itself. Page numbers are 1-based. If the document is open, the picture comes from that editor. If it is not, the page is laid out the same way with no window open.\n\n" +
       "Use it when the user wants the document to look good and the picture is the right signal. get_page_count is enough for how many pages there are and how full the last page is. After you change a page you judged from a picture, call screenshot_page again.",
     shape: {
       document_id: documentId,
@@ -637,12 +638,30 @@ export const TOOLS = [
       }
       const start = args.page <= 1 ? 0 : count.starts?.[args.page - 2];
       const end = count.starts?.[args.page - 1];
+      const open = doc.subscriberCount > 0;
+      // A range draws a caret in the editor. Skip it when the only viewer will be the headless layout, so the caret doesn't change the page.
       showActivity(ctx, doc, {
         chatId: ctx.author,
         status: "reading",
         label: `Looking at page ${args.page}`,
-        ...(count.measured && start !== undefined ? { range: { from: start, to: Math.max(start + 1, end ?? doc.doc.content.size) } } : {}),
+        ...(open && count.measured && start !== undefined ? { range: { from: start, to: Math.max(start + 1, end ?? doc.doc.content.size) } } : {}),
       });
+      if (!open) {
+        try {
+          const shot = await renderClosedDocumentPage(doc, args.page);
+          return {
+            text: [
+              `Page ${args.page} of ${shot.pages} of "${doc.meta.title}" (id ${doc.id}), laid out with no editor open.`,
+              "The picture is that page as the editor would lay it out, including spacing, fonts, images and where a table or heading breaks.",
+              "Look at the picture, then fix the document. Markdown does not show fonts or most spacing.",
+            ].join("\n"),
+            images: [{ data: Buffer.from(shot.png).toString("base64"), mimeType: "image/png" }],
+          };
+        } catch (error) {
+          if (error instanceof PageOutOfRangeError) return fail(error.message);
+          return fail(error instanceof Error ? error.message : "Couldn't picture the page.");
+        }
+      }
       let rendered;
       try {
         rendered = await requestPageRenders(doc, [args.page - 1], { scale: 1.5 });

@@ -1231,12 +1231,42 @@ describe("screenshot_page", () => {
   /** A 1×1 PNG. The editor posts real page pictures; the tool only needs bytes it can hand to Claude. */
   const png = Uint8Array.from(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"));
 
-  test("needs the document open in an editor", async () => {
-    const { ctx } = await setup();
-    const result = await runTool("screenshot_page", { page: 1 }, ctx);
-    assert.equal(result.isError, true);
-    assert.match(result.text, /open/);
-    assert.equal(result.images, undefined);
+  test("pictures a closed document without an editor", async () => {
+    const { doc, ctx } = await setup();
+    const { setClosedDocumentRenderer } = await import("@/lib/server/headlessPage");
+    setClosedDocumentRenderer(doc.id, async (target, page) => {
+      assert.equal(target.id, doc.id);
+      assert.equal(page, 1);
+      return { png, pages: 3 };
+    });
+    try {
+      const result = await runTool("screenshot_page", { page: 1 }, ctx);
+      assert.equal(result.isError, undefined, result.text);
+      assert.match(result.text, /Page 1 of 3 of "Field notes"/);
+      assert.match(result.text, /no editor open/);
+      assert.equal(result.images?.length, 1);
+      assert.equal(result.images?.[0]?.mimeType, "image/png");
+      assert.equal(result.images?.[0]?.data, Buffer.from(png).toString("base64"));
+    } finally {
+      setClosedDocumentRenderer(doc.id, null);
+    }
+  });
+
+  test("a closed document refuses a page past the laid-out count", async () => {
+    const { doc, ctx } = await setup();
+    const { PageOutOfRangeError, setClosedDocumentRenderer } = await import("@/lib/server/headlessPage");
+    setClosedDocumentRenderer(doc.id, async () => {
+      throw new PageOutOfRangeError("Field notes", 2, 5);
+    });
+    try {
+      const result = await runTool("screenshot_page", { page: 5 }, ctx);
+      assert.equal(result.isError, true);
+      assert.match(result.text, /"Field notes" is 2 pages/);
+      assert.match(result.text, /Pass a page from 1 to 2/);
+      assert.equal(result.images, undefined);
+    } finally {
+      setClosedDocumentRenderer(doc.id, null);
+    }
   });
 
   test("refuses a page the editor has already measured past the end", async () => {
