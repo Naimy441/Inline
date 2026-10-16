@@ -2268,6 +2268,201 @@ button.status-item:hover {
   }
 }
 
+/* The word toolbar is not a grid item while it is hidden, so the template
+   drops that row. Leaving it in place stretched the status bar over the canvas. */
+.workspace.is-canvas {
+  grid-template-rows: var(--titlebar-h) minmax(0, 1fr) var(--statusbar-h);
+}
+
+.workspace.is-canvas .toolbar {
+  display: none;
+}
+
+.page-stack-slot.is-canvas-hidden {
+  display: none;
+}
+
+.canvas-doc {
+  width: min(820px, calc(100% - 48px));
+  margin: 28px auto 64px;
+  padding: 36px 40px 48px;
+  background: var(--paper);
+  color: var(--paper-text);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--paper-shadow);
+}
+
+.canvas-section + .canvas-section {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.canvas-section-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.canvas-section-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 32px;
+  margin-top: 2px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.canvas-section-toggle:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.canvas-section.is-closed .canvas-section-toggle svg {
+  transform: none;
+}
+
+.canvas-section:not(.is-closed) .canvas-section-toggle svg {
+  transform: rotate(90deg);
+}
+
+.canvas-heading {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 22px;
+  font-weight: 650;
+  line-height: 1.3;
+  outline: none;
+}
+
+.canvas-heading:focus {
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.canvas-region {
+  margin: 14px 0;
+}
+
+.canvas-region-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.canvas-mode {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--bg-sunken);
+}
+
+.canvas-mode button {
+  border: 0;
+  border-radius: 999px;
+  padding: 3px 10px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.canvas-mode button.is-on {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+.canvas-lang select,
+.canvas-run {
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.canvas-lang select {
+  padding: 0 8px;
+}
+
+.canvas-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.canvas-run:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.canvas-text {
+  min-height: 1.5em;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 16px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  outline: none;
+}
+
+.canvas-text:focus {
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.canvas-layout {
+  padding: 2px 6px;
+}
+
+.canvas-code {
+  display: block;
+  width: 100%;
+  min-height: 88px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.canvas-output {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  white-space: pre-wrap;
+}
+
+.canvas-output.is-error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 /* Other tabs laid out for a PDF of the whole document: never seen. */
 .offscreen-pages {
   position: fixed;

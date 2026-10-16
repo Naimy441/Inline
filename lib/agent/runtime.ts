@@ -485,7 +485,7 @@ class ChatRuntime {
   }
 
   /** The document version Claude last saw in full (sent with a message), so an unchanged document isn't sent again. */
-  private listed: { id: string; version: number } | null = null;
+  private listed: { id: string; version: number; canvas: number } | null = null;
 
   /**
    * The reason to stop when the plan usage is at or past the user's limit,
@@ -532,6 +532,7 @@ class ChatRuntime {
       } else {
         context.push(`Open document: "${doc.meta.title}" (id ${doc.id}).`);
       }
+      if (doc.meta.kind === "canvas") context.push("It is a canvas. read_document shows its HTML. Edit that HTML. data-canvas-text stays editable by the user. data-canvas-layout is structure. data-canvas-cell is a notebook cell; run_notebook_cell runs it inside this canvas only.");
       const root = doc.meta.parentId ? await documentHub().get(doc.meta.parentId) : doc;
       if (root?.meta.folderId) {
         const folders = new Map((await listFolders()).map((folder) => [folder.id, folder]));
@@ -553,11 +554,11 @@ class ChatRuntime {
       if (suggestions) context.push(`The user has ${suggestions} pending suggestion${suggestions === 1 ? "" : "s"} of their own (suggesting mode).`);
       if (doc.editorMode !== "editing") context.push(`The user's editor is in ${doc.editorMode} mode.`);
       // Small documents come with the message, saving Claude a read_document round trip before it can edit.
-      if (!this.listed || this.listed.id !== doc.id || this.listed.version !== doc.version) {
+      if (!this.listed || this.listed.id !== doc.id || this.listed.version !== doc.version || this.listed.canvas !== doc.canvasRevision) {
         const listing = documentListing(doc);
         if (listing) {
           context.push(`The document as read_document would return it now (no need to read it again before editing, unless it changes):\n<document>\n${listing}\n</document>`);
-          this.listed = { id: doc.id, version: doc.version };
+          this.listed = { id: doc.id, version: doc.version, canvas: doc.canvasRevision };
         }
       } else {
         context.push("The document hasn't changed since you last saw it in full.");

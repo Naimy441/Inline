@@ -2,6 +2,7 @@ import { Node as PMNode } from "prosemirror-model";
 import { Step, Transform } from "prosemirror-transform";
 import { docPlainText, docWordCount, openingLine, rangeMarkTexts, wordCount } from "@/lib/doc/editing";
 import { blockIdFixes, ensureBlockIds, newId } from "@/lib/doc/ids";
+import { canvasToMarkdown, normalizeCanvasHtml, normalizeStoredCanvas, pageToCanvasHtml, sameProjection, starterCanvasHtml, type CanvasFile, type CanvasOutput } from "@/lib/doc/canvas";
 import { markdownToDoc } from "@/lib/doc/markdown";
 import { acceptHunks, hunkFromJSON, hunkToJSON, mapHunks, recordAgentChange, rejectHunks, USER_AUTHOR, type Hunk, type HunkJSON } from "@/lib/doc/review";
 import { emptyDoc, schema } from "@/lib/doc/schema";
@@ -89,6 +90,7 @@ export type HubEvent =
   | { type: "command"; command: ClientCommand }
   | { type: "tabs"; tabs: DocumentTab[] }
   | { type: "draft"; draft: { updatedAt: number; words: number } | null }
+  | { type: "canvas"; html: string; outputs: Record<string, CanvasOutput> }
   | { type: "deleted" };
 
 export type DocumentSnapshot = {
@@ -100,6 +102,8 @@ export type DocumentSnapshot = {
   comments: DocComment[];
   hunks: HunkJSON[];
   activity: AgentActivity | null;
+  /** The canvas HTML, when this document is or has been a canvas. */
+  canvas: { html: string; outputs: Record<string, CanvasOutput> } | null;
 };
 
 export type ClientSelection = { from: number; to: number; version: number; at: number };
@@ -142,6 +146,10 @@ export class LiveDocument {
   private layoutWaiters = new Set<() => void>();
   /** The mode the user's editor is in, so Claude knows whether they're suggesting or only viewing. */
   editorMode: "editing" | "suggesting" | "viewing" = "editing";
+  /** The canvas source. Null for a page that has never been a canvas. */
+  canvas: CanvasFile | null = null;
+  /** Bumped on every canvas write so the agent refetches HTML that didn't change the page projection. */
+  canvasRevision = 0;
   /** What the user did outside Claude's replies (restored a version, undid Claude's changes), told to Claude with the next message. */
   userEvents: Array<{ at: number; text: string }> = [];
   private log: Array<{ step: Step; clientID: string }> = [];
@@ -154,6 +162,7 @@ export class LiveDocument {
 
   constructor(file: StoredDocumentFile) {
     this.meta = file.meta;
+    this.canvas = normalizeStoredCanvas(file.canvas);
     this.doc = loadDoc(file.doc);
     this.comments = Array.isArray(file.comments) ? file.comments : [];
     this.hunks = (file.hunks ?? []).flatMap((json) => {
@@ -179,6 +188,7 @@ export class LiveDocument {
       comments: this.comments,
       hunks: this.hunksJSON(),
       activity: this.activity,
+      canvas: this.canvas ? { html: this.canvas.html, outputs: this.canvas.outputs } : null,
     };
   }
 
@@ -570,6 +580,22 @@ export class LiveDocument {
       this.schedulePersist();
     }
     this.dirtySinceRewind = true;
+    const wasCanvas = this.meta.kind === "canvas";
+    const restoredCanvas = normalizeStoredCanvas(version.canvas);
+    if (restoredCanvas) {
+      this.canvas = restoredCanvas;
+      this.meta = { ...this.meta, kind: "canvas" };
+    } else if (wasCanvas) {
+      const { kind: _kind, ...rest } = this.meta;
+      this.meta = rest;
+      this.canvas = null;
+    }
+    if (restoredCanvas || wasCanvas) {
+      this.canvasRevision += 1;
+      this.emit({ type: "meta", meta: this.meta });
+      if (this.canvas) this.emit({ type: "canvas", html: this.canvas.html, outputs: this.canvas.outputs });
+      this.schedulePersist();
+    }
     return version;
   }
 
@@ -661,7 +687,69 @@ export class LiveDocument {
   }
 
   toFile(): StoredDocumentFile {
-    return { format: 3, meta: this.meta, doc: this.doc.toJSON(), comments: this.comments, hunks: this.hunksJSON() };
+    return { format: 3, meta: this.meta, doc: this.doc.toJSON(), comments: this.comments, hunks: this.hunksJSON(), ...(this.canvas ? { canvas: this.canvas } : {}) };
+  }
+
+  /** Replace the canvas HTML and keep the page projection in step with its text. */
+  setCanvas(html: string) {
+    const normalized = normalizeCanvasHtml(html);
+    const projection = canvasToMarkdown(normalized);
+    this.canvas = { html: normalized, outputs: this.canvas?.outputs ?? {}, projection };
+    this.canvasRevision += 1;
+    this.projectCanvas(projection);
+    this.meta = { ...this.meta, kind: "canvas", updatedAt: Date.now() };
+    this.emit({ type: "canvas", html: normalized, outputs: this.canvas.outputs });
+    this.emit({ type: "meta", meta: this.meta });
+    this.dirtySinceRewind = true;
+    this.schedulePersist();
+  }
+
+  setCellOutput(cellId: string, output: CanvasOutput) {
+    if (!this.canvas) return;
+    this.canvas = { ...this.canvas, outputs: { ...this.canvas.outputs, [cellId]: output } };
+    this.canvasRevision += 1;
+    this.emit({ type: "canvas", html: this.canvas.html, outputs: this.canvas.outputs });
+    this.dirtySinceRewind = true;
+    this.schedulePersist();
+  }
+
+  /** Turn a page into a canvas, or a canvas back into a page. */
+  setKind(kind: "page" | "canvas") {
+    const current = this.meta.kind === "canvas" ? "canvas" : "page";
+    if (current === kind) return;
+    if (kind === "canvas") {
+      const reuse = Boolean(this.canvas && sameProjection(this.doc, this.canvas.projection));
+      const html = normalizeCanvasHtml(reuse && this.canvas ? this.canvas.html : pageToCanvasHtml(this.doc));
+      const projection = canvasToMarkdown(html);
+      this.canvas = { html, outputs: this.canvas?.outputs ?? {}, projection };
+      this.meta = { ...this.meta, kind: "canvas", updatedAt: Date.now() };
+      if (!reuse) this.projectCanvas(projection);
+    } else if (this.canvas) {
+      this.projectCanvas(canvasToMarkdown(this.canvas.html));
+      const { kind: _kind, ...rest } = this.meta;
+      this.meta = { ...rest, updatedAt: Date.now() };
+    } else {
+      const { kind: _kind, ...rest } = this.meta;
+      this.meta = { ...rest, updatedAt: Date.now() };
+    }
+    this.canvasRevision += 1;
+    this.emit({ type: "meta", meta: this.meta });
+    if (this.canvas) this.emit({ type: "canvas", html: this.canvas.html, outputs: this.canvas.outputs });
+    this.dirtySinceRewind = true;
+    this.schedulePersist();
+  }
+
+  private projectCanvas(projection: string) {
+    let next: PMNode;
+    try {
+      next = ensureBlockIds(projection.trim() ? markdownToDoc(projection) : emptyDoc());
+    } catch {
+      next = ensureBlockIds(emptyDoc());
+    }
+    if (next.eq(this.doc)) return;
+    const tr = new Transform(this.doc);
+    tr.replaceWith(0, this.doc.content.size, next.content);
+    this.applyTransform(tr, { kind: "system", label: "canvas" });
   }
 
   markDeleted() {
@@ -727,6 +815,12 @@ export type CreateDocumentInput = {
   tabTitle?: string;
   /** The folder to file the new document in. */
   folderId?: string | null;
+  /** "canvas" starts an HTML canvas instead of a word-processor page. */
+  kind?: "page" | "canvas";
+  /** Initial canvas HTML. Ignored unless kind is canvas. */
+  html?: string;
+  /** A canvas to copy, including notebook output. */
+  canvas?: CanvasFile;
 };
 
 /** When the last document was created, so creation times never tie (see create). */
@@ -774,7 +868,13 @@ class DocumentHub {
     const now = Math.max(Date.now(), lastCreatedAt + 1);
     lastCreatedAt = now;
     let doc: PMNode;
-    if (input.doc) doc = loadDoc(input.doc);
+    let canvas: CanvasFile | undefined = input.canvas;
+    if (input.kind === "canvas") {
+      const html = normalizeCanvasHtml(input.html?.trim() || input.canvas?.html || (input.markdown?.trim() ? pageToCanvasHtml(ensureBlockIds(markdownToDoc(input.markdown))) : starterCanvasHtml()));
+      const projection = canvasToMarkdown(html);
+      doc = ensureBlockIds(projection.trim() ? markdownToDoc(projection) : emptyDoc());
+      canvas = { html, outputs: input.canvas?.outputs ?? {}, projection };
+    } else if (input.doc) doc = loadDoc(input.doc);
     else if (input.markdown?.trim()) doc = ensureBlockIds(markdownToDoc(input.markdown));
     else doc = ensureBlockIds(emptyDoc());
     const text = docPlainText(doc);
@@ -792,8 +892,9 @@ class DocumentHub {
       ...(input.parentId ? { parentId: input.parentId } : {}),
       ...(input.tabTitle ? { tabTitle: cleanTabTitle(input.tabTitle) } : {}),
       ...(input.folderId && !input.parentId ? { folderId: input.folderId } : {}),
+      ...(input.kind === "canvas" ? { kind: "canvas" as const } : {}),
     };
-    const live = new LiveDocument({ format: 3, meta, doc: doc.toJSON(), comments: input.comments ?? [], hunks: [] });
+    const live = new LiveDocument({ format: 3, meta, doc: doc.toJSON(), comments: input.comments ?? [], hunks: [], ...(canvas ? { canvas } : {}) });
     this.adopt(live);
     this.open.set(meta.id, live);
     await writeDocumentFile(live.toFile());
@@ -935,13 +1036,16 @@ class DocumentHub {
       doc: source.doc.toJSON(),
       settings: source.meta.settings,
       folderId: source.meta.folderId,
+      kind: source.meta.kind === "canvas" ? "canvas" : undefined,
+      html: source.canvas?.html,
+      canvas: source.canvas ?? undefined,
     });
     if (source.meta.tabTitle) copy.setTabMeta({ tabTitle: source.meta.tabTitle });
     if (tabs.length > 1) {
       const order: string[] = [];
       for (const tab of tabs) {
         if (tab === source) order.push(copy.id);
-        else order.push((await this.create({ title: copy.meta.title, doc: tab.doc.toJSON(), settings: tab.meta.settings, parentId: copy.id, tabTitle: tab.meta.tabTitle })).id);
+        else order.push((await this.create({ title: copy.meta.title, doc: tab.doc.toJSON(), settings: tab.meta.settings, parentId: copy.id, tabTitle: tab.meta.tabTitle, kind: tab.meta.kind === "canvas" ? "canvas" : undefined, html: tab.canvas?.html, canvas: tab.canvas ?? undefined })).id);
       }
       copy.setTabMeta({ tabs: order });
     }
@@ -1028,10 +1132,15 @@ function normalizeFile(file: StoredDocumentFile): StoredDocumentFile {
         const pdfImport = normalizePdfImportMeta(meta.pdfImport);
         return pdfImport ? { pdfImport } : {};
       })(),
+      ...(meta.kind === "canvas" ? { kind: "canvas" as const } : {}),
     },
     doc: file.doc,
     comments: Array.isArray(file.comments) ? file.comments : [],
     hunks: Array.isArray(file.hunks) ? file.hunks : [],
+    ...(() => {
+      const canvas = normalizeStoredCanvas(file.canvas);
+      return canvas ? { canvas } : {};
+    })(),
   };
 }
 

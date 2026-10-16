@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import type { CanvasFile } from "@/lib/doc/canvas";
 import type { HunkJSON } from "@/lib/doc/review";
 import type { DocComment, DocumentMeta } from "@/lib/doc/settings";
 
@@ -19,6 +20,8 @@ export type StoredDocumentFile = {
   doc: unknown;
   comments: DocComment[];
   hunks: HunkJSON[];
+  /** Set when the document is, or has been, a canvas. */
+  canvas?: CanvasFile;
 };
 
 export function dataDir() {

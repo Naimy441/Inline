@@ -89,6 +89,22 @@
   .doc-content .page-break::before {
     display: none;
   }
+
+  .page-stack-slot.is-canvas-hidden,
+  .canvas-region-tools,
+  .canvas-section-toggle {
+    display: none !important;
+  }
+
+  .canvas-doc {
+    display: block !important;
+    width: auto;
+    margin: 0;
+    padding: 0;
+    background: #fff !important;
+    color: #202124 !important;
+    box-shadow: none;
+  }
 }
 
 /* The same clean view while a PDF is drawn from the pages (DocumentSession.exportPdf). */

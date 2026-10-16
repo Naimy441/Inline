@@ -14,6 +14,8 @@ import { setTabs } from "@/lib/client/tabs";
 import { api, ApiError, del, patch, post, Store, uploadFile } from "@/lib/client/api";
 import { setCommentState } from "@/lib/editor/comments";
 import { syncDomSelection } from "@/lib/editor/domSync";
+import type { CanvasOutput } from "@/lib/doc/canvas";
+import { canvasPdfModel } from "@/lib/doc/canvasPdf";
 import type { PdfDocumentModel } from "@/lib/pdf/pdfWriter";
 import { fitLinesNow } from "@/lib/editor/lineFit";
 import { closestFace, documentFonts, ensureFonts, fontData, loadDocumentFonts, type DocumentFont } from "@/lib/client/fonts";
@@ -58,7 +60,7 @@ export type ClientCommand =
   /** Measure pages for a fit and post them to /api/documents/[id]/fit (lib/server/fitMeasure.ts). */
   | { kind: "measure_fit"; requestId: string; fit: "half" | "page" };
 
-type Snapshot = { meta: DocumentMeta; epoch?: string; doc: unknown; version: number; comments: DocComment[]; hunks: HunkJSON[]; activity: AgentActivity | null };
+type Snapshot = { meta: DocumentMeta; epoch?: string; doc: unknown; version: number; comments: DocComment[]; hunks: HunkJSON[]; activity: AgentActivity | null; canvas?: { html: string; outputs: Record<string, CanvasOutput> } | null };
 
 type ServerEvent =
   | { type: "snapshot"; snapshot: Snapshot }
@@ -71,6 +73,7 @@ type ServerEvent =
   | { type: "command"; command: ClientCommand }
   | { type: "tabs"; tabs: DocumentTab[] }
   | { type: "draft"; draft: { updatedAt: number; words: number } | null }
+  | { type: "canvas"; html: string; outputs: Record<string, CanvasOutput> }
   | { type: "deleted" };
 
 export type DocumentUiState = {
@@ -99,6 +102,9 @@ export type DocumentUiState = {
   mode: EditorMode;
   /** A revision Claude prepared. The document itself is unchanged until the user keeps it. */
   draft: { updatedAt: number; words: number } | null;
+  /** Canvas HTML, when this document is a canvas. */
+  canvasHtml: string | null;
+  canvasOutputs: Record<string, CanvasOutput>;
 };
 
 export type EditorMode = "editing" | "suggesting" | "viewing";
@@ -242,6 +248,8 @@ export class DocumentSession {
     flow: false,
     mode: "editing",
     draft: null,
+    canvasHtml: null,
+    canvasOutputs: {},
   });
   /** Bumped on every editor transaction so toolbars can re-read the state. */
   readonly editor = new Store<EditorState | null>(null);
@@ -295,6 +303,10 @@ export class DocumentSession {
    * restore the normal layout.
    */
   async print() {
+    if (this.meta?.kind === "canvas") {
+      window.print();
+      return;
+    }
     const view = this.view;
     if (!view || this.ui.get().printing) return;
     const geometry = geometryFor(this.meta);
@@ -320,7 +332,26 @@ export class DocumentSession {
    * headers and wrapping match the screen. `addTabs` adds the document's other
    * tabs to this one's pages.
    */
+  /** The open canvas registers this so a download includes text still waiting on the debounce. */
+  canvasFlusher: (() => Promise<void>) | null = null;
+
   async exportPdf(addTabs?: (own: PdfDocumentModel) => Promise<PdfDocumentModel>) {
+    if (this.canvasFlusher) await this.canvasFlusher();
+    if (this.meta?.kind === "canvas" && this.ui.get().canvasHtml) {
+      const ui = this.ui.get();
+      const model = canvasPdfModel(ui.canvasHtml!, this.meta.title, ui.canvasOutputs);
+      const { buildPdf } = await import("@/lib/pdf/pdfWriter");
+      const bytes = buildPdf(model);
+      const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${model.title.replace(/[\\/:*?"<>|]+/g, "-").trim() || "Untitled document"}.pdf`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      return;
+    }
     const own = await this.pdfModel();
     const model = addTabs ? await addTabs(own) : own;
     const { buildPdf } = await import("@/lib/pdf/pdfWriter");
@@ -333,6 +364,33 @@ export class DocumentSession {
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  }
+
+  /** Save canvas HTML. The server normalizes it and sends it back live. */
+  async saveCanvas(html: string) {
+    this.ui.set((ui) => ({ ...ui, sync: "saving" }));
+    try {
+      const result = await patch<{ html: string | null; outputs: Record<string, CanvasOutput> }>(`/api/documents/${this.id}/canvas`, { html });
+      this.ui.set((ui) => ({ ...ui, sync: "saved", canvasHtml: result.html, canvasOutputs: result.outputs }));
+      return result.html ?? html;
+    } catch (error) {
+      this.ui.set((ui) => ({ ...ui, sync: "error" }));
+      throw error;
+    }
+  }
+
+  /** Turn this document into a canvas, or a canvas back into a page. */
+  async setKind(kind: "page" | "canvas") {
+    const result = await patch<{ meta: DocumentMeta; html: string | null; outputs: Record<string, CanvasOutput> }>(`/api/documents/${this.id}/canvas`, { kind });
+    this.ui.set((ui) => ({ ...ui, meta: result.meta, canvasHtml: result.html, canvasOutputs: result.outputs }));
+    if (kind === "page" && this.view) relayout(this.view);
+  }
+
+  /** Run one notebook cell. The server keeps its working directory inside this document. */
+  async runCell(cellId: string) {
+    const result = await post<{ output: CanvasOutput }>(`/api/documents/${this.id}/canvas`, { cellId });
+    this.ui.set((ui) => ({ ...ui, canvasOutputs: { ...ui.canvasOutputs, [cellId]: result.output } }));
+    return result.output;
   }
 
   /**
@@ -636,6 +694,8 @@ export class DocumentSession {
       comments: snapshot.comments,
       hunks: snapshot.hunks,
       activity: snapshot.activity,
+      canvasHtml: snapshot.canvas?.html ?? (snapshot.meta.kind === "canvas" ? ui.canvasHtml : null),
+      canvasOutputs: snapshot.canvas?.outputs ?? ui.canvasOutputs,
     }));
     this.syncCommentPlugin(snapshot.comments);
     this.applyActivity(snapshot.activity);
@@ -860,6 +920,9 @@ export class DocumentSession {
         return;
       case "draft":
         this.ui.set((ui) => ({ ...ui, draft: event.draft }));
+        return;
+      case "canvas":
+        this.ui.set((ui) => ({ ...ui, canvasHtml: event.html, canvasOutputs: event.outputs }));
         return;
       case "deleted":
         this.ui.set((ui) => ({ ...ui, status: "deleted" }));
