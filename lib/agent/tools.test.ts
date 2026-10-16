@@ -112,6 +112,8 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   align_pdf_page: { page: 1 },
   finish_pdf_import: {},
   show_pdf_annotations: { show: true },
+  set_document_kind: { kind: "page" },
+  run_notebook_cell: { cell_id: "missing" },
 };
 
 describe("tool registry", () => {
@@ -1339,6 +1341,22 @@ describe("documents", () => {
     assert.match(opened.text, /Opened "Plan"/);
     const read = await runTool("read_document", { document_id: id }, ctx);
     assert.match(read.text, /Step one\./);
+  });
+
+  test("a canvas is edited as HTML and its notebook cell runs", async () => {
+    const { ctx } = await setup();
+    const created = await runTool("create_document", { title: "Board", kind: "canvas", open: false }, ctx);
+    assert.equal(created.isError, undefined, created.text);
+    const id = created.text.match(/\(id (\S+)\)/)?.[1];
+    assert.ok(id);
+    const edited = await runTool("edit_document", { document_id: id, old_string: "Start writing here. This text stays editable.", new_string: "The quarter closed ahead of plan." }, ctx);
+    assert.equal(edited.isError, undefined, edited.text);
+    const read = await runTool("read_document", { document_id: id }, ctx);
+    assert.match(read.text, /The quarter closed ahead of plan/);
+    assert.match(read.text, /data-canvas-section/);
+    const ran = await runTool("run_notebook_cell", { document_id: id, cell_id: "intro-cell" }, ctx);
+    assert.equal(ran.isError, undefined, ran.text);
+    assert.match(ran.text, /hello from the canvas/);
   });
 
   test("create with open: false doesn't switch the editor", async () => {

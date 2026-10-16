@@ -127,6 +127,11 @@ export type DocumentMeta = {
   thumbnailKey?: string;
   /** Set on a document imported from a PDF (lib/server/pdfImports.ts). */
   pdfImport?: PdfImportMeta;
+  /**
+   * "canvas" is an HTML canvas the agent can build (sections, layout, notebook
+   * cells). Absent means an ordinary word-processor page.
+   */
+  kind?: "page" | "canvas";
 };
 
 /**

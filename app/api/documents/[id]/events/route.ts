@@ -23,6 +23,7 @@ export const GET = route(async (request, context: Context) => {
       send({ type: "meta", meta: doc.meta });
       send({ type: "comments", comments: doc.comments });
       send({ type: "activity", activity: doc.activity });
+      if (doc.canvas) send({ type: "canvas", html: doc.canvas.html, outputs: doc.canvas.outputs });
     } else {
       send({ type: "snapshot", snapshot: doc.snapshot() });
     }
