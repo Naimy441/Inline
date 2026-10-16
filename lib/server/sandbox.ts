@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export type SandboxResult = { code: number; stdout: string; stderr: string };
@@ -26,7 +26,36 @@ export async function runInFolder(folder: string, command: string, timeoutMs: nu
   }
 }
 
+type LinuxBackend = "unshare" | "bwrap";
+
+let linuxBackend: Promise<LinuxBackend> | null = null;
+
+/** User namespaces via unshare, or bubblewrap when AppArmor blocks that (GitHub Actions). */
+async function chooseLinuxBackend(): Promise<LinuxBackend> {
+  const forced = process.env.INLINE_SANDBOX;
+  if (forced === "unshare" || forced === "bwrap") return forced;
+  linuxBackend ??= (async () => {
+    if (await probe("unshare", ["--user", "--map-root-user", "true"])) return "unshare";
+    if (await probe("bwrap", ["--unshare-user", "--uid", "0", "--gid", "0", "--", "true"])) return "bwrap";
+    throw new Error("Running commands needs a sandbox, and this computer doesn't have one Inline can use.");
+  })();
+  return linuxBackend;
+}
+
+async function probe(command: string, args: string[]) {
+  try {
+    return (await capture(command, args, "", 10_000)).code === 0;
+  } catch {
+    return false;
+  }
+}
+
 async function runLinux(folder: string, timeoutMs: number): Promise<SandboxResult> {
+  const backend = await chooseLinuxBackend();
+  return backend === "bwrap" ? runBwrap(folder, timeoutMs) : runUnshare(folder, timeoutMs);
+}
+
+async function runUnshare(folder: string, timeoutMs: number): Promise<SandboxResult> {
   const setup = `
 set -eu
 WS="$1"
@@ -78,12 +107,65 @@ if [ -d /oldroot/home ] || [ -d /oldroot/usr ]; then
 fi
 rmdir /oldroot 2>/dev/null || true
 cd /work
-export PATH="/usr/bin:/bin" HOME=/work TMPDIR=/tmp LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONDONTWRITEBYTECODE=1
 set +e
-bash /work/.tmp/cmd.sh
+env -i PATH="/usr/bin:/bin" HOME=/work TMPDIR=/tmp LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 bash /work/.tmp/cmd.sh
 exit $?
 `;
   return capture("unshare", ["--user", "--map-root-user", "--mount", "--net", "--fork", "--pid", "--mount-proc", "bash", "-s", "--", folder], setup, timeoutMs);
+}
+
+async function runBwrap(folder: string, timeoutMs: number): Promise<SandboxResult> {
+  const scratch = path.join(folder, ".tmp");
+  await mkdir(scratch, { recursive: true });
+  const passwd = path.join(scratch, "passwd");
+  const group = path.join(scratch, "group");
+  await writeFile(passwd, "root:x:0:0:root:/work:/bin/sh\n");
+  await writeFile(group, "root:x:0:\n");
+  const args = ["--die-with-parent", "--unshare-user", "--uid", "0", "--gid", "0", "--unshare-net", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"];
+  for (const dir of ["/usr", "/bin", "/lib", "/lib64"]) {
+    if (await exists(dir)) args.push("--ro-bind", dir, dir);
+  }
+  args.push("--tmpfs", "/etc", "--ro-bind", passwd, "/etc/passwd", "--ro-bind", group, "/etc/group", "--bind", folder, "/work");
+  for (const name of [".git", "document.json", ".draft"]) {
+    const source = path.join(folder, name);
+    if (await exists(source)) args.push("--ro-bind", source, path.posix.join("/work", name));
+  }
+  args.push(
+    "--chdir",
+    "/work",
+    "--clearenv",
+    "--setenv",
+    "PATH",
+    "/usr/bin:/bin",
+    "--setenv",
+    "HOME",
+    "/work",
+    "--setenv",
+    "TMPDIR",
+    "/tmp",
+    "--setenv",
+    "LANG",
+    "C.UTF-8",
+    "--setenv",
+    "LC_ALL",
+    "C.UTF-8",
+    "--setenv",
+    "PYTHONDONTWRITEBYTECODE",
+    "1",
+    "--",
+    "bash",
+    "/work/.tmp/cmd.sh",
+  );
+  return capture("bwrap", args, "", timeoutMs);
+}
+
+async function exists(file: string) {
+  try {
+    await access(file);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function runMac(folder: string, timeoutMs: number): Promise<SandboxResult> {

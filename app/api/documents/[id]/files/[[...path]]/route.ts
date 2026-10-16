@@ -20,7 +20,7 @@ export const GET = route(async (_request, context: Context) => {
       "Content-Type": file.mime,
       "Cache-Control": "no-store",
       "X-Content-Type-Options": "nosniff",
-      "Content-Security-Policy": "default-src 'none'",
+      "Content-Security-Policy": "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox",
     },
   });
 });
