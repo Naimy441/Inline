@@ -32,6 +32,21 @@
   background: var(--selection);
 }
 
+/* Hunspell misspellings. Drawn by the editor, because the browser's own
+   spelling underlines don't show up reliably as the user types. */
+.doc-content .spelling-error {
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
+  text-decoration-color: #d93025;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 0.12em;
+  text-decoration-skip-ink: none;
+}
+
+:root[data-theme="dark"] .doc-content .spelling-error {
+  text-decoration-color: #ff8a80;
+}
+
 .ProseMirror-hideselection *::selection {
   background: transparent;
 }

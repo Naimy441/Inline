@@ -82,18 +82,22 @@ test("toolbar buttons show tooltips", async ({ page }) => {
   await expect(page.getByRole("tooltip")).toHaveText(/^Bold\s+(Ctrl|⌘)\+?B$/);
 });
 
-test("spelling underlines can be hidden, and a word added to the dictionary", async ({ page }) => {
+test("spelling underlines misspellings as you type, and a word can be added to the dictionary", async ({ page }) => {
   await newBlankDocument(page);
   const doc = page.locator(".doc-content");
   await doc.click();
-  await page.keyboard.type("Zorblat is here.");
-  // Right-click on the word itself.
-  await doc.locator("p").first().click({ button: "right", position: { x: 12, y: 8 } });
-  await page.getByRole("menuitem", { name: /Add “Zorblat” to dictionary/ }).click();
-  await expect(doc.locator('[spellcheck="false"]')).toHaveText("Zorblat");
+  await page.keyboard.type("The righteois path.");
+  const underlined = doc.locator(".spelling-error");
+  // Hunspell loads with the document; the line shows up without a reload.
+  await expect(underlined).toHaveText("righteois", { timeout: 15_000 });
+  await underlined.click({ button: "right" });
+  await page.getByRole("menuitem", { name: /Add “righteois” to dictionary/ }).click();
+  await expect(doc.locator(".spelling-error")).toHaveCount(0);
+  await expect(doc.locator('[spellcheck="false"]')).toHaveText("righteois");
   await doc.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Hide spelling underlines" }).click();
   await expect(doc).toHaveAttribute("spellcheck", "false");
+  await expect(doc.locator(".spelling-error")).toHaveCount(0);
 });
 
 test("document tabs can be added, renamed, reordered, exported and deleted", async ({ page }) => {

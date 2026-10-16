@@ -6,7 +6,7 @@ import { Store } from "@/lib/client/api";
 export type Preferences = {
   substitutions: boolean;
   showInvisibles: boolean;
-  /** The browser's red spelling underlines. */
+  /** Red spelling underlines in the document. */
   spellcheck: boolean;
   /** Words never underlined as misspelled (normalized: lower case). */
   dictionary: string[];

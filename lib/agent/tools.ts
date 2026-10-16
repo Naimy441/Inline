@@ -1072,7 +1072,7 @@ export const TOOLS = [
     name: "check_spelling",
     title: "Check spelling",
     description:
-      "Find the words the editor underlines in red as misspelled: each word with its line, the text around it and suggested corrections. Code, equations and words in the user's dictionary are skipped. Fix real typos with edit_document; for names, places and invented words that are spelled as intended (a character or a fictional town), use add_to_dictionary so the user stops seeing the underline. The editor's underlines come from the user's browser, so a few may differ from this list.",
+      "Find the words the editor underlines in red as misspelled: each word with its line, the text around it and suggested corrections. Code, equations and words in the user's dictionary are skipped. Fix real typos with edit_document; for names, places and invented words that are spelled as intended (a character or a fictional town), use add_to_dictionary so the user stops seeing the underline. The editor underlines with this same dictionary, so the list matches the red underlines.",
     shape: { document_id: documentId, from_line: z.number().int().min(1).optional(), to_line: z.number().int().min(1).optional() },
     write: false,
     async handler(args, ctx) {

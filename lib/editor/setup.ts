@@ -259,8 +259,10 @@ export type EditorPluginOptions = {
   readOnly?: () => boolean;
   substitutions?: () => boolean;
   showInvisibles?: boolean;
-  /** Words the browser shouldn't underline as misspelled. */
+  /** Words the user added so they are never underlined as misspelled. */
   dictionary?: string[];
+  /** Red spelling underlines. Off when the user hides them. */
+  spellcheck?: boolean;
 };
 
 function readOnlyPlugin(readOnly: () => boolean) {
@@ -290,7 +292,7 @@ export function editorPlugins(options: EditorPluginOptions) {
     commentsPlugin(options.onActivateComment),
     findPlugin(),
     invisiblesPlugin(options.showInvisibles ?? false),
-    spellingPlugin(options.dictionary ?? []),
+    spellingPlugin(options.dictionary ?? [], { enabled: options.spellcheck ?? true }),
     placeholderPlugin(options.placeholder ?? "Start writing, or ask Claude to draft something…"),
     bordersPlugin(),
     // Tabs are sized before pages are broken, since their widths can rewrap lines.
