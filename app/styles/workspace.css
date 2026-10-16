@@ -2210,8 +2210,10 @@ button.status-item:hover {
   }
 }
 
+/* The word toolbar is not a grid item while it is hidden, so the template
+   drops that row. Leaving it in place stretched the status bar over the canvas. */
 .workspace.is-canvas {
-  --toolbar-h: 0px;
+  grid-template-rows: var(--titlebar-h) minmax(0, 1fr) var(--statusbar-h);
 }
 
 .workspace.is-canvas .toolbar {
