@@ -1,7 +1,8 @@
 import type { Node as PMNode } from "prosemirror-model";
-import { NodeSelection, Plugin, type EditorState } from "prosemirror-state";
+import { NodeSelection, Plugin, TextSelection, type EditorState } from "prosemirror-state";
 import type { EditorView, NodeView } from "prosemirror-view";
-import { findToc, pageFromStarts, syncedToc, TOC_TITLE } from "@/lib/doc/toc";
+import { schema } from "@/lib/doc/schema";
+import { findToc, pageFromStarts, selectionReplacingTocGap, syncedToc } from "@/lib/doc/toc";
 import { followLink } from "@/lib/editor/commands";
 import { pageKey } from "@/lib/editor/pagination";
 
@@ -45,26 +46,38 @@ function entryIndent(state: EditorState, pos: number, level: number): number {
 /** Rebuild contents fields whose headings changed. Page numbers are not part of this. */
 export function tocSyncPlugin() {
   return new Plugin({
+    props: {
+      handleKeyDown(view, event) {
+        return handleTocKey(view, event);
+      },
+    },
     appendTransaction(transactions, _old, state) {
-      if (!transactions.some((tr) => tr.docChanged && !tr.getMeta("tocSync"))) return null;
-      const found: Array<{ pos: number; node: PMNode }> = [];
-      state.doc.descendants((node, pos) => {
-        if (node.type.name === "toc") {
-          found.push({ pos, node });
-          return false;
-        }
-        return true;
-      });
       let tr = state.tr;
       let changed = false;
-      for (const item of found.reverse()) {
-        const mapped = tr.mapping.mapResult(item.pos, 1);
-        if (mapped.deleted) continue;
-        const current = tr.doc.nodeAt(mapped.pos);
-        if (!current || current.type.name !== "toc") continue;
-        const updated = syncedToc(current, tr.doc);
-        if (updated === current) continue;
-        tr = tr.replaceWith(mapped.pos, mapped.pos + current.nodeSize, updated);
+      if (transactions.some((item) => item.docChanged && !item.getMeta("tocSync"))) {
+        const found: Array<{ pos: number; node: PMNode }> = [];
+        state.doc.descendants((node, pos) => {
+          if (node.type.name === "toc") {
+            found.push({ pos, node });
+            return false;
+          }
+          return true;
+        });
+        for (const item of found.reverse()) {
+          const mapped = tr.mapping.mapResult(item.pos, 1);
+          if (mapped.deleted) continue;
+          const current = tr.doc.nodeAt(mapped.pos);
+          if (!current || current.type.name !== "toc") continue;
+          const updated = syncedToc(current, tr.doc);
+          if (updated === current) continue;
+          tr = tr.replaceWith(mapped.pos, mapped.pos + current.nodeSize, updated);
+          changed = true;
+        }
+      }
+      const doc = changed ? tr.doc : state.doc;
+      const selection = selectionReplacingTocGap(doc, changed ? tr.selection : state.selection);
+      if (selection && !selection.eq(changed ? tr.selection : state.selection)) {
+        tr = tr.setSelection(selection);
         changed = true;
       }
       return changed ? tr.setMeta("addToHistory", false).setMeta("tocSync", true) : null;
@@ -82,7 +95,53 @@ export function tocSyncPlugin() {
   });
 }
 
-/** The field as one block: a click selects it, except a click on an entry, which goes to that heading. */
+function eventElement(event: Event): Element | null {
+  const target = event.target;
+  if (target instanceof Element) return target;
+  if (target instanceof Node) return target.parentElement;
+  return null;
+}
+
+function inTitle(event: Event) {
+  return Boolean(eventElement(event)?.closest(".doc-toc-title"));
+}
+
+/**
+ * Backspace or Delete in an empty heading removes the field. A selected
+ * field is left to the normal delete commands. Enter leaves the heading
+ * for the following text.
+ */
+function handleTocKey(view: EditorView, event: KeyboardEvent): boolean {
+  if (event.key !== "Backspace" && event.key !== "Delete" && event.key !== "Enter") return false;
+  if (event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) return false;
+  const { selection } = view.state;
+  if (selection instanceof NodeSelection && selection.node.type.name === "toc") return false;
+  if (!(selection instanceof TextSelection) || !selection.empty) return false;
+  const { $from } = selection;
+  if ($from.parent.type.name !== "toc_title" || $from.depth < 1) return false;
+  const toc = $from.node($from.depth - 1);
+  if (toc.type.name !== "toc") return false;
+  const tocPos = $from.before($from.depth - 1);
+  if (event.key === "Enter") {
+    const after = tocPos + toc.nodeSize;
+    const found = TextSelection.findFrom(view.state.doc.resolve(after), 1);
+    if (found) {
+      view.dispatch(view.state.tr.setSelection(found).scrollIntoView());
+      return true;
+    }
+    const paragraph = schema.nodes.paragraph!.create();
+    const tr = view.state.tr.insert(after, paragraph);
+    view.dispatch(tr.setSelection(TextSelection.create(tr.doc, after + 1)).scrollIntoView());
+    return true;
+  }
+  const empty = $from.parent.content.size === 0;
+  if (!empty) return false;
+  if (event.key === "Backspace" && $from.parentOffset !== 0) return false;
+  view.dispatch(view.state.tr.delete(tocPos, tocPos + toc.nodeSize).scrollIntoView());
+  return true;
+}
+
+/** The field on the page. The heading is editable text; an entry click goes to that heading. */
 export class TocView implements NodeView {
   dom: HTMLElement;
   contentDOM: HTMLElement;
@@ -94,12 +153,10 @@ export class TocView implements NodeView {
   ) {
     this.dom = document.createElement("nav");
     this.dom.className = "doc-toc";
-    this.dom.contentEditable = "false";
     this.dom.setAttribute("data-toc", "true");
-    this.dom.setAttribute("aria-label", TOC_TITLE);
     this.contentDOM = this.dom;
     this.paint();
-    this.dom.addEventListener("mousedown", (event) => this.onMouseDown(event));
+    this.dom.addEventListener("mousedown", (event) => this.onMouseDown(event), true);
     // A click on an entry must not also follow the anchor's href in the browser.
     this.dom.addEventListener("click", (event) => {
       if (event.target instanceof Element && event.target.closest("a.doc-toc-entry")) event.preventDefault();
@@ -121,6 +178,7 @@ export class TocView implements NodeView {
 
   private onMouseDown(event: MouseEvent) {
     if (event.button !== 0) return;
+    if (inTitle(event)) return;
     const target = event.target instanceof Element ? event.target : null;
     const entry = target?.closest("a.doc-toc-entry");
     if (entry instanceof HTMLAnchorElement) {
@@ -133,17 +191,25 @@ export class TocView implements NodeView {
     }
     const pos = this.getPos();
     if (pos == null) return;
+    const title = this.view.state.doc.nodeAt(pos)?.firstChild;
+    if (!title?.isTextblock) return;
     event.preventDefault();
-    const selection = NodeSelection.create(this.view.state.doc, pos);
-    this.view.dispatch(this.view.state.tr.setSelection(selection));
+    // A click on the field, rather than its heading, still leaves a text caret.
+    const selection = TextSelection.create(this.view.state.doc, pos + 2);
+    this.view.dispatch(this.view.state.tr.setSelection(selection).scrollIntoView());
     this.view.focus();
   }
 
   stopEvent(event: Event) {
+    if (inTitle(event)) return false;
     return event.type === "mousedown" || event.type === "pointerdown" || event.type === "click";
   }
 
-  ignoreMutation() {
+  ignoreMutation(mutation: MutationRecord | { type: string; target: Node }) {
+    if (mutation.type === "selection") return false;
+    const target = mutation.target;
+    const el = target instanceof Element ? target : target.parentElement;
+    if (el?.closest(".doc-toc-title")) return false;
     return true;
   }
 

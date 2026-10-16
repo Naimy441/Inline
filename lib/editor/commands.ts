@@ -6,7 +6,7 @@ import { canSplit } from "prosemirror-transform";
 import { isInTable } from "prosemirror-tables";
 import { pictureCrop, pictureRotate, pictureWrap, type PictureCrop, type PictureWrap } from "@/lib/doc/picture";
 import { fileLinkHref, MAX_INDENT, safeHref, schema, type Align } from "@/lib/doc/schema";
-import { createToc, findToc } from "@/lib/doc/toc";
+import { createToc, findToc, tocTitleSelection } from "@/lib/doc/toc";
 import { findStyle, nodeStyleId, resolveStyle, storedStyleId, structuralRole, type ParagraphStyle, type StyleRole } from "@/lib/doc/styles";
 
 /** Editing commands shared by the toolbar, menus, keymap and command palette. */
@@ -707,7 +707,8 @@ export const insertTableOfContents: Command = (state, dispatch) => {
   const existing = findToc(state.doc);
   if (!dispatch) return true;
   if (existing) {
-    dispatch(state.tr.setSelection(NodeSelection.create(state.doc, existing.pos)).scrollIntoView());
+    const selection = tocTitleSelection(state.doc, existing.pos) ?? TextSelection.create(state.doc, existing.pos + 1);
+    dispatch(state.tr.setSelection(selection).scrollIntoView());
     return true;
   }
   const { $from } = state.selection;
@@ -715,7 +716,8 @@ export const insertTableOfContents: Command = (state, dispatch) => {
   const at = depth ? $from.before(depth) : state.selection.from;
   const tr = state.tr.insert(at, createToc(state.doc));
   const pos = tr.mapping.map(at, -1);
-  dispatch(tr.setSelection(NodeSelection.create(tr.doc, pos)).scrollIntoView());
+  const selection = tocTitleSelection(tr.doc, pos) ?? NodeSelection.create(tr.doc, pos);
+  dispatch(tr.setSelection(selection).scrollIntoView());
   return true;
 };
 

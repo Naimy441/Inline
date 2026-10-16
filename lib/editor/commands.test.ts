@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { EditorState, NodeSelection, TextSelection, type Command } from "prosemirror-state";
+import { EditorState, TextSelection, type Command } from "prosemirror-state";
 import { ensureBlockIds } from "../doc/ids";
 import { docToMarkdown, markdownToDoc } from "../doc/markdown";
 import { blockPosById, changeCase, goToDocumentEdge, insertTab, insertTableOfContents, removeTableOfContents } from "./commands";
@@ -67,9 +67,12 @@ describe("insertTableOfContents", () => {
       assert.notEqual(blockPosById(state.doc, entry.href!.slice(1)), null);
     }
     assert.equal(docToMarkdown(state.doc).split("\n\n")[0], "\\tableofcontents");
+    assert.equal(state.selection.$from.parent.type.name, "toc_title");
+    assert.equal(state.doc.firstChild!.firstChild!.textContent, "Contents");
     const again = run(state, insertTableOfContents);
     assert.equal(again.state.doc.childCount, state.doc.childCount);
-    assert.ok(again.state.selection instanceof NodeSelection);
+    assert.ok(again.state.selection instanceof TextSelection);
+    assert.equal(again.state.selection.$from.parent.type.name, "toc_title");
   });
 
   it("inserts a field with no headings, and removes the whole field", () => {

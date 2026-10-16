@@ -222,7 +222,7 @@ function sameBreaks(a: Break[], b: Break[]) {
   });
 }
 
-const TEXTBLOCKS = new Set(["paragraph", "heading", "title", "subtitle", "code_block"]);
+const TEXTBLOCKS = new Set(["paragraph", "heading", "title", "subtitle", "code_block", "toc_title"]);
 const CONTAINERS = new Set(["bullet_list", "ordered_list", "list_item", "blockquote", "toc"]);
 
 /**

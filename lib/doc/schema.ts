@@ -603,8 +603,9 @@ const nodes: Record<string, NodeSpec> = {
 
   /**
    * A table of contents. One field: its entries are generated from the
-   * headings (lib/doc/toc.ts) and are not edited by hand. Page numbers are
-   * painted from the page layout, not stored.
+   * headings (lib/doc/toc.ts) and are not edited by hand. The heading is
+   * ordinary text, so it can be renamed. Page numbers are painted from the
+   * page layout, not stored. No gap cursor: a click or an arrow stays a text caret.
    */
   toc: {
     content: "toc_title toc_entry*",
@@ -612,6 +613,7 @@ const nodes: Record<string, NodeSpec> = {
     defining: true,
     isolating: true,
     selectable: true,
+    allowGapCursor: false,
     attrs: { id: { default: null as string | null }, depth: { default: 3 } },
     parseDOM: [
       {
@@ -630,19 +632,22 @@ const nodes: Record<string, NodeSpec> = {
         class: "doc-toc",
         "data-toc": "true",
         "data-depth": String(node.attrs.depth ?? 3),
-        "aria-label": "Contents",
         ...(node.attrs.id ? { "data-id": node.attrs.id } : {}),
       },
       0,
     ],
   },
 
+  /**
+   * The contents heading. `text` is only the old stored heading, from when
+   * this node was an atom; new headings are the node's content.
+   */
   toc_title: {
-    atom: true,
-    selectable: false,
-    attrs: { text: { default: "Contents" } },
-    parseDOM: [{ tag: "p.doc-toc-title", priority: 60, getAttrs: (dom) => ({ text: (dom as HTMLElement).textContent || "Contents" }) }],
-    toDOM: (node): DOMOutputSpec => ["p", { class: "doc-toc-title" }, String(node.attrs.text || "Contents")],
+    content: "inline*",
+    defining: true,
+    attrs: { text: { default: null as string | null } },
+    parseDOM: [{ tag: "p.doc-toc-title", priority: 60 }],
+    toDOM: (): DOMOutputSpec => ["p", { class: "doc-toc-title" }, 0],
   },
 
   toc_entry: {
