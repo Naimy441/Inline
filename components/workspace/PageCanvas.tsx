@@ -1,9 +1,10 @@
 "use client";
 
-import { memo, useEffect, useLayoutEffect, useRef, type RefObject } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, type CSSProperties, type RefObject } from "react";
 import { geometryFor, type DocumentSession } from "@/lib/client/documentSession";
 import { lineFactor, lineMetrics } from "@/lib/doc/fontMetrics";
 import { DEFAULT_MATH_SIZE, DEFAULT_TAB_STOP, fillHeaderTokens, headerParts, type DocumentMeta } from "@/lib/doc/settings";
+import { styleSheetCss, themeCssVars } from "@/lib/doc/styles";
 import { PdfAnnotations } from "@/components/workspace/PdfAnnotations";
 
 /**
@@ -59,6 +60,8 @@ export const PageCanvas = memo(function PageCanvas({
       }
     : undefined;
   const lineModel = `${settings?.lineModel === "font" ? " font-lines" : ""}${meta?.pdfImport ? " from-pdf" : ""}`;
+  const themeVars = settings?.theme ? themeCssVars(settings.theme) : undefined;
+  const sheetCss = settings ? styleSheetCss(settings) : "";
   // Zoom scales the laid-out pages rather than laying them out again (CSS zoom would): text
   // shaped at another size wraps differently, so the page count would change with the window.
   const scale = printing || flow ? 1 : zoom;
@@ -79,8 +82,10 @@ export const PageCanvas = memo(function PageCanvas({
             height: flow ? undefined : totalHeight,
             transform: scale === 1 ? undefined : `scale(${scale})`,
             ["--doc-font" as string]: settings?.fontFamily,
+            ...(themeVars as CSSProperties | undefined),
           }}
         >
+          {sheetCss ? <style>{sheetCss}</style> : null}
           {!flow &&
             Array.from({ length: pages }, (_, index) => <Sheet key={index} index={index} pages={pages} meta={meta} top={index * pitch} geometry={geometry} />)}
           <div

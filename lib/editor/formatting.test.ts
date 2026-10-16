@@ -245,7 +245,7 @@ describe("black text", () => {
 
   it("is drawn as the page's text color, so it follows dark mode, and still copies out as black", () => {
     const html = (color: string) => fragmentToHtml(schema.node("doc", null, [schema.node("paragraph", null, [schema.text("x", [schema.mark("text_color", { color })])])]));
-    assert.equal(html("rgb(0, 0, 0)"), '<p><span style="color: rgb(0, 0, 0)" class="text-black">x</span></p>');
-    assert.equal(html("#ff0000"), '<p><span style="color: #ff0000">x</span></p>');
+    assert.equal(html("rgb(0, 0, 0)"), '<p data-style="Normal"><span style="color: rgb(0, 0, 0)" class="text-black">x</span></p>');
+    assert.equal(html("#ff0000"), '<p data-style="Normal"><span style="color: #ff0000">x</span></p>');
   });
 });

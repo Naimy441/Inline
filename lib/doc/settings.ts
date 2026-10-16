@@ -3,6 +3,9 @@
  * the agent tools. Everything here is plain JSON.
  */
 
+import type { DocumentTheme, ParagraphStyle } from "@/lib/doc/styles";
+import { normalizeStyleSheet, normalizeTheme, styleLayoutKey } from "@/lib/doc/styles";
+
 export type PaperSize = "letter" | "a4" | "legal" | "statement";
 export type Orientation = "portrait" | "landscape";
 export type HorizontalAlign = "left" | "center" | "right";
@@ -87,6 +90,13 @@ export type DocumentSettings = {
   tabStop?: number;
   /** Equations' size against their text, when not the usual 1.1 (a PDF made with LaTeX sets them at 1). */
   mathSize?: number;
+  /**
+   * Named paragraph styles. Absent means the built-in styles (Normal, Title,
+   * Heading 1–6, Quote, Code), so documents from before styles still open.
+   */
+  styles?: ParagraphStyle[];
+  /** Heading font, body font and colors. Absent means the document font and the usual page colors. */
+  theme?: DocumentTheme;
 };
 
 /** Equations' usual size against their text. */
@@ -303,6 +313,11 @@ export function normalizeSettings(input: unknown, base: DocumentSettings = DEFAU
       const size = raw.mathSize === undefined ? base.mathSize : raw.mathSize;
       return typeof size === "number" && Number.isFinite(size) && size >= 0.5 && size <= 2 && size !== DEFAULT_MATH_SIZE ? { mathSize: Math.round(size * 100) / 100 } : {};
     })(),
+    ...(() => {
+      const styles = raw.styles === undefined ? base.styles : raw.styles === null ? undefined : normalizeStyleSheet(raw.styles);
+      const theme = raw.theme === undefined ? base.theme : raw.theme === null ? undefined : normalizeTheme(raw.theme);
+      return { ...(styles ? { styles } : {}), ...(theme ? { theme } : {}) };
+    })(),
   };
 }
 
@@ -332,7 +347,7 @@ export function patchSettings(current: DocumentSettings, patch: unknown): Docume
 /** The settings that decide where pages break, as a string, so a page count measured under other settings isn't trusted. */
 export function layoutKey(settings: DocumentSettings) {
   const { paperSize, orientation, margins, customSize } = settings.pageSetup;
-  return [customSize ? `${customSize.width}x${customSize.height}` : paperSize, orientation, margins.top, margins.right, margins.bottom, margins.left, settings.fontFamily, settings.fontSize, settings.lineSpacing, settings.paragraphSpacing, ...(settings.lineModel ? [settings.lineModel] : []), ...(settings.tabStop ? [`tab ${settings.tabStop}`] : []), ...(settings.mathSize ? [`math ${settings.mathSize}`] : [])].join("|");
+  return [customSize ? `${customSize.width}x${customSize.height}` : paperSize, orientation, margins.top, margins.right, margins.bottom, margins.left, settings.fontFamily, settings.fontSize, settings.lineSpacing, settings.paragraphSpacing, ...(settings.lineModel ? [settings.lineModel] : []), ...(settings.tabStop ? [`tab ${settings.tabStop}`] : []), ...(settings.mathSize ? [`math ${settings.mathSize}`] : []), styleLayoutKey(settings)].join("|");
 }
 
 /** Page dimensions in inches, accounting for orientation. */

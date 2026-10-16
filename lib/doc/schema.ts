@@ -1,6 +1,7 @@
 import { Schema, type DOMOutputSpec, type Mark, type Node as PMNode, type NodeSpec, type MarkSpec } from "prosemirror-model";
 import { tableNodes } from "prosemirror-tables";
 import { lineVars } from "@/lib/doc/fontMetrics";
+import { nodeStyleId, safeStyleId } from "@/lib/doc/styles";
 
 /**
  * The Inline document schema. It is shared by the browser editor, the server
@@ -130,6 +131,11 @@ const blockAttrs = {
   borders: { default: null as Borders | null },
   /** Where the lines broke in the PDF the paragraph was rebuilt from, kept until its text changes (lib/doc/lineBreaks.ts). */
   lineBreaks: { default: null as string | null },
+  /**
+   * Named paragraph style (lib/doc/styles.ts). Null means the style the block
+   * type already is: Normal, Title, a heading, Quote or Code.
+   */
+  style: { default: null as string | null },
 };
 
 const BORDER_SIDES = ["top", "bottom", "left", "right"] as const;
@@ -265,6 +271,7 @@ function blockDomAttrs(node: PMNode, extra: Record<string, string> = {}) {
   if (classes.length) attrs.class = classes.join(" ");
   if (node.attrs.footnote) attrs["data-footnote"] = String(node.attrs.footnote);
   if (node.attrs.id) attrs["data-id"] = node.attrs.id;
+  attrs["data-style"] = nodeStyleId(node);
   if (node.attrs.dir === "rtl") attrs.dir = "rtl";
   // What a style can't say exactly travels with the paragraph when it is copied and pasted.
   if (node.attrs.fontSize) attrs["data-font-size"] = String(node.attrs.fontSize);
@@ -339,7 +346,17 @@ function parseBlockAttrs(dom: HTMLElement) {
     borders: jsonAttr<Borders>(dom, "data-borders", isBorders),
     bibliography: (typeof dom.className === "string" ? dom.className : "").split(/\s+/).includes("doc-bibliography"),
     footnote: footnoteLabel(dom.getAttribute("data-footnote")),
+    style: storedStyleFromDom(dom),
   };
+}
+
+/** A style id worth storing: not the one the element type already implies. */
+function storedStyleFromDom(dom: HTMLElement) {
+  const id = safeStyleId(dom.getAttribute("data-style") ?? "");
+  if (!id) return null;
+  const tag = dom.tagName;
+  const implied = tag === "P" && dom.classList.contains("doc-title") ? "Title" : tag === "P" && dom.classList.contains("doc-subtitle") ? "Subtitle" : /^H[1-6]$/.test(tag) ? `Heading${tag.slice(1)}` : tag === "BLOCKQUOTE" ? "Quote" : tag === "PRE" ? "Code" : "Normal";
+  return id === implied ? null : id;
 }
 
 /**
@@ -447,9 +464,9 @@ const nodes: Record<string, NodeSpec> = {
     content: "block+",
     group: "block",
     defining: true,
-    attrs: { id: { default: null } },
-    parseDOM: [{ tag: "blockquote" }],
-    toDOM: (node): DOMOutputSpec => ["blockquote", node.attrs.id ? { "data-id": node.attrs.id } : {}, 0],
+    attrs: { id: { default: null }, style: { default: null as string | null } },
+    parseDOM: [{ tag: "blockquote", getAttrs: (dom) => ({ style: storedStyleFromDom(dom as HTMLElement) }) }],
+    toDOM: (node): DOMOutputSpec => ["blockquote", { ...(node.attrs.id ? { "data-id": node.attrs.id } : {}), "data-style": nodeStyleId(node) }, 0],
   },
 
   code_block: {
@@ -459,17 +476,17 @@ const nodes: Record<string, NodeSpec> = {
     code: true,
     defining: true,
     /** Space above and below in points, when not the usual (a displayed equation placed as in an imported PDF). */
-    attrs: { id: { default: null }, language: { default: "" }, spaceBefore: { default: null as number | null }, spaceAfter: { default: null as number | null } },
+    attrs: { id: { default: null }, language: { default: "" }, spaceBefore: { default: null as number | null }, spaceAfter: { default: null as number | null }, style: { default: null as string | null } },
     parseDOM: [
       {
         tag: "pre",
         preserveWhitespace: "full",
-        getAttrs: (dom) => ({ language: (dom as HTMLElement).getAttribute("data-language") || "" }),
+        getAttrs: (dom) => ({ language: (dom as HTMLElement).getAttribute("data-language") || "", style: storedStyleFromDom(dom as HTMLElement) }),
       },
     ],
     toDOM: (node): DOMOutputSpec => [
       "pre",
-      { ...(node.attrs.id ? { "data-id": node.attrs.id } : {}), "data-language": node.attrs.language || "", ...(blockSpacing(node) ? { style: blockSpacing(node) } : {}) },
+      { ...(node.attrs.id ? { "data-id": node.attrs.id } : {}), "data-language": node.attrs.language || "", "data-style": nodeStyleId(node), ...(blockSpacing(node) ? { style: blockSpacing(node) } : {}) },
       ["code", 0],
     ],
   },

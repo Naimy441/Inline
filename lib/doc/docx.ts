@@ -2,6 +2,7 @@ import type { Mark, Node as PMNode } from "prosemirror-model";
 import { cssSizeToPt, defaultListNumbering, MATH_LANGUAGE, schema, type BorderLine, type Borders, type CellBorders, type ListMarker, type ListNumbering, type TableBorders, type TableLine, type TabStop } from "@/lib/doc/schema";
 import { latexToOmml, OMML_NAMESPACE } from "@/lib/doc/omml";
 import { DEFAULT_TAB_STOP, pageSize, type DocComment, type DocumentMeta } from "@/lib/doc/settings";
+import { activeTheme, themeXml, wordStylesXml } from "@/lib/doc/styles";
 import { createZip, type ZipEntry } from "@/lib/doc/zip";
 
 /**
@@ -339,24 +340,30 @@ async function imageParagraph(node: PMNode, ctx: Context) {
  * `list` is the list this block sits in; `depth` counts its numbered lists, which decides their marker style as on the page,
  * and `left` is where its text starts (twips from the margin).
  */
+/** A paragraph's style id, when it isn't the document's default Normal. */
+function wordStyleOf(node: PMNode, fallback?: string) {
+  const id = typeof node.attrs.style === "string" && node.attrs.style ? node.attrs.style : fallback;
+  return id && id !== "Normal" ? id : undefined;
+}
+
 async function blockXml(node: PMNode, ctx: Context, list?: { numId: number; level: number; depth: number; left: number }, indentTwips = 0, next?: PMNode | null): Promise<string> {
   switch (node.type.name) {
     case "paragraph": {
       const note = node.attrs.footnote ? textRun(String(node.attrs.footnote), [schema.marks.superscript.create()]) : "";
-      return `<w:p>${paragraphProps(node, { numbering: list, indentTwips })}${note}${await inlineContent(node, ctx)}</w:p>`;
+      return `<w:p>${paragraphProps(node, { style: wordStyleOf(node), numbering: list, indentTwips })}${note}${await inlineContent(node, ctx)}</w:p>`;
     }
     case "title":
-      return `<w:p>${paragraphProps(node, { style: "Title" })}${await inlineContent(node, ctx)}</w:p>`;
+      return `<w:p>${paragraphProps(node, { style: wordStyleOf(node, "Title") })}${await inlineContent(node, ctx)}</w:p>`;
     case "subtitle":
-      return `<w:p>${paragraphProps(node, { style: "Subtitle" })}${await inlineContent(node, ctx)}</w:p>`;
+      return `<w:p>${paragraphProps(node, { style: wordStyleOf(node, "Subtitle") })}${await inlineContent(node, ctx)}</w:p>`;
     case "heading":
-      return `<w:p>${paragraphProps(node, { style: `Heading${node.attrs.level}`, indentTwips })}${await inlineContent(node, ctx)}</w:p>`;
+      return `<w:p>${paragraphProps(node, { style: wordStyleOf(node, `Heading${node.attrs.level}`), indentTwips })}${await inlineContent(node, ctx)}</w:p>`;
     case "blockquote": {
       let out = "";
       for (let i = 0; i < node.childCount; i += 1) {
         const child = node.child(i);
         if (child.isTextblock) {
-          out += `<w:p>${paragraphProps(child, { style: "Quote", indentTwips: indentTwips })}${await inlineContent(child, ctx)}</w:p>`;
+          out += `<w:p>${paragraphProps(child, { style: wordStyleOf(node, "Quote"), indentTwips: indentTwips })}${await inlineContent(child, ctx)}</w:p>`;
         } else {
           out += await blockXml(child, ctx, undefined, indentTwips + 720);
         }
@@ -367,7 +374,7 @@ async function blockXml(node: PMNode, ctx: Context, list?: { numId: number; leve
       if (node.attrs.language === MATH_LANGUAGE) return `<w:p><w:pPr><w:jc w:val="center"/></w:pPr>${latexToOmml(node.textContent, true)}</w:p>`;
       return node.textContent
         .split("\n")
-        .map((line) => `<w:p><w:pPr><w:pStyle w:val="Code"/></w:pPr>${textRun(line, [])}</w:p>`)
+        .map((line) => `<w:p><w:pPr><w:pStyle w:val="${wordStyleOf(node, "Code")}"/></w:pPr>${textRun(line, [])}</w:p>`)
         .join("");
     case "horizontal_rule":
       return '<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="BFBFBF"/></w:pBdr></w:pPr></w:p>';
@@ -504,18 +511,15 @@ function headerFooterXml(kind: "hdr" | "ftr", text: string, align: string, pageN
 
 function stylesXml(meta: DocumentMeta) {
   const s = meta.settings;
-  const font = xml(firstFont(s.fontFamily));
-  const size = Math.round(s.fontSize * 2);
-  const line = Math.round(s.lineSpacing * 240);
-  const after = Math.round(s.paragraphSpacing * 20);
-  // Headings look as they do on the page (app/styles/document.css): regular weight, Google Docs' sizes, spacing and greys.
-  // Laid out as Word lays documents out (lineModel "font"), they take the document's line spacing, as on the page.
-  const fontLines = s.lineModel === "font";
-  const headingLine = fontLines ? "" : ' w:line="288" w:lineRule="auto"';
-  const heading = (level: number, pt: number, before: number, after: number, color?: string) =>
-    `<w:style w:type="paragraph" w:styleId="Heading${level}"><w:name w:val="heading ${level}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before="${before * 20}" w:after="${after * 20}"${headingLine}/><w:outlineLvl w:val="${level - 1}"/></w:pPr><w:rPr>${level === 6 ? "<w:i/>" : ""}${color ? `<w:color w:val="${color}"/>` : ""}<w:sz w:val="${pt * 2}"/></w:rPr></w:style>`;
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${font}" w:hAnsi="${font}" w:cs="${font}" w:eastAsia="${font}"/><w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="${after}" w:line="${line}" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="0" w:after="60"${fontLines ? "" : ' w:line="276" w:lineRule="auto"'}/></w:pPr><w:rPr><w:sz w:val="52"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="0" w:after="320"/></w:pPr><w:rPr><w:color w:val="666666"/><w:sz w:val="30"/></w:rPr></w:style>${heading(1, 20, 20, 6)}${heading(2, 16, 18, 6)}${heading(3, 14, 16, 4, "434343")}${heading(4, 12, 14, 4, "666666")}${heading(5, 11, 12, 4, "666666")}${heading(6, 11, 12, 4, "666666")}<w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:pPr><w:pBdr><w:left w:val="single" w:sz="18" w:space="8" w:color="D0D7DE"/></w:pBdr><w:ind w:left="360"/></w:pPr><w:rPr><w:color w:val="555555"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/><w:pPr><w:shd w:val="clear" w:color="auto" w:fill="F6F8FA"/><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New" w:cs="Courier New"/><w:sz w:val="19"/></w:rPr></w:style><w:style w:type="character" w:styleId="InlineCode"><w:name w:val="HTML Code"/><w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New" w:cs="Courier New"/></w:rPr></w:style><w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/><w:rPr><w:color w:val="1155CC"/><w:u w:val="single"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="TableHeading"><w:name w:val="Table Heading"/><w:basedOn w:val="Normal"/><w:rPr><w:b/></w:rPr></w:style><w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:pPr><w:spacing w:after="0"/></w:pPr></w:style></w:styles>`;
+  return wordStylesXml({
+    fontFamily: s.fontFamily,
+    fontSize: s.fontSize,
+    lineSpacing: s.lineSpacing,
+    paragraphSpacing: s.paragraphSpacing,
+    fontLines: s.lineModel === "font",
+    styles: s.styles,
+    theme: s.theme,
+  });
 }
 
 function numberingXml(numbering: Context["numbering"]) {
@@ -731,6 +735,7 @@ export async function documentToDocx(content: PMNode | DocxTab[], meta: Document
     '<Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>',
     ...(carried ? ['<Relationship Id="rId6" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/>'] : []),
     '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>',
+    '<Relationship Id="rId7" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>',
     '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>',
     ...(commentParts
       ? [
@@ -744,7 +749,7 @@ export async function documentToDocx(content: PMNode | DocxTab[], meta: Document
   const entries: ZipEntry[] = [
     {
       name: "[Content_Types].xml",
-      data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="jpeg" ContentType="image/jpeg"/><Default Extension="gif" ContentType="image/gif"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/><Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>${firstPage ? '<Override PartName="/word/header2.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/><Override PartName="/word/footer2.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>' : ""}${commentParts ? '<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/><Override PartName="/word/commentsExtended.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml"/>' : ""}<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>${carried ? '<Default Extension="odttf" ContentType="application/vnd.openxmlformats-officedocument.obfuscatedFont"/><Override PartName="/word/fontTable.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"/>' : ""}<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>`,
+      data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="jpeg" ContentType="image/jpeg"/><Default Extension="gif" ContentType="image/gif"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/><Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>${firstPage ? '<Override PartName="/word/header2.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/><Override PartName="/word/footer2.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>' : ""}${commentParts ? '<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/><Override PartName="/word/commentsExtended.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml"/>' : ""}<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/><Override PartName="/word/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>${carried ? '<Default Extension="odttf" ContentType="application/vnd.openxmlformats-officedocument.obfuscatedFont"/><Override PartName="/word/fontTable.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"/>' : ""}<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>`,
     },
     {
       name: "_rels/.rels",
@@ -753,6 +758,7 @@ export async function documentToDocx(content: PMNode | DocxTab[], meta: Document
     { name: "word/_rels/document.xml.rels", data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}</Relationships>` },
     { name: "word/document.xml", data: documentXml },
     { name: "word/styles.xml", data: stylesXml(meta) },
+    { name: "word/theme/theme1.xml", data: themeXml(activeTheme(meta.settings)) },
     { name: "word/settings.xml", data: settingsXml(meta, Boolean(carried)) },
     ...(carried ? [{ name: "word/fontTable.xml", data: carried.fontTable }, { name: "word/_rels/fontTable.xml.rels", data: carried.rels }, ...carried.files] : []),
     { name: "word/numbering.xml", data: numberingXml(ctx.numbering) },
