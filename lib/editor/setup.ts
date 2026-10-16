@@ -106,35 +106,48 @@ function markInputRule(pattern: RegExp, type: MarkType) {
   });
 }
 
-/** Inline code keeps the character that was typed. Code blocks are already left alone by input rules. */
-function straightInCode(rule: InputRule) {
-  const handler = (rule as unknown as { handler: (state: EditorState, match: RegExpMatchArray, start: number, end: number) => Transaction | null }).handler;
-  return new InputRule((rule as unknown as { match: RegExp }).match, (state, match, start, end) => {
-    const marks = state.storedMarks ?? state.doc.resolve(end).marks();
-    if (marks.some((mark) => mark.type === schema.marks.code)) return null;
-    return handler(state, match, start, end);
-  });
+/** Inline code keeps the typed quote. Code blocks never reach these rules. */
+function inInlineCode(state: EditorState, pos: number) {
+  const marks = state.storedMarks ?? state.doc.resolve(pos).marks();
+  return marks.some((mark) => mark.type === schema.marks.code);
 }
 
 /**
- * A straight quote opens at the start of a word and closes at the end, the way
- * Google Docs does. Opening follows the start of a block, whitespace, a line
- * break, an opening bracket, or an opening quote. The input-rules plugin
- * represents a hard break (and any other inline leaf) as U+FFFC in the text
- * it matches, so a quote after Shift+Enter opens too.
+ * A straight quote opens at the start of a word and closes at the end.
+ * Whitespace, a line break (U+FFFC in the text the input rules see), an
+ * opening bracket, or an opening quote starts a word. A quote after a
+ * sentence end still closes when it finishes one that is already open, so
+ * `" a. "` becomes `“ a. ”`. Quotes that are already curly are never rewritten.
  */
-const OPEN_QUOTE = /(?:^|[\s\{\[\(\<'"\u2018\u201C\uFFFC])/;
-const smartQuoteRules = [
-  new InputRule(new RegExp(OPEN_QUOTE.source + '(")$'), "“"),
-  new InputRule(/"$/, "”"),
-  new InputRule(new RegExp(OPEN_QUOTE.source + "(')$"), "‘"),
-  new InputRule(/'$/, "’"),
-].map(straightInCode);
+function opensQuote(before: string, open: string, close: string) {
+  if (!before) return true;
+  const prev = before[before.length - 1]!;
+  if (!/[\s\uFFFC{\[(<'"\u2018\u201C]/.test(prev)) return false;
+  if (/[.!?][ \t\u00A0]+$/.test(before)) {
+    let openQuotes = 0;
+    for (const ch of before) {
+      if (ch === open) openQuotes += 1;
+      else if (ch === close && openQuotes > 0) openQuotes -= 1;
+    }
+    if (openQuotes > 0) return false;
+  }
+  return true;
+}
+
+function smartQuoteRule(straight: '"' | "'", open: string, close: string) {
+  return new InputRule(straight === '"' ? /"$/ : /'$/, (state, _match, start, end) => {
+    if (inInlineCode(state, end)) return null;
+    const $pos = state.doc.resolve(end);
+    const before = $pos.parent.textBetween(0, $pos.parentOffset, "\n", "\ufffc");
+    return state.tr.insertText(opensQuote(before, open, close) ? open : close, start, end);
+  });
+}
+
+const smartQuoteRules = [smartQuoteRule('"', "“", "”"), smartQuoteRule("'", "‘", "’")];
 
 /**
- * Tools > Automatic substitutions: typographic quotes, dashes, symbols and
- * fractions as you type. Each rule checks the preference when it fires, so
- * turning it off takes effect immediately.
+ * Tools > Automatic substitutions, as you type. Each rule checks the
+ * preference when it fires, so turning it off takes effect immediately.
  */
 const SUBSTITUTIONS: InputRule[] = [
   ...smartQuoteRules,
@@ -150,9 +163,6 @@ const SUBSTITUTIONS: InputRule[] = [
   new InputRule(/>=$/, "≥"),
   new InputRule(/<=$/, "≤"),
   new InputRule(/\+\/-$/, "±"),
-  new InputRule(/(?:^|[\s(])(1\/2)\s$/, "½"),
-  new InputRule(/(?:^|[\s(])(1\/4)\s$/, "¼"),
-  new InputRule(/(?:^|[\s(])(3\/4)\s$/, "¾"),
 ];
 
 function whenEnabled(rule: InputRule, enabled: () => boolean) {

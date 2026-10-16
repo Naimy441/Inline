@@ -383,7 +383,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
     ],
     Tools: [
       { label: "Word count", onSelect: actions.wordCount },
-      { label: "Automatic substitutions", hint: "Smart quotes, dashes, ©, →, ½", checked: actions.substitutions, onSelect: actions.toggleSubstitutions },
+      { label: "Automatic substitutions", checked: actions.substitutions, onSelect: actions.toggleSubstitutions },
       ...(actions.focusMode
         ? []
         : ([
