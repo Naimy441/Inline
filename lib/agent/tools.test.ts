@@ -83,6 +83,16 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   list_tabs: {},
   create_tab: { title: "Notes" },
   rename_tab: { title: "Draft" },
+  list_files: {},
+  read_file: { path: "missing.txt" },
+  write_file: { path: "note.txt", content: "hello" },
+  edit_file: { path: "missing.txt", old_string: "a", new_string: "b" },
+  delete_file: { path: "missing.txt" },
+  run_command: { command: "true" },
+  read_draft: {},
+  edit_draft: { old_string: "lazy dog", new_string: "sleepy dog" },
+  write_draft: { content: "A private revision." },
+  discard_draft: {},
   save_version: { label: "Snapshot" },
   list_versions: {},
   restore_version: { version_id: "missing" },
@@ -126,10 +136,10 @@ describe("tool registry", () => {
 
   test("read-only and write tool lists partition the registry", () => {
     assert.deepEqual([...READ_ONLY_TOOL_NAMES, ...WRITE_TOOL_NAMES].sort(), TOOLS.map((tool) => tool.name).sort());
-    for (const name of ["read_document", "search_document", "get_outline", "get_pending_changes", "list_comments", "list_documents", "analyze_writing"]) {
+    for (const name of ["read_document", "search_document", "get_outline", "get_pending_changes", "list_comments", "list_documents", "analyze_writing", "list_files", "read_file", "read_draft", "list_versions"]) {
       assert.ok(READ_ONLY_TOOL_NAMES.includes(name), name);
     }
-    for (const name of ["edit_document", "write_document", "format_text", "add_comment", "keep_changes", "restore_version", "save_version"]) {
+    for (const name of ["edit_document", "write_document", "format_text", "add_comment", "keep_changes", "restore_version", "save_version", "write_file", "run_command", "edit_draft", "write_draft"]) {
       assert.ok(WRITE_TOOL_NAMES.includes(name), name);
     }
   });
@@ -1358,13 +1368,18 @@ describe("versions", () => {
     const versions = await runTool("list_versions", {}, ctx);
     const id = versions.text.match(/^- (\S+): "Draft 1" · claude/m)?.[1];
     assert.ok(id, versions.text);
-    const restored = await runTool("restore_version", { version_id: id }, ctx);
+    const blocked = await runTool("restore_version", { version_id: id }, ctx);
+    assert.equal(blocked.isError, true);
+    assert.match(blocked.text, /aren't saved/);
+    assert.match(md(doc), /slow red/);
+    const restored = await runTool("restore_version", { version_id: id, discard_unsaved: true }, ctx);
     assert.equal(restored.isError, undefined, restored.text);
     assert.match(restored.text, /Restored "Field notes" to "Draft 1"/);
     assert.equal(md(doc), SAMPLE);
     assert.equal(doc.hunks.length, 0, "a restore clears pending changes");
     const after = await runTool("list_versions", {}, ctx);
-    assert.match(after.text, /"Before restoring a version" · auto/);
+    assert.match(after.text, /"Draft 1" · claude/);
+    assert.doesNotMatch(after.text, /Before restoring/);
   });
 
   test("no versions yet, and unknown or unsafe ids", async () => {
@@ -1375,6 +1390,82 @@ describe("versions", () => {
     assert.match(missing.text, /Version not found/);
     const traversal = await runTool("restore_version", { version_id: "../../documents/x" }, ctx);
     assert.equal(traversal.isError, true);
+  });
+});
+
+const CHART_PY = `import struct, zlib
+def chunk(tag, data):
+    return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+w = h = 4
+raw = b"".join(b"\\x00" + bytes([20, 90, 200]) * w for _ in range(h))
+png = b"\\x89PNG\\r\\n\\x1a\\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+open("chart.png", "wb").write(png)
+print("wrote", len(png))
+`;
+
+describe("document folder", () => {
+  test("a Python script draws a chart, the picture lands in the document, and a version restores both", async () => {
+    const { doc, ctx } = await setup();
+    const before = md(doc);
+    const wrote = await runTool("write_file", { path: "chart.py", content: CHART_PY }, ctx);
+    assert.equal(wrote.isError, undefined, wrote.text);
+    const ran = await runTool("run_command", { command: "python3 chart.py" }, ctx);
+    assert.equal(ran.isError, undefined, ran.text);
+    assert.match(ran.text, /wrote/);
+    assert.equal(md(doc), before, "running a command does not change the document");
+
+    const listed = await runTool("list_files", {}, ctx);
+    assert.match(listed.text, /chart\.py/);
+    assert.match(listed.text, /chart\.png/);
+
+    const inserted = await runTool("insert_image", { file: "chart.png", alt: "Quarterly chart", position: "end" }, ctx);
+    assert.equal(inserted.isError, undefined, inserted.text);
+    assert.match(md(doc), new RegExp(`/api/documents/${doc.id}/files/chart.png`));
+
+    const saved = await runTool("save_version", { label: "With chart" }, ctx);
+    assert.equal(saved.isError, undefined, saved.text);
+    const id = saved.text.match(/\(([0-9a-f]{40})\)/)?.[1];
+    assert.ok(id, saved.text);
+
+    await runTool("write_file", { path: "chart.py", content: "print('changed')\n" }, ctx);
+    await runTool("edit_document", { old_string: "lazy dog", new_string: "sleepy dog" }, ctx);
+    const restored = await runTool("restore_version", { version_id: id, discard_unsaved: true }, ctx);
+    assert.equal(restored.isError, undefined, restored.text);
+    assert.match(md(doc), /Quarterly chart/);
+    assert.match(md(doc), /lazy dog/);
+    const script = await runTool("read_file", { path: "chart.py" }, ctx);
+    assert.match(script.text, /chart\.png/);
+    const picture = await runTool("read_file", { path: "chart.png" }, ctx);
+    assert.equal(picture.images?.[0]?.mimeType, "image/png");
+  });
+
+  test("files and commands stay inside the document folder", async () => {
+    const { doc, ctx } = await setup();
+    for (const filePath of ["../package.json", "/etc/passwd", "document.json", ".git/config"]) {
+      const result = await runTool("read_file", { path: filePath }, ctx);
+      assert.equal(result.isError, true, filePath);
+    }
+    const passwd = await runTool("run_command", { command: "python3 -c 'print(open(\"/etc/passwd\").read())'" }, ctx);
+    assert.equal(passwd.isError, undefined, passwd.text);
+    assert.match(passwd.text, /root:x:0:0:root:\/work:\/bin\/sh/);
+    assert.doesNotMatch(passwd.text, /\/home\//);
+    const host = await runTool("run_command", { command: "python3 -c 'open(\"/workspace/package.json\").read()'" }, ctx);
+    assert.equal(host.isError, true, host.text);
+    const rewrite = await runTool("run_command", { command: "python3 -c 'open(\"document.json\",\"w\").write(\"nope\")'" }, ctx);
+    assert.equal(rewrite.isError, true, rewrite.text);
+    assert.match(md(doc), /lazy dog/);
+  });
+
+  test("a draft changes a copy until the user keeps it", async () => {
+    const { doc, ctx } = await setup();
+    const before = md(doc);
+    const drafted = await runTool("write_draft", { content: "A completely different draft." }, ctx);
+    assert.equal(drafted.isError, undefined, drafted.text);
+    assert.equal(md(doc), before);
+    assert.match((await runTool("read_draft", {}, ctx)).text, /completely different draft/);
+    await doc.keepDraft();
+    assert.match(md(doc), /completely different draft/);
+    assert.match((await runTool("read_draft", {}, ctx)).text, /No revision yet/);
   });
 });
 

@@ -224,15 +224,15 @@ describe("tool use", () => {
     });
     await chat.send({ text: "Rewrite it" });
     await idle(chat);
-    const [checkpoint] = await doc.versions();
-    assert.equal(checkpoint!.label, "Before Claude's edits");
-    const { readVersion } = await import("@/lib/server/store");
+    const id = lastAssistant(chat).changes?.[0]?.checkpoint;
+    assert.ok(id, "the reply remembers the snapshot taken before its edits");
+    assert.equal((await doc.versions()).length, 0, "a checkpoint is not a saved version");
+    const { readDocumentVersion } = await import("@/lib/server/repo");
     const { loadDoc } = await import("@/lib/server/hub");
     const { docToMarkdown } = await import("@/lib/doc/markdown");
-    const stored = await readVersion(doc.id, checkpoint!.id);
+    const stored = await readDocumentVersion(doc.id, id);
     assert.equal(docToMarkdown(loadDoc(stored!.doc)), NOTE);
-    assert.equal(lastAssistant(chat).changes?.[0]?.checkpoint, checkpoint!.id, "the reply links to it");
-    await doc.restoreVersion(checkpoint!.id);
+    await doc.restoreVersion(id, { discard: true });
     assert.equal(markdownOf(doc), NOTE, "restoring it undoes the reply");
   });
 

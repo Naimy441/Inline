@@ -448,7 +448,7 @@ export const AgentPanel = forwardRef<
           </>
         }
       >
-        <p>The document goes back to how it was before this reply&apos;s edits, and the chat rewinds to before your message, so Claude forgets it too. The current text is saved in version history.</p>
+        <p>The document goes back to how it was before this reply&apos;s edits, and the chat rewinds to before your message, so Claude forgets it too. What you have now is not saved as a version unless you saved one.</p>
       </Dialog>
     </aside>
   );

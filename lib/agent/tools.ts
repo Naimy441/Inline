@@ -26,7 +26,18 @@ import { BLOCK_SEPARATOR, markdownToDoc, serializeDoc } from "@/lib/doc/markdown
 import { changedRanges, isUserSuggestion } from "@/lib/doc/review";
 import { FONT_FAMILIES, googleFontValue, PAPER_SIZES, type DocumentSettings, type PaperSize } from "@/lib/doc/settings";
 import { findGoogleFont, keepGoogleFont } from "@/lib/server/googleFonts";
-import { documentHub, type LiveDocument } from "@/lib/server/hub";
+import { documentHub, loadDoc, type LiveDocument } from "@/lib/server/hub";
+import {
+  deleteWorkspaceFile,
+  listWorkspaceFiles,
+  readDraft,
+  readWorkspaceBytes,
+  readWorkspaceText,
+  runWorkspaceCommand,
+  workspaceFileUrl,
+  writeDraft,
+  writeWorkspaceFile,
+} from "@/lib/server/repo";
 import { lintWriting } from "@/lib/writing/lint";
 import { readFile } from "node:fs/promises";
 import { attachmentText } from "@/lib/agent/attachments";
@@ -327,6 +338,18 @@ function blockHasLock(node: PMNode) {
     return !locked;
   });
   return locked;
+}
+
+/** Edit the private copy of the document. The live document is not touched. */
+async function changeDraft(doc: LiveDocument, build: (current: PMNode) => Transform) {
+  const existing = await readDraft(doc.id);
+  const node = existing ? loadDoc(existing.doc) : doc.doc;
+  const tr = build(node);
+  if (!tr.docChanged) return { changed: false as const, words: docWordCount(node) };
+  const file = await writeDraft(doc.id, tr.doc.toJSON());
+  const words = docWordCount(tr.doc);
+  doc.setDraft({ updatedAt: file.updatedAt, words });
+  return { changed: true as const, words };
 }
 
 // ---------------------------------------------------------------------------
@@ -1118,11 +1141,12 @@ export const TOOLS = [
     name: "insert_image",
     title: "Insert image",
     description:
-      "Insert an image as its own block: an image the user attached in this chat (attachment_id), an Inline upload URL (/api/uploads/...), or a web image URL (https://...). Place it at the start, end, or before/after a line.",
+      "Insert an image as its own block: a file in this document's folder (file, such as chart.png), an image the user attached in this chat (attachment_id), an Inline upload URL (/api/uploads/...), or a web image URL (https://...). Place it at the start, end, or before/after a line.",
     shape: {
       document_id: documentId,
+      file: z.string().optional().describe("Path of an image in this document's folder, such as chart.png. From a script you just ran."),
       attachment_id: z.string().optional().describe("Id of an image the user attached to a chat message."),
-      url: z.string().optional().describe("Image URL, when not using attachment_id."),
+      url: z.string().optional().describe("Image URL, when not using a file or attachment_id."),
       alt: z.string().optional().describe("Alternative text describing the image."),
       width: z.number().int().min(16).max(2000).optional().describe("Width in pixels."),
       align: z.enum(["left", "center", "right"]).optional(),
@@ -1133,14 +1157,20 @@ export const TOOLS = [
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
       let src = args.url?.trim() ?? "";
-      if (args.attachment_id) {
+      if (args.file) {
+        const found = await readWorkspaceBytes(doc.id, args.file).catch((error: unknown) => {
+          throw error;
+        });
+        if (!found.mime.startsWith("image/")) return fail("That file isn't an image. Use png, jpg, gif, webp or svg.");
+        src = workspaceFileUrl(doc.id, args.file);
+      } else if (args.attachment_id) {
         const upload = await findUpload(args.attachment_id).catch(() => null);
         if (!upload) return fail(`No attachment with id ${args.attachment_id}.`);
         if (!/^(png|jpg|gif|webp|svg)$/.test(upload.extension)) return fail("That attachment isn't an image.");
         src = `/api/uploads/${args.attachment_id}.${upload.extension}`;
       }
-      if (!src) return fail("Pass attachment_id or url.");
-      if (!/^(https?:\/\/|\/api\/uploads\/)/i.test(src)) return fail("The image URL must start with https:// or /api/uploads/.");
+      if (!src) return fail("Pass file, attachment_id or url.");
+      if (!/^(https?:\/\/|\/api\/uploads\/|\/api\/documents\/)/i.test(src)) return fail("The image URL must start with https://, /api/uploads/ or be a file in this document's folder.");
       if ((args.position === "after_line" || args.position === "before_line") && !args.line) return fail("line is required when position is after_line or before_line.");
       const attrs = [args.width ? `width=${args.width}` : "", `align=${args.align ?? "center"}`].filter(Boolean).join(" ");
       const markdown = `![${(args.alt ?? "").replace(/[\[\]]/g, "")}](${src.replace(/[()\s]/g, encodeURIComponent)}){${attrs}}`;
@@ -1571,43 +1601,232 @@ export const TOOLS = [
   }),
 
   defineTool({
+    name: "list_files",
+    title: "List files",
+    description:
+      "List files in this document's private folder. The folder is a git repo that belongs only to this document: scripts, data and images you create live here, and a saved version commits them together with the document. The document itself is not a file in this list; read it with read_document.",
+    shape: { document_id: documentId },
+    write: false,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      const files = await listWorkspaceFiles(doc.id);
+      if (!files.length) return ok("The folder is empty. Write a file, or run a command that creates one.");
+      return ok(files.map((file) => `- ${file.path} (${file.kind}, ${file.size} bytes)`).join("\n"));
+    },
+  }),
+
+  defineTool({
+    name: "read_file",
+    title: "Read file",
+    description: "Read a text file in this document's folder, or an image (returned as a picture). Paths stay inside the folder.",
+    shape: { document_id: documentId, path: z.string().describe("Path relative to the document folder, such as chart.py or charts/q3.png.") },
+    write: false,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      const found = await readWorkspaceText(doc.id, args.path);
+      if (found.kind === "image") {
+        return { text: `${args.path} (${found.mime}, ${found.data.byteLength} bytes).`, images: [{ data: found.data.toString("base64"), mimeType: found.mime }] };
+      }
+      const text = found.text.length > 100_000 ? `${found.text.slice(0, 100_000)}\n…[truncated]` : found.text;
+      return ok(text || "(empty file)");
+    },
+  }),
+
+  defineTool({
+    name: "write_file",
+    title: "Write file",
+    description:
+      "Create or overwrite a text file in this document's folder. Use it for scripts and data. It cannot write outside the folder, and it does not change the document. Generate images by running the script, then insert_image with file.",
+    shape: {
+      document_id: documentId,
+      path: z.string().describe("Path relative to the document folder."),
+      content: z.string().describe("The full new contents."),
+    },
+    write: true,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      await writeWorkspaceFile(doc.id, args.path, args.content);
+      return ok(`Wrote ${args.path} in the folder for "${doc.meta.title}". The document is unchanged.`);
+    },
+  }),
+
+  defineTool({
+    name: "edit_file",
+    title: "Edit file",
+    description: "Replace an exact string in a file in this document's folder. old_string must match once. This does not change the document.",
+    shape: {
+      document_id: documentId,
+      path: z.string(),
+      old_string: z.string(),
+      new_string: z.string(),
+    },
+    write: true,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      const found = await readWorkspaceText(doc.id, args.path);
+      if (found.kind !== "text") return fail("That file isn't text.");
+      const hits = found.text.split(args.old_string).length - 1;
+      if (!args.old_string) return fail("old_string must not be empty.");
+      if (hits === 0) return fail("old_string was not found in the file.");
+      if (hits > 1) return fail(`old_string appears ${hits} times. Include more of the file so it matches once.`);
+      await writeWorkspaceFile(doc.id, args.path, found.text.replace(args.old_string, args.new_string));
+      return ok(`Edited ${args.path}.`);
+    },
+  }),
+
+  defineTool({
+    name: "delete_file",
+    title: "Delete file",
+    description: "Delete a file from this document's folder. It cannot delete the document or anything outside the folder.",
+    shape: { document_id: documentId, path: z.string() },
+    write: true,
+    destructive: true,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      await deleteWorkspaceFile(doc.id, args.path);
+      return ok(`Deleted ${args.path}.`);
+    },
+  }),
+
+  defineTool({
+    name: "run_command",
+    title: "Run command",
+    description:
+      "Run a shell command in this document's folder only. The command cannot see other documents or the rest of the computer, and it has no network. Python 3's standard library is available; write a script with write_file, run it, and it can save a PNG or SVG in the folder. Then insert_image with file to place that image in the document. The document file and the git history are read-only from here. Default timeout is 30 seconds (max 120).",
+    shape: {
+      document_id: documentId,
+      command: z.string().describe("Shell command, run with bash. The working directory is the document folder."),
+      timeout_seconds: z.number().int().min(1).max(120).optional(),
+    },
+    write: true,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      const timeout = (args.timeout_seconds ?? 30) * 1000;
+      const result = await runWorkspaceCommand(doc.id, args.command, timeout);
+      const output = [`exit ${result.code}`, result.stdout && `stdout:\n${result.stdout}`, result.stderr && `stderr:\n${result.stderr}`].filter(Boolean).join("\n");
+      return result.code === 0 ? ok(output) : fail(output);
+    },
+  }),
+
+  defineTool({
+    name: "read_draft",
+    title: "Read draft",
+    description:
+      "Read the private revision of the document, if you have started one. The revision is not the document the user is looking at. Nothing is here until edit_draft or write_draft.",
+    shape: { document_id: documentId },
+    write: false,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      const draft = await readDraft(doc.id);
+      if (!draft) return ok("No revision yet. edit_draft or write_draft starts one from the current document without changing it.");
+      return ok(serializeDoc(loadDoc(draft.doc)).markdown);
+    },
+  }),
+
+  defineTool({
+    name: "edit_draft",
+    title: "Edit draft",
+    description:
+      "Edit a private copy of the document without changing the document the user has open. The first call copies the current document. old_string matches that copy the same way edit_document matches the document. The user keeps or discards the result from a bar on the document; you cannot keep it yourself. Use this for a rewrite or an experiment they should accept as a whole. For a small change they asked you to make, use edit_document instead.",
+    shape: {
+      document_id: documentId,
+      old_string: z.string(),
+      new_string: z.string(),
+      replace_all: z.boolean().optional(),
+    },
+    write: true,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      const scrub = scrubWritten(args.new_string);
+      const result = await changeDraft(doc, (current) => applyStringEdits(current, [{ ...args, new_string: scrub.text }]));
+      if (!result.changed) return fail("The edit produced no change.");
+      return withWriteCheck(ok(`Prepared a revision of "${doc.meta.title}" (${result.words} words). The document is unchanged until the user keeps it.`), [scrub]);
+    },
+  }),
+
+  defineTool({
+    name: "write_draft",
+    title: "Write draft",
+    description:
+      "Replace the private revision with new Markdown, without changing the document the user has open. The user keeps or discards it from the bar on the document. Use this for a full rewrite they should accept as a whole; for a small change they asked for, use edit_document.",
+    shape: { document_id: documentId, content: z.string().describe("The full revision as Markdown.") },
+    write: true,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      const scrub = scrubWritten(args.content);
+      const result = await changeDraft(doc, (current) => writeDocument(current, scrub.text));
+      if (!result.changed) return fail("The revision matches the document, so there is nothing to keep.");
+      return withWriteCheck(ok(`Prepared a revision of "${doc.meta.title}" (${result.words} words). The document is unchanged until the user keeps it.`), [scrub]);
+    },
+  }),
+
+  defineTool({
+    name: "discard_draft",
+    title: "Discard draft",
+    description: "Throw away the private revision. The document the user has open is left as it is.",
+    shape: { document_id: documentId },
+    write: true,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      if (!(await readDraft(doc.id))) return ok("There was no revision to discard.");
+      await doc.dropDraft();
+      return ok("Discarded the revision. The document is unchanged.");
+    },
+  }),
+
+  defineTool({
     name: "save_version",
     title: "Save version",
-    description: "Save a named snapshot of a document to its version history so the user can return to it.",
+    description:
+      "Save a named version of the document and its folder. This is a git commit the user can return to. Typing is already stored and is not a version; only this is. Save when the user asks for a version, or just before a change they want to be able to undo. Don't save after ordinary edits.",
     shape: { document_id: documentId, label: z.string() },
     write: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
       const version = await doc.saveVersion(args.label, "claude");
-      return ok(`Saved version "${version.label}" (${version.id}).`);
+      const files = version.files.length ? ` Files: ${version.files.join(", ")}.` : "";
+      return ok(`Saved version "${version.label}" (${version.id}).${files}`);
     },
   }),
 
   defineTool({
     name: "list_versions",
     title: "List versions",
-    description: "List saved versions of a document (named versions, checkpoints taken before your edits, and autosaves).",
+    description: "List versions that were saved on purpose, newest first. There are no automatic versions. Each line is the id, label, who saved it, time and word count, plus files from the folder that were part of it.",
     shape: { document_id: documentId },
     write: false,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
       const versions = await doc.versions();
-      if (!versions.length) return ok("No saved versions.");
-      return ok(versions.slice(0, 50).map((version) => `- ${version.id}: "${version.label}" · ${version.author} · ${new Date(version.createdAt).toISOString()} · ${version.wordCount} words`).join("\n"));
+      if (!versions.length) return ok("No saved versions. What you see is the working copy; save_version commits one.");
+      return ok(
+        versions
+          .slice(0, 50)
+          .map((version) => {
+            const files = version.files.length ? ` · files: ${version.files.slice(0, 8).join(", ")}` : "";
+            return `- ${version.id}: "${version.label}" · ${version.author} · ${new Date(version.createdAt).toISOString()} · ${version.wordCount} words${files}`;
+          })
+          .join("\n"),
+      );
     },
   }),
 
   defineTool({
     name: "restore_version",
     title: "Restore version",
-    description: "Replace a document's content with a saved version. The current content is saved as a version first, so this can be undone.",
-    shape: { document_id: documentId, version_id: z.string() },
+    description:
+      "Roll the document and its folder back to a saved version. If there are changes that aren't saved as a version, this fails unless discard_unsaved is true. Pass that only when the user asked to roll back and lose what isn't saved. Saving a version first keeps the current text.",
+    shape: {
+      document_id: documentId,
+      version_id: z.string(),
+      discard_unsaved: z.boolean().optional().describe("Discard changes that aren't a saved version. Only when the user asked to."),
+    },
     write: true,
     destructive: true,
     async handler(args, ctx) {
       if (ctx.readOnly) return fail("You are in Ask mode, so documents can't be changed.");
       const doc = await resolveDocument(ctx, args.document_id);
-      const version = await doc.restoreVersion(args.version_id);
+      const version = await doc.restoreVersion(args.version_id, { discard: args.discard_unsaved });
       return ok(`Restored "${doc.meta.title}" to "${version.label}" from ${new Date(version.createdAt).toISOString()}.`);
     },
   }),

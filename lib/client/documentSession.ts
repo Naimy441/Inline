@@ -67,6 +67,7 @@ type ServerEvent =
   | { type: "activity"; activity: AgentActivity | null }
   | { type: "command"; command: ClientCommand }
   | { type: "tabs"; tabs: DocumentTab[] }
+  | { type: "draft"; draft: { updatedAt: number; words: number } | null }
   | { type: "deleted" };
 
 export type DocumentUiState = {
@@ -93,6 +94,8 @@ export type DocumentUiState = {
   flow: boolean;
   /** Editing changes the document directly; suggesting records edits for review; viewing is read-only. */
   mode: EditorMode;
+  /** A revision Claude prepared. The document itself is unchanged until the user keeps it. */
+  draft: { updatedAt: number; words: number } | null;
 };
 
 export type EditorMode = "editing" | "suggesting" | "viewing";
@@ -235,6 +238,7 @@ export class DocumentSession {
     exporting: false,
     flow: false,
     mode: "editing",
+    draft: null,
   });
   /** Bumped on every editor transaction so toolbars can re-read the state. */
   readonly editor = new Store<EditorState | null>(null);
@@ -824,6 +828,9 @@ export class DocumentSession {
         return;
       case "tabs":
         setTabs(event.tabs);
+        return;
+      case "draft":
+        this.ui.set((ui) => ({ ...ui, draft: event.draft }));
         return;
       case "deleted":
         this.ui.set((ui) => ({ ...ui, status: "deleted" }));

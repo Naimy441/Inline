@@ -14,7 +14,7 @@ import { fakeClaude, type FakeModel } from "@/lib/agent/testing/fakeClaude";
 import type { AssistantMessage, ChatEvent, ChatSettings, ToolPart, UserMessage } from "@/lib/agent/types";
 import { docToMarkdown } from "@/lib/doc/markdown";
 import { documentHub } from "@/lib/server/hub";
-import { listVersions, readChatFile, writeChatFile } from "@/lib/server/store";
+import { readChatFile, writeChatFile } from "@/lib/server/store";
 
 /**
  * The agent runtime driven by a scripted Claude Code (see testing/fakeClaude.ts).
@@ -300,10 +300,12 @@ describe("editing through MCP", () => {
       await claude.call("edit_document", { old_string: "Findings", new_string: `Findings ${turnInput.text}` });
     });
     const { doc, chat } = await newChat();
-    await turn(chat, "swift");
-    await turn(chat, "fast");
-    const checkpoints = (await listVersions(doc.id)).filter((version) => version.label === "Before Claude's edits");
-    assert.equal(checkpoints.length, 2);
+    const first = await turn(chat, "swift");
+    const second = await turn(chat, "fast");
+    const checkpoints = [first.changes?.[0]?.checkpoint, second.changes?.[0]?.checkpoint];
+    assert.ok(checkpoints[0] && checkpoints[1]);
+    assert.notEqual(checkpoints[0], checkpoints[1]);
+    assert.equal((await doc.versions()).length, 0, "a checkpoint is not a saved version");
   });
 
   it("refuses edits in Ask mode and marks the tool call failed", async () => {

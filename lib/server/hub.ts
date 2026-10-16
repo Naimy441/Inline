@@ -24,16 +24,23 @@ import {
 import { libraryChanged } from "@/lib/server/changes";
 import { log } from "@/lib/server/log";
 import {
+  discardDraft,
+  hasUnsavedChanges,
+  listDocumentVersions,
+  readDocumentVersion,
+  readDraft,
+  restoreDocumentVersion,
+  saveDocumentVersion,
+  snapshotRewind,
+  writeDraft,
+  type VersionSummary,
+} from "@/lib/server/repo";
+import {
   deleteDocumentFile,
   listDocumentIds,
-  listVersions,
-  pruneVersions,
   readDocumentFile,
-  readVersion,
   writeDocumentFile,
-  writeVersion,
   type StoredDocumentFile,
-  type VersionSummary,
   documentFilePath,
   FileSummaryCache,
 } from "@/lib/server/store";
@@ -79,6 +86,7 @@ export type HubEvent =
   | { type: "activity"; activity: AgentActivity | null }
   | { type: "command"; command: ClientCommand }
   | { type: "tabs"; tabs: DocumentTab[] }
+  | { type: "draft"; draft: { updatedAt: number; words: number } | null }
   | { type: "deleted" };
 
 export type DocumentSnapshot = {
@@ -101,7 +109,6 @@ export type ClientLayout = PageFall & { version: number; words: number; at: numb
 
 const STEP_LOG_LIMIT = 2000;
 const PERSIST_DELAY_MS = 400;
-const AUTO_VERSION_INTERVAL_MS = 10 * 60 * 1000;
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 const UNLOAD_AFTER_MS = 15 * 60 * 1000;
 
@@ -138,9 +145,9 @@ export class LiveDocument {
   private log: Array<{ step: Step; clientID: string }> = [];
   private listeners = new Set<(event: HubEvent) => void>();
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
-  private lastAutoVersion = 0;
-  private lastVersionId: string | null = null;
-  private dirtySinceVersion = false;
+  /** Last rewind snapshot, reused until the document changes again. Not a saved version. */
+  private lastRewindId: string | null = null;
+  private dirtySinceRewind = true;
   private deleted = false;
 
   constructor(file: StoredDocumentFile) {
@@ -275,7 +282,7 @@ export class LiveDocument {
       ...(hunksChanged ? { hunks: this.hunksJSON() } : {}),
     });
     this.meta = { ...this.meta, updatedAt: Date.now() };
-    this.dirtySinceVersion = true;
+    this.dirtySinceRewind = true;
     this.lastUsed = Date.now();
     // The title follows the first line as the letters arrive, not after the save delay.
     this.syncAutoTitle();
@@ -518,37 +525,32 @@ export class LiveDocument {
   }
 
   // --- versions -------------------------------------------------------------
+  // A version is a git commit of this document and its folder. Typing only
+  // updates the working tree, which is not a version.
 
-  async saveVersion(label: string, author: "user" | "claude" | "auto") {
-    const version = {
-      id: `${Date.now().toString(36)}-${newId(6)}`,
-      documentId: this.id,
-      label: label.trim() || "Saved version",
-      createdAt: Date.now(),
+  async saveVersion(label: string, author: "user" | "claude") {
+    await this.flush();
+    return saveDocumentVersion(this.id, {
+      label,
       author,
       title: this.meta.title,
-      doc: this.doc.toJSON(),
       wordCount: docWordCount(this.doc),
-      ...(this.hunks.length ? { hunks: this.hunksJSON() } : {}),
-    };
-    await writeVersion(version);
-    if (author === "auto") void pruneVersions(this.id).catch((error) => log("error", "pruning versions failed", { documentId: this.id, error }));
-    this.dirtySinceVersion = false;
-    this.lastAutoVersion = Date.now();
-    this.lastVersionId = version.id;
-    const { doc: _doc, hunks, ...summary } = version;
-    return hunks?.length ? { ...summary, pendingChanges: hunks.length } : summary;
+      pending: this.hunks.length,
+    });
   }
 
   async versions(): Promise<VersionSummary[]> {
-    return listVersions(this.id);
+    return listDocumentVersions(this.id);
   }
 
-  async restoreVersion(versionId: string) {
-    const version = await readVersion(this.id, versionId);
-    if (!version) throw new Error("Version not found.");
-    await this.saveVersion("Before restoring a version", "auto");
-    // Pending changes (Claude's and the user's suggestions) are kept in that version, so restoring it brings them back.
+  /** Whether the working tree differs from the last saved version. */
+  unsavedChanges() {
+    return hasUnsavedChanges(this.id);
+  }
+
+  async restoreVersion(versionId: string, options: { discard?: boolean } = {}) {
+    await this.flush();
+    const version = await restoreDocumentVersion(this.id, versionId, options);
     const restored = loadDoc(version.doc);
     const tr = new Transform(this.doc);
     tr.replaceWith(0, this.doc.content.size, restored.content);
@@ -565,14 +567,58 @@ export class LiveDocument {
       this.emit({ type: "hunks", version: this.version, hunks: this.hunksJSON() });
       this.schedulePersist();
     }
+    this.dirtySinceRewind = true;
     return version;
   }
 
-  /** Called before an agent turn edits the document, so the user can always go back. */
-  /** Returns the id of a version holding the current content (a new one only when something changed since the last). */
+  /**
+   * Remember the document as it is, so a reply can be undone. This is a git
+   * object off to the side: it is not a saved version and does not appear in history.
+   */
   async checkpoint(label: string): Promise<string> {
-    if (!this.dirtySinceVersion && this.lastVersionId) return this.lastVersionId;
-    return (await this.saveVersion(label, "auto")).id;
+    if (!this.dirtySinceRewind && this.lastRewindId) return this.lastRewindId;
+    await this.flush();
+    const id = await snapshotRewind(this.id, label);
+    this.lastRewindId = id;
+    this.dirtySinceRewind = false;
+    return id;
+  }
+
+  setDraft(draft: { updatedAt: number; words: number } | null) {
+    this.emit({ type: "draft", draft });
+  }
+
+  /** Replace the document with the revision Claude prepared. The user asked to keep it. */
+  async keepDraft() {
+    const draft = await readDraft(this.id);
+    if (!draft) throw new Error("There is no revision to keep.");
+    const restored = loadDoc(draft.doc);
+    const tr = new Transform(this.doc);
+    tr.replaceWith(0, this.doc.content.size, restored.content);
+    if (!this.applyTransform(tr, { kind: "system", label: "keep-draft" }, { hunks: [] })) {
+      if (this.hunks.length) {
+        this.hunks = [];
+        this.emit({ type: "hunks", version: this.version, hunks: [] });
+        this.schedulePersist();
+      }
+    }
+    await discardDraft(this.id);
+    this.setDraft(null);
+    return { words: docWordCount(this.doc) };
+  }
+
+  async dropDraft() {
+    await discardDraft(this.id);
+    this.setDraft(null);
+  }
+
+  /** Used by the draft tools to copy the live document the first time. */
+  async seedDraft() {
+    const existing = await readDraft(this.id);
+    if (existing) return existing;
+    const file = await writeDraft(this.id, this.doc.toJSON());
+    this.setDraft({ updatedAt: file.updatedAt, words: docWordCount(this.doc) });
+    return file;
   }
 
   // --- persistence ------------------------------------------------------------
@@ -602,9 +648,6 @@ export class LiveDocument {
     this.syncAutoTitle();
     await writeDocumentFile(this.toFile());
     libraryChanged();
-    if (this.dirtySinceVersion && Date.now() - this.lastAutoVersion > AUTO_VERSION_INTERVAL_MS) {
-      await this.saveVersion("Autosave", "auto");
-    }
   }
 
   async flush() {

@@ -5,7 +5,8 @@ type Context = { params: Promise<{ id: string }> };
 
 export const GET = route(async (_request, context: Context) => {
   const doc = await routeDocument(context);
-  return json({ versions: await doc.versions() });
+  const [versions, dirty] = await Promise.all([doc.versions(), doc.unsavedChanges()]);
+  return json({ versions, dirty });
 });
 
 const Body = z.object({ label: z.string().trim().max(120).optional() });

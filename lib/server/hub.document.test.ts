@@ -14,7 +14,7 @@ import { hunkToJSON, type Hunk } from "@/lib/doc/review";
 import { schema } from "@/lib/doc/schema";
 import { DEFAULT_SETTINGS, type DocumentMeta } from "@/lib/doc/settings";
 import { LiveDocument, StaleEpochError, StepConflictError, documentHub, loadDoc, type HubEvent } from "@/lib/server/hub";
-import { dataDir, readDocumentFile, type StoredDocumentFile } from "@/lib/server/store";
+import { dataDir, documentFilePath, readDocumentFile, type StoredDocumentFile } from "@/lib/server/store";
 
 // The store resolves its directory on every call, so this applies before any write.
 process.env.INLINE_DATA_DIR = mkdtempSync(path.join(tmpdir(), "inline-hub-"));
@@ -207,7 +207,8 @@ describe("DocumentHub lifecycle", () => {
     assert.equal(live.subscriberCount, 0);
     assert.equal(hub.activeDocumentId, null);
     assert.equal(await hub.get(live.id), null);
-    assert.equal(existsSync(path.join(dataDir(), "documents", `${live.id}.json`)), false);
+    assert.equal(existsSync(documentFilePath(live.id)), false);
+    assert.equal(existsSync(path.join(dataDir(), "repos", live.id)), false);
     assert.equal(existsSync(path.join(dataDir(), "versions", live.id)), false);
     assert.equal((await hub.list()).some((m) => m.id === live.id), false);
   });
@@ -645,55 +646,55 @@ describe("versions", () => {
     assert.equal(first.documentId, live.id);
     assert.equal(first.title, "Versioned");
     assert.equal(first.wordCount, 14);
+    assert.match(first.id, /^[0-9a-f]{40}$/);
     assert.equal("doc" in first, false);
-    await sleep(3);
+    live.receiveClientSteps(live.version, insertSteps(live.doc, 1, "x"), "a");
     const second = await live.saveVersion("Draft 2", "claude");
     const listed = await live.versions();
     assert.deepEqual(listed.map((v) => v.id), [second.id, first.id]);
     assert.equal(listed.some((v) => "doc" in v), false);
+    await assert.rejects(live.saveVersion("Again", "user"), /Nothing has changed/);
   });
 
-  it("restoreVersion snapshots the current state (with its pending changes) first, then restores the version's own", async () => {
+  it("restoreVersion keeps unsaved work unless asked to drop it, and brings back the version's pending changes", async () => {
     const live = await documentHub().create({ title: "Restore", markdown: SAMPLE });
-    const saved = await live.saveVersion("Clean", "user");
-    const original = textOf(live.doc);
     agentEdit(live, "lazy dog", "sleepy cat");
+    const saved = await live.saveVersion("Suggested", "user");
+    assert.equal(saved.pendingChanges, 1);
+    const withHunk = textOf(live.doc);
+    live.review("accept", "all");
     live.receiveClientSteps(live.version, insertSteps(live.doc, 1, "Edited: "), "a");
-    const edited = textOf(live.doc);
-    assert.equal(live.hunks.length, 1);
-    await sleep(3);
     const { of } = record(live);
-    const restored = await live.restoreVersion(saved.id);
+    await assert.rejects(live.restoreVersion(saved.id), /aren't saved/);
+    assert.match(textOf(live.doc), /Edited:/);
+    const restored = await live.restoreVersion(saved.id, { discard: true });
     assert.equal(restored.id, saved.id);
-    assert.equal(textOf(live.doc), original);
-    assert.equal(live.hunks.length, 0);
-    assert.ok(of("steps")[0]!.clientIDs.every((id) => id === "system:restore"));
-    const versions = await live.versions();
-    const backup = versions.find((v) => v.label === "Before restoring a version");
-    assert.ok(backup);
-    assert.equal(backup.author, "auto");
-    // The backup holds the edited text, so the restore itself can be undone.
-    assert.equal(backup.pendingChanges, 1, "the pending change is kept in the backup");
-    await live.restoreVersion(backup.id);
-    assert.equal(textOf(live.doc), edited);
-    // ...and restoring it brings the pending change back, still reviewable.
+    assert.equal(textOf(live.doc), withHunk);
     assert.equal(live.hunks.length, 1);
     assert.equal(live.hunksJSON()[0]!.insertedText, "sleepy cat");
-    live.review("reject", "all");
-    assert.match(textOf(live.doc), /lazy dog/);
+    assert.ok(of("steps")[0]!.clientIDs.every((id) => id === "system:restore"));
+    assert.deepEqual(
+      (await live.versions()).map((version) => version.label),
+      ["Suggested"],
+    );
     await assert.rejects(live.restoreVersion("nope"), /Version not found/);
   });
 
-  it("checkpoint saves only when there are changes since the last version", async () => {
+  it("checkpoint remembers the text without adding a version", async () => {
     const live = await documentHub().create({ markdown: SAMPLE });
+    const before = textOf(live.doc);
     const first = await live.checkpoint("Before Claude");
-    assert.equal((await live.versions()).find((version) => version.id === first)?.label, "Before Claude");
-    assert.equal(await live.checkpoint("Before Claude"), first, "no changes: the same version");
+    assert.match(first, /^[0-9a-f]{40}$/);
+    assert.equal((await live.versions()).length, 0);
+    assert.equal(await live.checkpoint("Before Claude"), first, "no changes: the same snapshot");
     live.receiveClientSteps(live.version, insertSteps(live.doc, 1, "x"), "a");
     const second = await live.checkpoint("Before Claude again");
     assert.notEqual(second, first);
     assert.equal(await live.checkpoint("again"), second);
-    assert.equal((await live.versions()).length, 2);
+    assert.equal((await live.versions()).length, 0);
+    const { readDocumentVersion } = await import("@/lib/server/repo");
+    const stored = await readDocumentVersion(live.id, first);
+    assert.equal(textOf(loadDoc(stored!.doc)), before);
   });
 });
 
@@ -706,7 +707,7 @@ describe("persistence", () => {
     agentEdit(live, "lazy dog", "sleepy cat", "chat-7");
     live.addComment({ ...range(live.doc, "quick"), body: "c1", author: "user" }, { kind: "client", clientID: "a" });
     await live.flush();
-    const onDisk = JSON.parse(readFileSync(path.join(dataDir(), "documents", `${live.id}.json`), "utf8")) as StoredDocumentFile;
+    const onDisk = JSON.parse(readFileSync(documentFilePath(live.id), "utf8")) as StoredDocumentFile;
     assert.equal(onDisk.format, 3);
     assert.equal(onDisk.meta.wordCount, 14);
     assert.match(onDisk.meta.preview, /sleepy cat/);
@@ -787,7 +788,7 @@ describe("persistence", () => {
   it("markDeleted stops edits, persistence and further events", async () => {
     const live = await documentHub().create({ markdown: "Doomed" });
     await live.flush();
-    const file = path.join(dataDir(), "documents", `${live.id}.json`);
+    const file = documentFilePath(live.id);
     const { events } = record(live);
     live.markDeleted();
     assert.deepEqual(events.map((e) => e.type), ["deleted"]);
