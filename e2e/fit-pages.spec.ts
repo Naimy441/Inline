@@ -11,7 +11,7 @@ async function newBlankDocument(page: Page) {
 async function pageFill(page: Page) {
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(null)))));
   return page.evaluate(() => {
-    const root = document.querySelector<HTMLElement>(".page-stack");
+    const root = document.querySelector<HTMLElement>(".doc-content");
     const content = document.querySelector<HTMLElement>(".page-content");
     const sheet = document.querySelector<HTMLElement>(".sheet");
     const footer = document.querySelector<HTMLElement>(".sheet-footer");
@@ -52,7 +52,7 @@ async function pageFill(page: Page) {
 /** Bottom of the blocks the fit wrote a font size onto, in the same natural coordinates. */
 async function fittedBottom(page: Page) {
   return page.evaluate(() => {
-    const root = document.querySelector<HTMLElement>(".page-stack");
+    const root = document.querySelector<HTMLElement>(".doc-content");
     const content = document.querySelector<HTMLElement>(".page-content");
     const sheet = document.querySelector<HTMLElement>(".sheet");
     const footer = document.querySelector<HTMLElement>(".sheet-footer");
