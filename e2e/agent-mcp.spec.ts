@@ -251,6 +251,8 @@ test.describe("review of agent edits", () => {
     const filler = "The clerk counted the names in his little book while the rain kept falling on the roof.";
     const paragraphs = Array.from({ length: 30 }, (_, i) => `Paragraph ${i}. ${filler} Cut ${i}: ${filler.repeat(3)}`);
     const { id } = await newDocumentInEditor(page, request, { title: "Pending count", markdown: paragraphs.join("\n\n") });
+    const panel = page.locator(".agent-panel");
+    if (await panel.count()) await panel.getByRole("button", { name: "Close panel" }).click();
     await expect(page.locator(".status-corner")).toContainText("3 pages");
     await mcp.ok("multi_edit_document", { document_id: id, edits: paragraphs.map((_, i) => ({ old_string: ` Cut ${i}: ${filler.repeat(3)}`, new_string: "" })) });
     await expect(page.locator(".review-bar-count")).toHaveText("30 changes by Claude");

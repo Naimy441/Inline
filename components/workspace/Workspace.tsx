@@ -811,14 +811,15 @@ export function Workspace({ documentId }: { documentId: string }) {
   }
 
   const openComments = ui.comments.filter((comment) => !comment.resolved).length;
-  // Keep the floating counters in the margin to the left of the text.
-  const textLeft = (() => {
+  // With the chat closed, the counters float in the margin to the right of the text.
+  const textInsetRight = (() => {
     if (!canvasWidth) return 200;
     const pageLeft = Math.max(canvasPad, (canvasWidth - pageWidth * effectiveZoom) / 2);
-    return pageLeft + geometry.marginLeft * effectiveZoom;
+    return pageLeft + geometry.marginRight * effectiveZoom;
   })();
   const working = Boolean(ui.activity && ui.activity.status !== "idle");
   const shownPanel: Panel = focusMode && panel === "agent" ? null : panel;
+  const chatOpen = shownPanel === "agent";
 
   /** Show a chat in the Claude panel (the one converting an imported PDF). */
   const openChat = (chatId: string) => {
@@ -970,7 +971,7 @@ export function Workspace({ documentId }: { documentId: string }) {
             <WithEditorState session={session}>{(state) => <OutlinePanel session={session} state={state} meta={meta} readOnly={ui.mode === "viewing"} onClose={toggleOutline} />}</WithEditorState>
           </>
         )}
-        <div className="canvas-frame" style={{ ["--text-left" as string]: `${textLeft}px` }}>
+        <div className="canvas-frame" style={{ ["--text-inset-right" as string]: `${textInsetRight}px` }}>
         <main
           ref={canvasRef}
           className={`canvas${(versionShown && shownPanel === "history") || draftPreview ? " is-previewing" : ""}${!shownPanel && (draftComment || ui.comments.some((comment) => !comment.resolved)) && marginFits(canvasRef.current) ? " with-comments" : ""}`}
@@ -1040,10 +1041,7 @@ export function Workspace({ documentId }: { documentId: string }) {
           <WithEditorState session={session}>{(state) => <PictureBar session={session} state={state} />}</WithEditorState>
         </main>
         <footer className="status-corner">
-          <button type="button" className="status-item" onClick={() => setCounting(true)}>
-            <WithEditorState session={session}>{(state) => <>{(state ? docWordCount(state.doc) : (meta?.wordCount ?? 0)).toLocaleString()} words</>}</WithEditorState>
-          </button>
-          <span className="status-item">{`${ui.pages} page${ui.pages === 1 ? "" : "s"}`}</span>
+          {!chatOpen && <DocCounts session={session} pages={ui.pages} fallbackWords={meta?.wordCount ?? 0} onWords={() => setCounting(true)} />}
           <TabStatus documentId={documentId} open={outline} onToggle={toggleOutline} />
           {ui.hunks.length > 0 && <span className="status-item is-accent">{ui.hunks.length} pending</span>}
           {ui.mode !== "editing" && (
@@ -1071,6 +1069,7 @@ export function Workspace({ documentId }: { documentId: string }) {
                 chatKey={chatKey}
                 hunks={ui.hunks}
                 initialPrompt={initialAsk}
+                documentCounts={chatOpen ? <DocCounts session={session} pages={ui.pages} fallbackWords={meta?.wordCount ?? 0} onWords={() => setCounting(true)} variant="meta" /> : undefined}
                 onClose={() => setPanel(null)}
                 onReview={(action, ids) => {
                   if (action === "next") session.gotoChange(1, ids);
@@ -1145,6 +1144,36 @@ export function Workspace({ documentId }: { documentId: string }) {
       <Toaster />
       <ConfirmHost />
     </div>
+  );
+}
+
+function countLabel(count: number, singular: string) {
+  return `${count.toLocaleString()} ${count === 1 ? singular : `${singular}s`}`;
+}
+
+/** The document's word and page counts. One item is singular. */
+function DocCounts({ session, pages, fallbackWords, onWords, variant = "corner" }: { session: DocumentSession; pages: number; fallbackWords: number; onWords: () => void; variant?: "corner" | "meta" }) {
+  const words = (
+    <WithEditorState session={session}>{(state) => <>{countLabel(state ? docWordCount(state.doc) : fallbackWords, "word")}</>}</WithEditorState>
+  );
+  const pagesLabel = countLabel(pages, "page");
+  if (variant === "meta") {
+    return (
+      <span className="msg-meta-counts">
+        <button type="button" className="msg-meta-count" onClick={onWords}>
+          {words}
+        </button>
+        <span className="msg-meta-count">{pagesLabel}</span>
+      </span>
+    );
+  }
+  return (
+    <>
+      <button type="button" className="status-item" onClick={onWords}>
+        {words}
+      </button>
+      <span className="status-item">{pagesLabel}</span>
+    </>
   );
 }
 
