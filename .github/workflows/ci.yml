@@ -21,7 +21,7 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           fi
           sudo apt-get update
-          sudo apt-get install -y bubblewrap socat
+          sudo apt-get install -y bubblewrap socat ripgrep
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
