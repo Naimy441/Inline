@@ -19,6 +19,7 @@ export function SelectionBubble({
   prompting = false,
   onPrompting,
   onInlineAsk,
+  hideAi = false,
 }: {
   session: DocumentSession;
   state: EditorState | null;
@@ -29,6 +30,8 @@ export function SelectionBubble({
   onPrompting?: (open: boolean) => void;
   /** Send the inline prompt to Claude about the selection (or the cursor). */
   onInlineAsk?: (text: string) => void;
+  /** Focus mode: no Ask Claude button, inline prompt, or edit-with-Claude action. */
+  hideAi?: boolean;
 }) {
   const [dragging, setDragging] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -120,7 +123,7 @@ export function SelectionBubble({
     onLinkEditing(false);
   };
 
-  if (prompting) {
+  if (prompting && !hideAi) {
     const close = () => {
       onPrompting?.(false);
       view.focus();

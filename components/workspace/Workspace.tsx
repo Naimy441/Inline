@@ -96,10 +96,6 @@ export function Workspace({ documentId }: { documentId: string }) {
   const [find, setFind] = useState<{ replace: boolean } | null>(null);
   const [linkEditing, setLinkEditing] = useState(false);
   const [prompting, setPrompting] = useState(false);
-  // The inline ⌘K prompt is open: start Claude Code while the user types.
-  useEffect(() => {
-    if (prompting) agentRef.current?.warm();
-  }, [prompting]);
   /** The text a new comment is being written about. */
   const [draftComment, setDraftComment] = useState<{ from: number; to: number } | null>(null);
   /** A saved version shown in place of the document, from version history. */
@@ -109,25 +105,36 @@ export function Workspace({ documentId }: { documentId: string }) {
   const [counting, setCounting] = useState(false);
   const [charmap, setCharmap] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
+  const focusRef = useRef(false);
+  focusRef.current = focusMode;
+  // The inline ⌘K prompt is open: start Claude Code while the user types.
+  useEffect(() => {
+    if (prompting && !focusMode) agentRef.current?.warm();
+  }, [prompting, focusMode]);
 
   // Before the first paint, so a panel kept closed doesn't flash open.
   useLayoutEffect(() => {
+    const focusOn = readStored(FOCUS_KEY, false, (raw) => raw === "1");
+    setFocusMode(focusOn);
     // On phones and tablets a panel covers the document, so it only opens when asked for.
-    if (isCompact()) setPanelState(initialAsk ? "agent" : null);
+    if (isCompact()) setPanelState(initialAsk && !focusOn ? "agent" : null);
     else {
       // "none" is the choice to keep panels closed, so it can't parse to null (which means "not stored").
       const stored = readStored<Panel | "none">(PANEL_KEY, "agent", (raw) => (["none", "agent", "comments", "history"].includes(raw) ? (raw as Panel | "none") : null));
-      setPanelState(stored === "none" ? null : stored);
+      const next = stored === "none" ? null : stored;
+      if (focusOn && next === "agent") store(PANEL_KEY, "none");
+      setPanelState(focusOn && next === "agent" ? null : next);
     }
     setPanelWidth(readStored(PANEL_WIDTH_KEY, 420, (raw) => (Number(raw) >= 320 ? Math.min(760, Number(raw)) : null)));
     setZoomState(readStored<Zoom>(ZOOM_KEY, "fit", (raw) => (raw === "fit" ? "fit" : Number(raw) >= 0.5 && Number(raw) <= 2 ? Number(raw) : null)));
     setOutline(!isCompact() && readStored(OUTLINE_KEY, false, (raw) => raw === "1"));
-    setFocusMode(readStored(FOCUS_KEY, false, (raw) => raw === "1"));
   }, []);
 
   const setPanel = useCallback((next: Panel | ((current: Panel) => Panel)) => {
     setPanelState((current) => {
-      const value = typeof next === "function" ? next(current) : next;
+      let value = typeof next === "function" ? next(current) : next;
+      // Focus mode keeps the chat closed even if a shortcut or stored panel asks for it.
+      if (focusRef.current && value === "agent") value = current === "agent" ? null : current;
       store(PANEL_KEY, value ?? "none");
       return value;
     });
@@ -239,6 +246,7 @@ export function Workspace({ documentId }: { documentId: string }) {
 
   const askClaude = useCallback(
     (prompt?: string) => {
+      if (focusRef.current) return;
       const selection: SelectionContext | null = session.selection();
       // Focus the composer in the same tick when the panel is already open, so
       // keystrokes typed right after the shortcut never land in the document.
@@ -256,6 +264,7 @@ export function Workspace({ documentId }: { documentId: string }) {
   /** The inline ⌘K prompt: sends straight to Claude about the selection, or the cursor when nothing is selected. */
   const inlineAsk = useCallback(
     (text: string, only?: SelectionContext) => {
+      if (focusRef.current) return;
       const view = session.view;
       const selection: SelectionContext | null =
         only ??
@@ -296,7 +305,8 @@ export function Workspace({ documentId }: { documentId: string }) {
     }
     const { from, to } = session.view.state.selection;
     // With no side panel open and room beside the page, the comment is written in the margin next to its text.
-    if (panel !== null || !marginFits(canvasRef.current)) setPanel("comments");
+    const sidePanel = focusRef.current && panel === "agent" ? null : panel;
+    if (sidePanel !== null || !marginFits(canvasRef.current)) setPanel("comments");
     setDraftComment({ from, to });
     session.setCommentDraft({ from, to });
   }, [session, setPanel, panel]);
@@ -306,6 +316,7 @@ export function Workspace({ documentId }: { documentId: string }) {
   }, [session]);
   const askAboutComment = useCallback(
     (comment: DocComment) => {
+      if (focusRef.current) return;
       setPanel("agent");
       requestAnimationFrame(() =>
         agentRef.current?.ask(null, `Address this comment (id ${comment.id}) on “${comment.quote}”: ${comment.body}\nThen reply to the comment saying what you changed and resolve it.`),
@@ -318,7 +329,7 @@ export function Workspace({ documentId }: { documentId: string }) {
     if (name === "find" || name === "replace") setFind({ replace: name === "replace" });
     else if (name === "link") setLinkEditing(true);
     else if (name === "comment") startComment();
-    else if (name === "askClaude") askClaude();
+    else if (name === "askClaude" && !focusRef.current) askClaude();
     return true;
   };
 
@@ -358,7 +369,7 @@ export function Workspace({ documentId }: { documentId: string }) {
       document.body.append(link);
       link.click();
       link.remove();
-    } else if (command.kind === "open_document" && command.documentId !== documentId) {
+    } else if (command.kind === "open_document" && command.documentId !== documentId && !focusRef.current) {
       toast("Claude opened another document.", { action: { label: "Open", run: () => router.push(`/d/${command.documentId}`) } });
     } else if (command.kind === "scroll_to") session.scrollTo(command.from, command.to);
     else if (command.kind === "render_pages") void session.answerRender(command).catch(() => undefined);
@@ -383,19 +394,23 @@ export function Workspace({ documentId }: { documentId: string }) {
         return;
       }
       if (key === "k" && !event.shiftKey && !event.altKey && session.view?.hasFocus() && session.ui.get().mode !== "viewing") {
+        if (focusRef.current) return;
         event.preventDefault();
         setPrompting(true);
         return;
       }
       if (event.altKey && !event.shiftKey && event.code === "KeyX" && session.view?.hasFocus() && session.ui.get().mode !== "viewing") {
+        if (focusRef.current) return;
         event.preventDefault();
         checkSpelling();
         return;
       }
       if (key === "j" && !event.shiftKey && !event.altKey) {
+        if (focusRef.current) return;
         event.preventDefault();
         setPanel((current) => (current === "agent" ? null : "agent"));
       } else if (key === "l" && !event.shiftKey && !event.altKey) {
+        if (focusRef.current) return;
         event.preventDefault();
         askClaude();
       } else if (key === "/") {
@@ -462,7 +477,10 @@ export function Workspace({ documentId }: { documentId: string }) {
       void addTab(documentId)
         .then((id) => router.push(`/d/${id}`))
         .catch((error: Error) => toast(error.message, { tone: "error" })),
-    toggleAgent: () => setPanel((current) => (current === "agent" ? null : "agent")),
+    toggleAgent: () => {
+      if (focusRef.current) return;
+      setPanel((current) => (current === "agent" ? null : "agent"));
+    },
     shortcuts: () => setShortcuts(true),
     connectClaudeCode: async () => {
       try {
@@ -488,10 +506,14 @@ export function Workspace({ documentId }: { documentId: string }) {
     focusMode,
     toggleFocusMode: () => {
       const next = !focusMode;
+      focusRef.current = next;
       setFocusMode(next);
       store(FOCUS_KEY, next ? "1" : "0");
-      if (next) setPanel((current) => (current === "agent" ? null : current));
-      toast(next ? "Focus mode on: Claude is hidden until you turn it off in View." : "Focus mode off.");
+      if (next) {
+        setPrompting(false);
+        setPanel((current) => (current === "agent" ? null : current));
+      }
+      toast(next ? "Focus mode on. AI tools stay hidden until you turn it off in View." : "Focus mode off.");
     },
     mode: ui.mode,
     setMode: (mode) => void session.setMode(mode),
@@ -515,6 +537,7 @@ export function Workspace({ documentId }: { documentId: string }) {
     convertPdf: meta?.pdfImport && meta.pdfImport.status !== "done" && !focusMode ? () => void convertPdf() : null,
     checkSpelling,
     ask: (prompt) => {
+      if (focusRef.current) return;
       setPanel("agent");
       requestAnimationFrame(() => agentRef.current?.ask(null, prompt));
     },
@@ -535,9 +558,11 @@ export function Workspace({ documentId }: { documentId: string }) {
 
   const openComments = ui.comments.filter((comment) => !comment.resolved).length;
   const working = Boolean(ui.activity && ui.activity.status !== "idle");
+  const shownPanel: Panel = focusMode && panel === "agent" ? null : panel;
 
   /** Show a chat in the Claude panel (the one converting an imported PDF). */
   const openChat = (chatId: string) => {
+    if (focusRef.current) return;
     rememberChat(chatKey, chatId);
     setPanel("agent");
     requestAnimationFrame(() => agentRef.current?.openChat(chatId));
@@ -583,7 +608,7 @@ export function Workspace({ documentId }: { documentId: string }) {
   ];
 
   return (
-    <div className={`workspace${panel ? " has-panel" : ""}${focusMode ? " is-focus" : ""} is-${ui.mode}`} style={{ ["--panel-width" as string]: `${panelWidth}px` }}>
+    <div className={`workspace${shownPanel ? " has-panel" : ""}${focusMode ? " is-focus" : ""} is-${ui.mode}`} style={{ ["--panel-width" as string]: `${panelWidth}px` }}>
       <header ref={titlebarRef} className={`titlebar${compact ? " is-compact" : ""}`}>
         <button type="button" className="home-btn" aria-label="All documents" data-tip="All documents" onClick={() => router.push("/")}>
           <InlineLogo />
@@ -628,17 +653,19 @@ export function Workspace({ documentId }: { documentId: string }) {
               <MessageSquare size={16} />
               {openComments > 0 && <span className="badge">{openComments}</span>}
             </IconButton>
-            <button
-              type="button"
-              className={`btn btn-md claude-toggle claude-toggle-text${panel === "agent" ? " is-active" : ""}`}
-              onClick={() => setPanel((current) => (current === "agent" ? null : "agent"))}
-              aria-pressed={panel === "agent"}
-              data-tip={`${panel === "agent" ? "Close" : "Open"} Claude  ${keys("⌘J")}`}
-            >
-              {/* With the panel closed, the button is where Claude shows it is working. */}
-              {working && panel !== "agent" ? <Spark size={15} /> : <PanelRight size={15} />}
-              <span className="btn-label">Claude</span>
-            </button>
+            {!focusMode && (
+              <button
+                type="button"
+                className={`btn btn-md claude-toggle claude-toggle-text${panel === "agent" ? " is-active" : ""}`}
+                onClick={() => setPanel((current) => (current === "agent" ? null : "agent"))}
+                aria-pressed={panel === "agent"}
+                data-tip={`${panel === "agent" ? "Close" : "Open"} Claude  ${keys("⌘J")}`}
+              >
+                {/* With the panel closed, the button is where Claude shows it is working. */}
+                {working && panel !== "agent" ? <Spark size={15} /> : <PanelRight size={15} />}
+                <span className="btn-label">Claude</span>
+              </button>
+            )}
             <MenuButton className="btn btn-secondary btn-md export-btn" label="Download" placement="bottom-end" items={downloads}>
               <Download size={15} />
               <span className="btn-label">Export</span>
@@ -684,7 +711,7 @@ export function Workspace({ documentId }: { documentId: string }) {
         )}
         <main
           ref={canvasRef}
-          className={`canvas${versionShown && panel === "history" ? " is-previewing" : ""}${!panel && (draftComment || ui.comments.some((comment) => !comment.resolved)) && marginFits(canvasRef.current) ? " with-comments" : ""}`}
+          className={`canvas${versionShown && shownPanel === "history" ? " is-previewing" : ""}${!shownPanel && (draftComment || ui.comments.some((comment) => !comment.resolved)) && marginFits(canvasRef.current) ? " with-comments" : ""}`}
           style={{ ["--canvas-pad" as string]: `${canvasPad}px` }}
           onDragOver={(event) => {
             if (event.dataTransfer.types.includes("Files")) event.preventDefault();
@@ -730,18 +757,18 @@ export function Workspace({ documentId }: { documentId: string }) {
               <Loader2 size={18} className="spin" />
             </div>
           )}
-          {versionShown && panel === "history" && <VersionPreview key={versionShown.id} session={session} version={versionShown} onClose={() => setVersionShown(null)} />}
+          {versionShown && shownPanel === "history" && <VersionPreview key={versionShown.id} session={session} version={versionShown} onClose={() => setVersionShown(null)} />}
           <PageCanvas session={session} meta={meta} pages={ui.pages} zoom={effectiveZoom} printing={ui.printing} flow={false} />
-          {!panel && (
+          {!shownPanel && (
             <WithEditorState session={session}>
-              {(state) => <CommentMargin session={session} state={state} canvas={canvasRef} comments={ui.comments} active={ui.activeComment} draft={draftComment} onDraftDone={endDraft} onAskClaude={askAboutComment} />}
+              {(state) => <CommentMargin session={session} state={state} canvas={canvasRef} comments={ui.comments} active={ui.activeComment} draft={draftComment} onDraftDone={endDraft} onAskClaude={askAboutComment} hideAskClaude={focusMode} />}
             </WithEditorState>
           )}
-          <ReviewBar session={session} hunks={ui.hunks} />
-          <WithEditorState session={session}>{(state) => <SelectionBubble session={session} state={state} linkEditing={linkEditing} onLinkEditing={setLinkEditing} prompting={prompting} onPrompting={setPrompting} onInlineAsk={inlineAsk} />}</WithEditorState>
+          <ReviewBar session={session} hunks={ui.hunks} hideClaude={focusMode} />
+          <WithEditorState session={session}>{(state) => <SelectionBubble session={session} state={state} linkEditing={linkEditing} onLinkEditing={setLinkEditing} prompting={prompting && !focusMode} onPrompting={setPrompting} onInlineAsk={inlineAsk} hideAi={focusMode} />}</WithEditorState>
         </main>
 
-        {panel && (
+        {shownPanel && (
           <div className="panel-shell">
             <PanelResizer
               width={panelWidth}
@@ -750,7 +777,7 @@ export function Workspace({ documentId }: { documentId: string }) {
                 store(PANEL_WIDTH_KEY, String(value));
               }}
             />
-            {panel === "agent" && (
+            {shownPanel === "agent" && (
               <AgentPanel
                 key={chatKey}
                 ref={agentRef}
@@ -765,7 +792,7 @@ export function Workspace({ documentId }: { documentId: string }) {
                 }}
               />
             )}
-            {panel === "comments" && (
+            {shownPanel === "comments" && (
               <CommentsPanel
                 session={session}
                 comments={ui.comments}
@@ -774,9 +801,10 @@ export function Workspace({ documentId }: { documentId: string }) {
                 onDraftDone={endDraft}
                 onClose={() => setPanel(null)}
                 onAskClaude={askAboutComment}
+                hideAskClaude={focusMode}
               />
             )}
-            {panel === "history" && <HistoryPanel session={session} selected={versionShown} onSelect={setVersionShown} onClose={() => setPanel(null)} />}
+            {shownPanel === "history" && <HistoryPanel session={session} selected={versionShown} onSelect={setVersionShown} onClose={() => setPanel(null)} hideAi={focusMode} />}
           </div>
         )}
       </div>
@@ -799,7 +827,7 @@ export function Workspace({ documentId }: { documentId: string }) {
       </footer>
 
       <PageSetupDialog open={Boolean(setup)} initialTab={setup?.tab} session={session} settings={meta?.settings} onClose={() => setSetup(null)} />
-      <ShortcutsDialog open={shortcuts} onClose={() => setShortcuts(false)} />
+      <ShortcutsDialog open={shortcuts} onClose={() => setShortcuts(false)} hideAi={focusMode} />
       <Dialog
         open={exporting !== null}
         onClose={() => setExporting(null)}

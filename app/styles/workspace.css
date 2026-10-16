@@ -1860,10 +1860,31 @@ button.status-item:hover {
   background: var(--accent-soft);
 }
 
-/* Focus mode hides everything to do with Claude. */
+/* Focus mode hides every AI surface: chat chrome, inline actions, usage, and Claude's cursor. */
 
-.workspace.is-focus .claude-toggle {
+.workspace.is-focus .claude-toggle,
+.workspace.is-focus .bubble-ask,
+.workspace.is-focus .bubble-ask + .bubble-sep,
+.workspace.is-focus .bubble-btn[aria-label="Edit with Claude"],
+.workspace.is-focus .bubble-prompt,
+.workspace.is-focus .agent-locator,
+.workspace.is-focus .usage-ring,
+.workspace.is-focus .usage-popover,
+.workspace.is-focus .doc-content .agent-caret {
   display: none !important;
+}
+
+.workspace.is-focus .doc-content .agent-range,
+.workspace.is-focus .doc-content .agent-range.agent-editing,
+.workspace.is-focus .doc-content .agent-range.agent-reading {
+  background: none !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  animation: none !important;
+}
+
+.workspace.is-focus .doc-content .is-empty::before {
+  content: "Start writing…";
 }
 
 /* Claude is working: a small pulsing dot on the compact Claude button. */
