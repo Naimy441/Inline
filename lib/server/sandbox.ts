@@ -251,7 +251,22 @@ function capture(
       }
       resolve({ code: code ?? 1, stdout: clip(out), stderr: clip(err) });
     });
-    child.stdin?.end(input);
+    // The sandbox often closes stdin without reading it. A write then raises
+    // EPIPE with no listener, which fails the test run even when the command
+    // itself finished and reported an exit code.
+    for (const stream of [child.stdin, child.stdout, child.stderr]) {
+      stream?.on("error", (error: NodeJS.ErrnoException) => {
+        if (error.code === "EPIPE" || error.code === "ERR_STREAM_DESTROYED") return;
+        clearTimeout(timer);
+        reject(error);
+      });
+    }
+    try {
+      child.stdin?.end(input);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EPIPE" && code !== "ERR_STREAM_DESTROYED") throw error;
+    }
   });
 }
 
