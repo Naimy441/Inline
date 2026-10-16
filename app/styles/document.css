@@ -16,6 +16,25 @@
   outline: none;
 }
 
+/*
+ * Spaces at the end of a line hang past the margin, as in Google Docs and
+ * Word, so a line holds the same words as Google's. Documents rebuilt from a
+ * PDF keep each line's last space on the line (lib/editor/lineFit.ts).
+ */
+.page-content:not(.from-pdf) .doc-content {
+  white-space: pre-wrap;
+}
+
+/*
+ * Pages draw text with the system's usual smoothing, as Google Docs does, not
+ * the thinner grayscale antialiasing the app's chrome uses (base.css): black
+ * text looks as heavy as in Google Docs.
+ */
+.page-stack {
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
+}
+
 /* Text colored plain black (pasted from Google Docs or Word, or picked) is the page's text color, light on a dark page. */
 @media screen {
   :root[data-theme="dark"] .doc-content .text-black {
