@@ -1,11 +1,14 @@
 "use client";
 
-import { ChevronRight, CircleAlert, FileText, Image as ImageIcon, PenLine, RotateCcw, TextQuote } from "lucide-react";
-import { memo, useMemo, useRef, useState } from "react";
+import { Check, ChevronRight, CircleAlert, Copy, FileText, Image as ImageIcon, PenLine, RotateCcw, TextQuote } from "lucide-react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { AssistantMessage, AssistantPart, ChatMessage, ThinkingPart, UserMessage } from "@/lib/agent/types";
+import { assistantReplyText } from "@/lib/agent/messageText";
 import { Spark } from "@/components/agent/Activity";
 import { Markdown } from "@/components/agent/Markdown";
 import { ToolCall } from "@/components/agent/ToolCall";
+import { IconButton } from "@/components/ui/Button";
+import { toast } from "@/components/ui/Toast";
 
 function formatDuration(ms: number) {
   if (ms < 1000) return `${ms} ms`;
@@ -38,6 +41,11 @@ export const UserBubble = memo(function UserBubble({ message }: { message: UserM
         </div>
       )}
       {message.text && <div className="msg-user-text">{message.text}</div>}
+      {message.text.trim() && (
+        <div className="msg-actions">
+          <CopyTextButton label="Copy prompt" text={message.text} />
+        </div>
+      )}
     </div>
   );
 });
@@ -107,6 +115,7 @@ export const AssistantView = memo(function AssistantView({
   onReview: (action: "next" | "accept" | "reject", ids: string[]) => void;
 }) {
   const streaming = message.status === "streaming";
+  const reply = assistantReplyText(message.parts);
   const changes = message.changes ?? [];
   const added = changes.reduce((sum, change) => sum + change.added, 0);
   const removed = changes.reduce((sum, change) => sum + change.removed, 0);
@@ -196,9 +205,45 @@ export const AssistantView = memo(function AssistantView({
           {message.model ? ` · ${modelLabel(message.model)}` : ""}
         </div>
       )}
+      {!streaming && reply && (
+        <div className="msg-actions">
+          <CopyTextButton label="Copy response" text={reply} />
+        </div>
+      )}
     </div>
   );
 });
+
+/** Copies one string. The prompt button and the response button stay separate actions. */
+function CopyTextButton({ label, text }: { label: string; text: string }) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current) window.clearTimeout(timer.current);
+    },
+    [],
+  );
+  return (
+    <IconButton
+      label={label}
+      size="sm"
+      {...(copied ? { "data-tip": "Copied" } : {})}
+      onClick={() => {
+        void navigator.clipboard.writeText(text).then(
+          () => {
+            setCopied(true);
+            if (timer.current) window.clearTimeout(timer.current);
+            timer.current = window.setTimeout(() => setCopied(false), 1200);
+          },
+          () => toast("Couldn't copy that.", { tone: "error" }),
+        );
+      }}
+    >
+      {copied ? <Check size={14} /> : <Copy size={14} />}
+    </IconButton>
+  );
+}
 
 /** A pending change as the chat shows it. */
 export type TurnHunk = { id: string; turn?: string; deletedText?: string; insertedText?: string };
