@@ -33,6 +33,11 @@ const nextConfig = {
     "/api/pdfjs/\\[\\.\\.\\.path\\]": ["./node_modules/pdfjs-dist/cmaps/**", "./node_modules/pdfjs-dist/standard_fonts/**", "./node_modules/pdfjs-dist/wasm/**", "./node_modules/pdfjs-dist/iccs/**"],
     "/api/documents/import/pdf": ["./node_modules/katex/dist/fonts/KaTeX_Main-*.ttf"],
   },
+  // The agent routes' traces take in the whole project folder, which would put
+  // the desktop app's own builds (desktop/dist) and the tests inside its server.
+  outputFileTracingExcludes: {
+    "/*": ["./desktop/**", "./e2e/**", "./tests/**", "./test-results/**", "./playwright-report/**"],
+  },
   experimental: {
     // proxy.ts runs on every request, and Next.js silently truncates bodies
     // past this size when a proxy is present. Imports take ZIP archives (a
