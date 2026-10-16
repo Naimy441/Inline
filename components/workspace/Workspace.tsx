@@ -419,7 +419,7 @@ export function Workspace({ documentId }: { documentId: string }) {
         x = box.left + box.width / 2;
         y = box.top + box.height / 2;
       }
-      apply(gestureZoom * gesture.scale, { x, y });
+      apply(zoomFromPinch(gestureZoom, 1, gesture.scale), { x, y });
       settle();
     };
     const onGestureEnd = () => {
