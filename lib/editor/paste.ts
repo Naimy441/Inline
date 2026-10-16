@@ -1,6 +1,6 @@
 import { Slice } from "prosemirror-model";
 import type { EditorState } from "prosemirror-state";
-import { cssSizeToPt } from "@/lib/doc/schema";
+import { cssSizeToPt, schema } from "@/lib/doc/schema";
 
 /**
  * Google Docs writes a paragraph's line spacing on the clipboard as the
@@ -92,4 +92,20 @@ export function pasteIntoEmptyTextblock(slice: Slice, state: EditorState) {
   const parent = selection.$from.parent;
   if (!selection.empty || !parent.isTextblock || parent.content.size || slice.openStart !== 1 || !slice.content.firstChild?.isTextblock) return slice;
   return new Slice(slice.content, 0, slice.openEnd);
+}
+
+/**
+ * A paste that ends with a picture (or a rule or page break) gets a line
+ * after it for the cursor, as in Google Docs, so the cursor is a text caret
+ * after the picture: not the picture selected, which typing would replace,
+ * nor the gap cursor after it. The line is the paragraph the paste went into,
+ * which ProseMirror otherwise replaces when it's empty. Null when the paste
+ * ends otherwise.
+ */
+export function endWithTextblock(slice: Slice, state: EditorState): Slice | null {
+  const last = slice.content.lastChild;
+  if (slice.openEnd !== 0 || !last?.isBlock || !last.isAtom) return null;
+  const parent = state.selection.$from.parent;
+  const paragraph = schema.nodes.paragraph!.create(parent.type === schema.nodes.paragraph ? { ...parent.attrs, id: null, lineBreaks: null } : null);
+  return new Slice(slice.content.addToEnd(paragraph), slice.openStart, 1);
 }

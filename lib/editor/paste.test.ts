@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { JSDOM } from "jsdom";
 import { DOMParser as PMDOMParser, type Node as PMNode } from "prosemirror-model";
+import { Slice } from "prosemirror-model";
 import { EditorState, TextSelection } from "prosemirror-state";
 
 import { schema } from "@/lib/doc/schema";
-import { fixGoogleDocsHtml, pasteIntoEmptyTextblock, transformPastedHtml } from "@/lib/editor/paste";
+import { endWithTextblock, fixGoogleDocsHtml, pasteIntoEmptyTextblock, transformPastedHtml } from "@/lib/editor/paste";
 import { GOOGLE_PASSAGE, googleClipboard, googleParagraph } from "../../tests/support/googleClipboard";
 
 const { window } = new JSDOM("");
@@ -93,5 +94,40 @@ describe("pasting from Google Docs", () => {
     const text = schema.node("doc", null, [schema.node("paragraph", null, [schema.text("ab")])]);
     const inText = EditorState.create({ doc: text, selection: TextSelection.create(text, 2) });
     assert.equal(pasteIntoEmptyTextblock(slice, inText), slice);
+  });
+});
+
+describe("pasting a picture", () => {
+  const image = () => schema.node("image", { src: "/api/uploads/a.png" });
+  const paste = (doc: PMNode, at: number, slice: Slice) => {
+    const state = EditorState.create({ doc, selection: TextSelection.create(doc, at) });
+    const tr = state.tr.replaceSelection(endWithTextblock(slice, state) ?? slice);
+    const kinds: string[] = [];
+    tr.doc.forEach((node) => void kinds.push(node.type.name));
+    return { kinds, selection: tr.selection, doc: tr.doc };
+  };
+
+  it("leaves a text caret on a line after it, keeping the empty paragraph it went into", () => {
+    const doc = schema.node("doc", null, [schema.node("paragraph", null, [schema.text("text")]), schema.node("paragraph", { align: "center" })]);
+    const result = paste(doc, 7, new Slice(schema.node("doc", null, [image()]).content, 0, 0));
+    assert.deepEqual(result.kinds, ["paragraph", "image", "paragraph"]);
+    assert.ok(result.selection instanceof TextSelection && result.selection.empty);
+    assert.equal(result.selection.$from.parent, result.doc.lastChild);
+    assert.equal(result.doc.lastChild!.attrs.align, "center");
+  });
+
+  it("splits text it's pasted into, the cursor before the rest", () => {
+    const doc = schema.node("doc", null, [schema.node("paragraph", null, [schema.text("abcd")])]);
+    const result = paste(doc, 3, new Slice(schema.node("doc", null, [image()]).content, 0, 0));
+    assert.deepEqual(result.kinds, ["paragraph", "image", "paragraph"]);
+    assert.equal(result.doc.lastChild!.textContent, "cd");
+    assert.equal(result.selection.$from.parentOffset, 0);
+    assert.equal(result.selection.$from.parent, result.doc.lastChild);
+  });
+
+  it("leaves pastes that end in text alone", () => {
+    const doc = schema.node("doc", null, [schema.node("paragraph")]);
+    const state = EditorState.create({ doc });
+    assert.equal(endWithTextblock(new Slice(schema.node("doc", null, [schema.node("paragraph", null, [schema.text("x")])]).content, 1, 1), state), null);
   });
 });

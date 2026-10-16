@@ -38,7 +38,7 @@ import { paginationPlugin, type PageGeometry, type PageLayout } from "@/lib/edit
 import { bordersPlugin } from "@/lib/editor/borders";
 import { lineFitPlugin } from "@/lib/editor/lineFit";
 import { tabsPlugin } from "@/lib/editor/tabs";
-import { pasteIntoEmptyTextblock, transformPastedHtml } from "@/lib/editor/paste";
+import { endWithTextblock, pasteIntoEmptyTextblock, transformPastedHtml } from "@/lib/editor/paste";
 import { justifyPlugin } from "@/lib/editor/justify";
 import { placeholderPlugin } from "@/lib/editor/placeholder";
 import { presencePlugin } from "@/lib/editor/presence";
@@ -224,6 +224,13 @@ function markdownPastePlugin() {
         const whole = wholeParagraphs.get(view);
         wholeParagraphs.delete(view);
         return whole ? pasteIntoEmptyTextblock(slice, view.state) : slice;
+      },
+      handlePaste(view, _event, slice) {
+        // Not on drop: a picture dragged elsewhere moves without a line of its own.
+        const ended = endWithTextblock(slice, view.state);
+        if (!ended) return false;
+        view.dispatch(view.state.tr.replaceSelection(ended).scrollIntoView().setMeta("paste", true).setMeta("uiEvent", "paste"));
+        return true;
       },
       clipboardTextParser(text, $context, plain) {
         if (plain || $context.parent.type.spec.code || !looksLikeMarkdown(text)) return null as unknown as Slice;
