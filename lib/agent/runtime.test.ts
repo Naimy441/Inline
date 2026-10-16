@@ -222,8 +222,22 @@ describe("a turn", () => {
     const chat = await agentRuntime().create();
     await turn(chat, "Sort these", { home: { folderId: folder.id } });
     assert.match(fake.turns[0]!.context, new RegExp(`on the home page, not in a document, looking at the folder "Recipes" \\(id ${folder.id}\\)\\. Their library has \\d+ documents`));
+    assert.match(fake.turns[0]!.context, /Use search_documents to find a document/);
     await turn(chat, "And the rest", { home: { folderId: null } });
     assert.match(fake.turns[1]!.context, /looking at all documents \(the top level\)/);
+  });
+
+  it("opens a document the home page asked for", async () => {
+    const doc = await documentHub().create({ title: "Recipe", markdown: "# Recipe {.title}\n\nSalt." });
+    const events: ChatEvent[] = [];
+    useModel(async (_turn, claude) => {
+      await claude.call("open_document", { document_id: doc.id });
+      claude.say("Opened it.");
+    });
+    const chat = await agentRuntime().create();
+    chat.subscribe((event) => events.push(event));
+    await turn(chat, "Open the recipe", { home: { folderId: null } });
+    assert.ok(events.some((event) => event.type === "open" && event.documentId === doc.id));
   });
 
   it("tells Claude which folder the open document is filed in", async () => {

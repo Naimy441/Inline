@@ -39,7 +39,7 @@ import { describePageStarts, pageCount, pageCountNow } from "@/lib/agent/pages";
 import { RenderUnavailableError, requestPageRenders } from "@/lib/server/renders";
 import { FOLDER_COLORS } from "@/lib/doc/folders";
 import { createFolder, deleteFolder, FolderError, folderPathName, updateFolder } from "@/lib/server/folders";
-import { formatFolderTree, formatLibrary, library, MAX_EXCERPT_WORDS, moveDocuments, resolveFolder } from "@/lib/server/library";
+import { formatFolderTree, formatLibrary, library, MAX_EXCERPT_WORDS, moveDocuments, resolveFolder, searchLibrary } from "@/lib/server/library";
 import { pdfTools } from "@/lib/agent/pdfTools";
 
 /**
@@ -67,6 +67,11 @@ export type ToolContext = {
   attachments?: () => Array<{ id: string; name: string; kind: "image" | "text" | "pdf" }>;
   /** Notified after a tool changes a document. */
   onChange?: (change: { documentId: string; title: string; tool: string; added: number; removed: number }) => void;
+  /**
+   * Show a document when no editor is listening. Set for in-app chats, so a
+   * request from the home page can open a search match.
+   */
+  onOpen?: (documentId: string) => void;
 };
 
 /** A tool's answer: text, and pictures for Claude to see (a PDF page, a comparison). */
@@ -1277,6 +1282,35 @@ export const TOOLS = [
   }),
 
   defineTool({
+    name: "search_documents",
+    title: "Search documents",
+    description:
+      "Search the user's documents for a word or phrase, in titles and the full text (not just the opening excerpt list_library shows). Returns each match's id, folder and the matching lines. Use it when the user asks to find a document, then open_document with the id to show it. search_document searches one document you already have; this searches the library.",
+    shape: {
+      query: z.string().min(1).describe("Text or regular expression to find."),
+      regex: z.boolean().optional().describe("Treat query as a JavaScript regular expression."),
+      case_sensitive: z.boolean().optional(),
+      folder: z.string().optional().describe('Only documents in this folder and the folders inside it: an id or a path like "Work/Q3".'),
+      limit: z.number().int().min(1).max(20).optional().describe("How many matching documents to return (default 8)."),
+    },
+    write: false,
+    async handler(args) {
+      const folderId = args.folder ? (await resolveFolder(args.folder, { create: false })).id : undefined;
+      if (args.folder && !folderId) return fail("Name a folder, or leave folder out to search the whole library.");
+      const hits = await searchLibrary(args.query, { regex: args.regex, caseSensitive: args.case_sensitive, folderId, limit: args.limit ?? 8 });
+      if (!hits.length) return ok(`No documents match "${args.query}".`);
+      const lines = hits.map((hit) => {
+        const where = [hit.tab ? `tab "${hit.tab}"` : "", hit.folder ? `in ${hit.folder}` : "unfiled"].filter(Boolean).join(" · ");
+        const found = hit.titleMatch ? "title match" : `${hit.matches} matching line${hit.matches === 1 ? "" : "s"}${hit.snippets.length ? `: "${hit.snippets.join(" / ")}"` : ""}`;
+        return `- ${hit.id} · "${hit.title}" · ${where} · ${found}`;
+      });
+      return ok(
+        `${hits.length} document${hits.length === 1 ? "" : "s"} match "${args.query}". Pass an id to open_document to show it.\n${lines.join("\n")}`,
+      );
+    },
+  }),
+
+  defineTool({
     name: "list_folders",
     title: "List folders",
     description: "The user's folders as a tree, with ids, colors and how many documents each holds.",
@@ -1492,13 +1526,20 @@ export const TOOLS = [
   defineTool({
     name: "open_document",
     title: "Open document",
-    description: "Show a document in the user's editor, switching the editor to it. Use it after create_document, or when the user asks to see another document.",
+    description:
+      "Show a document in the user's editor, switching the editor to it. On the home page, where no document is open, this opens the document there. Use it after create_document, when the user asks to see a document, or with an id search_documents returned.",
     shape: { document_id: z.string() },
     write: false,
     async handler(args, ctx) {
       const hub = documentHub();
       const target = await hub.get(args.document_id);
       if (!target || target.meta.trashedAt) return fail(`Document "${args.document_id}" was not found.`);
+      // A home-page chat has no document of its own. Open it in that page rather than
+      // whichever document happens to be focused in another tab.
+      if (!ctx.documentId && ctx.onOpen) {
+        ctx.onOpen(target.id);
+        return ok(`Opened "${target.meta.title}" (id ${target.id}).`);
+      }
       const current = ctx.documentId ? await hub.get(ctx.documentId) : await hub.active();
       const viewers = (current ?? target).sendCommand({ kind: "open_document", documentId: target.id });
       return ok(viewers ? `Opened "${target.meta.title}" in the editor.` : `"${target.meta.title}" is ready; the user has no editor open to show it in.`);

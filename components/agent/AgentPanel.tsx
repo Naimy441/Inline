@@ -2,8 +2,8 @@
 
 import { Check, CircleDashed, Copy, FolderTree, History, Loader2, MessageSquarePlus, Plus, RefreshCw, Terminal, X } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import type { Attachment, ChatMessage, DocumentMention, ChatSettings, LinkedDocument, SelectionContext, Todo } from "@/lib/agent/types";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { shortToolName, type Attachment, type ChatMessage, type DocumentMention, type ChatSettings, type LinkedDocument, type SelectionContext, type Todo } from "@/lib/agent/types";
 import { formatChatHistory, formatPromptTurn, turnForMessage } from "@/lib/agent/devCopy";
 import { ActivityLine, isWaiting } from "@/components/agent/Activity";
 import { refreshAgentStatus, useAgentStatus } from "@/lib/client/agentStatus";
@@ -182,6 +182,7 @@ export const AgentPanel = forwardRef<
   const send = useCallback(
     async ({ text, attachments, mentions, links, selected }: { text: string; attachments: Attachment[]; mentions?: DocumentMention[]; links?: LinkedDocument[]; selected?: SelectionContext | null }) => {
       stick.current = true;
+      if (!documentId) expectOpen.current = true;
       const input = { text, documentId, selection: (selected === undefined ? selection : selected) ?? undefined, attachments, mentions: mentions?.length ? mentions : undefined, links: links?.length ? links : undefined, home: homeRef.current };
       setSelection(null);
       try {
@@ -193,6 +194,7 @@ export const AgentPanel = forwardRef<
         const id = draftId.current ?? newChatId();
         draftId.current = null;
         const next = new ChatSession(id);
+        next.onOpen = (docId) => openMatch.current(docId);
         created.current = next;
         fresh.add(id);
         setChatId(id);
@@ -207,6 +209,8 @@ export const AgentPanel = forwardRef<
 
   const homeRef = useRef(home);
   homeRef.current = home;
+  /** This page asked the home assistant to do something, so a new open_document should show the document. */
+  const expectOpen = useRef(false);
 
   // Each folder or document change Claude finishes reloads the home page's list, once.
   const libraryChanges = chat?.messages.reduce((count, message) => count + (message.role === "assistant" ? message.parts.filter((part) => part.type === "tool" && part.status === "done" && LIBRARY_TOOLS.test(part.name)).length : 0), 0) ?? 0;
@@ -222,6 +226,35 @@ export const AgentPanel = forwardRef<
     seenChanges.current = { chatId: loadedChatId, count: libraryChanges };
   }, [loadedChatId, libraryChanges]);
 
+  // open_document from the home page. The turn can finish before the event stream
+  // connects, so this also reads the tool call in the chat snapshot, not only the live event.
+  const opened = useMemo(() => {
+    let count = 0;
+    let id: string | null = null;
+    for (const message of chat?.messages ?? []) {
+      if (message.role !== "assistant") continue;
+      for (const part of message.parts) {
+        if (part.type !== "tool" || part.status !== "done" || shortToolName(part.name) !== "open_document") continue;
+        const documentId = part.input?.document_id;
+        if (typeof documentId !== "string" || !documentId) continue;
+        count += 1;
+        id = documentId;
+      }
+    }
+    return { count, id };
+  }, [chat]);
+  const seenOpens = useRef<{ chatId: string; count: number } | null>(null);
+  useEffect(() => {
+    if (documentId || !loadedChatId) return;
+    const last = seenOpens.current;
+    const grew = last?.chatId === loadedChatId && opened.count > last.count;
+    if (expectOpen.current && opened.id && (grew || (!last && opened.count > 0))) {
+      expectOpen.current = false;
+      router.push(`/d/${opened.id}`);
+    }
+    seenOpens.current = { chatId: loadedChatId, count: opened.count };
+  }, [documentId, loadedChatId, opened.count, opened.id, router]);
+
   const updateSettings = (patch: Partial<ChatSettings>) => {
     if (session) void session.update({ settings: patch });
     else setDraftSettings({ ...settings, ...patch });
@@ -230,6 +263,18 @@ export const AgentPanel = forwardRef<
   // Stable callbacks, so replies that didn't change don't re-render while another streams.
   const sessionRef = useRef(session);
   sessionRef.current = session;
+  // Home has no editor listening for open_document, so the chat event opens the match.
+  const openMatch = useRef<(id: string) => void>(() => undefined);
+  openMatch.current = (id) => {
+    if (!documentId) router.push(`/d/${id}`);
+  };
+  useEffect(() => {
+    if (!session) return;
+    session.onOpen = (id) => openMatch.current(id);
+    return () => {
+      session.onOpen = null;
+    };
+  }, [session]);
   const reviewRef = useRef(onReview);
   reviewRef.current = onReview;
   const retry = useCallback(() => void sessionRef.current?.retry(), []);

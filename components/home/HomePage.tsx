@@ -164,6 +164,7 @@ export function HomePage() {
     const onPop = () => {
       setFolderId(folderFromAddress());
       setView("documents");
+      setQuery("");
     };
     window.addEventListener("popstate", onPop);
     // Coming back to the tab picks up changes made elsewhere (an editor tab, an MCP client).
@@ -212,7 +213,19 @@ export function HomePage() {
     store(SORT_KEY, next);
   };
 
-  const open = (id: string) => router.push(`/d/${id}`);
+  const open = (id: string) => {
+    // Search lists documents from every folder while the address stays put, so Back
+    // would return to Home. Leave the document's folder in history behind it.
+    if (searching) {
+      const doc = documents?.find((item) => item.id === id);
+      const folder = doc ? documentFolder(folders, doc) : null;
+      if (folder) {
+        const url = `/?folder=${encodeURIComponent(folder)}`;
+        if (window.location.pathname + window.location.search !== url) window.history.pushState(null, "", url);
+      }
+    }
+    router.push(`/d/${id}`);
+  };
 
   const create = async (template: DocumentTemplate) => {
     setCreating(template.id);
