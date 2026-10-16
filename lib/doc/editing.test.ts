@@ -205,6 +205,27 @@ describe("whole-document operations", () => {
     assert.equal(tr.doc.childCount, 4);
   });
 
+  it("accepts a displayed equation from write_document and insert_content", () => {
+    const empty = schema.node("doc", null, [schema.node("paragraph")]);
+    for (const markdown of ["$$y = x^2 - 2x - 3$$", "$$\ny = x^2 - 2x - 3\n$$"]) {
+      const written = writeDocument(empty, markdown);
+      const fixes = ensureBlockIds(written.doc);
+      fixes.check();
+      assert.equal(fixes.child(0).type.name, "code_block");
+      assert.equal(fixes.child(0).attrs.language, "math");
+      assert.equal(fixes.child(0).textContent, "y = x^2 - 2x - 3");
+      assert.equal(fixes.child(0).firstChild?.marks.length ?? 0, 0);
+      const inserted = insertMarkdown(empty, markdown, { at: "end" });
+      ensureBlockIds(inserted.doc).check();
+      assert.equal(inserted.doc.child(0).attrs.language, "math");
+    }
+    const prose = insertMarkdown(empty, "See $y = x^2$.", { at: "end" });
+    const equation = runs(prose.doc).find(([text]) => text === "y = x^2");
+    assert.ok(equation);
+    assert.ok(equation[1].split(",").includes("math"));
+    assert.ok(equation[1].split(",").includes("agent"));
+  });
+
   it("inserts at the end, after a line, and into an empty document", () => {
     const empty = schema.node("doc", null, [schema.node("paragraph")]);
     assert.equal(docToMarkdown(insertMarkdown(empty, "Hello", { at: "end" }).doc), "Hello");

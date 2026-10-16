@@ -160,6 +160,42 @@ describe("photo selection", () => {
     }
   });
 
+  it("puts a text caret under an image instead of a horizontal gap cursor", () => {
+    const doc = schema.nodes.doc.create(null, [
+      schema.nodes.paragraph.create(null, schema.text("Before")),
+      schema.nodes.image.create({ src: "/photo.png", alt: "photo" }),
+    ]);
+    const plugin = imageSelectionPlugin();
+    const mountPoint = dom.window.document.createElement("div");
+    dom.window.document.body.append(mountPoint);
+    const view = new EditorView(mountPoint, {
+      state: EditorState.create({ doc, plugins: [plugin] }),
+      nodeViews: { image: (node, editorView, getPos) => new ImageView(node, editorView, getPos) },
+    });
+    try {
+      let imagePos = -1;
+      view.state.doc.descendants((node, pos) => {
+        if (node.type.name === "image") {
+          imagePos = pos;
+          return false;
+        }
+        return true;
+      });
+      const after = imagePos + view.state.doc.nodeAt(imagePos)!.nodeSize;
+      const handled = plugin.props.handleClick!.call(plugin, view, after, { button: 0, shiftKey: false, target: view.dom, clientX: 8, clientY: 400 } as unknown as MouseEvent);
+      assert.equal(handled, true);
+      assert.equal(view.state.selection instanceof TextSelection, true);
+      assert.equal(view.state.selection instanceof NodeSelection, false);
+      assert.equal(view.state.doc.lastChild?.type.name, "paragraph");
+      assert.equal(view.state.doc.lastChild?.content.size, 0);
+      const parent = view.state.doc.resolve(view.state.selection.from).parent;
+      assert.equal(parent.type.name, "paragraph");
+      assert.equal(parent.content.size, 0);
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("does not take a text click away from the editor", () => {
     const { view, selectPhoto, destroy } = mount();
     try {

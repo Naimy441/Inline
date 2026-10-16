@@ -670,12 +670,17 @@ img.ProseMirror-separator {
 .doc-content .doc-image {
   margin: 0 0 var(--para-space, 8pt);
   line-height: 0;
+  max-width: 100%;
+  /* The frame is only a box around the picture. Clicks on the text under or
+     beside it pass through; the picture itself still takes the click. */
+  pointer-events: none;
 }
 
 .doc-content .doc-image img {
   max-width: 100%;
   height: auto;
   border-radius: 2px;
+  pointer-events: auto;
 }
 
 .doc-content .doc-image.align-center {
@@ -741,8 +746,15 @@ img.ProseMirror-separator {
   display: contents;
 }
 
-.doc-content .doc-image.is-cropped .image-crop img,
-.doc-content .image-crop img {
+.doc-content .image-frame,
+.doc-content .image-turn,
+.doc-content .image-crop {
+  pointer-events: none;
+}
+
+/* A crop's source is larger than its window; the frame clips it. An uncropped
+   picture stays inside the text column. */
+.doc-content .doc-image.is-cropped .image-crop img {
   max-width: none;
 }
 
@@ -783,6 +795,7 @@ img.ProseMirror-separator {
   background: var(--surface);
   display: none;
   touch-action: none;
+  pointer-events: auto;
 }
 .doc-content .image-handle-left {
   left: -6px;

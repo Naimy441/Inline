@@ -113,10 +113,36 @@ export function croppedFrame(displayWidth: number, naturalWidth: number, natural
   };
 }
 
-/** A width attribute (`220px`, `50%`, `220`) in CSS pixels. */
+/**
+ * A picture's width as CSS. A bare number is pixels (`480` and `480px` are the
+ * same). A percent is a share of the text width (`70%`).
+ */
+export function pictureWidth(value: unknown): string | null {
+  if (value == null || value === "") return null;
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  if (/^\d+(\.\d+)?%$/.test(raw)) {
+    const percent = Number.parseFloat(raw);
+    return percent > 0 ? `${percent}%` : null;
+  }
+  if (/^\d+(\.\d+)?px$/i.test(raw) || /^\d+(\.\d+)?$/.test(raw)) {
+    const px = Number.parseFloat(raw);
+    return px > 0 ? `${px}px` : null;
+  }
+  return raw;
+}
+
+/** A width attribute (`220px`, `50%`, `220`) in CSS pixels, never wider than the text. */
 export function cssPx(width: string | null, container: number, natural: number) {
-  if (!width) return natural > 0 ? natural : container;
-  if (width.endsWith("%")) return (Math.max(0, container) * Number.parseFloat(width)) / 100;
-  const value = Number.parseFloat(width);
-  return Number.isFinite(value) && value > 0 ? value : natural > 0 ? natural : container;
+  let value: number;
+  if (!width) value = natural > 0 ? natural : container;
+  else if (width.endsWith("%")) value = (Math.max(0, container) * Number.parseFloat(width)) / 100;
+  else {
+    const parsed = Number.parseFloat(width);
+    value = Number.isFinite(parsed) && parsed > 0 ? parsed : natural > 0 ? natural : container;
+  }
+  if (!(value > 0)) return container > 0 ? container : 1;
+  if (container > 0 && value > container) return container;
+  return value;
 }

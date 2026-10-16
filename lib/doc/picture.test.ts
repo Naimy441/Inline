@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { croppedFrame, cropToSrcRect, parseCropToken, pictureCrop, pictureRotate, rotateFromWord, rotateToWord, srcRectToCrop } from "./picture";
+import { croppedFrame, cropToSrcRect, cssPx, parseCropToken, pictureCrop, pictureRotate, pictureWidth, rotateFromWord, rotateToWord, srcRectToCrop } from "./picture";
 
 describe("picture crop and rotation", () => {
   it("reads a crop as the percent hidden on each edge", () => {
@@ -18,6 +18,20 @@ describe("picture crop and rotation", () => {
     assert.equal(box.imageWidth, 400);
     assert.equal(box.offsetX, -200);
     assert.ok(box.imageWidth > box.frameWidth);
+  });
+
+  it("stores a bare pixel width with a unit and keeps percents", () => {
+    assert.equal(pictureWidth("480"), "480px");
+    assert.equal(pictureWidth("480px"), "480px");
+    assert.equal(pictureWidth("70%"), "70%");
+    assert.equal(pictureWidth(""), null);
+  });
+
+  it("fits a pixel width to the text column", () => {
+    assert.equal(cssPx("2000px", 600, 4000), 600);
+    assert.equal(cssPx("480", 600, 4000), 480);
+    assert.equal(cssPx("70%", 600, 4000), 420);
+    assert.equal(cssPx(null, 600, 4000), 600);
   });
 
   it("speaks Word's units", () => {
