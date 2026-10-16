@@ -43,7 +43,7 @@ export type PageDraft = { markdown: string; concerns: string[]; needs: PdfBox[] 
 
 const GLUE = /^[\s\d()[\]=+−,.;:|/!'<>ΓΔΘΛΞΠΣΥΦΨΩˆ˜¯˙¨]+/;
 const GLUE_END = /[\s\d()[\]=+−,.;:|/!'<>ΓΔΘΛΞΠΣΥΦΨΩˆ˜¯˙¨]+$/;
-const MARKER = /^(\(?(?:\d{1,2}|[a-z]|[ivx]{1,4}|[A-Z])[.)]|•|∙|◦|▪|–|-)(?=\s)/;
+const MARKER = /^(\(?(?:\d{1,2}|[a-z]|[ivx]{1,4}|[A-Z])[.)]|•|∙|◦|▪|–|-)(?=\s|$)/;
 
 type Token = { kind: "text"; run: PdfTextRun; text: string; x: number; right: number; tab: boolean } | { kind: "math"; glyphs: MathGlyph[]; parts: MathPart[]; x: number; right: number; tab: boolean };
 
@@ -672,15 +672,17 @@ export function draftPage(ctx: DraftContext): PageDraft {
     block.lines.forEach((line, index) => {
       let piece = content(line, index);
       if (index === 0 && markerTab !== null && line.marker) {
-        const escaped = /^[•∙]$/.test(line.marker) ? "∙" : escapeText(line.marker);
-        piece = piece.replace(new RegExp(`^(\\*\\*)?${escaped.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`), (whole, bold) => `${bold ?? ""}${escaped}&#9;`);
+        const bullet = /^[•∙]$/.test(line.marker);
+        const escaped = bullet ? "∙" : escapeText(line.marker);
+        const pattern = (bullet ? "[•∙]" : escaped.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")) + "\\s*";
+        piece = piece.replace(new RegExp(`^(\\*\\*)?${pattern}`), (whole, bold) => `${bold ?? ""}${escaped}&#9;`);
       }
       if (index === 0) text = piece;
       else if (centered) text += `<br>${piece}`;
       else if (/\p{L}-$/u.test(text) && /^\p{Ll}/u.test(piece)) text = text.slice(0, -1) + piece;
       else text += /\s$/.test(text) ? piece.trimStart() : ` ${piece.trimStart()}`;
     });
-    text = escapeStart(text.replace(/\*\*\s*\*\*/g, " ").trim());
+    text = escapeStart(text.replace(/\*\*\s*\*\*/g, " ").replace(/(&emsp;|&ensp;)\s+/g, "$1").trim());
     const prefix = block.kind === "heading" ? (size >= ctx.fontSize * 1.15 ? "## " : "### ") : "";
     out.push(`${prefix}${text} {${attrs.join(" ")}}`);
     noteMath(block, concerns);
