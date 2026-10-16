@@ -58,6 +58,7 @@ import { formatFolderTree, formatLibrary, library, MAX_EXCERPT_WORDS, moveDocume
 import { pdfTools } from "@/lib/agent/pdfTools";
 import { formatCommandReport } from "@/lib/server/sandbox";
 import { jobTools } from "@/lib/agent/jobs";
+import { createToc, describeToc, findToc, syncTocTransform, tocDepth } from "@/lib/doc/toc";
 
 /**
  * The tools Claude uses to work in Inline documents. They are transport
@@ -1910,6 +1911,63 @@ export const TOOLS = [
       return ok(`${viewers ? `Started the download of "${filename}" in the user's browser.` : "No editor is open to download into."} The file is available at ${url} on the Inline server.`);
     },
   }),
+  defineTool({
+    name: "insert_table_of_contents",
+    title: "Insert table of contents",
+    description:
+      "Insert a table of contents generated from the document's headings: each entry is the heading, a dotted leader, and the page that heading falls on, and each entry opens that heading. It updates on its own as headings are added, renamed or removed, and as pages change. Don't type the entries by hand, and don't build one out of paragraphs.\n\n" +
+      "One document has one table of contents. If it already has one, this leaves it and reports the entries. depth is the deepest heading level to list (1–6, default 3). It is written as \\tableofcontents in the Markdown. To remove it, delete that line, or the user can select the field and delete it.",
+    shape: {
+      document_id: documentId,
+      position: z.enum(["start", "end", "after_line", "before_line"]).optional().describe("Where to insert it. Defaults to the start."),
+      line: z.number().int().min(1).optional().describe("Line number for after_line / before_line."),
+      depth: z.number().int().min(1).max(6).optional().describe("Deepest heading level to include. Default 3."),
+    },
+    write: true,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      const depth = tocDepth(args.depth);
+      const existing = findToc(doc.doc);
+      if (existing) return ok(`This document already has a table of contents.\n${describeToc(doc.doc, pageCountNow(doc).starts)}`);
+      if ((args.position === "after_line" || args.position === "before_line") && !args.line) return fail("line is required when position is after_line or before_line.");
+      const where = args.position ?? "start";
+      const result = await commitEdit(
+        ctx,
+        doc,
+        "insert_table_of_contents",
+        (current) => {
+          const tr = new Transform(current);
+          tr.insert(tocInsertAt(current, where, args.line), createToc(current, depth));
+          return tr;
+        },
+        "Inserted a table of contents",
+      );
+      if (result.isError) return result;
+      return ok(`${result.text}\n${describeToc(doc.doc, pageCountNow(doc).starts)}`);
+    },
+  }),
+
+  defineTool({
+    name: "refresh_table_of_contents",
+    title: "Refresh table of contents",
+    description:
+      "Rebuild the table of contents from the document's headings and report each entry with its page number. Page numbers follow the editor's layout, so call this after edits when you need to see which page a heading is on. It does nothing if there is no table of contents; insert one with insert_table_of_contents. The field also updates on its own in the editor.",
+    shape: { document_id: documentId },
+    write: true,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      const existing = findToc(doc.doc);
+      if (!existing) return fail("This document has no table of contents. Insert one with insert_table_of_contents.");
+      const synced = syncTocTransform(doc.doc);
+      if (synced) {
+        const result = await commitEdit(ctx, doc, "refresh_table_of_contents", (current) => syncTocTransform(current) ?? new Transform(current), "Updated the table of contents");
+        if (result.isError && !/no change/.test(result.text)) return result;
+      }
+      const fresh = await resolveDocument(ctx, args.document_id);
+      const starts = pageCountNow(fresh).starts;
+      return ok(`${synced ? "Updated the table of contents." : "The table of contents is already up to date."}\n${describeToc(fresh.doc, starts)}`);
+    },
+  }),
 
   // Rebuilding an imported PDF as an editable document (lib/agent/pdfTools.ts).
   ...pdfTools({ defineTool, ok, fail, resolveDocument, documentId, showActivity }),
@@ -1920,6 +1978,19 @@ export const TOOLS = [
 function clip(text: string, max = 160) {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+}
+
+function tocInsertAt(doc: PMNode, position: "start" | "end" | "after_line" | "before_line", line?: number): number {
+  if (position === "start") return 0;
+  if (position === "end") return doc.content.size;
+  const entries = blockLines(serializeDoc(doc));
+  const containing = entries.find((item) => item.endLine >= line! && item.startLine <= line!);
+  const entry = containing ?? entries.find((item) => item.startLine > line!);
+  if (!entry) return doc.content.size;
+  const index = position === "after_line" ? entry.block.index + 1 : entry.block.index;
+  let pos = 0;
+  for (let i = 0; i < index && i < doc.childCount; i += 1) pos += doc.child(i).nodeSize;
+  return pos;
 }
 
 export const READ_ONLY_TOOL_NAMES = TOOLS.filter((tool) => !tool.write).map((tool) => tool.name);

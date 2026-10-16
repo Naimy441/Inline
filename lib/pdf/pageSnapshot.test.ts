@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { JSDOM } from "jsdom";
 import { parseColor, snapshotPages, standardFont, type Box, type PageMeasurer, type SnapshotStyle } from "./pageSnapshot";
-import type { PdfItem, PdfText } from "./pdfWriter";
+import { buildPdf, type PdfItem, type PdfText } from "./pdfWriter";
 
 // A fake layout: every measured element carries data-box="left top width height"
 // in viewport pixels, text advances 5px per character, and data-wrap="n" moves
@@ -253,6 +253,38 @@ describe("snapshotPages", () => {
     assert.equal(find(snapshot().pages[0].items, "Serif")!.font, "Times-Bold");
     assert.equal(standardFont({ fontFamily: "\"Courier New\", monospace", fontWeight: "400", fontStyle: "italic" }), "Courier-Oblique");
     assert.equal(standardFont({ fontFamily: "Roboto", fontWeight: "700", fontStyle: "italic" }), "Helvetica-BoldOblique");
+  });
+
+  it("turns a contents entry into an internal destination and bookmarks the headings", () => {
+    const html = `
+      <div class="page-stack">
+        <div class="sheet" data-box="0 0 408 528"></div>
+        <div class="sheet" data-box="0 540 408 528"></div>
+        <div class="page-content doc-content" data-box="48 48 312 900">
+          <nav class="doc-toc" data-box="48 48 300 40">
+            <a class="doc-toc-entry" href="#intro" data-box="48 64 300 16">
+              <span class="doc-toc-label" data-box="48 64 70 16">Introduction</span>
+              <span class="doc-toc-leader" data-box="130 64 140 16">....</span>
+              <span class="doc-toc-page" data-box="280 64 16 16">2</span>
+            </a>
+          </nav>
+          <h1 data-id="intro" data-box="48 600 200 20">Introduction</h1>
+          <h2 data-id="detail" data-box="48 640 200 16">Detail</h2>
+        </div>
+      </div>`;
+    const dom = new JSDOM(html);
+    const model = snapshotPages(dom.window.document.querySelector<HTMLElement>(".page-stack")!, "Notes", fakeMeasurer());
+    const link = model.pages[0]!.items.find((item) => item.kind === "link");
+    assert.equal(link?.kind === "link" && link.dest?.page, 1);
+    assert.ok(link?.kind === "link" && (link.dest?.top ?? 0) > 0);
+    const dots = model.pages.flatMap((page) => page.items).filter((item) => item.kind === "text" && item.text === ".");
+    assert.ok(dots.length >= 3, "dotted leaders");
+    assert.equal(model.outline?.[0]?.title, "Introduction");
+    assert.equal(model.outline?.[0]?.page, 1);
+    assert.equal(model.outline?.[0]?.children?.[0]?.title, "Detail");
+    const bytes = Buffer.from(buildPdf(model)).toString("latin1");
+    assert.match(bytes, /\/Type \/Outlines /);
+    assert.match(bytes, /\/Dest \[\d+ 0 R \/XYZ null /);
   });
 
   it("renders headers, footers and page numbers from the sheets", () => {

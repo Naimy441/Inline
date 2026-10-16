@@ -124,6 +124,8 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   get_job: { job_id: "job_missing" },
   stop_job: { job_id: "job_missing" },
   start_jobs: { jobs: [{ tool: "read_document" }] },
+  insert_table_of_contents: {},
+  refresh_table_of_contents: {},
 };
 
 describe("tool registry", () => {
@@ -630,6 +632,22 @@ describe("get_outline", () => {
     const { ctx } = await setup({}, "Just text here.");
     const result = await runTool("get_outline", {}, ctx);
     assert.match(result.text, /\(start\) — 3 words/);
+  });
+});
+
+describe("table of contents", () => {
+  test("inserts one field and refresh reports its headings", async () => {
+    const { doc, ctx } = await setup();
+    const inserted = await runTool("insert_table_of_contents", {}, ctx);
+    assert.equal(inserted.isError, undefined, inserted.text);
+    assert.match(md(doc), /\\tableofcontents/);
+    assert.match(inserted.text, /Findings/);
+    assert.match(inserted.text, /once the document is laid out/);
+    const again = await runTool("insert_table_of_contents", {}, ctx);
+    assert.match(again.text, /already has a table of contents/);
+    assert.equal(md(doc).match(/\\tableofcontents/g)?.length, 1);
+    const refreshed = await runTool("refresh_table_of_contents", {}, ctx);
+    assert.match(refreshed.text, /already up to date/);
   });
 });
 

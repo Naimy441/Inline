@@ -232,7 +232,7 @@ test.describe("tablet", () => {
     await expect(page.locator(".menubar")).toBeHidden();
     await page.getByLabel("More options").click();
     await page.locator(".menu-item", { hasText: "Insert" }).click();
-    await expect(page.locator(".menu-item", { hasText: "Table of contents" })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: /^Table of contents/ })).toBeVisible();
   });
 });
 

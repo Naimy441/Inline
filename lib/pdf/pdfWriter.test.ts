@@ -71,6 +71,19 @@ describe("buildPdf", () => {
     assert.match(text, /\/Title <FEFF0051007500610072007400650072006C0079002020130020005200650070006F00720074>/);
   });
 
+  it("writes a bookmark outline and an internal link to a page", () => {
+    const model = twoPageModel();
+    model.outline = [{ title: "One", page: 0, top: 72, children: [{ title: "Two", page: 1, top: 80 }] }];
+    model.pages[0]!.items.push({ kind: "link", x: 72, y: 100, width: 200, height: 14, dest: { page: 1, top: 80 } });
+    const text = latin1(buildPdf(model));
+    assert.match(text, /\/Type \/Catalog \/Pages \d+ 0 R \/Outlines \d+ 0 R/);
+    assert.match(text, /\/Type \/Outlines \/First \d+ 0 R \/Last \d+ 0 R \/Count 2/);
+    assert.match(text, /\/Title <FEFF004F006E0065>/);
+    assert.match(text, /\/Title <FEFF00540077006F>/);
+    // Page 2 is 792pt tall; a heading 80pt from the top sits at y 712.
+    assert.match(text, /\/Dest \[\d+ 0 R \/XYZ null 712 null\]/);
+  });
+
   it("declares content stream lengths that match the stream bytes", () => {
     const text = latin1(buildPdf(twoPageModel()));
     for (const match of text.matchAll(/<< \/Length (\d+) >>\nstream\n/g)) {

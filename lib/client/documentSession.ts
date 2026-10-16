@@ -27,6 +27,7 @@ import { editorPlugins } from "@/lib/editor/setup";
 import { setInvisibles } from "@/lib/editor/invisibles";
 import { normalizeWord, setDictionary, setSpellcheckEnabled } from "@/lib/editor/spelling";
 import { codeBlockView } from "@/lib/editor/math";
+import { TocEntryView, TocView } from "@/lib/editor/tocView";
 import { rebaseLocalEdits, unconfirmedEdits } from "@/lib/editor/resync";
 import { loadPreferences, preferences, setPreference } from "@/lib/client/preferences";
 import { formatShortcut, isApple } from "@/lib/client/platform";
@@ -601,7 +602,12 @@ export class DocumentSession {
         editable: () => !this.callbacks.offline && this.ui.get().mode !== "viewing",
         state: this.createState(document),
         dispatchTransaction: (tr) => this.dispatch(tr),
-        nodeViews: { image: (node, view, getPos) => new ImageView(node, view, getPos), code_block: codeBlockView },
+        nodeViews: {
+          image: (node, view, getPos) => new ImageView(node, view, getPos),
+          code_block: codeBlockView,
+          toc: (node, view, getPos) => new TocView(node, view, getPos),
+          toc_entry: (node, view, getPos) => new TocEntryView(node, view, getPos),
+        },
         // Native spellcheck draws its own dotted line on top of ours. The
         // editor's underlines are the only spelling marks; hiding them is the
         // spelling plugin, not this attribute.

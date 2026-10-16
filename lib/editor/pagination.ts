@@ -223,7 +223,7 @@ function sameBreaks(a: Break[], b: Break[]) {
 }
 
 const TEXTBLOCKS = new Set(["paragraph", "heading", "title", "subtitle", "code_block"]);
-const CONTAINERS = new Set(["bullet_list", "ordered_list", "list_item", "blockquote"]);
+const CONTAINERS = new Set(["bullet_list", "ordered_list", "list_item", "blockquote", "toc"]);
 
 /**
  * A textblock's lines relative to its own top, kept per node. Reading line

@@ -601,6 +601,90 @@ const nodes: Record<string, NodeSpec> = {
     ],
   },
 
+  /**
+   * A table of contents. One field: its entries are generated from the
+   * headings (lib/doc/toc.ts) and are not edited by hand. Page numbers are
+   * painted from the page layout, not stored.
+   */
+  toc: {
+    content: "toc_title toc_entry*",
+    group: "block",
+    defining: true,
+    isolating: true,
+    selectable: true,
+    attrs: { id: { default: null as string | null }, depth: { default: 3 } },
+    parseDOM: [
+      {
+        tag: "nav.doc-toc",
+        priority: 60,
+        getAttrs: (dom) => {
+          const el = dom as HTMLElement;
+          const depth = Number(el.getAttribute("data-depth"));
+          return { id: el.getAttribute("data-id"), depth: Number.isInteger(depth) && depth >= 1 && depth <= 6 ? depth : 3 };
+        },
+      },
+    ],
+    toDOM: (node): DOMOutputSpec => [
+      "nav",
+      {
+        class: "doc-toc",
+        "data-toc": "true",
+        "data-depth": String(node.attrs.depth ?? 3),
+        "aria-label": "Contents",
+        ...(node.attrs.id ? { "data-id": node.attrs.id } : {}),
+      },
+      0,
+    ],
+  },
+
+  toc_title: {
+    atom: true,
+    selectable: false,
+    attrs: { text: { default: "Contents" } },
+    parseDOM: [{ tag: "p.doc-toc-title", priority: 60, getAttrs: (dom) => ({ text: (dom as HTMLElement).textContent || "Contents" }) }],
+    toDOM: (node): DOMOutputSpec => ["p", { class: "doc-toc-title" }, String(node.attrs.text || "Contents")],
+  },
+
+  toc_entry: {
+    atom: true,
+    selectable: false,
+    attrs: {
+      level: { default: 1 },
+      text: { default: "" },
+      href: { default: null as string | null },
+      placeholder: { default: false },
+    },
+    parseDOM: [
+      {
+        tag: "a.doc-toc-entry, p.doc-toc-entry",
+        priority: 60,
+        getAttrs: (dom) => {
+          const el = dom as HTMLElement;
+          const level = Number(el.getAttribute("data-level"));
+          return {
+            level: Number.isInteger(level) && level >= 1 && level <= 6 ? level : 1,
+            text: el.querySelector(".doc-toc-label")?.textContent || "",
+            href: el.getAttribute("href"),
+            placeholder: el.hasAttribute("data-placeholder") || el.classList.contains("is-placeholder"),
+          };
+        },
+      },
+    ],
+    toDOM: (node): DOMOutputSpec => {
+      const placeholder = Boolean(node.attrs.placeholder);
+      const href = node.attrs.href as string | null;
+      const attrs: Record<string, string> = {
+        class: `doc-toc-entry${placeholder ? " is-placeholder" : ""}`,
+        "data-level": String(node.attrs.level ?? 1),
+      };
+      if (placeholder) attrs["data-placeholder"] = "true";
+      if (href) attrs.href = href;
+      const label: DOMOutputSpec = ["span", { class: "doc-toc-label" }, String(node.attrs.text ?? "")];
+      if (placeholder) return ["p", attrs, label];
+      return ["a", attrs, label, ["span", { class: "doc-toc-leader", "aria-hidden": "true" }], ["span", { class: "doc-toc-page" }]];
+    },
+  },
+
   image: {
     group: "block",
     atom: true,
