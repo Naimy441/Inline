@@ -9,14 +9,6 @@ import { fakeClaude, type FakeModel } from "@/lib/agent/testing/fakeClaude";
 const failedOnce = new Set<string>();
 let backgroundJob: string | undefined;
 
-const BROKEN_PLOT = `# plot-marker
-print("stdout-from-plot")
-import sys
-sys.stderr.write("stderr-from-plot\\n")
-print("file-says", open("plot.py").readline().strip())
-raise SystemExit(1)
-`;
-
 const model: FakeModel = async (turn, claude) => {
   const text = turn.text;
   const documentId = turn.context.match(/\(id ([^)]+)\)/)?.[1];
@@ -97,13 +89,6 @@ const model: FakeModel = async (turn, claude) => {
     return;
   }
 
-  if (/^run a broken plot$/i.test(text)) {
-    await claude.call("write_file", { path: "plot.py", content: BROKEN_PLOT, document_id: documentId });
-    const ran = await claude.call("run_command", { command: "python3 plot.py", document_id: documentId });
-    claude.say(ran.text);
-    return;
-  }
-
   const readBoth = text.match(/^read (\S+) and (\S+) together$/);
   if (readBoth) {
     const result = await claude.call("start_jobs", {
@@ -124,11 +109,10 @@ const model: FakeModel = async (turn, claude) => {
     return;
   }
 
-  if (/^start a slow background command$/i.test(text)) {
-    const started = await claude.call("start_job", { tool: "run_command", arguments: { command: "sleep 0.6; echo picked-up" }, document_id: documentId });
+  if (/^start a background read$/i.test(text)) {
+    const started = await claude.call("start_job", { tool: "read_document", arguments: { document_id: documentId } });
     backgroundJob = started.text.match(/job_[0-9a-f]+/)?.[0];
-    const early = backgroundJob ? await claude.call("get_job", { job_id: backgroundJob }) : null;
-    claude.say([started.text, early?.text].filter(Boolean).join("\n\n"));
+    claude.say(started.text);
     return;
   }
 

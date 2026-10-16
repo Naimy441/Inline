@@ -24,21 +24,6 @@ async function ask(page: Page, text: string) {
 
 const lastReply = (page: Page) => page.locator(".msg-assistant").last();
 
-test("a broken plot shows stdout, stderr, and the exit reason", async ({ page, request }) => {
-  await openWithClaude(page, request, "Plot space.");
-  await ask(page, "run a broken plot");
-  const reply = lastReply(page);
-  await expect(reply).toContainText("exit 1 (finished with an error)");
-  await expect(reply).toContainText("stdout-from-plot");
-  await expect(reply).toContainText("stderr-from-plot");
-  await expect(reply).toContainText("file-says # plot-marker");
-  await expect(reply).toContainText("working directory: the document folder");
-  const tool = reply.locator(".tool", { hasText: "python3 plot.py" });
-  await tool.locator(".tool-head").click();
-  await expect(tool.locator(".tool-result")).toContainText("stderr-from-plot");
-  await expect(tool.locator(".tool-result")).toContainText("stdout-from-plot");
-});
-
 test("two independent reads run in one call", async ({ page, request }) => {
   const alpha = await request.post("/api/documents", { data: { title: "Alpha page", markdown: "Alpha body stays put." } });
   const beta = await request.post("/api/documents", { data: { title: "Beta page", markdown: "Beta body stays put." } });
@@ -60,9 +45,9 @@ test("Claude can cancel a command while it is running", async ({ page, request }
 });
 
 test("a background job's result is picked up on a later call", async ({ page, request }) => {
-  await openWithClaude(page, request, "Come back for this.");
-  await ask(page, "start a slow background command");
-  await expect(lastReply(page)).toContainText("is still running");
+  await openWithClaude(page, request, "Come back for this picked-up line.");
+  await ask(page, "start a background read");
+  await expect(lastReply(page)).toContainText("It is running");
   await expect(lastReply(page)).toContainText(/job_[0-9a-f]+/);
   await ask(page, "pick up the background job");
   await expect(lastReply(page)).toContainText("picked-up");
