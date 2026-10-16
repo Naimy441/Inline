@@ -120,6 +120,10 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   align_pdf_page: { page: 1 },
   finish_pdf_import: {},
   show_pdf_annotations: { show: true },
+  start_job: { tool: "read_document" },
+  get_job: { job_id: "job_missing" },
+  stop_job: { job_id: "job_missing" },
+  start_jobs: { jobs: [{ tool: "read_document" }] },
 };
 
 describe("tool registry", () => {
@@ -1519,6 +1523,31 @@ describe("document folder", () => {
     assert.match(script.text, /chart\.png/);
     const picture = await runTool("read_file", { path: "chart.png" }, ctx);
     assert.equal(picture.images?.[0]?.mimeType, "image/png");
+  });
+
+  test("a failing plot reports stdout, stderr, and why it exited, from the document folder", async () => {
+    const { ctx } = await setup();
+    const content = "# plot-marker\nprint('stdout-from-plot')\nimport sys\nsys.stderr.write('stderr-from-plot\\n')\nprint('file-says', open('plot.py').readline().strip())\nraise SystemExit(1)\n";
+    const wrote = await runTool("write_file", { path: "plot.py", content }, ctx);
+    assert.equal(wrote.isError, undefined, wrote.text);
+    const ran = await runTool("run_command", { command: "python3 plot.py" }, ctx);
+    assert.equal(ran.isError, true, ran.text);
+    assert.match(ran.text, /exit 1 \(finished with an error\)/);
+    assert.match(ran.text, /stdout:\nstdout-from-plot/);
+    assert.match(ran.text, /stderr:\nstderr-from-plot/);
+    assert.match(ran.text, /file-says # plot-marker/);
+    assert.match(ran.text, /working directory: the document folder/);
+    assert.match(ran.text, /python3 is \/usr\/bin\/python3|python3 is \/usr\/local\/bin\/python3/);
+    assert.doesNotMatch(ran.text, /^exit 1$/);
+  });
+
+  test("a command that prints nothing still reports empty stdout and stderr", async () => {
+    const { ctx } = await setup();
+    const ran = await runTool("run_command", { command: "false" }, ctx);
+    assert.equal(ran.isError, true, ran.text);
+    assert.match(ran.text, /exit 1 \(finished with an error\)/);
+    assert.match(ran.text, /stdout:\n\(empty\)/);
+    assert.match(ran.text, /stderr:\n\(empty\)/);
   });
 
   test("files and commands stay inside the document folder", async () => {
