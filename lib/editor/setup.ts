@@ -3,7 +3,7 @@ import { baseKeymap, chainCommands, exitCode, joinDown, joinUp, selectParentNode
 import { dropCursor } from "prosemirror-dropcursor";
 import { gapCursor } from "prosemirror-gapcursor";
 import { history, redo, undo } from "prosemirror-history";
-import { ellipsis, emDash, InputRule, inputRules, smartQuotes, textblockTypeInputRule, wrappingInputRule } from "prosemirror-inputrules";
+import { ellipsis, emDash, InputRule, inputRules, textblockTypeInputRule, wrappingInputRule } from "prosemirror-inputrules";
 import { keymap } from "prosemirror-keymap";
 import { Fragment, Slice, type MarkType } from "prosemirror-model";
 import { findWrapping } from "prosemirror-transform";
@@ -71,13 +71,38 @@ function markInputRule(pattern: RegExp, type: MarkType) {
   });
 }
 
+/** Inline code keeps the character that was typed. Code blocks are already left alone by input rules. */
+function straightInCode(rule: InputRule) {
+  const handler = (rule as unknown as { handler: (state: EditorState, match: RegExpMatchArray, start: number, end: number) => Transaction | null }).handler;
+  return new InputRule((rule as unknown as { match: RegExp }).match, (state, match, start, end) => {
+    const marks = state.storedMarks ?? state.doc.resolve(end).marks();
+    if (marks.some((mark) => mark.type === schema.marks.code)) return null;
+    return handler(state, match, start, end);
+  });
+}
+
+/**
+ * A straight quote opens at the start of a word and closes at the end, the way
+ * Google Docs does. Opening follows the start of a block, whitespace, a line
+ * break, an opening bracket, or an opening quote. The input-rules plugin
+ * represents a hard break (and any other inline leaf) as U+FFFC in the text
+ * it matches, so a quote after Shift+Enter opens too.
+ */
+const OPEN_QUOTE = /(?:^|[\s\{\[\(\<'"\u2018\u201C\uFFFC])/;
+const smartQuoteRules = [
+  new InputRule(new RegExp(OPEN_QUOTE.source + '(")$'), "“"),
+  new InputRule(/"$/, "”"),
+  new InputRule(new RegExp(OPEN_QUOTE.source + "(')$"), "‘"),
+  new InputRule(/'$/, "’"),
+].map(straightInCode);
+
 /**
  * Tools > Automatic substitutions: typographic quotes, dashes, symbols and
  * fractions as you type. Each rule checks the preference when it fires, so
  * turning it off takes effect immediately.
  */
 const SUBSTITUTIONS: InputRule[] = [
-  ...smartQuotes,
+  ...smartQuoteRules,
   ellipsis,
   emDash,
   new InputRule(/\((?:c|C)\)$/, "©"),
