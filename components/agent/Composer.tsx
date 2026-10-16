@@ -1,8 +1,9 @@
 "use client";
 
-import { ArrowUp, Brain, ChevronDown, FileText, Image as ImageIcon, MessageCircleQuestion, Paperclip, PenLine, Square, TextQuote, X } from "lucide-react";
+import { ArrowUp, Brain, ChevronDown, FileText, Image as ImageIcon, Link2, MessageCircleQuestion, Paperclip, PenLine, Square, TextQuote, X } from "lucide-react";
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import type { AgentMode, Attachment, ChatSettings, DocumentMention, Effort, ModelOption, SelectionContext } from "@/lib/agent/types";
+import { linkedDocumentLabel, type AgentMode, type Attachment, type ChatSettings, type DocumentMention, type Effort, type LinkedDocument, type ModelOption, type SelectionContext } from "@/lib/agent/types";
+import { LinkDocumentDialog } from "@/components/agent/LinkDocumentDialog";
 import { api, uploadFile } from "@/lib/client/api";
 import { MenuButton } from "@/components/ui/Menu";
 import { CommandsDialog, useCommands } from "@/components/agent/CommandsDialog";
@@ -45,7 +46,7 @@ export const Composer = forwardRef<
     onClearSelection: () => void;
     /** The open document, left out of @-mention suggestions. The unsent message is remembered per document. */
     documentId?: string | null;
-    onSend: (input: { text: string; attachments: Attachment[]; mentions: DocumentMention[] }) => Promise<void> | void;
+    onSend: (input: { text: string; attachments: Attachment[]; mentions: DocumentMention[]; links: LinkedDocument[] }) => Promise<void> | void;
     onStop: () => void;
     onSettings: (patch: Partial<ChatSettings>) => void;
     /** Prompts already sent in this chat, oldest first. Arrow keys recall them when the draft is empty. */
@@ -64,6 +65,8 @@ export const Composer = forwardRef<
   const [commandsHidden, setCommandsHidden] = useState(false);
   const [managing, setManaging] = useState(false);
   const [mentions, setMentions] = useState<DocumentMention[]>([]);
+  const [links, setLinks] = useState<LinkedDocument[]>([]);
+  const [linking, setLinking] = useState(false);
   const [caret, setCaret] = useState(0);
 
   // Pick up the message left unsent when the panel was last closed. Read after
@@ -79,6 +82,7 @@ export const Composer = forwardRef<
     setText(draft.text);
     setAttachments(draft.attachments);
     setMentions(draft.mentions);
+    setLinks(draft.links);
     setCaret(draft.text.length);
   }, [documentId]);
   useEffect(() => {
@@ -86,8 +90,8 @@ export const Composer = forwardRef<
       skipSave.current = false;
       return;
     }
-    if (documentId && restored.current === documentId) saveDraft(documentId, { text, attachments, mentions });
-  }, [documentId, text, attachments, mentions]);
+    if (documentId && restored.current === documentId) saveDraft(documentId, { text, attachments, mentions, links });
+  }, [documentId, text, attachments, mentions, links]);
 
   const documents = useDocumentTitles(documentId ?? null);
   const slash = /^\/([a-z0-9-]*)$/i.exec(text);
@@ -179,16 +183,19 @@ export const Composer = forwardRef<
     if ((!value && !attachments.length) || disabled || uploading) return;
     setText("");
     const sent = attachments;
+    const sentLinks = links;
     // Only documents whose @-mention is still in the text.
     const mentioned = mentions.filter((doc) => value.includes(`@${doc.title.replace(/\s+/g, " ")}`));
     setAttachments([]);
     setMentions([]);
+    setLinks([]);
     try {
-      await onSend({ text: value, attachments: sent, mentions: mentioned });
+      await onSend({ text: value, attachments: sent, mentions: mentioned, links: sentLinks });
     } catch {
       setText(value);
       setAttachments(sent);
       setMentions(mentioned);
+      setLinks(sentLinks);
     }
   };
 
@@ -208,7 +215,7 @@ export const Composer = forwardRef<
         void attach(event.dataTransfer.files);
       }}
     >
-      {(selection || attachments.length > 0 || uploading > 0) && (
+      {(selection || attachments.length > 0 || links.length > 0 || uploading > 0) && (
         <div className="composer-chips">
           {selection && (
             <span className="chip chip-quote" title={selection.text}>
@@ -224,6 +231,15 @@ export const Composer = forwardRef<
               {attachment.kind === "image" ? <ImageIcon size={12} /> : <FileText size={12} />}
               <span className="chip-text">{attachment.name}</span>
               <button type="button" className="chip-x" aria-label={`Remove ${attachment.name}`} onClick={() => setAttachments((list) => list.filter((item) => item.id !== attachment.id))}>
+                <X size={12} />
+              </button>
+            </span>
+          ))}
+          {links.map((link) => (
+            <span key={link.id} className="chip" title={linkedDocumentLabel(link)}>
+              <Link2 size={12} />
+              <span className="chip-text">{linkedDocumentLabel(link)}</span>
+              <button type="button" className="chip-x" aria-label={`Remove ${linkedDocumentLabel(link)}`} onClick={() => setLinks((list) => list.filter((item) => item.id !== link.id))}>
                 <X size={12} />
               </button>
             </span>
@@ -411,6 +427,15 @@ export const Composer = forwardRef<
         </div>
         <div className="composer-actions">
           {meter}
+          <button type="button" className="icon-btn icon-btn-sm" aria-label="Link a document" data-tip="Link a document for voice or context" onClick={() => setLinking(true)} disabled={disabled}>
+            <Link2 size={15} />
+          </button>
+          <LinkDocumentDialog
+            open={linking}
+            excludeId={documentId ?? null}
+            onClose={() => setLinking(false)}
+            onLink={(link) => setLinks((list) => [...list.filter((item) => item.id !== link.id), link].slice(-8))}
+          />
           <button type="button" className="icon-btn icon-btn-sm" aria-label="Attach files" data-tip="Attach images, PDFs or text files" onClick={() => fileInput.current?.click()} disabled={disabled}>
             <Paperclip size={15} />
           </button>

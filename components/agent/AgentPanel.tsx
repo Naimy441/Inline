@@ -3,7 +3,7 @@
 import { Check, CircleDashed, Copy, FolderTree, History, Loader2, MessageSquarePlus, Plus, RefreshCw, Terminal, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import type { Attachment, ChatMessage, DocumentMention, ChatSettings, SelectionContext, Todo } from "@/lib/agent/types";
+import type { Attachment, ChatMessage, DocumentMention, ChatSettings, LinkedDocument, SelectionContext, Todo } from "@/lib/agent/types";
 import { formatChatHistory, formatPromptTurn, turnForMessage } from "@/lib/agent/devCopy";
 import { ActivityLine, isWaiting } from "@/components/agent/Activity";
 import { refreshAgentStatus, useAgentStatus } from "@/lib/client/agentStatus";
@@ -180,9 +180,9 @@ export const AgentPanel = forwardRef<
   }, [ready, chatId, documentId, settings]);
 
   const send = useCallback(
-    async ({ text, attachments, mentions, selected }: { text: string; attachments: Attachment[]; mentions?: DocumentMention[]; selected?: SelectionContext | null }) => {
+    async ({ text, attachments, mentions, links, selected }: { text: string; attachments: Attachment[]; mentions?: DocumentMention[]; links?: LinkedDocument[]; selected?: SelectionContext | null }) => {
       stick.current = true;
-      const input = { text, documentId, selection: (selected === undefined ? selection : selected) ?? undefined, attachments, mentions: mentions?.length ? mentions : undefined, home: homeRef.current };
+      const input = { text, documentId, selection: (selected === undefined ? selection : selected) ?? undefined, attachments, mentions: mentions?.length ? mentions : undefined, links: links?.length ? links : undefined, home: homeRef.current };
       setSelection(null);
       try {
         if (session) {

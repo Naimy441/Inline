@@ -120,6 +120,41 @@ test("the usage meter shows plan limits, the chat's cost and the limit Claude pa
   await expect(meter.getByRole("radio", { name: "75%" })).toHaveAttribute("aria-checked", "true");
 });
 
+test("a linked document can be a writing sample of chosen pages, or the whole document as context", async ({ page, request }) => {
+  const title = `Voice sample ${Date.now()}`;
+  await request.post("/api/documents", {
+    data: { title, markdown: "The formal page keeps its distance.\n\n\\pagebreak\n\nThe warm page talks like a friend." },
+  });
+  await openWithClaude(page, request, "Write the next paragraph.");
+
+  await page.getByRole("button", { name: "Link a document" }).click();
+  const dialog = page.getByRole("dialog", { name: "Link a document" });
+  await dialog.getByLabel("Search documents").fill("Voice sample");
+  await dialog.getByRole("option", { name: title, exact: true }).click();
+  await dialog.getByRole("radio", { name: "Match the voice" }).click();
+  const pageTwo = dialog.getByRole("checkbox", { name: "Page 2", exact: true });
+  await expect(pageTwo).toBeVisible();
+  await pageTwo.check();
+  await dialog.getByRole("button", { name: "Link document" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator(".composer .chip")).toContainText(`Voice · ${title} · p. 2`);
+
+  await ask(page, "what did I link");
+  await expect(page.locator(".msg-user").last().locator(".chip")).toContainText("p. 2");
+  await expect(lastReply(page)).toContainText("The warm page talks like a friend.");
+  await expect(lastReply(page)).not.toContainText("The formal page keeps its distance.");
+
+  await page.getByRole("button", { name: "Link a document" }).click();
+  await dialog.getByLabel("Search documents").fill("Voice sample");
+  await dialog.getByRole("option", { name: title, exact: true }).click();
+  await dialog.getByRole("radio", { name: "Use as context" }).click();
+  await dialog.getByRole("button", { name: "Link document" }).click();
+  await expect(page.locator(".composer .chip")).toContainText(`Context · ${title}`);
+  await ask(page, "what did I link");
+  await expect(lastReply(page)).toContainText("The formal page keeps its distance.");
+  await expect(lastReply(page)).toContainText("The warm page talks like a friend.");
+});
+
 test("typing @ suggests other documents and inserts the mention", async ({ page, request }) => {
   const title = `Mention target ${Date.now()}`;
   await request.post("/api/documents", { data: { title, markdown: "Other text." } });

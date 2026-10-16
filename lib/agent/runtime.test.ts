@@ -160,6 +160,28 @@ describe("a turn", () => {
     assert.deepEqual(user && "mentions" in user ? user.mentions : null, [{ id: "doc-123", title: "Budget" }]);
   });
 
+  it("includes selected pages as a writing sample, or the whole linked document as context", async () => {
+    const { PAGE_BREAK } = await import("@/lib/doc/markdown");
+    const sample = await documentHub().create({
+      title: "Voice guide",
+      markdown: `The formal page keeps its distance.\n\n${PAGE_BREAK}\n\nThe warm page talks like a friend.`,
+    });
+    const fake = useModel(() => undefined);
+    const { chat } = await newChat();
+    await turn(chat, "Match this", { links: [{ id: sample.id, title: "Voice guide", purpose: "voice", pages: [2] }] });
+    const voice = fake.turns[0]!.context;
+    assert.match(voice, /<writing-sample>[\s\S]*The warm page talks like a friend/);
+    assert.doesNotMatch(voice, /formal page/);
+    const user = chat.state.messages.find((message) => message.role === "user");
+    assert.equal(user && "links" in user ? user.links?.[0]?.purpose : "", "voice");
+
+    await turn(chat, "Use the facts", { links: [{ id: sample.id, title: "Voice guide", purpose: "context" }] });
+    const context = fake.turns[1]!.context;
+    assert.match(context, /<linked-document>[\s\S]*The formal page keeps its distance/);
+    assert.match(context, /The warm page talks like a friend/);
+    assert.doesNotMatch(context, /<writing-sample>/);
+  });
+
   it("sends a small document with the message, and only again once it changed", async () => {
     const fake = useModel(() => undefined);
     const { doc, chat } = await newChat();

@@ -1778,3 +1778,143 @@
 .chat-loading span:nth-child(3) {
   width: 68%;
 }
+
+/* Linking a document as a writing sample or as context. */
+
+.link-doc-search {
+  margin-bottom: 8px;
+}
+
+.link-doc-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.link-doc-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+}
+
+.link-doc-item:last-child {
+  border-bottom: 0;
+}
+
+.link-doc-item:hover,
+.link-doc-item.is-selected {
+  background: var(--surface-hover);
+}
+
+.link-doc-item.is-selected {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.link-doc-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link-purpose {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.link-purpose label {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 8px;
+  row-gap: 1px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.link-purpose label.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+
+.link-purpose input {
+  grid-row: 1 / span 2;
+}
+
+.link-purpose-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.link-purpose-hint,
+.link-note,
+.link-page-preview {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.link-pages {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 12px;
+}
+
+.link-pages-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.link-text-btn {
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 12px;
+  padding: 0;
+}
+
+.link-page {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 2px;
+  cursor: pointer;
+}
+
+.link-page-name {
+  display: block;
+  font-size: 13px;
+}
+
+.link-page-preview {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.link-note {
+  margin: 8px 0 0;
+}
+
+.link-note-error {
+  color: var(--danger);
+}
