@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import type { CanvasFile } from "@/lib/doc/canvas";
 import type { HunkJSON } from "@/lib/doc/review";
 import type { DocComment, DocumentMeta } from "@/lib/doc/settings";
 
@@ -18,6 +19,8 @@ export type StoredDocumentFile = {
   doc: unknown;
   comments: DocComment[];
   hunks: HunkJSON[];
+  /** Set when the document is, or has been, a canvas. */
+  canvas?: CanvasFile;
 };
 
 export type StoredVersion = {
@@ -31,9 +34,11 @@ export type StoredVersion = {
   wordCount: number;
   /** Changes that were still pending review when the version was saved; restored with it. */
   hunks?: HunkJSON[];
+  /** The canvas HTML at this version, when the document was a canvas. */
+  canvas?: CanvasFile;
 };
 
-export type VersionSummary = Omit<StoredVersion, "doc" | "hunks"> & { pendingChanges?: number };
+export type VersionSummary = Omit<StoredVersion, "doc" | "hunks" | "canvas"> & { pendingChanges?: number };
 
 export function dataDir() {
   return path.resolve(process.env.INLINE_DATA_DIR || path.join(/* turbopackIgnore: true */ process.cwd(), ".inline"));
@@ -179,7 +184,7 @@ export async function listDocumentIds() {
 const INDEX = "index";
 
 function summarize(version: StoredVersion): VersionSummary {
-  const { doc: _doc, hunks, ...summary } = version;
+  const { doc: _doc, hunks, canvas: _canvas, ...summary } = version;
   return hunks?.length ? { ...summary, pendingChanges: hunks.length } : summary;
 }
 

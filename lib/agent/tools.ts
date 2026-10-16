@@ -22,6 +22,7 @@ import {
   writeDocument,
   type FormatSpec,
 } from "@/lib/doc/editing";
+import { appendCell, insertInCanvas, parseCanvas, replaceCanvas, setCellLanguage, setRegionText } from "@/lib/doc/canvas";
 import { BLOCK_SEPARATOR, markdownToDoc, serializeDoc } from "@/lib/doc/markdown";
 import { changedRanges, isUserSuggestion } from "@/lib/doc/review";
 import { FONT_FAMILIES, googleFontValue, PAPER_SIZES, type DocumentSettings, type PaperSize } from "@/lib/doc/settings";
@@ -42,6 +43,7 @@ import { FOLDER_COLORS } from "@/lib/doc/folders";
 import { createFolder, deleteFolder, FolderError, folderPathName, updateFolder } from "@/lib/server/folders";
 import { formatFolderTree, formatLibrary, library, MAX_EXCERPT_WORDS, moveDocuments, resolveFolder, searchLibrary } from "@/lib/server/library";
 import { pdfTools } from "@/lib/agent/pdfTools";
+import { runNotebookSource } from "@/lib/server/notebook";
 
 /**
  * The tools Claude uses to work in Inline documents. They are transport
@@ -119,7 +121,12 @@ function header(doc: LiveDocument, lines: number) {
   const words = docWordCount(doc.doc);
   const pages = pageCountNow(doc);
   const pending = doc.hunks.length ? ` · ${doc.hunks.length} change${doc.hunks.length === 1 ? "" : "s"} awaiting the user's review` : "";
-  return `Document "${doc.meta.title}" (id ${doc.id}) · ${words.toLocaleString()} words · ${pages.measured ? "" : "~"}${pages.pages} page${pages.pages === 1 ? "" : "s"} · ${lines} lines${pending}`;
+  const canvas = doc.meta.kind === "canvas" ? " · canvas" : "";
+  return `Document "${doc.meta.title}" (id ${doc.id}) · ${words.toLocaleString()} words · ${pages.measured ? "" : "~"}${pages.pages} page${pages.pages === 1 ? "" : "s"} · ${lines} lines${canvas}${pending}`;
+}
+
+function isCanvas(doc: LiveDocument) {
+  return doc.meta.kind === "canvas" && Boolean(doc.canvas);
 }
 
 /** Words, characters, sentences and paragraphs of plain text, counted the way the editor counts. */
@@ -139,6 +146,13 @@ function inches(value: number) {
  * start editing without first spending a round trip on read_document.
  */
 export function documentListing(doc: LiveDocument, maxLines = 400, maxChars = 40_000) {
+  if (isCanvas(doc)) {
+    const lines = doc.canvas!.html.split("\n");
+    if (lines.length > maxLines) return null;
+    const body = numberLines(lines, 1, lines.length);
+    if (body.length > maxChars) return null;
+    return `${header(doc, lines.length)}\n${body}`;
+  }
   const lines = markdownLines(serializeDoc(doc.doc));
   if (lines.length > maxLines) return null;
   const body = numberLines(lines, 1, lines.length);
@@ -187,7 +201,22 @@ function countWords(before: PMNode, tr: Transform) {
 }
 
 /** Apply an agent transform to the live document and describe the result. */
+async function commitCanvas(ctx: ToolContext, doc: LiveDocument, tool: string, build: (html: string) => string, describe: string): Promise<ToolResult> {
+  if (ctx.readOnly) return fail("You are in Ask mode, so documents can't be changed. Describe the change instead, or ask the user to switch to Agent mode.");
+  await ctx.beforeWrite?.(doc);
+  const before = doc.canvas?.html ?? "";
+  const next = build(before);
+  if (next === before) return fail("The edit produced no change to the canvas.");
+  doc.setCanvas(next);
+  showActivity(ctx, doc, { chatId: ctx.author, status: "editing", label: describe });
+  ctx.onChange?.({ documentId: doc.id, title: doc.meta.title, tool, added: 0, removed: 0 });
+  return ok(`${describe} the canvas "${doc.meta.title}". The change is live.`);
+}
+
 async function commitEdit(ctx: ToolContext, doc: LiveDocument, tool: string, build: (current: PMNode) => Transform, describe: string): Promise<ToolResult> {
+  if (doc.meta.kind === "canvas") {
+    return fail("This is a canvas. Change its HTML with edit_document, write_document or insert_content. Editable text is marked data-canvas-text, layout is data-canvas-layout, and notebook cells are data-canvas-cell (run them with run_notebook_cell).");
+  }
   if (ctx.readOnly) return fail("You are in Ask mode, so documents can't be changed. Describe the change instead, or ask the user to switch to Agent mode.");
   await ctx.beforeWrite?.(doc);
   // Build and apply synchronously so no other change can interleave.
@@ -336,7 +365,7 @@ export const TOOLS = [
     name: "read_document",
     title: "Read document",
     description:
-      "Read a document as Markdown with line numbers (cat -n format), like the Read tool. Read before editing so edit_document's old_string matches exactly.\n\n" +
+      "Read a document as Markdown with line numbers (cat -n format), like the Read tool. Read before editing so edit_document's old_string matches exactly. A canvas is read as its HTML instead.\n\n" +
       "Markdown conventions in Inline documents: one paragraph per line, blank line between blocks; `# Text {.title}` is the document title style and `Text {.subtitle}` the subtitle; `{align=center|right|justify}` and `{indent=N}` set paragraph alignment and indent; ==highlight==, <u>underline</u>, <sup>x</sup>, <sub>x</sub>; <cite>(Author, Year)</cite> is an inline citation; [^1] is a footnote marker and [^1]: The note. is its text; {.bibliography} is a works-cited entry (hanging indent); `&nbsp;` is an intentionally empty paragraph; `\\pagebreak` is a page break; images are `![alt](url){width=50% wrap=square crop=10,0,0,0 rotate=90}` (`wrap` is square, behind or front). Colors, fonts, comments and locked passages are not shown but are preserved when you edit around them.",
     shape: {
       document_id: documentId,
@@ -346,7 +375,7 @@ export const TOOLS = [
     write: false,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
-      const lines = markdownLines(serializeDoc(doc.doc));
+      const lines = isCanvas(doc) ? doc.canvas!.html.split("\n") : markdownLines(serializeDoc(doc.doc));
       const offset = args.offset ?? 1;
       const limit = args.limit ?? 2000;
       showActivity(ctx, doc, { chatId: ctx.author, status: "reading", label: "Reading" });
@@ -363,7 +392,7 @@ export const TOOLS = [
     name: "edit_document",
     title: "Edit document",
     description:
-      "Replace exact text in a document, like the Edit tool: old_string must match the Markdown from read_document exactly (excluding the line-number prefix) and be unique unless replace_all is true. new_string may contain any Markdown (headings, lists, tables, emphasis, new paragraphs). Formatting that Markdown can't show (colors, fonts, comments) is kept on unchanged words. Changes go live immediately and are shown to the user as reviewable suggestions. Prefer several small, precise edits over rewriting large passages.",
+      "Replace exact text in a document, like the Edit tool: old_string must match the Markdown from read_document exactly (excluding the line-number prefix) and be unique unless replace_all is true. new_string may contain any Markdown (headings, lists, tables, emphasis, new paragraphs). Formatting that Markdown can't show (colors, fonts, comments) is kept on unchanged words. Changes go live immediately and are shown to the user as reviewable suggestions. Prefer several small, precise edits over rewriting large passages. On a canvas, old_string and new_string are HTML from read_document, and the change appears live rather than as a suggestion.",
     shape: {
       document_id: documentId,
       old_string: z.string().describe("The exact Markdown to replace."),
@@ -374,6 +403,11 @@ export const TOOLS = [
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
       const scrub = scrubWritten(args.new_string);
+      if (isCanvas(doc)) {
+        if (scrub.text === args.old_string && scrub.removed) return ok(`Deleted ${scrub.removed} invisible character${scrub.removed === 1 ? "" : "s"} from the replacement. The remaining text matches the canvas, so nothing else changed.`);
+        const result = await commitCanvas(ctx, doc, "edit_document", (html) => replaceCanvas(html, args.old_string, scrub.text, Boolean(args.replace_all)), args.replace_all ? "Replaced every match in" : "Edited");
+        return withWriteCheck(result, [scrub]);
+      }
       if (scrub.text === args.old_string && scrub.removed) {
         return ok(`Deleted ${scrub.removed} invisible character${scrub.removed === 1 ? "" : "s"} from the replacement. The remaining text matches the document, so nothing else changed.`);
       }
@@ -404,6 +438,15 @@ export const TOOLS = [
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
       const prepared = args.edits.map((edit) => ({ edit, scrub: scrubWritten(edit.new_string) }));
+      if (isCanvas(doc)) {
+        const edits = prepared.map((item) => ({ ...item.edit, new_string: item.scrub.text }));
+        const result = await commitCanvas(ctx, doc, "multi_edit_document", (html) => {
+          let current = html;
+          for (const edit of edits) current = replaceCanvas(current, edit.old_string, edit.new_string, Boolean(edit.replace_all));
+          return current;
+        }, `Applied ${edits.length} edit${edits.length === 1 ? "" : "s"} to`);
+        return withWriteCheck(result, prepared.map((item) => item.scrub));
+      }
       const applicable = prepared.filter((item) => item.scrub.text !== item.edit.old_string);
       if (!applicable.length) {
         const removed = prepared.reduce((sum, item) => sum + item.scrub.removed, 0);
@@ -429,6 +472,11 @@ export const TOOLS = [
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
       const scrub = scrubWritten(args.content);
+      if (isCanvas(doc)) {
+        if (!scrub.text.trim() && scrub.removed) return ok(`Deleted ${scrub.removed} invisible character${scrub.removed === 1 ? "" : "s"}. No visible text was left to write, so the canvas was not replaced.`);
+        const result = await commitCanvas(ctx, doc, "write_document", () => scrub.text, "Rewrote");
+        return withWriteCheck(result, [scrub]);
+      }
       if (!scrub.text.trim() && scrub.removed) {
         return ok(`Deleted ${scrub.removed} invisible character${scrub.removed === 1 ? "" : "s"}. No visible text was left to write, so the document was not replaced.`);
       }
@@ -464,6 +512,11 @@ export const TOOLS = [
             ? { afterLine: args.line! }
             : { beforeLine: args.line! };
       const scrub = scrubWritten(args.content);
+      if (isCanvas(doc)) {
+        if (!scrub.text.trim() && scrub.removed) return ok(`Deleted ${scrub.removed} invisible character${scrub.removed === 1 ? "" : "s"}. Nothing visible was left to insert.`);
+        const result = await commitCanvas(ctx, doc, "insert_content", (html) => insertInCanvas(html, scrub.text, position), "Inserted content in");
+        return withWriteCheck(result, [scrub]);
+      }
       if (!scrub.text.trim() && scrub.removed) {
         return ok(`Deleted ${scrub.removed} invisible character${scrub.removed === 1 ? "" : "s"}. Nothing visible was left to insert.`);
       }
@@ -485,6 +538,22 @@ export const TOOLS = [
     write: false,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
+      if (isCanvas(doc)) {
+        const lines = doc.canvas!.html.split("\n");
+        let matcher: (line: string) => boolean;
+        try {
+          const flags = args.case_sensitive ? "" : "i";
+          const pattern = args.regex ? new RegExp(args.pattern, flags) : null;
+          const needle = args.case_sensitive ? args.pattern : args.pattern.toLowerCase();
+          matcher = (line) => (pattern ? pattern.test(line) : (args.case_sensitive ? line : line.toLowerCase()).includes(needle));
+        } catch (error) {
+          return fail(error instanceof Error ? error.message : "Invalid pattern.");
+        }
+        const hits = lines.flatMap((line, index) => (matcher(line) ? [{ line: index + 1, text: line }] : [])).slice(0, 100);
+        if (!hits.length) return ok(`No lines match "${args.pattern}" in "${doc.meta.title}".`);
+        const body = hits.map((hit) => `${String(hit.line).padStart(6, " ")}\t${hit.text.length > 400 ? `${hit.text.slice(0, 400)}…` : hit.text}`).join("\n");
+        return ok(`${hits.length} matching line${hits.length === 1 ? "" : "s"} in "${doc.meta.title}":\n${body}`);
+      }
       const { hits, total } = searchLines(doc.doc, args.pattern, { regex: args.regex, caseSensitive: args.case_sensitive, limit: 100 });
       if (!hits.length) return ok(`No lines match "${args.pattern}" in "${doc.meta.title}".`);
       const width = 6;
@@ -496,11 +565,21 @@ export const TOOLS = [
   defineTool({
     name: "get_outline",
     title: "Get outline",
-    description: "Heading structure of a document with line numbers and word counts per section. Use it to orient in long documents before reading specific ranges.",
+    description: "Heading structure of a document with line numbers and word counts per section. Use it to orient in long documents before reading specific ranges. A canvas lists its sections.",
     shape: { document_id: documentId },
     write: false,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
+      if (isCanvas(doc)) {
+        const lines = doc.canvas!.html.split("\n");
+        const model = parseCanvas(doc.canvas!.html);
+        const rows = model.sections.map((section) => {
+          const line = Math.max(1, lines.findIndex((item) => item.includes(`id="${section.id}"`)) + 1);
+          const words = section.blocks.reduce((sum, block) => sum + (block.kind === "text" || block.kind === "heading" ? block.text.split(/\s+/).filter(Boolean).length : 0), 0);
+          return `${String(line).padStart(6, " ")}\t${section.title} — ${words} words`;
+        });
+        return ok(`${header(doc, lines.length)}\n${rows.length ? rows.join("\n") : "(No sections.)"}`);
+      }
       const serialized = serializeDoc(doc.doc);
       const entries = blockLines(serialized);
       const rows: string[] = [];
@@ -1475,10 +1554,11 @@ export const TOOLS = [
   defineTool({
     name: "create_document",
     title: "Create document",
-    description: "Create a new document, optionally with initial Markdown content, and open it in the user's editor.",
+    description: "Create a new document, optionally with initial Markdown content, and open it in the user's editor. Pass kind canvas to start an HTML canvas; content is then the canvas HTML (sections, data-canvas-text, data-canvas-layout, data-canvas-cell).",
     shape: {
       title: z.string(),
-      content: z.string().optional().describe("Initial content as Markdown."),
+      content: z.string().optional().describe("Initial content as Markdown, or HTML when kind is canvas."),
+      kind: z.enum(["page", "canvas"]).optional().describe("page is a word processor document. canvas is an HTML canvas."),
       open: z.boolean().optional().describe("Open it in the editor (default true)."),
       folder: z.string().optional().describe('Folder to file it in: an id or a path like "Work/Q3" (created if missing).'),
     },
@@ -1487,7 +1567,7 @@ export const TOOLS = [
       if (ctx.readOnly) return fail("You are in Ask mode, so documents can't be created.");
       const hub = documentHub();
       const folderId = args.folder ? (await resolveFolder(args.folder, { create: true })).id : null;
-      const created = await hub.create({ title: args.title, markdown: args.content, folderId });
+      const created = await hub.create({ title: args.title, markdown: args.kind === "canvas" ? undefined : args.content, html: args.kind === "canvas" ? args.content : undefined, kind: args.kind, folderId });
       if (args.open !== false) {
         const current = ctx.documentId ? await hub.get(ctx.documentId) : await hub.active();
         current?.sendCommand({ kind: "open_document", documentId: created.id });
@@ -1626,6 +1706,12 @@ export const TOOLS = [
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
       const tabs = args.all_tabs === false ? "tab" : "all";
+      if (args.format === "pdf" && doc.meta.kind === "canvas") {
+        const url = `/api/documents/${doc.id}/export?format=pdf`;
+        const filename = `${doc.meta.title.replace(/[\\/:*?"<>|]+/g, "-")}.pdf`;
+        const viewers = doc.sendCommand({ kind: "download", url, filename });
+        return ok(`${viewers ? `Started the download of "${filename}" in the user's browser.` : "No editor is open to download into."} The file is available at ${url} on the Inline server.`);
+      }
       if (args.format === "pdf") {
         const viewers = doc.sendCommand({ kind: "export_pdf", tabs });
         return viewers
@@ -1638,6 +1724,62 @@ export const TOOLS = [
       return ok(`${viewers ? `Started the download of "${filename}" in the user's browser.` : "No editor is open to download into."} The file is available at ${url} on the Inline server.`);
     },
   }),
+  defineTool({
+    name: "set_document_kind",
+    title: "Set document kind",
+    description: "Turn the open document into a canvas, or turn a canvas back into a word-processor page. A canvas keeps the text. Turning a page into a canvas keeps the canvas you built if the page text has not changed since.",
+    shape: {
+      document_id: documentId,
+      kind: z.enum(["page", "canvas"]).describe("canvas is an HTML canvas. page is a word-processor document."),
+    },
+    write: true,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      await ctx.beforeWrite?.(doc);
+      doc.setKind(args.kind);
+      return ok(args.kind === "canvas" ? `"${doc.meta.title}" is now a canvas. Edit its HTML with edit_document.` : `"${doc.meta.title}" is now a page.`);
+    },
+  }),
+
+  defineTool({
+    name: "run_notebook_cell",
+    title: "Run notebook cell",
+    description:
+      "Run a Jupyter-style notebook cell in a canvas. The cell's working directory is that canvas document only. Pass cell_id from the data-canvas-cell element, or omit it to run the first cell. Pass source to replace the cell's code first. Language is javascript or python.",
+    shape: {
+      document_id: documentId,
+      cell_id: z.string().optional().describe("The cell's id. Defaults to the first cell."),
+      source: z.string().max(100_000).optional().describe("Replace the cell's code before running."),
+      language: z.enum(["javascript", "python"]).optional(),
+    },
+    write: true,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      if (!isCanvas(doc)) return fail("Notebook cells run in a canvas. Use set_document_kind with kind canvas first.");
+      await ctx.beforeWrite?.(doc);
+      let html = doc.canvas!.html;
+      let cells = () => parseCanvas(html).sections.flatMap((section) => section.blocks).filter((block) => block.kind === "cell");
+      let cell = cells().find((block) => block.kind === "cell" && (!args.cell_id || block.id === args.cell_id));
+      if (!cell && args.source) {
+        const added = appendCell(html, args.language ?? "javascript", args.source);
+        html = added.html;
+        doc.setCanvas(html);
+        cell = cells().find((block) => block.kind === "cell" && block.id === added.id);
+      }
+      if (!cell || cell.kind !== "cell") return fail(args.cell_id ? `No notebook cell "${args.cell_id}".` : "This canvas has no notebook cell.");
+      if (args.source && cell.id) {
+        html = setRegionText(html, cell.id, args.source);
+        if (args.language) html = setCellLanguage(html, cell.id, args.language);
+        doc.setCanvas(html);
+        cell = { ...cell, source: args.source, language: args.language ?? cell.language };
+      }
+      const output = await runNotebookSource({ documentId: doc.id, cellId: cell.id, language: cell.language, source: cell.source });
+      doc.setCellOutput(cell.id, output);
+      const text = output.error ? output.error : output.stdout || output.stderr || "(no output)";
+      return output.error ? fail(`Cell ${cell.id} failed.\n${text}`) : ok(`Cell ${cell.id} (${cell.language}) ran in this canvas's folder.\n${text}`);
+    },
+  }),
+
   // Rebuilding an imported PDF as an editable document (lib/agent/pdfTools.ts).
   ...pdfTools({ defineTool, ok, fail, resolveDocument, documentId, showActivity }),
 ];
