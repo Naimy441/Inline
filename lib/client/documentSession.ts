@@ -1071,12 +1071,21 @@ export class DocumentSession {
     }
   }
 
+  /**
+   * Read a selection the browser has made but not reported yet. Toolbar buttons
+   * call this on pointerdown, before a touch can move focus and drop the range.
+   */
+  captureDomSelection() {
+    if (this.view) syncDomSelection(this.view);
+  }
+
   run(command: Command) {
     const view = this.view;
     if (!view) return false;
-    // The browser reports a selection made from the keyboard (Shift+Home) a moment later; a toolbar
-    // click right after it would act on the old one. Read what the page shows first.
-    (view as unknown as { domObserver?: { flush(): void } }).domObserver?.flush();
+    // Shift+Home is on the page before selectionchange. A flush that is already
+    // waiting returns without reading; force it. If a button took focus first,
+    // the range is already gone. Those buttons keep it (see Toolbar).
+    syncDomSelection(view);
     const result = command(view.state, (tr) => this.dispatch(tr), view);
     view.focus();
     return result;
