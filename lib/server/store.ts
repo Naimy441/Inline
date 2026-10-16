@@ -146,6 +146,7 @@ export async function deleteDocumentFile(id: string) {
   await removeFile(dir("pdf-imports", `${id}.json`));
   await fs.rm(dir("repos", id), { recursive: true, force: true });
   await fs.rm(dir("versions", id), { recursive: true, force: true });
+  await fs.rm(dir("version-files", id), { recursive: true, force: true });
 }
 
 export type ThumbnailTheme = "light" | "dark";

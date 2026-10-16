@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -125,9 +125,11 @@ describe("documents", () => {
 
   it("deleteDocumentFile removes the document's repository", async () => {
     await writeDocumentFile(docFile("gone"));
+    mkdirSync(path.join(dataDir(), "version-files", "gone"), { recursive: true });
     assert.equal(existsSync(documentFilePath("gone")), true);
     await deleteDocumentFile("gone");
     assert.equal(existsSync(path.dirname(documentFilePath("gone"))), false);
+    assert.equal(existsSync(path.join(dataDir(), "version-files", "gone")), false);
     await deleteDocumentFile("gone");
   });
 

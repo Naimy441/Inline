@@ -1,9 +1,10 @@
 "use client";
 
-import { ChevronDown, ChevronUp, FileText, History, RotateCcw, Save, Sparkles, X } from "lucide-react";
+import { ChevronDown, ChevronUp, FileText, FolderSearch, History, RotateCcw, Save, Sparkles, X } from "lucide-react";
 import { DOMSerializer, Node as PMNode } from "prosemirror-model";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api, post } from "@/lib/client/api";
+import { loadServerPlatform, revealLabel } from "@/lib/client/fileManager";
 import type { DocumentSession } from "@/lib/client/documentSession";
 import { refreshVersions, useVersions, versionDoc, type VersionSummary } from "@/lib/client/versions";
 import { schema } from "@/lib/doc/schema";
@@ -32,6 +33,80 @@ function dayLabel(at: number) {
 }
 
 const AUTHORS = { user: "You", claude: "Claude" } as const;
+
+/**
+ * Files saved with the version on screen. "Open with…" hands that one file to
+ * the system's app chooser. The folder button opens the directory that holds
+ * all of them.
+ */
+function VersionFiles({
+  documentId,
+  versionId,
+  files,
+  preview,
+}: {
+  documentId: string;
+  versionId: string | null;
+  files: Array<{ path: string; kind: string }>;
+  /** Current files can preview an image. A saved version's copy is not the live file. */
+  preview: boolean;
+}) {
+  const [os, setOs] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  useEffect(() => {
+    void loadServerPlatform().then(setOs);
+  }, []);
+
+  const open = async (key: string, file?: string) => {
+    setBusy(key);
+    try {
+      await post(`/api/documents/${documentId}/versions/open`, {
+        ...(versionId ? { versionId } : {}),
+        ...(file ? { file } : {}),
+      });
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Couldn't open that.", { tone: "error" });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const folderLabel = revealLabel(os);
+  return (
+    <section className="history-files" aria-label={versionId ? "Files in this version" : "Files"}>
+      <div className="history-files-bar">
+        <div className="version-day">{versionId ? "Files in this version" : "Files"}</div>
+        <Button size="sm" variant="ghost" className="history-folder" icon={<FolderSearch size={14} />} loading={busy === "folder"} disabled={busy !== null} onClick={() => void open("folder")}>
+          {folderLabel}
+        </Button>
+      </div>
+      <ul>
+        {files.map((file) => {
+          const href = `/api/documents/${documentId}/files/${file.path.split("/").map(encodeURIComponent).join("/")}`;
+          return (
+            <li key={file.path} className="history-file-row">
+              {preview && file.kind === "image" ? (
+                <a className="history-file" href={href} target="_blank" rel="noreferrer">
+                  <img src={href} alt="" />
+                  <span title={file.path}>{file.path}</span>
+                </a>
+              ) : (
+                <span className="history-file">
+                  <FileText size={14} />
+                  <span title={file.path}>{file.path}</span>
+                </span>
+              )}
+              <Button size="sm" variant="ghost" className="history-file-open" loading={busy === file.path} disabled={busy !== null} aria-label={`Open ${file.path} with…`} onClick={() => void open(file.path, file.path)}>
+                Open with…
+              </Button>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
 
 /** The version list. Picking one shows it in place of the document (see VersionPreview). */
 export function HistoryPanel({
@@ -67,6 +142,8 @@ export function HistoryPanel({
       cancelled = true;
     };
   }, [session.id, versions]);
+
+  const shownFiles = selected ? (selected.files ?? []).map((filePath) => ({ path: filePath, kind: "other" as const })) : files;
 
   const groups = useMemo(() => {
     const result: Array<{ day: string; versions: VersionSummary[] }> = [];
@@ -181,27 +258,8 @@ export function HistoryPanel({
             ))}
           </ul>
         )}
-        {files && files.length > 0 && (
-          <div className="history-files">
-            <div className="version-day">Files</div>
-            <ul>
-              {files.map((file) => (
-                <li key={file.path}>
-                  {file.kind === "image" ? (
-                    <a className="history-file" href={`/api/documents/${session.id}/files/${file.path.split("/").map(encodeURIComponent).join("/")}`} target="_blank" rel="noreferrer">
-                      <img src={`/api/documents/${session.id}/files/${file.path.split("/").map(encodeURIComponent).join("/")}`} alt="" />
-                      <span>{file.path}</span>
-                    </a>
-                  ) : (
-                    <span className="history-file">
-                      <FileText size={14} />
-                      <span>{file.path}</span>
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </div>
+        {shownFiles && shownFiles.length > 0 && (
+          <VersionFiles documentId={session.id} versionId={selected?.id ?? null} files={shownFiles} preview={!selected} />
         )}
       </div>
     </aside>
