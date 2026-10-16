@@ -98,7 +98,7 @@
   justify-content: space-between;
   gap: 12px;
   font-size: 11.5px;
-  color: var(--faint);
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 
@@ -816,6 +816,7 @@ button.msg-meta-count:hover {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface-2);
+  box-shadow: var(--shadow-sm);
   overflow: hidden;
 }
 
@@ -909,8 +910,10 @@ button.msg-meta-count:hover {
   padding: 6px 8px 6px 10px;
   border: 1px dashed var(--border-strong);
   border-radius: var(--radius);
+  background: var(--surface);
   color: var(--muted);
   font-size: 12.5px;
+  box-shadow: var(--shadow-sm);
 }
 
 .queue-item > svg {
@@ -934,7 +937,7 @@ button.msg-meta-count:hover {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
   background: var(--surface);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-md);
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
@@ -1025,9 +1028,8 @@ button.msg-meta-count:hover {
   flex: none;
 }
 
-.context-popover {
-  width: min(280px, calc(100vw - 24px));
-  padding: 12px 12px 8px;
+.context-section {
+  gap: 0;
 }
 
 .context-label {
@@ -1298,35 +1300,39 @@ button.context-row:hover {
 
 .usage-limit {
   display: flex;
-  gap: 2px;
-  padding: 2px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-hover);
+  flex-direction: column;
+  gap: 4px;
 }
 
-.usage-limit-option {
-  flex: 1;
-  height: 26px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px;
+.usage-limit-line,
+.usage-limit-scale {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.usage-limit-line {
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.usage-limit-scale {
+  color: var(--faint);
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
-.usage-limit-option:hover:not(:disabled) {
-  color: var(--text);
+.usage-limit-slider {
+  width: 100%;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--text);
+  cursor: pointer;
 }
 
-.usage-limit-option.is-active {
-  background: var(--surface);
-  color: var(--text);
-  font-weight: 500;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
-}
-
-.usage-limit-option:disabled {
+.usage-limit-slider:disabled {
+  cursor: default;
   opacity: 0.45;
 }
 
@@ -1376,8 +1382,35 @@ button.context-row:hover {
   opacity: 1;
 }
 
+/* The composer and the usage warning float over the thread. The scroller pads
+   by the footer's height so the latest line can rest just above them, and
+   earlier lines pass underneath the transparent gap around the box. */
+.agent-panel {
+  position: relative;
+}
+
 .agent-panel .panel-footer {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
   padding-bottom: 22px;
+  background: transparent;
+  pointer-events: none;
+}
+
+.agent-panel .panel-footer > * {
+  pointer-events: auto;
+}
+
+.agent-panel .panel-warning,
+.agent-panel .panel-error {
+  box-shadow: var(--shadow-md);
+}
+
+.panel-scroll-pad {
+  flex: none;
 }
 
 /* Phones: the panel is a sheet; larger text and touch targets, no keyboard hints. */

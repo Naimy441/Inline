@@ -1,9 +1,10 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChatState, PlanUsage, UsageWindow } from "@/lib/agent/types";
-import { USAGE_LIMIT_OPTIONS } from "@/lib/agent/types";
+import { contextView } from "@/lib/agent/contextUsage";
 import { refreshPlanUsage, usePlanUsage } from "@/lib/client/planUsage";
+import { ContextDetails } from "@/components/agent/ContextPanel";
 import { Popover } from "@/components/ui/Popover";
 
 function tone(percent: number) {
@@ -74,6 +75,13 @@ function WindowRow({ window, now }: { window: UsageWindow; now: number }) {
 
 const PLAN_NAMES: Record<string, string> = { pro: "Pro", max: "Max", team: "Team", enterprise: "Enterprise" };
 
+/** Lowest pause the slider offers: the current session usage, and at least 1%. */
+function pauseFloor(windows: UsageWindow[]) {
+  const session = windows.find((window) => window.id === "five_hour");
+  if (!session) return 1;
+  return Math.min(100, Math.max(1, Math.ceil(session.utilization)));
+}
+
 /**
  * The usage ring by the send button: the account's 5-hour and weekly plan
  * usage, what this chat has cost, and the limit Claude pauses at.
@@ -84,12 +92,22 @@ export function UsageMeter({ chat, running, usageLimit, onUsageLimit }: { chat: 
   const { usage } = usePlanUsage(running);
   const spent = chatSpend(chat);
   const context = chat?.context;
+  const breakdown = contextView(context);
   const now = Date.now();
   const plan: PlanUsage | null = usage;
   const windows = plan?.available ? plan.windows.filter((window) => !window.resetsAt || window.resetsAt > now) : [];
   const main = windows.filter((window) => window.id === "five_hour" || window.id === "seven_day");
   const top = [...main].sort((a, b) => b.utilization - a.utilization)[0];
   const percent = top ? top.utilization : (context?.percentage ?? 0);
+  const floor = pauseFloor(windows);
+  const savedLimit = usageLimit ?? 100;
+  const clamped = Math.min(100, Math.max(floor, savedLimit));
+  // The thumb follows the drag. The saved limit arrives a moment later.
+  const [live, setLive] = useState<number | null>(null);
+  useEffect(() => {
+    if (live != null && (usageLimit ?? 100) === live) setLive(null);
+  }, [usageLimit, live]);
+  const limitValue = live ?? clamped;
   // Stay visible while Claude is generating. Plan, cost and context often
   // arrive only after the reply goes idle; the ring must not wait for that.
   if (!running && !plan && !spent && !context) return null;
@@ -110,7 +128,8 @@ export function UsageMeter({ chat, running, usageLimit, onUsageLimit }: { chat: 
       >
         <Ring percent={percent} state={top ? tone(top.utilization) : "normal"} />
       </button>
-      <Popover open={open} onClose={() => setOpen(false)} anchor={button} placement="top-end" className="usage-popover">
+      <Popover open={open} onClose={() => setOpen(false)} anchor={button} placement="top-end" className="usage-popover" label="Usage">
+        <ContextDetails context={context} />
         {top && top.utilization >= 75 && (
           <div className={`usage-alert is-${tone(top.utilization)}`}>
             {top.label} {top.utilization >= 100 ? "used up" : "almost used up"}: {Math.round(top.utilization)}%.{top.resetsAt ? ` ${resetText(top.resetsAt, now)}.` : ""}
@@ -133,7 +152,7 @@ export function UsageMeter({ chat, running, usageLimit, onUsageLimit }: { chat: 
             <span>This chat</span>
             <span className="usage-line-value">{formatUsd(spent)}</span>
           </div>
-          {context && (
+          {context && !breakdown && (
             <div className="usage-line">
               <span>Context</span>
               <span className="usage-line-value">
@@ -143,21 +162,35 @@ export function UsageMeter({ chat, running, usageLimit, onUsageLimit }: { chat: 
           )}
         </div>
         <div className="usage-section">
-          <div className="usage-section-head">Pause Claude at</div>
-          <div className="usage-limit" role="radiogroup" aria-label="Pause Claude at">
-            {USAGE_LIMIT_OPTIONS.map((value) => (
-              <button
-                key={String(value)}
-                type="button"
-                role="radio"
-                aria-checked={(usageLimit ?? null) === value}
-                className={`usage-limit-option${(usageLimit ?? null) === value ? " is-active" : ""}`}
-                disabled={value !== null && !plan?.available}
-                onClick={() => onUsageLimit(value)}
-              >
-                {value === null ? "No limit" : `${value}%`}
-              </button>
-            ))}
+          <div className="usage-limit">
+            <div className="usage-limit-line">
+              <span>Pause Claude at</span>
+              <span className="usage-line-value">{limitValue}%</span>
+            </div>
+            <input
+              type="range"
+              className="usage-limit-slider"
+              min={floor}
+              max={100}
+              step={1}
+              value={limitValue}
+              aria-label="Pause Claude at"
+              aria-valuemin={floor}
+              aria-valuemax={100}
+              aria-valuenow={limitValue}
+              aria-valuetext={`${limitValue}%`}
+              disabled={floor >= 100}
+              onChange={(event) => {
+                const next = Number(event.currentTarget.value);
+                if (!Number.isInteger(next)) return;
+                setLive(next);
+                onUsageLimit(next);
+              }}
+            />
+            <div className="usage-limit-scale">
+              <span>{floor}%</span>
+              <span>100%</span>
+            </div>
           </div>
           <p className="usage-note">Claude stops when your 5-hour or weekly usage reaches this share of your plan.</p>
         </div>

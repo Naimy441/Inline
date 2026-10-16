@@ -1311,7 +1311,7 @@ export function usageLimitReason(usage: PlanUsage | null, limit: number, now = D
   if (!over) return null;
   const name = over.id === "five_hour" ? "5-hour session" : "weekly";
   const resets = over.resetsAt ? ` It resets ${formatReset(over.resetsAt, now)}.` : "";
-  return `Paused at your usage limit: your ${name} usage is at ${Math.round(over.utilization)}% and your limit is ${limit}%.${resets} Raise or turn off the limit from the usage meter below the message box to keep going.`;
+  return `Paused at your usage limit: your ${name} usage is at ${Math.round(over.utilization)}% and your limit is ${limit}%.${resets} Raise the limit from the usage meter below the message box to keep going.`;
 }
 
 let workspaceCache: string | null = null;
