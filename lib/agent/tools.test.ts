@@ -833,8 +833,22 @@ describe("document settings", () => {
     assert.equal(doc.meta.settings.pageNumbers.align, "center");
     assert.equal(doc.meta.settings.pageNumbers.position, "footer");
     assert.equal(doc.meta.settings.fontSize, 11);
+    const headerNumbers = await runTool(
+      "update_document_settings",
+      { header_align: "center", footer: "Notes", footer_align: "right", header_rule: true, page_numbers: { enabled: true, position: "header", align: "center" } },
+      ctx,
+    );
+    assert.equal(headerNumbers.isError, undefined, headerNumbers.text);
+    assert.equal(doc.meta.settings.headerFooter.header, "{title}");
+    assert.equal(doc.meta.settings.headerFooter.headerAlign, "center");
+    assert.equal(doc.meta.settings.headerFooter.footer, "Notes");
+    assert.equal(doc.meta.settings.headerFooter.footerAlign, "right");
+    assert.equal(doc.meta.settings.headerFooter.headerRule, true);
+    assert.equal(doc.meta.settings.pageNumbers.position, "header");
+    assert.equal(doc.meta.settings.pageNumbers.align, "center");
+    assert.equal(doc.meta.settings.pageNumbers.enabled, true);
     assert.ok(events.some((event) => event.type === "meta"));
-    assert.deepEqual(changes, ["update_document_settings"]);
+    assert.deepEqual(changes, ["update_document_settings", "update_document_settings"]);
   });
 
   test("update with nothing to change fails", async () => {

@@ -865,7 +865,7 @@ export const TOOLS = [
     name: "update_document_settings",
     title: "Update document settings",
     description:
-      "Change document-level settings: title, default font and size, line/paragraph spacing, page setup, header and footer text (supports {page}, {pages}, {title}, {date}; tabs split it into left, center and right parts), the header rule and the header and footer distances from the page edge, and page numbers. Only the fields you pass change.",
+      "Change document-level settings: title, default font and size, line/paragraph spacing, page setup, header and footer text (supports {page}, {pages}, {title}, {date}; tabs split it into left, center and right parts), header and footer alignment, the header rule and the header and footer distances from the page edge, and page numbers. Page numbers go in the header or the footer (page_numbers.position), on every page, with that text — neither position is forced. Only the fields you pass change.",
     shape: {
       document_id: documentId,
       title: z.string().optional(),
@@ -881,8 +881,8 @@ export const TOOLS = [
         .describe("Margins in inches."),
       header: z.string().optional(),
       footer: z.string().optional(),
-      header_align: z.enum(["left", "center", "right"]).optional(),
-      footer_align: z.enum(["left", "center", "right"]).optional(),
+      header_align: z.enum(["left", "center", "right"]).optional().describe("Aligns the header text on the page: left, center, or right."),
+      footer_align: z.enum(["left", "center", "right"]).optional().describe("Aligns the footer text on the page: left, center, or right."),
       different_first_page: z.boolean().optional(),
       first_page_header: z.string().optional(),
       first_page_footer: z.string().optional(),
@@ -892,7 +892,7 @@ export const TOOLS = [
       page_numbers: z
         .object({
           enabled: z.boolean().optional(),
-          position: z.enum(["header", "footer"]).optional(),
+          position: z.enum(["header", "footer"]).optional().describe("Draw the number in the header or the footer, on every page, with that text."),
           align: z.enum(["left", "center", "right"]).optional(),
           skip_first: z.boolean().optional(),
         })

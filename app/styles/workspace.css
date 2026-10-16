@@ -572,6 +572,7 @@
   position: absolute;
   left: 0;
   right: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   color: var(--muted);
@@ -579,6 +580,8 @@
   font-family: var(--doc-font, Arial, sans-serif);
   white-space: pre;
   overflow: hidden;
+  /* Above the page text, so a margin click reaches the header or footer. */
+  pointer-events: auto;
 }
 
 .sheet-header {
@@ -593,12 +596,41 @@
   padding-top: 18px;
 }
 
+/* One header or footer line, as wide as the text column, so left, center and right move the words. */
+.sheet-line,
+.sheet-zone-field {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-align: inherit;
+  white-space: pre;
+}
+
+.sheet-zone-field {
+  resize: none;
+  overflow: hidden;
+  outline: none;
+}
+
+.sheet-zone-field:focus {
+  outline: 1px solid var(--focus);
+  outline-offset: 2px;
+}
+
 /* A header in parts (left, center, right), as Word's header tab stops set them. */
 .sheet-parts {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   gap: 12px;
   width: 100%;
+  min-width: 0;
 }
 
 .sheet-parts > :nth-child(2) {
@@ -618,7 +650,9 @@
 
 .sheet-number {
   position: absolute;
+  z-index: 1;
   font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 
 .sheet-header .sheet-number {

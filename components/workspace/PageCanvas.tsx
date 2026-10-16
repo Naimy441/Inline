@@ -1,11 +1,12 @@
 "use client";
 
-import { memo, useEffect, useLayoutEffect, useRef, type RefObject } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent, type RefObject } from "react";
 import { geometryFor, type DocumentSession } from "@/lib/client/documentSession";
 import { lineFactor, lineMetrics } from "@/lib/doc/fontMetrics";
 import { DEFAULT_MATH_SIZE, DEFAULT_TAB_STOP, fillHeaderTokens, headerParts, type DocumentMeta } from "@/lib/doc/settings";
 import { styleSheetCss } from "@/lib/doc/styles";
 import { PdfAnnotations } from "@/components/workspace/PdfAnnotations";
+import { toast } from "@/components/ui/Toast";
 
 /**
  * The page stack: paper sheets with headers, footers and page numbers drawn
@@ -32,6 +33,47 @@ export const PageCanvas = memo(function PageCanvas({
   zoomCommit?: RefObject<(() => void) | null>;
 }) {
   const mount = useRef<HTMLDivElement>(null);
+  const readOnly = useSyncExternalStore(
+    session.ui.subscribe,
+    () => session.ui.get().mode === "viewing",
+    () => session.ui.get().mode === "viewing",
+  );
+  const [editing, setEditing] = useState<{ page: number; kind: ZoneKind } | null>(null);
+  const [pending, setPending] = useState<{ page: number; kind: ZoneKind; value: string } | null>(null);
+
+  useEffect(() => {
+    if (readOnly || printing || flow) setEditing(null);
+  }, [readOnly, printing, flow]);
+
+  useEffect(() => {
+    if (!pending || !meta) return;
+    const key = headerField(pending.page, pending.kind, meta.settings.headerFooter.differentFirstPage);
+    if (meta.settings.headerFooter[key] === pending.value) setPending(null);
+  }, [meta, pending]);
+
+  const editZone = useCallback((page: number, kind: ZoneKind) => {
+    if (session.ui.get().mode === "viewing") return;
+    setEditing((current) => (current?.page === page && current.kind === kind ? current : { page, kind }));
+  }, [session]);
+
+  const closeZone = useCallback((page: number, kind: ZoneKind) => {
+    setEditing((current) => (current?.page === page && current.kind === kind ? null : current));
+  }, []);
+
+  const commitZone = useCallback((page: number, kind: ZoneKind, value: string) => {
+    const current = session.meta?.settings.headerFooter;
+    if (!current) return;
+    const key = headerField(page, kind, current.differentFirstPage);
+    if (current[key] === value) {
+      setPending((item) => (item?.page === page && item.kind === kind ? null : item));
+      return;
+    }
+    setPending({ page, kind, value });
+    void session.updateMeta({ settings: { headerFooter: { [key]: value } } }).catch((error: unknown) => {
+      setPending((item) => (item?.page === page && item.kind === kind && item.value === value ? null : item));
+      toast(error instanceof Error ? error.message : `Couldn't save the ${kind}.`, { tone: "error" });
+    });
+  }, [session]);
 
   useEffect(() => {
     const element = mount.current;
@@ -85,7 +127,22 @@ export const PageCanvas = memo(function PageCanvas({
         >
           {sheetCss ? <style>{sheetCss}</style> : null}
           {!flow &&
-            Array.from({ length: pages }, (_, index) => <Sheet key={index} index={index} pages={pages} meta={meta} top={index * pitch} geometry={geometry} />)}
+            Array.from({ length: pages }, (_, index) => (
+              <Sheet
+                key={index}
+                index={index}
+                pages={pages}
+                meta={meta}
+                top={index * pitch}
+                geometry={geometry}
+                pending={pending?.page === index ? pending : null}
+                editing={editing?.page === index ? editing.kind : null}
+                readOnly={readOnly}
+                onEdit={editZone}
+                onClose={closeZone}
+                onCommit={commitZone}
+              />
+            ))}
           <div
             className={`page-content${lineModel}`}
             style={
@@ -109,46 +166,71 @@ export const PageCanvas = memo(function PageCanvas({
   );
 });
 
+type ZoneKind = "header" | "footer";
+
+/** Which stored string a page's header or footer edits. The first page can have its own. */
+function headerField(page: number, kind: ZoneKind, differentFirst: boolean): "header" | "footer" | "firstHeader" | "firstFooter" {
+  const first = page === 0 && differentFirst;
+  if (kind === "header") return first ? "firstHeader" : "header";
+  return first ? "firstFooter" : "footer";
+}
+
+function textAlignOf(align: string): CSSProperties["textAlign"] {
+  return align === "right" || align === "center" ? align : "left";
+}
+
 const Sheet = memo(function Sheet({
   index,
   pages,
   meta,
   top,
   geometry,
+  pending,
+  editing,
+  readOnly,
+  onEdit,
+  onClose,
+  onCommit,
 }: {
   index: number;
   pages: number;
   meta: DocumentMeta | null;
   top: number;
   geometry: ReturnType<typeof geometryFor>;
+  pending: { kind: ZoneKind; value: string } | null;
+  editing: ZoneKind | null;
+  readOnly: boolean;
+  onEdit: (page: number, kind: ZoneKind) => void;
+  onClose: (page: number, kind: ZoneKind) => void;
+  onCommit: (page: number, kind: ZoneKind, value: string) => void;
 }) {
   const settings = meta?.settings;
   const page = index + 1;
-  const first = index === 0;
-  let header = "";
-  let footer = "";
-  let headerAlign: string = "center";
-  let footerAlign: string = "center";
+  const hf = settings?.headerFooter;
+  const raw = (kind: ZoneKind) => {
+    if (!hf) return "";
+    if (pending?.kind === kind) return pending.value;
+    return hf[headerField(index, kind, hf.differentFirstPage)];
+  };
+  let header = raw("header");
+  let footer = raw("footer");
+  let headerAlign = hf?.headerAlign ?? "left";
+  let footerAlign = hf?.footerAlign ?? "center";
   let number: { where: "header" | "footer"; align: string } | null = null;
   if (settings) {
-    const hf = settings.headerFooter;
-    const useFirst = first && hf.differentFirstPage;
-    header = useFirst ? hf.firstHeader : hf.header;
-    footer = useFirst ? hf.firstFooter : hf.footer;
-    headerAlign = hf.headerAlign;
-    footerAlign = hf.footerAlign;
     const pn = settings.pageNumbers;
-    if (pn.enabled && !(first && pn.skipFirst)) number = { where: pn.position, align: pn.align };
+    if (pn.enabled && !(index === 0 && pn.skipFirst)) number = { where: pn.position, align: pn.align };
     const context = { page, pages, title: meta!.title };
     if (header) header = fillHeaderTokens(header, context);
     if (footer) footer = fillHeaderTokens(footer, context);
   }
-  const rule = Boolean(settings?.headerFooter.headerRule && header);
+  const rule = Boolean(hf?.headerRule && header);
   /** A header or footer's text: one part set by its alignment, or parts split by tabs at the left, center and right. */
-  const zoneText = (text: string, ruled = false, sizes?: number[]) => {
+  const zoneText = (text: string, align: string, ruled = false, sizes?: number[]) => {
     const parts = headerParts(text);
-    const sized = (index: number) => (sizes?.[index] ? { fontSize: `${sizes[index]}pt` } : undefined);
-    if (parts.length < 2) return <span className={ruled ? "sheet-ruled" : undefined} style={sized(0)}>{text}</span>;
+    const sized = (part: number) => (sizes?.[part] ? { fontSize: `${sizes[part]}pt` } : undefined);
+    // A full-width line, so text-align moves the words. Flex justify leaves a ruled (full-width) header on the left.
+    if (parts.length < 2) return <span className={ruled ? "sheet-line sheet-ruled" : "sheet-line"} style={{ ...sized(0), textAlign: textAlignOf(align) }}>{text}</span>;
     const [left, center, right] = parts.length === 2 ? [parts[0], "", parts[1]] : parts;
     // Sizes are given per written part: two parts are the left and right ones.
     const [leftSize, centerSize, rightSize] = sizes ? (parts.length === 2 ? [0, -1, 1] : [0, 1, 2]) : [];
@@ -162,15 +244,16 @@ const Sheet = memo(function Sheet({
   };
   const zoneStyle = (height: number, align: string) => ({
     height,
-    ...(settings?.headerFooter.size ? { fontSize: `${settings.headerFooter.size}pt` } : {}),
-    ...(settings?.headerFooter.color ? { color: settings.headerFooter.color } : {}),
+    ...(hf?.size ? { fontSize: `${hf.size}pt` } : {}),
+    ...(hf?.color ? { color: hf.color } : {}),
     paddingLeft: geometry.marginLeft,
     paddingRight: geometry.marginRight,
-    justifyContent: align === "left" ? "flex-start" : align === "right" ? "flex-end" : "center",
+    textAlign: textAlignOf(align),
+    justifyContent: align === "right" ? "flex-end" : align === "center" ? "center" : "flex-start",
   });
   // A header or footer set a distance from the page's edge (an imported PDF's, Word's) sits there rather than by the margin.
-  const headerFrom = settings?.headerFooter.headerFrom;
-  const footerFrom = settings?.headerFooter.footerFrom;
+  const headerFrom = hf?.headerFrom;
+  const footerFrom = hf?.footerFrom;
   const headerZone = headerFrom !== undefined ? { alignItems: "flex-start", paddingTop: `${headerFrom}in`, paddingBottom: 0 } : {};
   const footerZone = footerFrom !== undefined ? { alignItems: "flex-end", paddingBottom: `${footerFrom}in`, paddingTop: 0 } : {};
   const numberAt = (where: "header" | "footer") =>
@@ -179,17 +262,89 @@ const Sheet = memo(function Sheet({
     ...(align === "left" ? { left: geometry.marginLeft } : align === "right" ? { right: geometry.marginRight } : { left: 0, right: 0, textAlign: "center" as const }),
     ...numberAt(where),
   });
+  // A single click in the margin must not take the caret out of the body. preventDefault on
+  // mousedown keeps the editor focused; only a double-click opens the header or footer.
+  const keepCaret = (event: MouseEvent) => {
+    if (event.target instanceof Element && event.target.closest("textarea")) return;
+    event.preventDefault();
+  };
+  const open = (kind: ZoneKind) => (event: MouseEvent) => {
+    if (readOnly) return;
+    event.preventDefault();
+    onEdit(index, kind);
+  };
   return (
-    <div className="sheet" style={{ top, height: geometry.pageHeight, width: geometry.pageWidth }} aria-hidden>
-      <div className="sheet-header" style={{ ...zoneStyle(geometry.marginTop, headerAlign), ...headerZone }}>
-        {header && zoneText(header, rule, settings?.headerFooter.headerPartSizes)}
+    <div className="sheet" style={{ top, height: geometry.pageHeight, width: geometry.pageWidth }} aria-hidden={editing ? undefined : true}>
+      <div className="sheet-header" style={{ ...zoneStyle(geometry.marginTop, headerAlign), ...headerZone }} onMouseDown={keepCaret} onDoubleClick={open("header")}>
+        {editing === "header" ? (
+          <ZoneField label="Header" value={raw("header")} align={headerAlign} ruled={Boolean(hf?.headerRule)} onCommit={(value) => onCommit(index, "header", value)} onClose={() => onClose(index, "header")} />
+        ) : (
+          header && zoneText(header, headerAlign, rule, hf?.headerPartSizes)
+        )}
         {number?.where === "header" && <span className="sheet-number" style={numberStyle(number.align, "header")}>{page}</span>}
       </div>
-      <div className="sheet-footer" style={{ ...zoneStyle(geometry.marginBottom, footerAlign), ...footerZone }}>
-        {footer && zoneText(footer)}
+      <div className="sheet-footer" style={{ ...zoneStyle(geometry.marginBottom, footerAlign), ...footerZone }} onMouseDown={keepCaret} onDoubleClick={open("footer")}>
+        {editing === "footer" ? (
+          <ZoneField label="Footer" value={raw("footer")} align={footerAlign} ruled={false} onCommit={(value) => onCommit(index, "footer", value)} onClose={() => onClose(index, "footer")} />
+        ) : (
+          footer && zoneText(footer, footerAlign)
+        )}
         {number?.where === "footer" && <span className="sheet-number" style={numberStyle(number.align, "footer")}>{page}</span>}
       </div>
     </div>
   );
 });
+
+/** The header or footer, opened for editing. The value is the stored text, tokens and all, so nothing already there is dropped. */
+function ZoneField({
+  label,
+  value,
+  align,
+  ruled,
+  onCommit,
+  onClose,
+}: {
+  label: string;
+  value: string;
+  align: string;
+  ruled: boolean;
+  onCommit: (value: string) => void;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const field = ref.current;
+    if (!field) return;
+    field.focus();
+    const end = field.value.length;
+    field.setSelectionRange(end, end);
+  }, []);
+  return (
+    <textarea
+      ref={ref}
+      className={`sheet-zone-field${ruled ? " sheet-ruled" : ""}`}
+      aria-label={label}
+      rows={1}
+      maxLength={500}
+      value={draft}
+      style={{ textAlign: textAlignOf(align) }}
+      onChange={(event) => setDraft(event.target.value)}
+      onMouseDown={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.currentTarget.blur();
+        }
+      }}
+      onBlur={(event) => {
+        onCommit(draft);
+        const next = event.relatedTarget;
+        if (next instanceof Element && next.closest("textarea.sheet-zone-field")) return;
+        onClose();
+      }}
+    />
+  );
+}
 

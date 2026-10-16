@@ -34,6 +34,25 @@ describe("document settings", () => {
     assert.equal(patched.pageNumbers.position, DEFAULT_SETTINGS.pageNumbers.position);
   });
 
+  it("keeps a page number in the header and the header's alignment", () => {
+    const patched = patchSettings(DEFAULT_SETTINGS, {
+      headerFooter: { header: "Draft", headerAlign: "center", footer: "Notes", footerAlign: "right", headerRule: true },
+      pageNumbers: { enabled: true, position: "header", align: "center" },
+    });
+    assert.equal(patched.headerFooter.header, "Draft");
+    assert.equal(patched.headerFooter.footer, "Notes");
+    assert.equal(patched.headerFooter.headerAlign, "center");
+    assert.equal(patched.headerFooter.footerAlign, "right");
+    assert.equal(patched.headerFooter.headerRule, true);
+    assert.equal(patched.pageNumbers.enabled, true);
+    assert.equal(patched.pageNumbers.position, "header");
+    assert.equal(patched.pageNumbers.align, "center");
+    const back = patchSettings(patched, { pageNumbers: { position: "footer" } });
+    assert.equal(back.pageNumbers.position, "footer");
+    assert.equal(back.headerFooter.header, "Draft");
+    assert.equal(back.headerFooter.headerAlign, "center");
+  });
+
   it("swaps width and height in landscape", () => {
     assert.deepEqual(pageSize({ ...DEFAULT_SETTINGS.pageSetup, paperSize: "letter", orientation: "portrait" }), { width: 8.5, height: 11 });
     assert.deepEqual(pageSize({ ...DEFAULT_SETTINGS.pageSetup, paperSize: "letter", orientation: "landscape" }), { width: 11, height: 8.5 });
