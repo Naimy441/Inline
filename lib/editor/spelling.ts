@@ -1,17 +1,22 @@
 import type { Node as PMNode } from "prosemirror-model";
 import { Plugin, PluginKey, type EditorState, type Transaction } from "prosemirror-state";
 import { Decoration, DecorationSet, type EditorView } from "prosemirror-view";
+import { schema } from "@/lib/doc/schema";
 import { misspelledSpans, normalizeWord, WORD, type SpellChecker } from "@/lib/doc/words";
 
 /**
  * Live spelling underlines.
  *
- * Misspellings get a red wavy line (class `spelling-error`) from the same
- * Hunspell dictionary Claude uses. The browser's own underlines are not
- * reliable here, so a misspelled span also sets spellcheck="false" and the
- * line is ours. Words the user added to their dictionary are wrapped with
- * spellcheck="false" and are not underlined. (Browsers don't let a page add
- * to their own dictionary.)
+ * Misspellings get one small dotted line (class `spelling-error`) from the
+ * same Hunspell dictionary Claude uses. The browser's own underlines are a
+ * second, larger style, so the editor turns native spellcheck off and a
+ * misspelled span also sets spellcheck="false". Words the user added to their
+ * dictionary are wrapped with spellcheck="false" and are not underlined.
+ * (Browsers don't let a page add to their own dictionary.)
+ *
+ * Text Claude inserted carries the `agent` mark and is not underlined. A
+ * misspelling Claude replaces loses its underline with the old text. Characters
+ * the user then types, including into that text, are checked.
  *
  * The checker may answer `null` while a verdict is still loading. Those words
  * stay plain until the answer arrives, then the decorations are rebuilt.
@@ -21,7 +26,7 @@ const spellingKey = new PluginKey<SpellingState>("spelling");
 type SpellingState = { words: ReadonlySet<string>; enabled: boolean; check: SpellChecker | null; decorations: DecorationSet };
 type SpellingMeta = { words?: ReadonlySet<string>; enabled?: boolean; check?: SpellChecker | null; refresh?: boolean };
 
-const SKIP_MARKS = new Set(["code", "math"]);
+const SKIP_MARKS = new Set(["code", "math", "agent"]);
 
 export { normalizeWord };
 
@@ -71,6 +76,33 @@ function build(doc: PMNode, words: ReadonlySet<string>, enabled: boolean, check:
   return DecorationSet.create(doc, decorations);
 }
 
+/**
+ * Ranges a transaction inserted, in the coordinates after every transaction
+ * in `trs`. Deletions are skipped. `include` chooses which transactions'
+ * insertions count (user edits, not steps that arrived from the server).
+ */
+function insertedRanges(trs: readonly Transaction[], include: (tr: Transaction) => boolean) {
+  const ranges: Array<{ from: number; to: number }> = [];
+  for (let t = 0; t < trs.length; t += 1) {
+    const tr = trs[t]!;
+    if (!include(tr)) continue;
+    tr.steps.forEach((step, index) => {
+      const afterStep = tr.mapping.slice(index + 1);
+      step.getMap().forEach((_oldFrom, _oldTo, newFrom, newTo) => {
+        if (newTo <= newFrom) return;
+        let from = afterStep.map(newFrom, 1);
+        let to = afterStep.map(newTo, -1);
+        for (let next = t + 1; next < trs.length; next += 1) {
+          from = trs[next]!.mapping.map(from, 1);
+          to = trs[next]!.mapping.map(to, -1);
+        }
+        if (to > from) ranges.push({ from, to });
+      });
+    });
+  }
+  return ranges;
+}
+
 export function spellingPlugin(initial: Iterable<string>, options: SpellingPluginOptions = {}) {
   const initialCheck = options.check ?? null;
   const initialEnabled = options.enabled ?? true;
@@ -93,6 +125,21 @@ export function spellingPlugin(initial: Iterable<string>, options: SpellingPlugi
     },
     props: {
       decorations: (state) => spellingKey.getState(state)?.decorations,
+    },
+    // Typing inside text Claude wrote inherits the agent mark. Drop it from
+    // characters this transaction inserted, so what the user types is checked.
+    // Agent steps arrive with addToHistory false and already carry the mark.
+    appendTransaction(trs, _old, state) {
+      const mark = schema.marks.agent;
+      let tr: Transaction | null = null;
+      for (const range of insertedRanges(trs, (item) => item.docChanged && item.getMeta("addToHistory") !== false)) {
+        const from = Math.max(0, Math.min(state.doc.content.size, range.from));
+        const to = Math.max(from, Math.min(state.doc.content.size, range.to));
+        if (from === to || !state.doc.rangeHasMark(from, to, mark)) continue;
+        tr ??= state.tr;
+        tr.removeMark(from, to, mark);
+      }
+      return tr;
     },
     view(editorView) {
       if (initialCheck || spellingKey.getState(editorView.state)?.check) return {};

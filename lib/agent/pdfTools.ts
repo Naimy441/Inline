@@ -3,6 +3,7 @@ import type { Node as PMNode } from "prosemirror-model";
 import { Transform } from "prosemirror-transform";
 import { z } from "zod";
 import { EditError, lockedBetween } from "@/lib/doc/editing";
+import { markAgentText } from "@/lib/doc/merge";
 import { parseMarkdown, serializeBlocks } from "@/lib/doc/markdown";
 import { serializeLayoutBlock, serializeLayoutBlocks } from "@/lib/doc/layoutMarkdown";
 import { mapHunks } from "@/lib/doc/review";
@@ -486,7 +487,9 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
         if (!range) return fail(`Page ${args.page} isn't in the document any more: it has fewer page breaks than the PDF has pages. Read the document and restore the page breaks first.`);
         const content = args.use_draft ? (await pageDraft(doc, record, args.page)).markdown : args.content;
         if (!content) return fail("Give the page's content, or use_draft: true to write its draft.");
-        const blocks = parseMarkdown(content).filter((node) => node.type.name !== "page_break");
+        const blocks = parseMarkdown(content)
+          .filter((node) => node.type.name !== "page_break")
+          .map((node) => markAgentText(node));
         if (!blocks.length) return fail("The content parsed to nothing.");
         if (lockedBetween(doc.doc, range.from, range.to)) return fail("Part of this page is locked by the user, so it can't be replaced.");
         return replacePage(ctx, doc, record, args.page, range, blocks, "write_pdf_page");
@@ -527,7 +530,8 @@ export function pdfTools(kit: PdfToolKit): ToolDefinition[] {
         range.nodes.forEach((node, index) => unchanged.set(before[index]!, [...(unchanged.get(before[index]!) ?? []), node]));
         const blocks = parsed.map((node) => {
           const same = unchanged.get(serializeLayoutBlock(node));
-          return same?.length ? same.shift()! : node;
+          // A block Claude rewrote is Claude's text. A block left as it was keeps the marks it had.
+          return same?.length ? same.shift()! : markAgentText(node);
         });
         return replacePage(ctx, doc, record, args.page, range, blocks, "edit_pdf_page");
       },

@@ -1,5 +1,5 @@
 import { ChangeSet, simplifyChanges, type TokenEncoder } from "prosemirror-changeset";
-import { Slice, type Mark, type Node as PMNode, type Schema } from "prosemirror-model";
+import { Fragment, Slice, type Mark, type Node as PMNode, type Schema } from "prosemirror-model";
 import {
   AddMarkStep,
   AddNodeMarkStep,
@@ -230,13 +230,40 @@ export function recordAgentChange(before: PMNode, tr: Transform, existing: reado
     mapping,
   );
   // A merged hunk whose content ended up identical to the original is no change at all.
-  const live = created.filter((hunk) => !sliceEqualsRange(hunk.deleted, tr.doc, hunk.from, hunk.to));
+  // The agent mark is not a change: text Claude put back the way it was is the user's again.
+  const live: Hunk[] = [];
+  for (const hunk of created) {
+    const same = sliceEqualsRange(hunk.deleted, tr.doc, hunk.from, hunk.to);
+    if (same === "agent") tr.removeMark(hunk.from, hunk.to, tr.doc.type.schema.marks.agent);
+    if (!same) live.push(hunk);
+  }
   return [...untouched, ...live].sort((a, b) => a.from - b.from);
 }
 
-function sliceEqualsRange(slice: Slice, doc: PMNode, from: number, to: number) {
+/** Drop the mark that only means "Claude inserted this", so a restored passage can match the original. */
+function withoutAgent(fragment: Fragment): Fragment {
+  const nodes: PMNode[] = [];
+  fragment.forEach((node) => {
+    if (node.isText) {
+      const marks = node.marks.filter((mark) => mark.type.name !== "agent");
+      nodes.push(marks.length === node.marks.length ? node : node.mark(marks));
+      return;
+    }
+    if (!node.content.size) {
+      nodes.push(node);
+      return;
+    }
+    const content = withoutAgent(node.content);
+    nodes.push(content.eq(node.content) ? node : node.copy(content));
+  });
+  return Fragment.from(nodes);
+}
+
+function sliceEqualsRange(slice: Slice, doc: PMNode, from: number, to: number): false | "exact" | "agent" {
   const current = doc.slice(from, to);
-  return current.openStart === slice.openStart && current.openEnd === slice.openEnd && current.content.eq(slice.content);
+  if (current.openStart !== slice.openStart || current.openEnd !== slice.openEnd) return false;
+  if (current.content.eq(slice.content)) return "exact";
+  return withoutAgent(current.content).eq(withoutAgent(slice.content)) ? "agent" : false;
 }
 
 /** Undo the given hunks. Returns the transform and the hunks that remain pending. */

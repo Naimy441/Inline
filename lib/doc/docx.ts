@@ -1,4 +1,4 @@
-import type { Mark, Node as PMNode } from "prosemirror-model";
+import { Mark, type Node as PMNode } from "prosemirror-model";
 import { cssSizeToPt, defaultListNumbering, MATH_LANGUAGE, schema, type BorderLine, type Borders, type CellBorders, type ListMarker, type ListNumbering, type TableBorders, type TableLine, type TabStop } from "@/lib/doc/schema";
 import { cropToSrcRect, pictureCrop, pictureRotate, pictureWrap, rotateToWord, type PictureCrop, type PictureWrap } from "@/lib/doc/picture";
 import { latexToOmml, OMML_NAMESPACE } from "@/lib/doc/omml";
@@ -149,6 +149,21 @@ function commentMarkers(ctx: Context, marks: readonly Mark[] | null) {
   return out;
 }
 
+/** The agent mark only skips spellcheck. Word runs join across it, so a word stays one run. */
+function forExport(node: PMNode): PMNode[] {
+  const out: PMNode[] = [];
+  node.forEach((child) => {
+    const marks = child.marks.filter((mark) => mark.type.name !== "agent");
+    const prev = out[out.length - 1];
+    if (child.isText && prev?.isText && Mark.sameSet(prev.marks, marks)) {
+      out[out.length - 1] = schema.text((prev.text ?? "") + (child.text ?? ""), marks);
+      return;
+    }
+    out.push(child.isText && marks.length !== child.marks.length ? child.mark(marks) : child);
+  });
+  return out;
+}
+
 async function inlineContent(node: PMNode, ctx: Context, prefix = "") {
   // A paragraph's own text size is its mark's, and the size of its text that has none of its own.
   const size = (node.attrs.fontSize as number | null | undefined) ?? null;
@@ -160,8 +175,9 @@ async function inlineContent(node: PMNode, ctx: Context, prefix = "") {
     out += `<w:hyperlink r:id="${rel}">${link.runs}</w:hyperlink>`;
     link = null;
   };
-  for (let i = 0; i < node.childCount; i += 1) {
-    const child = node.child(i);
+  const children = forExport(node);
+  for (let i = 0; i < children.length; i += 1) {
+    const child = children[i]!;
     const linkMark = child.marks.find((mark) => mark.type.name === "link");
     const href = linkMark ? String(linkMark.attrs.href) : null;
     if (link && link.href !== href) flush();

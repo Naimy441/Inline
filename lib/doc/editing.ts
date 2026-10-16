@@ -1,7 +1,7 @@
 import { Mark, type Node as PMNode } from "prosemirror-model";
 import { Transform } from "prosemirror-transform";
 import { BLOCK_SEPARATOR, parseMarkdown, serializeBlock, serializeDoc, type BlockSpan, type SerializedDoc } from "@/lib/doc/markdown";
-import { LockedContentError, replaceTopLevelBlocks } from "@/lib/doc/merge";
+import { LockedContentError, markAgentText, replaceTopLevelBlocks } from "@/lib/doc/merge";
 import { ALIGNMENTS, fileLinkHref, MAX_INDENT, safeHref, cssSizeToPt, isTextblockType, schema, type Align } from "@/lib/doc/schema";
 
 /**
@@ -367,7 +367,7 @@ export function insertMarkdown(doc: PMNode, markdown: string, position: InsertPo
   }
   let pos = 0;
   for (let i = 0; i < index && i < doc.childCount; i += 1) pos += doc.child(i).nodeSize;
-  tr.insert(pos, blocks);
+  tr.insert(pos, blocks.map((block) => markAgentText(block)));
   return tr;
 }
 

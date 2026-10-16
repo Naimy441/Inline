@@ -12,7 +12,8 @@ const base = () => ensureBlockIds(markdownToDoc("The quick brown fox jumps over 
 function agentEdit(doc: ReturnType<typeof base>, hunks: Hunk[], old_string: string, new_string: string) {
   const tr = new Transform(doc);
   applyStringEdit(tr, { old_string, new_string });
-  return { doc: tr.doc, hunks: recordAgentChange(doc, tr, hunks, "chat-1") };
+  const next = recordAgentChange(doc, tr, hunks, "chat-1");
+  return { doc: tr.doc, hunks: next };
 }
 
 describe("review hunks", () => {

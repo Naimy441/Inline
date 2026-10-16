@@ -618,7 +618,10 @@ export class DocumentSession {
         state: this.createState(document),
         dispatchTransaction: (tr) => this.dispatch(tr),
         nodeViews: { image: (node, view, getPos) => new ImageView(node, view, getPos), code_block: codeBlockView },
-        attributes: () => ({ class: "doc-content", spellcheck: preferences.get().spellcheck ? "true" : "false", "aria-label": "Document", role: "textbox", "aria-multiline": "true" }),
+        // Native spellcheck draws its own dotted line on top of ours. The
+        // editor's underlines are the only spelling marks; hiding them is the
+        // spelling plugin, not this attribute.
+        attributes: () => ({ class: "doc-content", spellcheck: "false", "aria-label": "Document", role: "textbox", "aria-multiline": "true" }),
         handleDOMEvents: {
           focus: () => {
             this.reportSelection();
