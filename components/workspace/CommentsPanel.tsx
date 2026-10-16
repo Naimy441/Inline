@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, MessageSquare, MoreHorizontal, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { DocumentSession } from "@/lib/client/documentSession";
 import type { DocComment } from "@/lib/doc/settings";
 import { commentDraft, commentRanges } from "@/lib/editor/comments";
@@ -97,14 +97,16 @@ export function CommentsPanel({
 function CommentField({ placeholder, onSubmit, onCancel, autoFocus = false, submitLabel, initial = "" }: { placeholder: string; onSubmit: (body: string) => void; onCancel?: () => void; autoFocus?: boolean; submitLabel: string; initial?: string }) {
   const [body, setBody] = useState(initial);
   const ref = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => {
-    if (!autoFocus) return;
-    const focus = () => ref.current?.focus({ preventScroll: true });
-    focus();
-    // A floating card is hidden until it's placed, and hidden fields can't take focus.
-    const frame = requestAnimationFrame(focus);
-    return () => cancelAnimationFrame(frame);
-  }, [autoFocus]);
+  const focused = useRef(false);
+  // Layout, not a later frame: the shortcut's next key is already queued, and a
+  // hidden field can't take focus, so the first letter would replace the selection.
+  useLayoutEffect(() => {
+    if (!autoFocus || focused.current) return;
+    const element = ref.current;
+    if (!element) return;
+    element.focus({ preventScroll: true });
+    if (document.activeElement === element) focused.current = true;
+  });
   useLayoutEffect(() => {
     const element = ref.current;
     if (!element) return;
