@@ -39,7 +39,11 @@ export class ImageView implements NodeView {
     this.dom = document.createElement("figure");
     this.img = document.createElement("img");
     this.img.draggable = false;
-    this.img.addEventListener("load", () => this.render());
+    // A crop needs the natural size to place the window. An uncropped picture
+    // already has its width, and rendering again would wipe a drag in progress.
+    this.img.addEventListener("load", () => {
+      if (pictureCrop(this.node.attrs.crop)) this.render();
+    });
     // The frame hugs the image so the handles sit on its corners. Crop clips inside it; rotation turns that window.
     this.frame = document.createElement("span");
     this.frame.className = "image-frame";
