@@ -170,7 +170,8 @@ async function inlineContent(node: PMNode, ctx: Context, prefix = "") {
     else if (child.isText) run += textRun(child.text ?? "", child.marks, size);
     else if (child.type.name === "hard_break") run += "<w:r><w:br/></w:r>";
     else if (child.type.name === "inline_image") run += await inlineImageRun(child, ctx, size);
-    if (href && /^(https?:|mailto:|tel:)/i.test(href)) {
+    // File links are real Word hyperlinks too, so the copy outside Inline still opens them.
+    if (href && /^(https?:|mailto:|tel:|file:)/i.test(href)) {
       if (!link) link = { href, runs: "" };
       link.runs += run;
     } else {

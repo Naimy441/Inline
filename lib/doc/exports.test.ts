@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { diffSequences, textSimilarity } from "./diff";
 import { documentToDocx, imageSize } from "./docx";
+import { docxToDoc } from "./docxImport";
 import { documentHtmlFile, escapeHtml, fragmentToHtml } from "./html";
 import { latexToOmml } from "./omml";
 import { blockIdFixes, ensureBlockIds, newId } from "./ids";
-import { markdownToDoc } from "./markdown";
+import { docToMarkdown, markdownToDoc } from "./markdown";
 import { DEFAULT_SETTINGS, type DocumentMeta } from "./settings";
+import { readZip } from "@/lib/server/unzip";
 import { createZip } from "./zip";
 
 const SAMPLE = "# Plan {.title}\n\nIntro with **bold** and a [link](https://example.com).\n\n- one\n- two\n\n| A | B |\n| --- | --- |\n| 1 | 2 |";
@@ -48,6 +50,14 @@ describe("Word export", () => {
     assert.ok(text.includes("<w:b/>") || text.includes("<w:b "), "bold run");
     assert.ok(text.includes("<w:tbl>"), "table");
     assert.ok(text.includes("https://example.com"), "hyperlink target");
+  });
+
+  it("keeps a file link as a Word hyperlink", async () => {
+    const bytes = await documentToDocx(markdownToDoc("See the [notes](file:///tmp/notes.pdf)."), meta(), async () => null);
+    const text = latin1(bytes);
+    assert.match(text, /<w:hyperlink r:id="[^"]+">/);
+    assert.match(text, /Target="file:\/\/\/tmp\/notes\.pdf" TargetMode="External"/);
+    assert.match(docToMarkdown(await docxToDoc(readZip(bytes))), /\[notes\]\(file:\/\/\/tmp\/notes\.pdf\)/);
   });
 
   it("uses the document's paper size and margins", async () => {

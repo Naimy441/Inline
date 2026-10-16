@@ -209,7 +209,8 @@ export function SelectionBubble({
           target="_blank"
           rel="noopener noreferrer"
           onClick={(event) => {
-            if (!link.href.startsWith("#")) return;
+            // In-document anchors and file links are opened by the editor. A browser will not follow file://.
+            if (!link.href.startsWith("#") && !/^file:/i.test(link.href)) return;
             event.preventDefault();
             session.run(followLink(link.href));
           }}
