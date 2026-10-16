@@ -3,6 +3,7 @@
 import { ArrowDown, ArrowUp, CloudOff, FileText, PenLine, Sparkles, X } from "lucide-react";
 import type { EditorState } from "prosemirror-state";
 import { useEffect, useState, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import type { PdfImportMeta } from "@/lib/doc/settings";
 
 /**
@@ -21,13 +22,11 @@ export function OfflineNotice({ offline }: { offline: boolean }) {
   }, [offline]);
   if (!show) return null;
   return (
-    <div className="canvas-notice">
-      <div className="offline-notice" role="status">
-        <CloudOff size={15} />
-        <span>
-          <strong>You&apos;re offline.</strong> Keep writing: your edits stay in this tab and sync when the connection is back.
-        </span>
-      </div>
+    <div className="offline-notice" role="status">
+      <CloudOff size={15} />
+      <span>
+        <strong>You&apos;re offline.</strong> Keep writing: your edits stay in this tab and sync when the connection is back.
+      </span>
     </div>
   );
 }
@@ -69,11 +68,11 @@ export function AgentLocator({ canvas, state, active, label }: { canvas: RefObje
   }, [canvas, state, active]);
 
   if (!where) return null;
-  return (
+  const button = (
     <button
       type="button"
       className={`agent-locator is-${where.side}`}
-      style={where.side === "above" ? { left: where.left, top: where.top } : { left: where.left, bottom: where.bottom }}
+      style={where.side === "below" ? { left: where.left, bottom: where.bottom } : undefined}
       onClick={() => canvas.current?.querySelector(".doc-content .agent-caret")?.scrollIntoView({ block: "center", behavior: "smooth" })}
     >
       <Sparkles size={13} />
@@ -81,6 +80,13 @@ export function AgentLocator({ canvas, state, active, label }: { canvas: RefObje
       {where.side === "above" ? <ArrowUp size={13} /> : <ArrowDown size={13} />}
     </button>
   );
+  // Above the page, the chip joins the notice stack so it sits under the conversion
+  // bar instead of covering it. Below, it stays fixed over the canvas edge.
+  if (where.side === "above") {
+    const stack = canvas.current?.querySelector(".canvas-notices");
+    if (stack) return createPortal(button, stack);
+  }
+  return button;
 }
 
 /**
@@ -89,50 +95,50 @@ export function AgentLocator({ canvas, state, active, label }: { canvas: RefObje
  * original annotations. Gone once the conversion is done (the View menu
  * keeps the switch).
  */
-export function PdfImportNotice({ pdf, working, onConvert, onShowChat, onToggleAnnotations }: { pdf: PdfImportMeta; working: boolean; onConvert: () => void; onShowChat: () => void; onToggleAnnotations: () => void }) {
+export function PdfImportNotice({ pdf, working, chatOpen, onConvert, onShowChat, onToggleAnnotations }: { pdf: PdfImportMeta; working: boolean; chatOpen: boolean; onConvert: () => void; onShowChat: () => void; onToggleAnnotations: () => void }) {
   const [hidden, setHidden] = useState(false);
   if (pdf.status === "done" || hidden) return null;
   const done = Math.min(pdf.pages, pdf.converted.length);
   const converting = pdf.status === "converting";
   const annotations = pdf.inkPages.length > 0;
   return (
-    <div className="canvas-notice">
-      <div className="pdf-notice" role="status">
-        {converting ? <Sparkles size={15} className={working ? "pulse" : undefined} /> : <FileText size={15} />}
-        <span className="pdf-notice-text">
-          {converting ? (
-            <>
-              <strong>Claude is converting this PDF</strong> into editable text: {done} of {pdf.pages} page{pdf.pages === 1 ? "" : "s"} done.
-            </>
-          ) : (
-            <>
-              <strong>
-                {pdf.pages - done} of {pdf.pages} page{pdf.pages === 1 ? " is" : "s are"} still {pdf.pages - done === 1 ? "a picture" : "pictures"} of the PDF.
-              </strong>{" "}
-              Claude can rebuild {pdf.pages - done === 1 ? "it" : "them"} as editable text.
-            </>
-          )}
-        </span>
+    <div className="pdf-notice" role="status">
+      {converting ? <Sparkles size={15} className={working ? "pulse" : undefined} /> : <FileText size={15} />}
+      <span className="pdf-notice-text">
         {converting ? (
+          <>
+            <strong>Claude is converting this PDF</strong> into editable text: {done} of {pdf.pages} page{pdf.pages === 1 ? "" : "s"} done.
+          </>
+        ) : (
+          <>
+            <strong>
+              {pdf.pages - done} of {pdf.pages} page{pdf.pages === 1 ? " is" : "s are"} still {pdf.pages - done === 1 ? "a picture" : "pictures"} of the PDF.
+            </strong>{" "}
+            Claude can rebuild {pdf.pages - done === 1 ? "it" : "them"} as editable text.
+          </>
+        )}
+      </span>
+      {converting ? (
+        !chatOpen && (
           <button type="button" className="pdf-notice-action" onClick={onShowChat}>
             Show progress
           </button>
-        ) : (
-          <button type="button" className="pdf-notice-action is-primary" onClick={onConvert}>
-            {done ? "Continue converting" : "Convert with Claude"}
-          </button>
-        )}
-        {annotations && (
-          <button type="button" className={`pdf-notice-action${pdf.showAnnotations ? " is-on" : ""}`} onClick={onToggleAnnotations} title="Show the handwriting and markup the PDF had, where it was on the original pages">
-            <PenLine size={13} /> {pdf.showAnnotations ? "Hide annotations" : "Show annotations"}
-          </button>
-        )}
-        {!converting && (
-          <button type="button" className="pdf-notice-close" aria-label="Dismiss" onClick={() => setHidden(true)}>
-            <X size={13} />
-          </button>
-        )}
-      </div>
+        )
+      ) : (
+        <button type="button" className="pdf-notice-action is-primary" onClick={onConvert}>
+          {done ? "Continue converting" : "Convert with Claude"}
+        </button>
+      )}
+      {annotations && (
+        <button type="button" className={`pdf-notice-action${pdf.showAnnotations ? " is-on" : ""}`} onClick={onToggleAnnotations} title="Show the handwriting and markup the PDF had, where it was on the original pages">
+          <PenLine size={13} /> {pdf.showAnnotations ? "Hide annotations" : "Show annotations"}
+        </button>
+      )}
+      {!converting && (
+        <button type="button" className="pdf-notice-close" aria-label="Dismiss" onClick={() => setHidden(true)}>
+          <X size={13} />
+        </button>
+      )}
     </div>
   );
 }

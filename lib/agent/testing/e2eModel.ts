@@ -85,6 +85,9 @@ const model: FakeModel = async (turn, claude) => {
     const compared = await claude.call("compare_pdf_page", { document_id: documentId, page: 1 });
     const finished = await claude.call("finish_pdf_import", { document_id: documentId });
     claude.say([aligned.text, compared.text.split("\n")[1] ?? "", finished.text].join("\n\n"));
+    // Pages left: the notice stays up, but a finished turn clears the caret. Hold the
+    // turn so the locator chip can be read next to it. A one-page import finishes here.
+    if (finished.isError) await claude.untilInterrupted();
     return;
   }
 

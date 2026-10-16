@@ -617,7 +617,7 @@ export function Workspace({ documentId }: { documentId: string }) {
       link.remove();
     } else if (command.kind === "open_document" && command.documentId !== documentId && !focusRef.current) {
       toast("Claude opened another document.", { action: { label: "Open", run: () => router.push(`/d/${command.documentId}`) } });
-    } else if (command.kind === "scroll_to") session.scrollTo(command.from, command.to);
+    } else if (command.kind === "scroll_to") session.followEdit(command.from, command.to);
     else if (command.kind === "render_pages") void session.answerRender(command).catch(() => undefined);
     else if (command.kind === "measure_fit") void session.answerFit(command).catch(() => undefined);
   };
@@ -1001,18 +1001,21 @@ export function Workspace({ documentId }: { documentId: string }) {
           }}
         >
           {find && <WithEditorState session={session}>{(state) => <FindBar session={session} state={state} replace={find.replace} onClose={() => setFind(null)} />}</WithEditorState>}
-          <OfflineNotice offline={ui.status === "ready" && (ui.connection === "reconnecting" || ui.sync === "error")} />
-          {meta?.pdfImport && !focusMode && (
-            <PdfImportNotice
-              pdf={meta.pdfImport}
-              working={working}
-              onConvert={() => void convertPdf()}
-              onShowChat={() => {
-                if (meta.pdfImport?.chatId) openChat(meta.pdfImport.chatId);
-              }}
-              onToggleAnnotations={() => void togglePdfAnnotations()}
-            />
-          )}
+          <div className="canvas-notices">
+            <OfflineNotice offline={ui.status === "ready" && (ui.connection === "reconnecting" || ui.sync === "error")} />
+            {meta?.pdfImport && !focusMode && (
+              <PdfImportNotice
+                pdf={meta.pdfImport}
+                working={working}
+                chatOpen={shownPanel === "agent"}
+                onConvert={() => void convertPdf()}
+                onShowChat={() => {
+                  if (meta.pdfImport?.chatId) openChat(meta.pdfImport.chatId);
+                }}
+                onToggleAnnotations={() => void togglePdfAnnotations()}
+              />
+            )}
+          </div>
           <WithEditorState session={session}>{(state) => <AgentLocator canvas={canvasRef} state={state} active={working && !focusMode} label={ui.activity?.label ?? ""} />}</WithEditorState>
           {ui.status === "loading" && (
             <div className="canvas-loading">
