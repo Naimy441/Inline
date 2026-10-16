@@ -3,6 +3,7 @@ import { Transform } from "prosemirror-transform";
 import { BLOCK_SEPARATOR, parseMarkdown, serializeBlock, serializeDoc, type BlockSpan, type SerializedDoc } from "@/lib/doc/markdown";
 import { LockedContentError, markAgentText, replaceTopLevelBlocks } from "@/lib/doc/merge";
 import { ALIGNMENTS, fileLinkHref, MAX_INDENT, safeHref, cssSizeToPt, isTextblockType, schema, type Align } from "@/lib/doc/schema";
+import { cleanTitle, titleFromText } from "@/lib/doc/settings";
 
 /**
  * Document operations in the vocabulary the agent uses: Markdown text with
@@ -142,6 +143,31 @@ export function openingLine(doc: PMNode): string {
     return true;
   });
   return line;
+}
+
+/** Text of the first Title block, or null when the document has none. An empty Title still counts. */
+export function firstTitleText(doc: PMNode): string | null {
+  let found: string | null = null;
+  doc.descendants((node) => {
+    if (found !== null) return false;
+    if (node.type.name === "title") {
+      found = node.textContent;
+      return false;
+    }
+    return true;
+  });
+  return found;
+}
+
+/**
+ * The name an untitled document follows. The first Title block wins, including
+ * when a paragraph stands above it. With no Title block, the first line is the
+ * name. An empty Title block clears the name.
+ */
+export function followedDocumentTitle(doc: PMNode): string | null {
+  const titled = firstTitleText(doc);
+  if (titled !== null) return titleFromText(titled) ?? cleanTitle("");
+  return titleFromText(openingLine(doc));
 }
 
 export function docWordCount(doc: PMNode): number {

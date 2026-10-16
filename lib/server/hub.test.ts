@@ -199,6 +199,32 @@ describe("metadata and titles", () => {
     assert.equal(doc.meta.title, capped);
   });
 
+  it("an untitled document takes its title from the first Title block", async () => {
+    const doc = await hub.create({ markdown: "A paragraph comes first.\n\n# Hello world {.title}\n\nAfter." });
+    await doc.flush();
+    assert.equal(doc.meta.autoTitle, true);
+    assert.equal(doc.meta.title, "Hello world");
+    const from = textPos(doc, "Hello world");
+    doc.receiveClientSteps(doc.version, [new ReplaceStep(from + "Hello".length, from + "Hello".length, new Slice(Fragment.from(schema.text(" there")), 0, 0)).toJSON()], "tab-1");
+    assert.equal(doc.meta.title, "Hello there world");
+  });
+
+  it("removing the first Title block updates the title only when it was not set by hand", async () => {
+    const automatic = await hub.create({ markdown: "# Hello {.title}\n\n# Second {.title}" });
+    await automatic.flush();
+    assert.equal(automatic.meta.title, "Hello");
+    automatic.applyTransform(new Transform(automatic.doc).delete(0, automatic.doc.firstChild!.nodeSize), { kind: "system", label: "remove-title" });
+    assert.equal(automatic.meta.title, "Second");
+
+    const named = await hub.create({ markdown: "# Hello {.title}\n\nBody text." });
+    named.updateMeta({ title: "Chosen name" });
+    named.applyTransform(new Transform(named.doc).delete(0, named.doc.firstChild!.nodeSize), { kind: "system", label: "remove-title" });
+    assert.equal(named.meta.autoTitle, false);
+    assert.equal(named.meta.title, "Chosen name");
+    named.receiveClientSteps(named.version, [insertStep(1, "Still ")], "tab-1");
+    assert.equal(named.meta.title, "Chosen name");
+  });
+
   it("patches settings and broadcasts the new meta", async () => {
     const doc = await hub.create({});
     const { events } = record(doc);
