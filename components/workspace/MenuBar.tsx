@@ -27,8 +27,10 @@ import { FONT_FAMILIES, type DocumentSettings } from "@/lib/doc/settings";
 import { DOCUMENT_THEMES, activeTheme, chosenThemeId, resolveStyle, stylePreview, stylesOf } from "@/lib/doc/styles";
 import { addColumnAfter, addColumnBefore, addRowAfter, addRowBefore, deleteColumn, deleteRow, deleteTable, isInTable, toggleHeaderRow } from "prosemirror-tables";
 import { textToTable } from "@/lib/editor/tables";
-import { tableFormatItems, TABLE_ASK, type TableAsk } from "@/components/workspace/tableMenu";
+import { askTable, tableFormatItems, TABLE_ASK, type TableAsk } from "@/components/workspace/tableMenu";
 import { TableDialog } from "@/components/workspace/TableDialog";
+import { InsertTableDialog } from "@/components/workspace/InsertTableDialog";
+import { TABLE_PRESETS, TableSizeGrid } from "@/components/workspace/TableSizeGrid";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { fitPagesInView } from "@/lib/editor/pageFit";
 import { insertEquation } from "@/lib/editor/math";
@@ -167,7 +169,8 @@ export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSe
           <Menu open={open === name} onClose={() => setOpen((value) => (value === name ? null : value))} anchor={anchor(name)} items={items} />
         </span>
       ))}
-      <TableDialog key={tableAsk ?? "closed"} kind={tableAsk} session={session} onClose={() => setTableAsk(null)} notice={actions.notice} />
+      <TableDialog key={tableAsk === "size" ? "closed" : (tableAsk ?? "closed")} kind={tableAsk === "size" ? null : tableAsk} session={session} onClose={() => setTableAsk(null)} notice={actions.notice} />
+      <InsertTableDialog open={tableAsk === "size"} session={session} onClose={() => setTableAsk(null)} notice={actions.notice} />
     </nav>
   );
 }
@@ -266,8 +269,21 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       {
         label: "Table",
         submenu: [
-          ...[2, 3, 4, 5].map((size) => ({ label: `${size} × ${size}`, onSelect: () => run(insertTable(size, size)) })),
+          {
+            kind: "widget",
+            render: (close) => (
+              <TableSizeGrid
+                onPick={(rows, cols) => {
+                  close();
+                  if (!run(insertTable(rows, cols))) actions.notice("Move the cursor out of a table first.");
+                }}
+              />
+            ),
+          },
           { kind: "separator" },
+          ...TABLE_PRESETS.map((size) => ({ label: `${size} × ${size}`, onSelect: () => run(insertTable(size, size)) })),
+          { kind: "separator" },
+          { label: "Custom size…", onSelect: () => askTable("size") },
           { label: "Text to table", onSelect: () => !run(textToTable) && actions.notice("Select the lines to turn into a table. Separate cells with tabs.") },
         ],
       },

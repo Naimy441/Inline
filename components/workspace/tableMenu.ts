@@ -17,7 +17,7 @@ import {
 import type { MenuItem } from "@/components/ui/Menu";
 
 /** Opens the table dialog from any menu, including the phone's overflow menu. */
-export type TableAsk = "width" | "height" | "formula";
+export type TableAsk = "width" | "height" | "formula" | "size";
 export const TABLE_ASK = "inline:table-ask";
 
 export function askTable(kind: TableAsk) {
