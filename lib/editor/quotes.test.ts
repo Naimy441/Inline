@@ -42,6 +42,21 @@ function type(state: EditorState, text: string, at?: number) {
 }
 
 describe("smart quotes", () => {
+  it("opens before a word and closes after a period, even with spaces", () => {
+    const state = type(stateFor(""), '" a. "');
+    assert.equal(state.doc.textContent, "“ a. ”");
+  });
+
+  it("closes a quote typed right after a period", () => {
+    assert.equal(type(stateFor(""), '"a."').doc.textContent, "“a.”");
+  });
+
+  it("still opens a quote after an abbreviation", () => {
+    const doc = schema.node("doc", null, [schema.node("paragraph", { id: "p1" }, schema.text("Mr. "))]);
+    const state = type(EditorState.create({ doc, plugins: stateFor("").plugins }), '"Hi"', doc.content.size - 1);
+    assert.equal(state.doc.textContent, "Mr. “Hi”");
+  });
+
   it("opens at the start of a word and closes at the end", () => {
     const state = type(stateFor(""), '"She said "hello" today."');
     assert.equal(state.doc.textContent, "“She said “hello” today.”");
@@ -104,8 +119,43 @@ describe("smart quotes", () => {
     assert.equal(state.doc.textContent, 'She said "hello" already.');
   });
 
+  it("leaves curly quotes curly when more text is typed", () => {
+    const doc = schema.node("doc", null, [schema.node("paragraph", { id: "p1" }, schema.text("“hello”"))]);
+    const state = type(EditorState.create({ doc, plugins: stateFor("").plugins }), "!", doc.content.size - 1);
+    assert.equal(state.doc.textContent, "“hello”!");
+  });
+
+  it("does not turn a typed fraction into a fraction glyph", () => {
+    const state = type(stateFor(""), "1/2 ");
+    assert.equal(state.doc.textContent, "1/2 ");
+  });
+
   it("stays straight when automatic substitutions are off", () => {
     const state = type(stateFor("", { substitutions: () => false }), '"hello"');
     assert.equal(state.doc.textContent, '"hello"');
   });
+});
+
+describe("automatic substitutions", () => {
+  const samples: Array<[string, string]> = [
+    ["...", "…"],
+    ["--", "—"],
+    ["(c)", "©"],
+    ["(C)", "©"],
+    ["(r)", "®"],
+    ["(tm)", "™"],
+    ["->", "→"],
+    ["<-", "←"],
+    ["=>", "⇒"],
+    ["!=", "≠"],
+    [">=", "≥"],
+    ["<=", "≤"],
+    ["+/-", "±"],
+  ];
+
+  for (const [typed, expected] of samples) {
+    it(`replaces ${typed} with ${expected}`, () => {
+      assert.equal(type(stateFor(""), typed).doc.textContent, expected);
+    });
+  }
 });
