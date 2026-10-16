@@ -371,6 +371,19 @@ img.ProseMirror-separator {
   max-width: none;
 }
 
+/* A cropped picture in a line is the visible window; the source spills out and is clipped. */
+.doc-content span.doc-inline-image {
+  display: inline-block;
+  overflow: hidden;
+  vertical-align: baseline;
+  line-height: 0;
+}
+
+.doc-content span.doc-inline-image img {
+  display: block;
+  max-width: none;
+}
+
 /* Lists */
 
 .doc-content ul,
@@ -546,6 +559,66 @@ img.ProseMirror-separator {
   text-align: right;
 }
 
+/* Square wrap: the picture floats and the following text runs beside it. */
+.doc-content .doc-image.wrap-square {
+  float: left;
+  margin: 0 12px 8px 0;
+}
+
+.doc-content .doc-image.wrap-square.align-right {
+  float: right;
+  margin: 0 0 8px 12px;
+}
+
+/* Behind and in front leave no gap, so the following text runs across the picture. */
+.doc-content .doc-image.wrap-behind,
+.doc-content .doc-image.wrap-front {
+  position: relative;
+  height: 0;
+  margin: 0;
+  overflow: visible;
+  clear: both;
+}
+
+.doc-content .doc-image.wrap-behind .image-frame,
+.doc-content .doc-image.wrap-front .image-frame {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+}
+
+.doc-content .doc-image.wrap-behind .image-frame {
+  z-index: -1;
+}
+
+.doc-content .doc-image.align-left.wrap-behind .image-frame,
+.doc-content .doc-image.align-left.wrap-front .image-frame,
+.doc-content .doc-image.align-justify.wrap-behind .image-frame,
+.doc-content .doc-image.align-justify.wrap-front .image-frame {
+  left: 0;
+  transform: none;
+}
+
+.doc-content .doc-image.align-right.wrap-behind .image-frame,
+.doc-content .doc-image.align-right.wrap-front .image-frame {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
+/* Uncropped, these wrappers disappear so the frame still hugs the image. */
+.doc-content .image-turn,
+.doc-content .image-crop {
+  display: contents;
+}
+
+.doc-content .doc-image.is-cropped .image-crop img,
+.doc-content .image-crop img {
+  max-width: none;
+}
+
 .doc-content .doc-image.ProseMirror-selectednode {
   outline: none;
 }
@@ -553,6 +626,15 @@ img.ProseMirror-separator {
 .doc-content .doc-image.ProseMirror-selectednode img {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
+}
+
+.doc-content .doc-image.is-cropped.ProseMirror-selectednode .image-frame {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.doc-content .doc-image.is-cropped.ProseMirror-selectednode img {
+  outline: none;
 }
 
 /* Resize handles on the selected image's corners */

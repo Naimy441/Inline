@@ -1,5 +1,6 @@
 import type { Mark, Node as PMNode } from "prosemirror-model";
 import { newId } from "@/lib/doc/ids";
+import { pictureCrop, pictureWrap, rotateFromWord, srcRectToCrop, type PictureCrop, type PictureWrap } from "@/lib/doc/picture";
 import { defaultListNumbering, safeHref, sameBorders, schema, type Align, type BorderLine, type Borders, type ListMarker, type ListNumbering, type TabStop } from "@/lib/doc/schema";
 import { primaryFamily } from "@/lib/doc/fontMetrics";
 import { DEFAULT_SETTINGS, DEFAULT_TAB_STOP, FONT_FAMILIES, PAPER_SIZES, type CommentAuthor, type DocComment, type DocumentSettings, type HorizontalAlign, type PaperSize } from "@/lib/doc/settings";
@@ -745,6 +746,10 @@ async function imageFromDrawing(drawing: XmlElement, ctx: Context, inText = fals
   let inline = false;
   let opacity: number | null = null;
   let dist: [number, number, number, number] | null = null;
+  let behindDoc = false;
+  let wrap: PictureWrap | null = null;
+  let crop: PictureCrop | null = null;
+  let rotate: number | null = null;
   const walk = (node: XmlElement) => {
     if (node.name === "a:blip") embed ??= node.attrs["r:embed"];
     if (node.name === "a:alphaModFix") {
@@ -765,6 +770,12 @@ async function imageFromDrawing(drawing: XmlElement, ctx: Context, inText = fals
       inline = true;
       dist = (["distT", "distR", "distB", "distL"] as const).map((side) => Math.round((Number(node.attrs[side]) || 0) / EMU_PER_PX)) as [number, number, number, number];
     }
+    // behindDoc is on the anchor; the wrap element is inside it, so it is known before that child is visited.
+    if (node.name === "wp:anchor") behindDoc = node.attrs.behindDoc === "1" || node.attrs.behindDoc === "true";
+    if (node.name === "wp:wrapSquare" || node.name === "wp:wrapTight" || node.name === "wp:wrapThrough") wrap = "square";
+    else if (node.name === "wp:wrapNone") wrap = behindDoc ? "behind" : "front";
+    if (node.name === "a:srcRect") crop = srcRectToCrop(node.attrs);
+    if (node.name === "a:xfrm" && node.attrs.rot) rotate = rotateFromWord(Number(node.attrs.rot));
     if (node.name === "wp:extent" && !widthEmu) {
       widthEmu = Number(node.attrs.cx);
       heightEmu = Number(node.attrs.cy);
@@ -782,14 +793,15 @@ async function imageFromDrawing(drawing: XmlElement, ctx: Context, inText = fals
   if (!data || !mime) return null;
   const src = await ctx.saveImage(data, mime);
   if (!src) return null;
-  if (inText && inline && widthEmu && heightEmu) {
+  const kept = { crop: pictureCrop(crop), rotate };
+  if (inText && inline && !wrap && widthEmu && heightEmu) {
     const px = (emu: number) => Math.max(1, Math.round(emu / EMU_PER_PX));
     // Google Docs keeps 2px clear around a picture in a line, whatever space its file records (often an eighth of an inch).
     const space = ctx.google ? [2, 2, 2, 2] : dist;
-    return schema.nodes.inline_image!.create({ src, alt, width: px(widthEmu), height: px(heightEmu), opacity, dist: space && space.some(Boolean) ? space : null });
+    return schema.nodes.inline_image!.create({ src, alt, width: px(widthEmu), height: px(heightEmu), opacity, dist: space && space.some(Boolean) ? space : null, ...kept });
   }
   const width = widthEmu ? `${Math.round(widthEmu / EMU_PER_PX)}px` : widthPt ? `${Math.round((widthPt * 96) / 72)}px` : null;
-  return schema.nodes.image!.create({ src, alt, width });
+  return schema.nodes.image!.create({ src, alt, width, wrap: pictureWrap(wrap), ...kept });
 }
 
 /** `breakOnly` while the paragraph has nothing but a page break in it. */
@@ -1011,6 +1023,10 @@ async function readParagraph(p: XmlElement, ctx: Context, cell: "cell" | "header
     inline = [...(rest ? [schema.text(rest, inline[0]!.marks)] : []), ...inline.slice(1)];
   }
   const hasContent = inline.length > 0 || !content.blocks.length;
+  // A floating picture is anchored to this paragraph. It goes first so the paragraph's text runs beside it or across it.
+  const floating = placed.filter((block) => block.type === schema.nodes.image && pictureWrap(block.attrs.wrap));
+  const rest = placed.filter((block) => !floating.includes(block));
+  if (floating.length) blocks.push(...floating);
   if (hasContent) {
     if (isList) {
       // Numbered items count on across interruptions, as Word numbers them.
@@ -1040,7 +1056,7 @@ async function readParagraph(p: XmlElement, ctx: Context, cell: "cell" | "header
       blocks.push(paragraph);
     }
   }
-  blocks.push(...placed);
+  blocks.push(...rest);
   if (boxed && !isList && !cell) return [{ boxed: blocks.filter((block): block is PMNode => !("list" in block) && !("boxed" in block)) }];
   return blocks;
 }

@@ -3,6 +3,7 @@ import { Fragment, type Attrs, type MarkType, type Node as PMNode, type NodeType
 import { liftListItem, sinkListItem, wrapInList } from "prosemirror-schema-list";
 import { NodeSelection, TextSelection, type Command, type EditorState } from "prosemirror-state";
 import { isInTable } from "prosemirror-tables";
+import { pictureCrop, pictureRotate, pictureWrap, type PictureCrop, type PictureWrap } from "@/lib/doc/picture";
 import { fileLinkHref, MAX_INDENT, safeHref, schema, type Align } from "@/lib/doc/schema";
 
 const CITATION_PLACEHOLDER = "(Author, Year)";
@@ -365,11 +366,20 @@ export function insertTable(rows: number, cols: number): Command {
   };
 }
 
-export function setImageAttrs(attrs: Partial<{ width: string | null; align: Align; alt: string }>): Command {
+export function setImageAttrs(attrs: Partial<{ width: string | null; align: Align; alt: string; wrap: PictureWrap | null; crop: PictureCrop | null; rotate: number | null }>): Command {
   return (state, dispatch) => {
     const selection = state.selection;
-    if (!(selection instanceof NodeSelection) || selection.node.type !== nodes.image) return false;
-    dispatch?.(state.tr.setNodeMarkup(selection.from, undefined, { ...selection.node.attrs, ...attrs }));
+    if (!(selection instanceof NodeSelection)) return false;
+    const node = selection.node;
+    if (node.type !== nodes.image && node.type !== nodes.inline_image) return false;
+    const next: Record<string, unknown> = { ...node.attrs };
+    if ("width" in attrs && "width" in node.attrs) next.width = attrs.width ?? null;
+    if ("align" in attrs && node.type === nodes.image) next.align = attrs.align;
+    if ("alt" in attrs) next.alt = attrs.alt ?? "";
+    if ("wrap" in attrs && node.type === nodes.image) next.wrap = pictureWrap(attrs.wrap);
+    if ("crop" in attrs) next.crop = pictureCrop(attrs.crop);
+    if ("rotate" in attrs) next.rotate = pictureRotate(attrs.rotate);
+    dispatch?.(state.tr.setNodeMarkup(selection.from, undefined, next));
     return true;
   };
 }

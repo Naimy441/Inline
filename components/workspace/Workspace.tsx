@@ -38,6 +38,7 @@ import { EDITOR_MODES, modeMenuItems } from "@/components/workspace/modes";
 import { COMPACT_QUERY, isCompact, useMediaQuery, useVisualViewportVars } from "@/lib/client/viewport";
 import { DEFAULT_PREFERENCES, loadPreferences, preferences, setPreference } from "@/lib/client/preferences";
 import { anchorAt, clampZoom, manualZoomOrigin, scrollForAnchor, touchDistance, touchMidpoint, zoomFromPinch, zoomFromWheel, type ZoomAnchor } from "@/lib/client/zoom";
+import { PictureBar } from "@/components/workspace/PictureBar";
 import { SelectionBubble } from "@/components/workspace/SelectionBubble";
 import { ShortcutsDialog } from "@/components/workspace/ShortcutsDialog";
 import { ContextMenu } from "@/components/workspace/ContextMenu";
@@ -876,6 +877,7 @@ export function Workspace({ documentId }: { documentId: string }) {
           )}
           <ReviewBar session={session} hunks={ui.hunks} hideClaude={focusMode} />
           <WithEditorState session={session}>{(state) => <SelectionBubble session={session} state={state} linkEditing={linkEditing} onLinkEditing={setLinkEditing} prompting={prompting && !focusMode} onPrompting={setPrompting} onInlineAsk={inlineAsk} hideAi={focusMode} />}</WithEditorState>
+          <WithEditorState session={session}>{(state) => <PictureBar session={session} state={state} />}</WithEditorState>
         </main>
 
         {shownPanel && (

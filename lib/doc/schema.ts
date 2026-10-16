@@ -1,6 +1,7 @@
 import { Schema, type DOMOutputSpec, type Mark, type Node as PMNode, type NodeSpec, type MarkSpec } from "prosemirror-model";
 import { tableNodes } from "prosemirror-tables";
 import { lineVars } from "@/lib/doc/fontMetrics";
+import { cropToken, parseCropToken, pictureCrop, pictureRotate, pictureWrap, type PictureCrop, type PictureWrap } from "@/lib/doc/picture";
 
 /**
  * The Inline document schema. It is shared by the browser editor, the server
@@ -334,6 +335,57 @@ function listDomAttrs(node: PMNode, extra: Record<string, string> = {}, styles: 
   return attrs;
 }
 
+function inlineImageAttrs(el: HTMLImageElement) {
+  const px = (value: string) => (/^[\d.]+px$/.test(value) ? Number.parseFloat(value) : null);
+  const opacity = Number.parseFloat(el.style.opacity);
+  const widthAttr = el.getAttribute("width");
+  const heightAttr = el.getAttribute("height");
+  const fromAttr = (value: string | null) => {
+    const n = value ? Number(value.replace(/px$/, "")) : Number.NaN;
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
+  return {
+    src: el.getAttribute("src") || "",
+    alt: el.getAttribute("alt") || "",
+    width: px(el.style.width) ?? fromAttr(widthAttr),
+    height: px(el.style.height) ?? fromAttr(heightAttr),
+    opacity: Number.isFinite(opacity) && opacity < 1 ? opacity : null,
+    dist: (() => {
+      const values = (el.getAttribute("data-dist") ?? "").split(",").map(Number);
+      return values.length === 4 && values.every((value) => Number.isFinite(value) && value >= 0) ? (values as [number, number, number, number]) : null;
+    })(),
+    ...readPictureDom(el),
+  };
+}
+
+/** Crop and rotation carried on a picture element (`data-crop` is percents). */
+function readPictureDom(el: HTMLElement) {
+  const host = el.closest("[data-wrap], [data-crop], [data-rotate]");
+  const read = (name: string) => el.getAttribute(name) || host?.getAttribute(name) || "";
+  const fromClass = el.closest("figure")?.className.match(/\bwrap-(square|behind|front)\b/)?.[1];
+  return {
+    wrap: pictureWrap(read("data-wrap") || fromClass),
+    crop: parseCropToken(read("data-crop")),
+    rotate: pictureRotate(read("data-rotate")),
+  };
+}
+
+/** Static paint for a picture outside the editor (clip hides the crop; the editor shrinks the frame). */
+function pictureDom(crop: unknown, rotate: unknown) {
+  const cropped = pictureCrop(crop);
+  const turned = pictureRotate(rotate);
+  const style = [
+    cropped ? `clip-path: inset(${cropped.t * 100}% ${cropped.r * 100}% ${cropped.b * 100}% ${cropped.l * 100}%)` : "",
+    turned != null ? `transform: rotate(${turned}deg)` : "",
+  ]
+    .filter(Boolean)
+    .join("; ");
+  const data: Record<string, string> = {};
+  if (cropped) data["data-crop"] = cropToken(cropped);
+  if (turned != null) data["data-rotate"] = String(turned);
+  return { style, data };
+}
+
 const nodes: Record<string, NodeSpec> = {
   doc: { content: "block+" },
 
@@ -436,6 +488,11 @@ const nodes: Record<string, NodeSpec> = {
       title: { default: "" },
       width: { default: null as string | null },
       align: { default: "center" as Align },
+      /** null keeps today's block picture: text above and below it. */
+      wrap: { default: null as PictureWrap | null },
+      crop: { default: null as PictureCrop | null },
+      /** Degrees clockwise. */
+      rotate: { default: null as number | null },
     },
     parseDOM: [
       {
@@ -443,32 +500,43 @@ const nodes: Record<string, NodeSpec> = {
         getAttrs: (dom) => {
           const el = dom as HTMLImageElement;
           const width = el.style.width || el.getAttribute("width") || null;
+          const picture = readPictureDom(el);
           return {
             src: el.getAttribute("src") || "",
             alt: el.getAttribute("alt") || "",
             title: el.getAttribute("title") || "",
             width: width ? (/^\d+$/.test(width) ? `${width}px` : width) : null,
+            ...picture,
           };
         },
       },
     ],
-    toDOM: (node): DOMOutputSpec => [
-      "figure",
-      {
-        class: `doc-image align-${node.attrs.align}`,
-        ...(node.attrs.id ? { "data-id": node.attrs.id } : {}),
-      },
-      [
-        "img",
+    toDOM: (node): DOMOutputSpec => {
+      const wrap = pictureWrap(node.attrs.wrap);
+      const picture = pictureDom(node.attrs.crop, node.attrs.rotate);
+      const style = [node.attrs.width ? `width: ${node.attrs.width}` : "", picture.style].filter(Boolean).join("; ");
+      return [
+        "figure",
         {
-          src: node.attrs.src,
-          alt: node.attrs.alt,
-          ...(node.attrs.title ? { title: node.attrs.title } : {}),
-          ...(node.attrs.width ? { style: `width: ${node.attrs.width}` } : {}),
-          draggable: "false",
+          class: `doc-image align-${node.attrs.align}${wrap ? ` wrap-${wrap}` : ""}`,
+          ...(node.attrs.id ? { "data-id": node.attrs.id } : {}),
+          ...(wrap ? { "data-wrap": wrap } : {}),
+          ...picture.data,
         },
-      ],
-    ],
+        [
+          "img",
+          {
+            src: node.attrs.src,
+            alt: node.attrs.alt,
+            ...(node.attrs.title ? { title: node.attrs.title } : {}),
+            ...(style ? { style } : {}),
+            ...(wrap ? { "data-wrap": wrap } : {}),
+            ...picture.data,
+            draggable: "false",
+          },
+        ],
+      ];
+    },
   },
 
   bullet_list: {
@@ -586,39 +654,70 @@ const nodes: Record<string, NodeSpec> = {
       opacity: { default: null as number | null },
       /** Space kept clear around it, in CSS pixels: top, right, bottom, left (only the sides move text). */
       dist: { default: null as [number, number, number, number] | null },
+      crop: { default: null as PictureCrop | null },
+      /** Degrees clockwise. The picture stays in the line. */
+      rotate: { default: null as number | null },
     },
     leafText: () => "",
     parseDOM: [
       {
         tag: "img.doc-inline-image[src]",
         priority: 60,
+        getAttrs: (dom) => inlineImageAttrs(dom as HTMLImageElement),
+      },
+      {
+        tag: "span.doc-inline-image",
+        priority: 60,
         getAttrs: (dom) => {
-          const el = dom as HTMLImageElement;
+          const img = (dom as HTMLElement).querySelector("img");
+          if (!img) return false;
+          const frame = dom as HTMLElement;
           const px = (value: string) => (/^[\d.]+px$/.test(value) ? Number.parseFloat(value) : null);
-          const opacity = Number.parseFloat(el.style.opacity);
-          return {
-            src: el.getAttribute("src") || "",
-            alt: el.getAttribute("alt") || "",
-            width: px(el.style.width),
-            height: px(el.style.height),
-            opacity: Number.isFinite(opacity) && opacity < 1 ? opacity : null,
-            dist: (() => {
-              const values = (el.getAttribute("data-dist") ?? "").split(",").map(Number);
-              return values.length === 4 && values.every((value) => Number.isFinite(value) && value >= 0) ? values : null;
-            })(),
-          };
+          return { ...inlineImageAttrs(img), width: px(frame.style.width), height: px(frame.style.height), ...readPictureDom(frame) };
         },
       },
     ],
     toDOM: (node): DOMOutputSpec => {
+      const crop = pictureCrop(node.attrs.crop);
+      const rotate = pictureRotate(node.attrs.rotate);
+      const picture = pictureDom(node.attrs.crop, node.attrs.rotate);
+      const dist = node.attrs.dist ? { "data-dist": (node.attrs.dist as number[]).join(",") } : {};
+      // A crop with a known size is a window: the frame is the visible part and the image spills out of it.
+      if (crop && node.attrs.width && node.attrs.height) {
+        const visW = 1 - crop.l - crop.r;
+        const visH = 1 - crop.t - crop.b;
+        const frame = [
+          `width: ${node.attrs.width}px`,
+          `height: ${node.attrs.height}px`,
+          "display: inline-block",
+          "overflow: hidden",
+          "vertical-align: baseline",
+          "line-height: 0",
+          node.attrs.opacity != null ? `opacity: ${node.attrs.opacity}` : "",
+          rotate != null ? `transform: rotate(${rotate}deg)` : "",
+        ].filter(Boolean);
+        const imgStyle = [
+          `width: ${(100 / visW).toFixed(4)}%`,
+          `height: ${(100 / visH).toFixed(4)}%`,
+          `margin-left: ${((-100 * crop.l) / visW).toFixed(4)}%`,
+          `margin-top: ${((-100 * crop.t) / visH).toFixed(4)}%`,
+          "max-width: none",
+          "display: block",
+        ];
+        return [
+          "span",
+          { class: "doc-inline-image", ...dist, ...picture.data, style: frame.join("; ") },
+          ["img", { src: node.attrs.src, alt: node.attrs.alt, draggable: "false", style: imgStyle.join("; ") }],
+        ];
+      }
       const style = [
         node.attrs.width ? `width: ${node.attrs.width}px` : "",
         node.attrs.height ? `height: ${node.attrs.height}px` : "",
         node.attrs.opacity != null ? `opacity: ${node.attrs.opacity}` : "",
         node.attrs.dist ? `margin: 0 ${node.attrs.dist[1]}px 0 ${node.attrs.dist[3]}px` : "",
+        picture.style,
       ].filter(Boolean);
-      const dist = node.attrs.dist ? { "data-dist": (node.attrs.dist as number[]).join(",") } : {};
-      return ["img", { class: "doc-inline-image", src: node.attrs.src, alt: node.attrs.alt, draggable: "false", ...dist, ...(style.length ? { style: style.join("; ") } : {}) }];
+      return ["img", { class: "doc-inline-image", src: node.attrs.src, alt: node.attrs.alt, draggable: "false", ...dist, ...picture.data, ...(style.length ? { style: style.join("; ") } : {}) }];
     },
   },
 };
