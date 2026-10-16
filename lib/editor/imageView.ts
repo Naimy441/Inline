@@ -262,6 +262,28 @@ function forgetRecentClick(view: EditorView) {
 export function imageSelectionPlugin() {
   return new Plugin({
     props: {
+      handleDOMEvents: {
+        // The picture is contenteditable=false. A click on it otherwise lets the
+        // browser drop the caret in the text beside it, and that replaces the
+        // node selection — so the picture bar closes on the click that should
+        // open it. A leading picture starts selected, and that click is a no-op
+        // in ProseMirror, which is when the caret move wins.
+        mousedown(view, event) {
+          if (event.button !== 0 || event.shiftKey) return false;
+          const target = event.target;
+          if (!eventOnPhoto(target) || (target instanceof Element && target.closest(".image-handle"))) return false;
+          event.preventDefault();
+          const found = view.posAtCoords({ left: event.clientX, top: event.clientY });
+          if (!found || found.inside < 0) return true;
+          const node = view.state.doc.nodeAt(found.inside);
+          if (!node || !PHOTO_TYPES.has(node.type.name)) return true;
+          const selected = view.state.selection;
+          if (!(selected instanceof NodeSelection) || selected.from !== found.inside) {
+            view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, found.inside)).setMeta("pointer", true));
+          }
+          return true;
+        },
+      },
       handleClickOn(view, _pos, node, nodePos, event) {
         // Right-click keeps the editor's own menu; shift-click still extends a text selection.
         if (event.button !== 0 || event.shiftKey) return false;
@@ -274,6 +296,11 @@ export function imageSelectionPlugin() {
         if (!("button" in event) || (event as MouseEvent).button !== 0) return;
         if (!isPhotoSelection(editorView.state)) return;
         if (keepsPhoto(event.target)) return;
+        // The bar can open under the pointer before mouseup. The click's target is then
+        // a shared ancestor, so also trust whatever is actually under the cursor.
+        const mouse = event as MouseEvent;
+        const under = (mouse.clientX || mouse.clientY) && typeof document.elementFromPoint === "function" ? document.elementFromPoint(mouse.clientX, mouse.clientY) : null;
+        if (keepsPhoto(under)) return;
         const target = event.target;
         if (target && typeof (target as Node).nodeType === "number" && editorView.dom.contains(target as Node)) return;
         if (!moveCursorOffPhoto(editorView, editorView.state.selection.from)) return;

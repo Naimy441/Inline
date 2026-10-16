@@ -63,7 +63,7 @@ test("square wrap, behind, in front, crop and rotate survive a reload", async ({
   const id = await createDocument(
     request,
     "Pictures",
-    `![Wide stripe](${url}){width=220px align=left alt text stays}\n\nWords flow beside the picture and keep going across the line so wrap can put them next to it, under it, or behind it on the page.`,
+    `![Wide stripe](${url}){width=220px align=left}\n\nWords flow beside the picture and keep going across the line so wrap can put them next to it, under it, or behind it on the page.`,
   );
   await openDocument(page, id);
   const image = page.locator(".doc-content .doc-image img");
@@ -83,8 +83,8 @@ test("square wrap, behind, in front, crop and rotate survive a reload", async ({
       const turned = figure.querySelector(".image-turn") as HTMLElement;
       const visual = getComputedStyle(turned).transform !== "none" ? turned : img;
       const visualBox = visual.getBoundingClientRect();
-      const hit = document.elementFromPoint(box.left + 28, box.top + 14);
-      const imgBox = img.getBoundingClientRect();
+      // The center stays on the picture after a turn. A corner of the layout box does not.
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
       return {
         wrap: figure.dataset.wrap ?? "",
         crop: figure.dataset.crop ?? "",
@@ -94,25 +94,28 @@ test("square wrap, behind, in front, crop and rotate survive a reload", async ({
         frame: { left: box.left, top: box.top, right: box.right, bottom: box.bottom, width: box.width, height: box.height },
         line: line ? { left: line.left, top: line.top, bottom: line.bottom } : null,
         hit: hit?.tagName ?? "",
-        imgWidth: imgBox.width,
-        imgLeft: imgBox.left,
+        // Layout size, not the turned box: a 90° turn would swap width and height.
+        imgWidth: img.offsetWidth,
+        frameWidth: frame.offsetWidth,
+        imgShift: Number.parseFloat(img.style.marginLeft) || 0,
         visual: { width: visualBox.width, height: visualBox.height, transform: getComputedStyle(visual).transform },
       };
     });
 
   await image.click();
   const bar = page.locator(".picture-bar");
-  await expect(bar.getByRole("button", { name: "Square", exact: true })).toBeVisible();
+  const square = bar.getByRole("button", { name: "Square", exact: true });
+  await expect(square).toBeVisible();
 
-  await bar.getByRole("button", { name: "Square", exact: true }).click();
+  await square.click();
   await expect.poll(async () => (await layout()).wrap).toBe("square");
-  const square = await layout();
-  expect(square.line).toBeTruthy();
-  expect(square.line!.left).toBeGreaterThan(square.frame.right - 8);
-  expect(square.line!.top).toBeLessThan(square.frame.bottom - 4);
-  expect(square.line!.bottom).toBeGreaterThan(square.frame.top + 4);
+  const beside = await layout();
+  expect(beside.line).toBeTruthy();
+  expect(beside.line!.left).toBeGreaterThan(beside.frame.right - 8);
+  expect(beside.line!.top).toBeLessThan(beside.frame.bottom - 4);
+  expect(beside.line!.bottom).toBeGreaterThan(beside.frame.top + 4);
 
-  const upright = square.visual;
+  const upright = beside.visual;
   expect(upright.width).toBeGreaterThan(upright.height);
   await bar.getByLabel("Rotate").fill("90");
   await expect.poll(async () => (await layout()).rotate).toBe("90");
@@ -135,8 +138,8 @@ test("square wrap, behind, in front, crop and rotate survive a reload", async ({
   await bar.getByLabel("Crop from left").press("Tab");
   await expect.poll(async () => (await layout()).crop).toBe("50,0,0,0");
   const cropped = await layout();
-  expect(cropped.imgWidth).toBeGreaterThan(cropped.frame.width + 20);
-  expect(cropped.imgLeft).toBeLessThan(cropped.frame.left - 10);
+  expect(cropped.imgWidth).toBeGreaterThan(cropped.frameWidth + 20);
+  expect(cropped.imgShift).toBeLessThan(-10);
 
   await bar.getByRole("button", { name: "Square", exact: true }).click();
   await expect.poll(async () => (await layout()).wrap).toBe("square");
@@ -150,6 +153,7 @@ test("square wrap, behind, in front, crop and rotate survive a reload", async ({
   expect(kept.rotate).toBe("90");
   expect(kept.alt).toContain("stripe");
   expect(kept.line!.left).toBeGreaterThan(kept.frame.right - 8);
-  expect(kept.imgWidth).toBeGreaterThan(kept.frame.width + 20);
+  expect(kept.imgWidth).toBeGreaterThan(kept.frameWidth + 20);
+  expect(kept.imgShift).toBeLessThan(-10);
   expect(kept.visual.transform).not.toBe("none");
 });

@@ -1,7 +1,7 @@
 "use client";
 
 import { NodeSelection, type EditorState } from "prosemirror-state";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { DocumentSession } from "@/lib/client/documentSession";
 import { parseCropToken, pictureCrop, pictureRotate, pictureWrap, type PictureWrap } from "@/lib/doc/picture";
 import { setImageAttrs } from "@/lib/editor/commands";
@@ -19,39 +19,106 @@ const WRAPS: Array<{ wrap: PictureWrap | null; label: string }> = [
  */
 export function PictureBar({ session, state }: { session: DocumentSession; state: EditorState | null }) {
   const bar = useRef<HTMLDivElement>(null);
+  const pressing = useRef(false);
   const [box, setBox] = useState<{ left: number; top: number } | null>(null);
+  // The bar must not open under the press that selects the picture, or that
+  // press ends on the bar and the picture loses its selection.
+  const [open, setOpen] = useState(false);
   const view = session.view;
   const selection = state?.selection;
   const node = selection instanceof NodeSelection ? selection.node : null;
   const picture = node && (node.type.name === "image" || node.type.name === "inline_image") ? node : null;
   const pos = selection instanceof NodeSelection ? selection.from : null;
+  // Attrs that move the picture, not the node object (that changes on every untouched transaction).
+  const layoutKey = picture
+    ? `${pos}:${String(picture.attrs.wrap ?? "")}:${String(picture.attrs.align ?? "")}:${String(picture.attrs.width ?? "")}:${String(picture.attrs.rotate ?? "")}:${picture.attrs.crop ? "1" : ""}`
+    : "";
+
+  useEffect(() => {
+    const down = () => {
+      pressing.current = true;
+    };
+    const up = () => {
+      pressing.current = false;
+    };
+    window.addEventListener("pointerdown", down, true);
+    window.addEventListener("pointerup", up, true);
+    window.addEventListener("pointercancel", up, true);
+    return () => {
+      window.removeEventListener("pointerdown", down, true);
+      window.removeEventListener("pointerup", up, true);
+      window.removeEventListener("pointercancel", up, true);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!layoutKey) {
+      setOpen(false);
+      return;
+    }
+    if (!pressing.current) {
+      setOpen(true);
+      return;
+    }
+    const show = () => setOpen(true);
+    window.addEventListener("pointerup", show, { once: true });
+    window.addEventListener("pointercancel", show, { once: true });
+    return () => {
+      window.removeEventListener("pointerup", show);
+      window.removeEventListener("pointercancel", show);
+    };
+  }, [layoutKey]);
 
   useLayoutEffect(() => {
-    if (!view || pos == null || !picture || !view.editable) {
+    if (!view || !layoutKey || !view.editable) {
       setBox(null);
       return;
     }
+    const at = Number(layoutKey.split(":")[0]);
+    let frame = 0;
+    let tries = 0;
     const place = () => {
-      const dom = view.nodeDOM(pos);
+      if (frame) cancelAnimationFrame(frame);
+      frame = 0;
+      const dom = view.nodeDOM(at);
       const element = dom instanceof HTMLElement ? dom : null;
-      const frame = element?.querySelector(".image-frame") ?? element;
-      const rect = frame?.getBoundingClientRect();
+      const target = element?.querySelector(".image-frame") ?? element;
+      const rect = target?.getBoundingClientRect();
       if (!rect || (rect.width === 0 && rect.height === 0)) {
-        setBox(null);
+        // A layout pass can report an empty box for a frame. Keep the last position and try again.
+        if (tries++ < 8) frame = requestAnimationFrame(place);
         return;
       }
-      setBox({ left: rect.left + rect.width / 2, top: Math.max(8, rect.top - 8) });
+      tries = 0;
+      const left = rect.left + rect.width / 2;
+      const top = Math.max(8, rect.top - 8);
+      setBox((current) => (current && Math.abs(current.left - left) < 0.5 && Math.abs(current.top - top) < 0.5 ? current : { left, top }));
     };
     place();
     window.addEventListener("scroll", place, true);
     window.addEventListener("resize", place);
     return () => {
+      if (frame) cancelAnimationFrame(frame);
       window.removeEventListener("scroll", place, true);
       window.removeEventListener("resize", place);
     };
-  }, [view, pos, picture]);
+  }, [view, layoutKey]);
 
-  if (!picture || !box || !view?.editable) return null;
+  // The bar is centred on the picture, which sits on the left of the page, so pull it back on screen.
+  useLayoutEffect(() => {
+    const element = bar.current;
+    if (!element) return;
+    const rect = element.getBoundingClientRect();
+    const edge = 8;
+    const shiftX = rect.left < edge ? edge - rect.left : rect.right > window.innerWidth - edge ? window.innerWidth - edge - rect.right : 0;
+    const shiftY = rect.top < edge ? edge - rect.top : 0;
+    const currentX = Number.parseFloat(element.style.marginLeft) || 0;
+    const currentY = Number.parseFloat(element.style.marginTop) || 0;
+    if (shiftX) element.style.marginLeft = `${currentX + shiftX}px`;
+    if (shiftY) element.style.marginTop = `${currentY + shiftY}px`;
+  }, [box]);
+
+  if (!picture || !box || !open || !view?.editable) return null;
   const block = picture.type.name === "image";
   const wrap = pictureWrap(picture.attrs.wrap);
   const crop = pictureCrop(picture.attrs.crop);
