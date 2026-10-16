@@ -91,6 +91,8 @@ test("long documents flow onto a second page", async ({ page }) => {
   }
   await expect(page.locator(".sheet")).toHaveCount(2);
   await expect(page.locator(".page-gap")).toHaveCount(1);
+  const panel = page.locator(".agent-panel");
+  if (await panel.count()) await panel.getByRole("button", { name: "Close panel" }).click();
   await expect(page.locator(".status-corner")).toContainText("2 pages");
 });
 

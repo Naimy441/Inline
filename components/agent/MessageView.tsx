@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, ChevronRight, CircleAlert, Copy, FileText, Image as ImageIcon, Link2, PenLine, RotateCcw, TextQuote } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { linkedDocumentLabel, type AssistantMessage, type AssistantPart, type ChatMessage, type ThinkingPart, type UserMessage } from "@/lib/agent/types";
 import { turnCopyTargets } from "@/lib/agent/devCopy";
 import { assistantReplyText } from "@/lib/agent/messageText";
@@ -121,6 +121,7 @@ export const AssistantView = memo(function AssistantView({
   latestThinking,
   showCopy,
   onCopyTurn,
+  documentCounts,
 }: {
   message: AssistantMessage;
   isLast: boolean;
@@ -137,6 +138,8 @@ export const AssistantView = memo(function AssistantView({
   pending: TurnHunk[];
   onRetry: () => void;
   onReview: (action: "next" | "accept" | "reject", ids: string[]) => void;
+  /** Word and page counts, on the latest turn's usage line while the chat is open. */
+  documentCounts?: ReactNode;
 }) {
   const streaming = message.status === "streaming";
   const reply = assistantReplyText(message.parts);
@@ -219,14 +222,17 @@ export const AssistantView = memo(function AssistantView({
       )}
       {!streaming && message.usage && (
         <div className="msg-meta">
-          {formatDuration(message.usage.durationMs)} · {formatTokens(message.usage.outputTokens)} tokens
-          {message.usage.costUsd > 0 && (
-            <>
-              {" · "}
-              <span data-tip="Cost of this reply">{message.usage.costUsd < 0.01 ? "<$0.01" : `$${message.usage.costUsd.toFixed(2)}`}</span>
-            </>
-          )}
-          {message.model ? ` · ${modelLabel(message.model)}` : ""}
+          <span className="msg-meta-usage">
+            {formatDuration(message.usage.durationMs)} · {formatTokens(message.usage.outputTokens)} tokens
+            {message.usage.costUsd > 0 && (
+              <>
+                {" · "}
+                <span data-tip="Cost of this reply">{message.usage.costUsd < 0.01 ? "<$0.01" : `$${message.usage.costUsd.toFixed(2)}`}</span>
+              </>
+            )}
+            {message.model ? ` · ${modelLabel(message.model)}` : ""}
+          </span>
+          {documentCounts}
         </div>
       )}
       {!streaming && reply && (
@@ -288,6 +294,7 @@ export function MessageList({
   documentId,
   onRestore,
   onCopyTurn,
+  documentCounts,
 }: {
   messages: ChatMessage[];
   /** Pending changes in the open document; each card acts only on its own turn's. */
@@ -298,11 +305,14 @@ export function MessageList({
   onRestore?: (versionId: string, messageId: string) => void;
   /** When set (developer options), the last message of each turn can copy that turn. */
   onCopyTurn?: (messageId: string) => void;
+  /** Shown on the latest finished reply's usage line. */
+  documentCounts?: ReactNode;
 }) {
   const byTurn = useStableGroups(hunks);
   const copyAt = useMemo(() => (onCopyTurn ? turnCopyTargets(messages) : null), [onCopyTurn, messages]);
   const last = messages[messages.length - 1];
   const latestThinking = last?.role === "assistant" ? last.parts.findLast((part) => part.type === "thinking")?.id : undefined;
+  const countsOn = documentCounts ? latestUsageMessage(messages) : undefined;
   return (
     <>
       {messages.map((message, index) =>
@@ -321,6 +331,7 @@ export function MessageList({
             latestThinking={index === messages.length - 1 ? latestThinking : undefined}
             showCopy={copyAt?.has(message.id)}
             onCopyTurn={onCopyTurn}
+            documentCounts={message.id === countsOn ? documentCounts : undefined}
           />
         ),
       )}
@@ -349,6 +360,15 @@ function useStableGroups(hunks: ReadonlyArray<TurnHunk>) {
     previous.current = next;
     return next;
   }, [hunks]);
+}
+
+/** The newest finished reply that shows a usage line. */
+function latestUsageMessage(messages: readonly ChatMessage[]) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "assistant" && message.status !== "streaming" && message.usage) return message.id;
+  }
+  return undefined;
 }
 
 /** "claude-sonnet-5-5" → "Sonnet 5.5"; unknown ids are shown as they are. */

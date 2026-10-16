@@ -1834,19 +1834,20 @@
   }
 }
 
-/* Word and page counts float in the bottom-left margin, with no bar behind them. */
+/* With the chat closed, the word and page counts float in the bottom-right margin, with no bar behind them. */
 
 .status-corner {
   position: absolute;
   z-index: 4;
-  left: 8px;
+  right: 8px;
   bottom: 6px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   align-content: flex-end;
+  justify-content: flex-end;
   gap: 0 2px;
-  max-width: calc(var(--text-left, 200px) - 16px);
+  max-width: calc(var(--text-inset-right, 200px) - 16px);
   color: var(--muted);
   font-size: 12px;
   pointer-events: none;
@@ -1881,6 +1882,10 @@ button.status-item:hover {
 
 .status-item.is-active {
   color: var(--accent-text);
+}
+
+.status-corner:empty {
+  display: none;
 }
 
 .status-corner .status-item {

@@ -2,7 +2,7 @@
 
 import { Check, CircleDashed, Copy, FolderTree, History, Loader2, MessageSquarePlus, Plus, RefreshCw, Terminal, X } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { shortToolName, type Attachment, type ChatMessage, type DocumentMention, type ChatSettings, type LinkedDocument, type SelectionContext, type Todo } from "@/lib/agent/types";
 import { formatChatHistory, formatPromptTurn, turnForMessage } from "@/lib/agent/devCopy";
 import { ActivityLine, isWaiting } from "@/components/agent/Activity";
@@ -84,8 +84,10 @@ export const AgentPanel = forwardRef<
     home?: { folderId: string | null };
     /** Claude changed folders or documents (home page): time to reload the list. */
     onLibraryChange?: () => void;
+    /** Word and page counts for the open document, shown on the latest turn's usage line. */
+    documentCounts?: ReactNode;
   }
->(function AgentPanel({ documentId, chatKey: chatKeyProp, hunks = NO_HUNKS, onClose, onReview, initialPrompt, home, onLibraryChange }, ref) {
+>(function AgentPanel({ documentId, chatKey: chatKeyProp, hunks = NO_HUNKS, onClose, onReview, initialPrompt, home, onLibraryChange, documentCounts }, ref) {
   const chatKey = chatKeyProp ?? documentId ?? HOME_CHAT_KEY;
   const draftKey = documentId ?? HOME_CHAT_KEY;
   const { status, defaults } = useAgentStatus();
@@ -379,7 +381,7 @@ export const AgentPanel = forwardRef<
           <Onboarding state={status.state} message={"message" in status ? status.message : ""} />
         ) : chat?.messages.length ? (
           <div className="messages">
-            <MessageList messages={chat.messages} hunks={hunks} onRetry={retry} onReview={review} documentId={documentId ?? undefined} onRestore={(versionId, messageId) => setRewinding({ versionId, messageId })} onCopyTurn={devOptions ? copyTurn : undefined} />
+            <MessageList messages={chat.messages} hunks={hunks} onRetry={retry} onReview={review} documentId={documentId ?? undefined} onRestore={(versionId, messageId) => setRewinding({ versionId, messageId })} onCopyTurn={devOptions ? copyTurn : undefined} documentCounts={documentCounts} />
             {chat.running && isWaiting(chat.status, lastAssistant(chat.messages)) && <ActivityLine status={chat.status} message={lastAssistant(chat.messages)} since={lastSent(chat.messages)} />}
           </div>
         ) : chatId && !chat && !ui.error ? (
