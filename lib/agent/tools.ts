@@ -1745,7 +1745,7 @@ export const TOOLS = [
     name: "run_command",
     title: "Run command",
     description:
-      "Run a shell command in this document's folder only. The working directory is that folder, so a file you just wrote (plot.py) is right here, and python3 is on PATH. The command cannot see other documents or the rest of the computer, and it has no network. Python 3's standard library is available; write a script with write_file, run it, and it can save a PNG or SVG in the folder. Then insert_image with file to place that image in the document. The document file and the git history are read-only from here. The result always includes the exit reason, stdout, and stderr: read those when it fails. Default timeout is 30 seconds (max 120).",
+      "Run a shell command with this document's folder as the working directory, in Claude Code's sandbox. A file you just wrote is right here. The result always includes the exit reason, stdout, and stderr: read those when it fails. Default timeout is 30 seconds (max 120).",
     shape: {
       document_id: documentId,
       command: z.string().describe("Shell command, run with bash. The working directory is the document folder."),
