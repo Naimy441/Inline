@@ -161,10 +161,30 @@ test("spelling underlines misspellings as you type, and a word can be added to t
   await expect(underlined).toHaveText("righteois", { timeout: 15_000 });
   await underlined.click({ button: "right" });
   await expect(page.getByText("Shift+right-click for spelling suggestions")).toHaveCount(0);
+  await expect(page.getByText("Definitions and synonyms")).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: /Look up “righteois”/ })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: /Add “righteois” to dictionary/ })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Hide spelling underlines" })).toBeVisible();
+
+  // A word with no red underline offers neither spelling action.
+  await page.keyboard.press("Escape");
+  await doc.locator("p").click({ button: "right", position: { x: 8, y: 8 } });
+  await expect(page.getByRole("menuitem", { name: /Look up “The”/ })).toBeVisible();
+  await expect(page.getByText("Definitions and synonyms")).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: /to dictionary/ })).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: "Hide spelling underlines" })).toHaveCount(0);
+
+  await page.keyboard.press("Escape");
+  await underlined.click({ button: "right" });
   await page.getByRole("menuitem", { name: /Add “righteois” to dictionary/ }).click();
   await expect(doc.locator(".spelling-error")).toHaveCount(0);
   await expect(doc.locator('[spellcheck="false"]')).toHaveText("righteois");
-  await doc.click({ button: "right" });
+
+  await page.keyboard.press("End");
+  await page.keyboard.type(" worng");
+  const again = doc.locator(".spelling-error");
+  await expect(again).toHaveText("worng", { timeout: 15_000 });
+  await again.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Hide spelling underlines" }).click();
   await expect(doc).toHaveAttribute("spellcheck", "false");
   await expect(doc.locator(".spelling-error")).toHaveCount(0);
@@ -192,6 +212,9 @@ test("right-clicking a word opens definitions and synonyms", async ({ page }) =>
   await page.keyboard.type("ephemeral");
   await doc.locator("p").first().click({ button: "right", position: { x: 12, y: 8 } });
   await expect(page.getByText("Shift+right-click for spelling suggestions")).toHaveCount(0);
+  await expect(page.getByText("Definitions and synonyms")).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: /to dictionary/ })).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: "Hide spelling underlines" })).toHaveCount(0);
   await page.getByRole("menuitem", { name: /Look up “ephemeral”/ }).click();
   const card = page.getByRole("dialog", { name: "Dictionary for ephemeral" });
   await expect(card).toContainText("Lasting for a short period of time.");

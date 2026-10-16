@@ -4,7 +4,7 @@ import { EditorState } from "prosemirror-state";
 import type { Decoration, DecorationSet } from "prosemirror-view";
 import { markdownToDoc } from "../doc/markdown";
 import type { SpellChecker } from "../doc/words";
-import { normalizeWord, setDictionary, setSpellcheckEnabled, spellingPlugin, wordAt } from "./spelling";
+import { hasSpellingUnderline, normalizeWord, setDictionary, setSpellcheckEnabled, spellingPlugin, wordAt } from "./spelling";
 
 function decorations(state: EditorState): Decoration[] {
   const plugin = state.plugins.find((item) => (item as unknown as { key: string }).key.startsWith("spelling"))!;
@@ -55,6 +55,12 @@ describe("Hunspell underlines", () => {
       plugins: [spellingPlugin([], { check })],
     });
     assert.deepEqual(underlined(state), ["righteois"]);
+    const typo = wordAt(state, state.doc.textContent.indexOf("righteois") + 1);
+    const real = wordAt(state, 2);
+    assert.equal(typo?.text, "righteois");
+    assert.equal(real?.text, "A");
+    assert.equal(typo ? hasSpellingUnderline(state, typo.from, typo.to) : false, true);
+    assert.equal(real ? hasSpellingUnderline(state, real.from, real.to) : true, false);
     // A new typo is underlined as it's typed. Real words still are not.
     const end = state.doc.content.size - 1;
     state = state.apply(state.tr.insertText(" recieve righteous", end));
