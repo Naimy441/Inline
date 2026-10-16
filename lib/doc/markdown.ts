@@ -3,6 +3,7 @@ type Token = ReturnType<InstanceType<typeof MarkdownIt>["parse"]>[number];
 import markPlugin from "markdown-it-mark";
 import { Fragment, type Mark, type Node as PMNode } from "prosemirror-model";
 import { ALIGNMENTS, MARKDOWN_MARKS, MATH_LANGUAGE, MAX_INDENT, cssSizeToPt, footnoteLabel, safeHref, schema, type Align, type BorderLine, type Borders, type TabStop } from "@/lib/doc/schema";
+import { cropToken, parseCropToken, pictureCrop, pictureRotate, pictureWrap } from "@/lib/doc/picture";
 
 /**
  * Markdown is the agent's view of a document. Each top-level block becomes one
@@ -18,7 +19,7 @@ import { ALIGNMENTS, MARKDOWN_MARKS, MATH_LANGUAGE, MAX_INDENT, cssSizeToPt, foo
  *   Entry. {.bibliography}           a works-cited entry (hanging indent)
  *   &nbsp;                           an intentionally empty paragraph
  *   \pagebreak                       a page break
- *   ![alt](src){width=50%}           image size and alignment
+ *   ![alt](src){width=50% wrap=square crop=10,0,0,0 rotate=90}
  *   $x^2$   $$ … $$                  LaTeX equations, inline and displayed
  *
  * Layout that Markdown can't say can be written too, though it isn't shown
@@ -149,13 +150,40 @@ function attrSuffix(tokens: string[]) {
   return tokens.length ? ` {${tokens.join(" ")}}` : "";
 }
 
+function pictureTokens(node: PMNode) {
+  const tokens: string[] = [];
+  const wrap = pictureWrap(node.attrs.wrap);
+  const crop = pictureCrop(node.attrs.crop);
+  const rotate = pictureRotate(node.attrs.rotate);
+  if (wrap) tokens.push(`wrap=${wrap}`);
+  if (crop) tokens.push(`crop=${cropToken(crop)}`);
+  if (rotate != null) tokens.push(`rotate=${rotate}`);
+  return tokens;
+}
+
 function serializeImage(node: PMNode) {
   const alt = escapeLinkText(node.attrs.alt || "");
   const title = node.attrs.title ? ` "${String(node.attrs.title).replace(/"/g, '\\"')}"` : "";
-  const tokens: string[] = [];
-  if (node.attrs.width) tokens.push(`width=${node.attrs.width}`);
-  if (node.attrs.align && node.attrs.align !== "center") tokens.push(`align=${node.attrs.align}`);
+  const tokens = [...(node.attrs.width ? [`width=${node.attrs.width}`] : []), ...(node.attrs.align && node.attrs.align !== "center" ? [`align=${node.attrs.align}`] : []), ...pictureTokens(node)];
   return `![${alt}](${formatUrl(node.attrs.src || "")}${title})${tokens.length ? `{${tokens.join(" ")}}` : ""}`;
+}
+
+/** A picture in a line of text. Crop and rotation are written as HTML so a fresh parse keeps them. */
+function serializeInlineImage(node: PMNode) {
+  const alt = escapeLinkText(String(node.attrs.alt || ""));
+  const src = formatUrl(String(node.attrs.src || ""));
+  const crop = pictureCrop(node.attrs.crop);
+  const rotate = pictureRotate(node.attrs.rotate);
+  if (!crop && rotate == null) return `![${alt}](${src})`;
+  const attrs = [
+    `src="${src}"`,
+    `alt="${alt.replace(/"/g, "&quot;")}"`,
+    node.attrs.width ? `width="${node.attrs.width}"` : "",
+    node.attrs.height ? `height="${node.attrs.height}"` : "",
+    crop ? `data-crop="${cropToken(crop)}"` : "",
+    rotate != null ? `data-rotate="${rotate}"` : "",
+  ].filter(Boolean);
+  return `<img ${attrs.join(" ")}>`;
 }
 
 function serializeList(node: PMNode, context: BlockContext): string {
@@ -333,7 +361,7 @@ export function serializeInline(node: PMNode, options: InlineOptions): string {
     if (child.isText) pieces.push({ kind: "text", text: child.text ?? "", marks });
     else if (child.type.name === "hard_break") pieces.push({ kind: "break", marks });
     // A picture in a line of text (an icon) is written where it sits; its size and fade come back from the old one when Claude edits.
-    else if (child.type.name === "inline_image") pieces.push({ kind: "image", markdown: `![${escapeLinkText(String(child.attrs.alt || ""))}](${formatUrl(String(child.attrs.src || ""))})`, marks });
+    else if (child.type.name === "inline_image") pieces.push({ kind: "image", markdown: serializeInlineImage(child), marks });
     else if (child.type.name === "footnote_ref") {
       const label = footnoteLabel(child.attrs.label);
       if (label) pieces.push({ kind: "footnote", markdown: `[^${label}]`, marks });
@@ -826,6 +854,9 @@ class BlockBuilder {
         title: image.attrGet("title") ?? "",
         width: spec.values.width ?? null,
         align: align && ALIGNMENTS.includes(align) ? align : "center",
+        wrap: pictureWrap(spec.values.wrap),
+        crop: parseCropToken(spec.values.crop),
+        rotate: pictureRotate(spec.values.rotate),
       });
     }
     const text = children.map((token) => (token.type === "text" ? token.content : "")).join("").trim();
@@ -1153,7 +1184,18 @@ function inlineImage(tag: string, marks: Mark[]): PMNode | null {
     const n = value ? Number(value.replace(/px$/, "")) : NaN;
     return Number.isFinite(n) && n > 0 && n < 5000 ? Math.round(n * 100) / 100 : null;
   };
-  return schema.nodes.inline_image!.create({ src, alt: htmlAttr(tag, "alt") ?? "", width: size("width"), height: size("height") }, null, marks.filter((mark) => mark.type.name === "link"));
+  return schema.nodes.inline_image!.create(
+    {
+      src,
+      alt: htmlAttr(tag, "alt") ?? "",
+      width: size("width"),
+      height: size("height"),
+      crop: parseCropToken(htmlAttr(tag, "data-crop")),
+      rotate: pictureRotate(htmlAttr(tag, "data-rotate")),
+    },
+    null,
+    marks.filter((mark) => mark.type.name === "link"),
+  );
 }
 
 /**

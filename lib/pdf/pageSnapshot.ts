@@ -348,8 +348,12 @@ export function snapshotPages(
 
     if (el.tagName === "IMG") {
       const img = el as HTMLImageElement;
-      const box = measure.box(img);
-      const layout = measure.layoutSize(img);
+      // A crop clips the source to a smaller window. Draw that window, not the shifted source.
+      const clip = img.parentElement;
+      const clipped = !!clip?.classList.contains("image-crop") && measure.style(clip).getPropertyValue("overflow") === "hidden";
+      const target = clipped && clip ? clip : img;
+      const box = measure.box(target);
+      const layout = measure.layoutSize(target);
       const data = box.width && box.height ? measure.image(img, layout.width, layout.height) : null;
       if (data) {
         const at = place(box);
@@ -580,7 +584,15 @@ export function domMeasurer(rasters?: ReadonlyMap<Element, Raster>, font?: PageM
         // A faded picture (its opacity) is faded onto the white page.
         const opacity = Number.parseFloat(window.getComputedStyle(img).opacity);
         if (Number.isFinite(opacity) && opacity < 1) ctx.globalAlpha = Math.max(0, opacity);
-        ctx.drawImage(img, 0, 0, w, h);
+        const crop = (img.dataset.crop ?? "").split(",").map(Number);
+        if (crop.length === 4 && crop.every((side) => Number.isFinite(side)) && img.naturalWidth && img.naturalHeight) {
+          const [l, t, r, b] = crop.map((side) => side / 100);
+          const sx = l * img.naturalWidth;
+          const sy = t * img.naturalHeight;
+          const sw = Math.max(1, (1 - l - r) * img.naturalWidth);
+          const sh = Math.max(1, (1 - t - b) * img.naturalHeight);
+          ctx.drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
+        } else ctx.drawImage(img, 0, 0, w, h);
         const url = target.toDataURL("image/jpeg", 0.9);
         const binary = atob(url.slice(url.indexOf(",") + 1));
         const jpeg = new Uint8Array(binary.length);

@@ -1,5 +1,6 @@
 import type { Mark, Node as PMNode } from "prosemirror-model";
 import { cssSizeToPt, defaultListNumbering, MATH_LANGUAGE, schema, type BorderLine, type Borders, type CellBorders, type ListMarker, type ListNumbering, type TableBorders, type TableLine, type TabStop } from "@/lib/doc/schema";
+import { cropToSrcRect, pictureCrop, pictureRotate, pictureWrap, rotateToWord, type PictureCrop, type PictureWrap } from "@/lib/doc/picture";
 import { latexToOmml, OMML_NAMESPACE } from "@/lib/doc/omml";
 import { DEFAULT_TAB_STOP, pageSize, type DocComment, type DocumentMeta } from "@/lib/doc/settings";
 import { activeTheme, themeXml, wordStylesXml } from "@/lib/doc/styles";
@@ -200,7 +201,42 @@ async function pictureEntry(src: string, ctx: Context) {
   return entry;
 }
 
-/** A picture set in a line of text: its size, its fade (transparency) and the space kept around it. */
+/** The displayed size in EMUs. A crop's window is `width`; the hidden edges stay in the source rectangle. */
+function fittedExtent(entry: { width: number; height: number }, node: PMNode, contentWidth: number) {
+  const crop = pictureCrop(node.attrs.crop);
+  const visW = crop ? 1 - crop.l - crop.r : 1;
+  const visH = crop ? 1 - crop.t - crop.b : 1;
+  let width = entry.width * visW;
+  const requested = String(node.attrs.width ?? "");
+  if (requested.endsWith("%")) width = (contentWidth * Number.parseFloat(requested)) / 100;
+  else if (requested) {
+    const parsed = Number.parseFloat(requested);
+    if (Number.isFinite(parsed) && parsed > 0) width = parsed;
+  }
+  width = Math.min(Math.max(1, width), contentWidth);
+  const height = (width * entry.height * visH) / (entry.width * visW);
+  return { cx: Math.round(width * EMU_PER_PX), cy: Math.round(Math.max(1, height) * EMU_PER_PX) };
+}
+
+/** Inline when the picture sits in the line or on its own; an anchor when text wraps around it or runs across it. */
+function pictureDrawing(options: { id: number; rel: string; cx: number; cy: number; alt: string; alpha: string; crop: PictureCrop | null; rotate: number | null; floating: PictureWrap | null; align: string; dist: [number, number, number, number] }) {
+  const rect = options.crop ? cropToSrcRect(options.crop) : null;
+  const srcRect = rect ? `<a:srcRect l="${rect.l}" t="${rect.t}" r="${rect.r}" b="${rect.b}"/>` : "";
+  const rot = options.rotate != null ? ` rot="${rotateToWord(options.rotate)}"` : "";
+  const graphic = `<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="${options.id}" name="Picture ${options.id}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${options.rel}">${options.alpha}</a:blip>${srcRect}<a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm${rot}><a:off x="0" y="0"/><a:ext cx="${options.cx}" cy="${options.cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic>`;
+  const descr = xml(options.alt);
+  if (!options.floating) {
+    const [top, right, bottom, left] = options.dist;
+    return `<wp:inline distT="${top}" distB="${bottom}" distL="${left}" distR="${right}"><wp:extent cx="${options.cx}" cy="${options.cy}"/><wp:docPr id="${options.id}" name="Picture ${options.id}" descr="${descr}"/>${graphic}</wp:inline>`;
+  }
+  const behind = options.floating === "behind" ? "1" : "0";
+  const wrap = options.floating === "square" ? `<wp:wrapSquare wrapText="bothSides"/>` : `<wp:wrapNone/>`;
+  const align = options.align === "right" ? "right" : options.align === "center" ? "center" : "left";
+  const gap = options.floating === "square" ? Math.round(12 * EMU_PER_PX) : 0;
+  return `<wp:anchor distT="0" distB="0" distL="${gap}" distR="${gap}" simplePos="0" relativeHeight="251658240" behindDoc="${behind}" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:align>${align}</wp:align></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="${options.cx}" cy="${options.cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/>${wrap}<wp:docPr id="${options.id}" name="Picture ${options.id}" descr="${descr}"/>${graphic}</wp:anchor>`;
+}
+
+/** A picture set in a line of text: its size, its fade (transparency), its crop and the space kept around it. */
 async function inlineImageRun(node: PMNode, ctx: Context, size: number | null) {
   const entry = await pictureEntry(String(node.attrs.src || ""), ctx);
   if (!entry) return "";
@@ -208,10 +244,11 @@ async function inlineImageRun(node: PMNode, ctx: Context, size: number | null) {
   const height = Number(node.attrs.height) || (entry.height / entry.width) * width;
   const cx = Math.round(width * EMU_PER_PX);
   const cy = Math.round(height * EMU_PER_PX);
-  const [top, right, bottom, left] = ((node.attrs.dist as number[] | null) ?? [0, 0, 0, 0]).map((px) => Math.round(px * EMU_PER_PX));
+  const dist = ((node.attrs.dist as number[] | null) ?? [0, 0, 0, 0]).map((px) => Math.round(px * EMU_PER_PX)) as [number, number, number, number];
   const alpha = node.attrs.opacity != null ? `<a:alphaModFix amt="${Math.round(Number(node.attrs.opacity) * 100000)}"/>` : "";
   const id = ctx.nextDrawingId++;
-  return `<w:r>${runProps([], "", size)}<w:drawing><wp:inline distT="${top}" distB="${bottom}" distL="${left}" distR="${right}"><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${id}" name="Picture ${id}" descr="${xml(String(node.attrs.alt || ""))}"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="${id}" name="Picture ${id}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${entry.rel}">${alpha}</a:blip><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
+  const drawing = pictureDrawing({ id, rel: entry.rel, cx, cy, alt: String(node.attrs.alt || ""), alpha, crop: pictureCrop(node.attrs.crop), rotate: pictureRotate(node.attrs.rotate), floating: null, align: "left", dist });
+  return `<w:r>${runProps([], "", size)}<w:drawing>${drawing}</w:drawing></w:r>`;
 }
 
 const TABLE_LINE_KIND: Record<TableLine["style"], string> = { solid: "single", double: "double", dotted: "dotted", dashed: "dashed", nil: "nil" };
@@ -318,17 +355,23 @@ async function imageParagraph(node: PMNode, ctx: Context) {
   const src = String(node.attrs.src || "");
   const entry = await pictureEntry(src, ctx);
   if (!entry) return `<w:p><w:r><w:t xml:space="preserve">${xml(`[Image: ${node.attrs.alt || src}]`)}</w:t></w:r></w:p>`;
-  let width = entry.width;
-  const requested = String(node.attrs.width ?? "");
-  if (requested.endsWith("%")) width = (ctx.contentWidthPx * Number.parseFloat(requested)) / 100;
-  else if (requested.endsWith("px")) width = Number.parseFloat(requested);
-  width = Math.min(width, ctx.contentWidthPx);
-  const height = (entry.height / entry.width) * width;
-  const cx = Math.round(width * EMU_PER_PX);
-  const cy = Math.round(height * EMU_PER_PX);
+  const { cx, cy } = fittedExtent(entry, node, ctx.contentWidthPx);
   const id = ctx.nextDrawingId++;
   const align = node.attrs.align === "left" ? "left" : node.attrs.align === "right" ? "right" : "center";
-  return `<w:p><w:pPr><w:jc w:val="${align}"/></w:pPr><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${id}" name="Picture ${id}" descr="${xml(String(node.attrs.alt || ""))}"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="${id}" name="Picture ${id}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${entry.rel}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
+  const drawing = pictureDrawing({
+    id,
+    rel: entry.rel,
+    cx,
+    cy,
+    alt: String(node.attrs.alt || ""),
+    alpha: "",
+    crop: pictureCrop(node.attrs.crop),
+    rotate: pictureRotate(node.attrs.rotate),
+    floating: pictureWrap(node.attrs.wrap),
+    align,
+    dist: [0, 0, 0, 0],
+  });
+  return `<w:p><w:pPr><w:jc w:val="${align}"/></w:pPr><w:r><w:drawing>${drawing}</w:drawing></w:r></w:p>`;
 }
 
 /**

@@ -5,6 +5,7 @@ import { describe, it } from "node:test";
 import { documentToDocx } from "./docx";
 import { docxTitle, docxToDoc, DocxImportError, readDocx } from "./docxImport";
 import { docToMarkdown, markdownToDoc } from "./markdown";
+import { schema } from "./schema";
 import { DEFAULT_SETTINGS, type DocumentMeta } from "./settings";
 import { readZip, ZipError } from "@/lib/server/unzip";
 
@@ -260,6 +261,57 @@ describe("reading Word documents", () => {
     assert.equal(sized.settings.fontSize, 11);
     // Only Google writes its tabs this way; a Word document's sections are one document.
     assert.equal((await readDocx(wordDocument([p("One"), sectionEnd("Two"), p("Three")].join("")))).tabs.length, 1);
+  });
+
+  it("round-trips wrap, crop and rotation, and keeps a picture in the line", async () => {
+    const png = new Uint8Array(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAADCAYAAAC56t6BAAAAEUlEQVR42mNk+M9QzwAEjDAGAKw3BP5PFSRuAAAAAElFTkSuQmCC", "base64"));
+    const doc = schema.nodes.doc.create(null, [
+      schema.nodes.image.create({ src: "/a.png", alt: "Cat", width: "200px", align: "left", wrap: "square", crop: { l: 0.25, t: 0, r: 0, b: 0 }, rotate: 90 }),
+      schema.nodes.paragraph.create(null, [schema.text("Before "), schema.nodes.inline_image.create({ src: "/a.png", alt: "Icon", width: 40, height: 20, crop: { l: 0, t: 0.5, r: 0, b: 0 }, rotate: 15 }), schema.text(" after")]),
+      schema.nodes.image.create({ src: "/a.png", alt: "Under", width: "160px", align: "left", wrap: "behind" }),
+      schema.nodes.image.create({ src: "/a.png", alt: "Over", width: "160px", align: "left", wrap: "front", rotate: -30 }),
+    ]);
+    const docx = await documentToDocx(doc, meta, async () => ({ data: png, mime: "image/png" }));
+    const xml = Buffer.from(docx).toString("latin1");
+    assert.match(xml, /wrapSquare/);
+    assert.match(xml, /behindDoc="1"/);
+    assert.match(xml, /behindDoc="0"/);
+    assert.match(xml, /a:srcRect l="25000"/);
+    assert.match(xml, /rot="5400000"/);
+    const back = await docxToDoc(readZip(docx), { saveImage: async () => "/api/uploads/a.png" });
+    const square = back.child(0);
+    assert.equal(square.type.name, "image");
+    assert.equal(square.attrs.alt, "Cat");
+    assert.equal(square.attrs.wrap, "square");
+    assert.equal(square.attrs.width, "200px");
+    assert.deepEqual(square.attrs.crop, { l: 0.25, t: 0, r: 0, b: 0 });
+    assert.equal(square.attrs.rotate, 90);
+    const icon = back.child(1).child(1);
+    assert.equal(icon.type.name, "inline_image");
+    assert.equal(icon.attrs.alt, "Icon");
+    assert.equal(icon.attrs.width, 40);
+    assert.deepEqual(icon.attrs.crop, { l: 0, t: 0.5, r: 0, b: 0 });
+    assert.equal(icon.attrs.rotate, 15);
+    assert.equal(back.child(2).attrs.wrap, "behind");
+    assert.equal(back.child(2).attrs.alt, "Under");
+    assert.equal(back.child(3).attrs.wrap, "front");
+    assert.equal(back.child(3).attrs.rotate, -30);
+  });
+
+  it("places a square-wrapped picture before the words it sits beside", async () => {
+    const drawing = `<w:p><w:r><w:drawing><wp:anchor behindDoc="0" xmlns:wp="wp"><wp:positionH relativeFrom="column"><wp:align>left</wp:align></wp:positionH><wp:extent cx="1905000" cy="952500"/><wp:docPr id="1" descr="Cat"/><wp:wrapSquare wrapText="bothSides"/><a:graphic xmlns:a="a"><a:graphicData><pic:pic xmlns:pic="pic"><pic:blipFill><a:blip r:embed="rId5"/><a:srcRect l="10000" t="0" r="0" b="0"/></pic:blipFill><pic:spPr><a:xfrm rot="5400000"><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></a:xfrm></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r><w:r><w:t>Beside</w:t></w:r></w:p>`;
+    const doc = await docxToDoc(
+      wordDocument(drawing, {
+        "word/_rels/document.xml.rels": `<Relationships xmlns="x"><Relationship Id="rId5" Type="image" Target="media/image1.png"/></Relationships>`,
+        "word/media/image1.png": "PNGDATA",
+      }),
+      { saveImage: async () => "/api/uploads/abc.png" },
+    );
+    assert.equal(doc.child(0).type.name, "image");
+    assert.equal(doc.child(0).attrs.wrap, "square");
+    assert.equal(doc.child(0).attrs.rotate, 90);
+    assert.deepEqual(doc.child(0).attrs.crop, { l: 0.1, t: 0, r: 0, b: 0 });
+    assert.equal(doc.child(1).textContent, "Beside");
   });
 
   it("rejects files that aren't Word documents", async () => {

@@ -112,6 +112,12 @@ td p, th p { margin: 0; }
 figure.doc-image { margin: 0 0 ${settings.paragraphSpacing}pt; }
 figure.doc-image img { max-width: 100%; }
 figure.align-center { text-align: center; } figure.align-right { text-align: right; }
+figure.doc-image.wrap-square { float: left; margin: 0 12px 8px 0; }
+figure.doc-image.wrap-square.align-right { float: right; margin: 0 0 8px 12px; }
+figure.doc-image.wrap-behind, figure.doc-image.wrap-front { position: relative; height: 0; margin: 0; overflow: visible; }
+figure.doc-image.wrap-behind img { position: absolute; z-index: 0; }
+figure.doc-image.wrap-front img { position: absolute; z-index: 2; }
+span.doc-inline-image { display: inline-block; overflow: hidden; vertical-align: baseline; line-height: 0; }
 li.task-item { list-style: none; }
 li.task-item[data-checked="true"]::before { content: "☑ "; } li.task-item[data-checked="false"]::before { content: "☐ "; }
 .page-break { break-after: page; }
