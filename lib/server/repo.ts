@@ -48,7 +48,7 @@ export type VersionSummary = {
   files: string[];
 };
 
-export type SavedVersion = VersionSummary & { doc: unknown; hunks?: HunkJSON[]; canvas?: StoredDocumentFile["canvas"] };
+export type SavedVersion = VersionSummary & { doc: unknown; hunks?: HunkJSON[] };
 
 export type WorkspaceFile = { path: string; size: number; kind: "image" | "text" | "other" };
 
@@ -264,7 +264,6 @@ export async function readDocumentVersion(documentId: string, versionId: string)
       ...summaryOf(documentId, versionId, parsed.label, parsed.author, parsed.title || file.meta?.title || "", parsed.wordCount || file.meta?.wordCount || 0, pending, Number(seconds) * 1000, await filesAt(documentId, versionId)),
       doc: file.doc,
       ...(file.hunks?.length ? { hunks: file.hunks } : {}),
-      ...(file.canvas ? { canvas: file.canvas } : {}),
     };
   });
 }
@@ -311,7 +310,6 @@ export async function restoreDocumentVersion(documentId: string, versionId: stri
       ...summaryOf(documentId, sha, parsed.label, parsed.author, parsed.title || file.meta.title, file.meta.wordCount ?? parsed.wordCount, pending, Number(seconds) * 1000, await filesAt(documentId, sha)),
       doc: file.doc,
       ...(file.hunks?.length ? { hunks: file.hunks } : {}),
-      ...(file.canvas ? { canvas: file.canvas } : {}),
     };
   });
 }

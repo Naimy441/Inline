@@ -232,10 +232,9 @@ export function HomePage() {
     try {
       const { document } = await post<{ document: Snapshot }>("/api/documents", {
         title: template.documentTitle,
-        markdown: template.kind === "canvas" ? undefined : template.markdown,
+        markdown: template.markdown,
         settings: template.settings,
         folderId: targetFolder,
-        kind: template.kind,
       });
       const suffix = template.suggestion ? `?ask=${encodeURIComponent(template.suggestion)}` : "";
       router.push(`/d/${document.meta.id}${suffix}`);
@@ -1032,13 +1031,6 @@ export function HomePage() {
 
 function TemplateThumb({ template }: { template: DocumentTemplate }) {
   const [failed, setFailed] = useState(false);
-  if (template.kind === "canvas") {
-    return (
-      <span className="template-thumb is-blank">
-        <LayoutGrid size={26} strokeWidth={1.5} />
-      </span>
-    );
-  }
   if (!template.markdown) {
     return (
       <span className="template-thumb is-blank">
