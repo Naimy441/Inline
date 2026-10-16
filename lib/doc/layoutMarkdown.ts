@@ -52,6 +52,7 @@ function blockTokens(node: PMNode): string[] {
   if (Number(indent)) tokens.push(`left=${Math.round(Number(indent) * 36 * 10) / 10}`);
   if (Number(textIndent) > 0) tokens.push(`first-line=${round(Number(textIndent))}`);
   if (Number(textIndent) < 0) tokens.push(`hanging=${round(-Number(textIndent))}`);
+  if (Number(node.attrs.rightIndent) > 0) tokens.push(`right=${round(Number(node.attrs.rightIndent))}`);
   if (dir === "rtl") tokens.push("dir=rtl");
   if (fontSize != null) tokens.push(`size=${fontSize}`);
   if (lineHeight != null) tokens.push(`line=${lineHeight}`);

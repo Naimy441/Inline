@@ -788,6 +788,8 @@ export function Workspace({ documentId }: { documentId: string }) {
     setMode: (mode) => void session.setMode(mode),
     showInvisibles: prefs.showInvisibles,
     toggleInvisibles: () => session.setShowInvisibles(!prefs.showInvisibles),
+    showRuler: prefs.showRuler,
+    toggleRuler: () => setPreference("showRuler", !prefs.showRuler),
     spellcheck: prefs.spellcheck,
     toggleSpellcheck: () => session.setSpellcheck(!prefs.spellcheck),
     substitutions: prefs.substitutions,
@@ -1044,7 +1046,7 @@ export function Workspace({ documentId }: { documentId: string }) {
           {versionShown && shownPanel === "history" && <VersionPreview key={versionShown.id} session={session} version={versionShown} onClose={() => setVersionShown(null)} />}
           {draftPreview && ui.draft && !versionShown && <DraftPreview session={session} />}
           <div className="page-stack-slot">
-            <PageCanvas session={session} meta={meta} pages={ui.pages} zoom={effectiveZoom} printing={ui.printing} flow={false} zoomCommit={zoomCommit} />
+            <PageCanvas session={session} meta={meta} pages={ui.pages} zoom={effectiveZoom} printing={ui.printing} flow={false} zoomCommit={zoomCommit} showRuler={prefs.showRuler} />
           </div>
           {!shownPanel && (
             <WithEditorState session={session}>

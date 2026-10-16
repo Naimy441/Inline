@@ -93,7 +93,7 @@ If a tool says the editor hasn't laid the page out yet, it is busy (or reloading
 
 ### Layout attributes
 Block attributes go in braces at the end of a paragraph or heading, combined freely:
-- size=12 (text size, pt) · before=6 after=6 (space above/below, pt) · line=1.2 (line height, × size) · left=18 (indent, pt) · align=center|right|justify · first-line=0.5 / hanging=0.5 (inches)
+- size=12 (text size, pt) · before=6 after=6 (space above/below, pt) · line=1.2 (line height, × size) · left=18 (indent, pt) · align=center|right|justify · first-line=0.5 / hanging=0.5 / right=0.5 (inches)
 - .box, or border=bottom / border="top bottom" / border="left right bottom", with border-width=0.5 border-space=3 (pt; border-space-top= and the other sides for one side's own) border-color=#000000 border-style=solid|double|dotted|dashed
 - tabs="234:center 470:right:dot" (tab stops in pt from the left margin: left|center|right|decimal, leader dot|hyphen|underscore|middleDot); a tab in text is &#9;
 - color=#c00000 · font="Courier New" · highlight=#fff2a8 (the whole paragraph's text)

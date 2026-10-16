@@ -111,6 +111,8 @@ const blockAttrs = {
   spaceAfter: { default: null as number | null },
   /** First-line indent in inches; negative is a hanging indent (works cited, bibliographies). */
   textIndent: { default: null as number | null },
+  /** Right indent in inches: how far the lines stop short of the right margin. */
+  rightIndent: { default: 0 },
   /** A works-cited entry. The hanging indent is `textIndent` (half an inch when the entry doesn't say otherwise). */
   bibliography: { default: false },
   /** When set, this paragraph is the text of the footnote with this label. The marker in the text is a `footnote_ref`. */
@@ -219,9 +221,12 @@ function blockStyle(node: PMNode, extra = ""): string {
   const start = borders?.[side] ? borderCss(borders[side]!) : null;
   const finish = borders?.[end] ? borderCss(borders[end]!) : null;
   const margin = (Number(indent) || 0) * 0.5;
+  const endIndent = Number(node.attrs.rightIndent) || 0;
   if (start) parts.push(`margin-${side}: calc(${margin}in - ${start.width + start.space}px)`);
   else if (margin) parts.push(`margin-${side}: ${margin}in`);
-  if (finish) parts.push(`margin-${end}: -${finish.width + finish.space}px`);
+  // A side border sits outside the text on the end too; the right indent is the paragraph's own end margin.
+  if (finish) parts.push(`margin-${end}: calc(${endIndent}in - ${finish.width + finish.space}px)`);
+  else if (endIndent) parts.push(`margin-${end}: ${endIndent}in`);
   if (textIndent) parts.push(`text-indent: ${textIndent}in`);
   const padStart = (textIndent < 0 ? -textIndent : 0) * 96 + (start?.space ?? 0);
   if (padStart) parts.push(`padding-${side}: ${textIndent < 0 && !start ? `${-textIndent}in` : `${padStart}px`}`);
@@ -290,6 +295,7 @@ function blockDomAttrs(node: PMNode, extra: Record<string, string> = {}) {
   if (node.attrs.borders) attrs["data-borders"] = JSON.stringify(node.attrs.borders);
   if (node.attrs.lineBreaks) attrs["data-line-breaks"] = String(node.attrs.lineBreaks);
   if (node.attrs.indent && !Number.isInteger(Number(node.attrs.indent))) attrs["data-indent"] = String(node.attrs.indent);
+  if (Number(node.attrs.rightIndent) > 0) attrs["data-right-indent"] = String(node.attrs.rightIndent);
   const style = blockStyle(node);
   if (style) attrs.style = style;
   return attrs;
@@ -309,6 +315,15 @@ function jsonAttr<T>(dom: HTMLElement, name: string, valid: (value: unknown) => 
 const isTabs = (value: unknown) => Array.isArray(value) && value.every((tab) => tab && typeof tab === "object" && Number.isFinite((tab as TabStop).pos));
 const isBorders = (value: unknown) =>
   Boolean(value) && typeof value === "object" && Object.values(value as object).every((line) => line && typeof line === "object" && Number.isFinite((line as BorderLine).width));
+
+/** A right indent in inches (0 for none), from `data-right-indent` or `margin-right: 0.5in`. */
+function parseRightIndent(exact: string | null, margin: string): number {
+  const fromAttr = Number(exact);
+  const match = margin.trim().match(/^([\d.]+)in$/);
+  const raw = fromAttr > 0 ? fromAttr : match ? Number(match[1]) : 0;
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return Math.round(Math.min(8, raw) * 100) / 100;
+}
 
 /** "0.5in", "36pt" or "48px" in inches, rounded to a hundredth; null for none. */
 export function parseTextIndent(value: string): number | null {
@@ -334,6 +349,7 @@ function parseBlockAttrs(dom: HTMLElement) {
   // A right-to-left block's "right" is its start; its far edge, the left, is "right".
   if (rtl && (align === "left" || align === "right")) align = align === "left" ? "right" : "left";
   const marginLeft = (rtl ? style?.marginRight : style?.marginLeft) || "";
+  const marginEnd = (rtl ? style?.marginLeft : style?.marginRight) || "";
   let indent = 0;
   const inches = marginLeft.match(/^([\d.]+)in$/);
   const px = marginLeft.match(/^([\d.]+)px$/);
@@ -350,6 +366,7 @@ function parseBlockAttrs(dom: HTMLElement) {
     spaceBefore: parseSpace(style?.marginTop),
     spaceAfter: parseSpace(style?.marginBottom),
     textIndent: parseTextIndent(style?.textIndent || ""),
+    rightIndent: parseRightIndent(dom.getAttribute("data-right-indent"), marginEnd),
     dir: rtl ? ("rtl" as const) : null,
     fontSize: fontSize > 0 && fontSize <= 400 ? fontSize : null,
     tabs: jsonAttr<TabStop[]>(dom, "data-tabs", isTabs),

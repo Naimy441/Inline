@@ -6,6 +6,7 @@ import { lineFactor, lineMetrics } from "@/lib/doc/fontMetrics";
 import { DEFAULT_MATH_SIZE, DEFAULT_TAB_STOP, fillHeaderTokens, headerParts, type DocumentMeta } from "@/lib/doc/settings";
 import { styleSheetCss } from "@/lib/doc/styles";
 import { PdfAnnotations } from "@/components/workspace/PdfAnnotations";
+import { Ruler } from "@/components/workspace/Ruler";
 
 /**
  * The page stack: paper sheets with headers, footers and page numbers drawn
@@ -20,6 +21,7 @@ export const PageCanvas = memo(function PageCanvas({
   printing,
   flow,
   zoomCommit,
+  showRuler,
 }: {
   session: DocumentSession;
   meta: DocumentMeta | null;
@@ -28,6 +30,8 @@ export const PageCanvas = memo(function PageCanvas({
   printing: boolean;
   /** Reflow the text to the screen (phones): no sheets, margins or page breaks. */
   flow: boolean;
+  /** View → Show ruler. Hidden while printing or when the text isn't on pages. */
+  showRuler?: boolean;
   /** Called after the scaled frame is committed, before later layout effects read positions. */
   zoomCommit?: RefObject<(() => void) | null>;
 }) {
@@ -64,6 +68,7 @@ export const PageCanvas = memo(function PageCanvas({
   // Zoom scales the laid-out pages rather than laying them out again (CSS zoom would): text
   // shaped at another size wraps differently, so the page count would change with the window.
   const scale = printing || flow ? 1 : zoom;
+  const ruler = Boolean(showRuler) && !printing && !flow;
 
   // Runs before sibling layout effects (comments) so a zoom scroll lands first.
   useLayoutEffect(() => {
@@ -72,8 +77,12 @@ export const PageCanvas = memo(function PageCanvas({
 
   // The tree stays the same in both layouts so the editor's DOM is never remounted.
   return (
-    <div className={`page-stack-wrap${flow ? " is-flow" : ""}`}>
-      <div className="page-stack-frame" style={flow ? undefined : { width: geometry.pageWidth * scale, height: totalHeight * scale }}>
+    <div className={`page-stack-wrap${flow ? " is-flow" : ""}${ruler ? " has-ruler" : ""}`}>
+      <div className="page-column" style={flow ? undefined : { width: geometry.pageWidth * scale }}>
+      {ruler && (
+        <Ruler session={session} zoom={scale} pageWidth={geometry.pageWidth} marginLeft={geometry.marginLeft} marginRight={geometry.marginRight} tabStop={settings?.tabStop ?? DEFAULT_TAB_STOP} />
+      )}
+      <div className="page-stack-frame" style={flow ? undefined : { width: "100%", height: totalHeight * scale }}>
         <div
           className="page-stack"
           style={{
@@ -104,6 +113,7 @@ export const PageCanvas = memo(function PageCanvas({
           </div>
           {!flow && meta?.pdfImport?.showAnnotations && <PdfAnnotations session={session} documentId={meta.id} pageWidth={geometry.pageWidth} pageHeight={geometry.pageHeight} pitch={pitch} pages={pages} />}
         </div>
+      </div>
       </div>
     </div>
   );

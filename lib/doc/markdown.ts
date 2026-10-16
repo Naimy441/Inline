@@ -14,6 +14,7 @@ import { tocMarkdown, tocMarkdownMatch, withSyncedTocs } from "@/lib/doc/toc";
  *
  *   # Annual report {.title}        title / subtitle styles, alignment, indent,
  *   Text {first-line=0.5}            first-line (or hanging=0.5) indent in inches
+ *   Text {right=0.5}                 right indent in inches
  *   ==highlight==  <u>underline</u>  <sup>sup</sup>  <sub>sub</sub>
  *   <cite>(Author, Year)</cite>      an inline citation (the text is the citation)
  *   [^1]  and  [^1]: The note.       a footnote marker and its note
@@ -146,6 +147,8 @@ function blockAttrTokens(node: PMNode, context: BlockContext): string[] {
   if (textIndent > 0) tokens.push(`first-line=${textIndent}`);
   // A bibliography entry's usual half-inch hang is implied by {.bibliography}.
   if (textIndent < 0 && !(node.attrs.bibliography && textIndent === -0.5)) tokens.push(`hanging=${-textIndent}`);
+  const rightIndent = Number(node.attrs.rightIndent) || 0;
+  if (rightIndent > 0) tokens.push(`right=${rightIndent}`);
   if (node.attrs.dir === "rtl") tokens.push("dir=rtl");
   return tokens;
 }
@@ -1064,6 +1067,7 @@ function hexColor(value: string | undefined) {
  *   before=12 after=6  space above and below, in points
  *   line=1.2           line height, a multiple of the size
  *   left=36            left indent in points
+ *   right=0.5          right indent in inches
  *   .box               a box around it (neighbours with the same box share it), or
  *   border=bottom      some sides: border="top bottom", with border-width=0.5 (pt),
  *                      border-color=#000, border-space=3 (pt from the text) and
@@ -1083,6 +1087,8 @@ export function layoutAttrs(spec: { classes: string[]; values: Record<string, st
   if (line !== null) attrs.lineHeight = String(Math.round(line * 1000) / 1000);
   const left = numberIn(values.left, 0, 576);
   if (left !== null) attrs.indent = Math.min(MAX_INDENT, Math.round((left / 36) * 1000) / 1000);
+  const right = numberIn(values.right, 0, 8);
+  if (right !== null) attrs.rightIndent = right > 0 ? Math.round(right * 100) / 100 : 0;
   const all = spec.classes.includes("box") || values.border === "box" || values.border === "all";
   const sides = all ? ["top", "bottom", "left", "right"] : (values.border ?? "").split(/[\s,]+/).filter((side) => ["top", "bottom", "left", "right"].includes(side));
   if (sides.length) {

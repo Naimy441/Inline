@@ -39,6 +39,7 @@ describe("Markdown dialect round trip", () => {
     ["page breaks", `Before\n\n${PAGE_BREAK}\n\nAfter`],
     ["title and subtitle", "# Report {.title}\n\nA short summary {.subtitle}"],
     ["paragraph alignment and indent", "Centered {align=center}\n\nIndented {indent=2}"],
+    ["right indent", "Narrower on the right. {right=0.5}"],
     ["line breaks inside a paragraph", "Line one<br>Line two"],
     ["empty paragraphs", `First\n\n${EMPTY_PARAGRAPH}\n\nSecond`],
     ["tables", "| Name | Score |\n| --- | --- |\n| Ada | 10 |"],

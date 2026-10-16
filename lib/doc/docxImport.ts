@@ -136,6 +136,8 @@ type ParaProps = {
   align?: Align;
   /** Twips. */
   left?: number;
+  /** Twips, the paragraph's right indent. */
+  right?: number;
   firstLine?: number;
   hanging?: number;
   before?: number;
@@ -212,6 +214,8 @@ function readParaProps(pPr: XmlElement | undefined): ParaProps {
   const ind = child(pPr, "w:ind");
   const left = numAttr(ind, "w:left") ?? numAttr(ind, "w:start");
   if (left !== undefined) props.left = left;
+  const right = numAttr(ind, "w:right") ?? numAttr(ind, "w:end");
+  if (right !== undefined) props.right = right;
   const firstLine = numAttr(ind, "w:firstLine");
   const hanging = numAttr(ind, "w:hanging");
   if (firstLine !== undefined || hanging !== undefined) {
@@ -1005,6 +1009,9 @@ function blockLayout(ctx: Context, para: ParaProps, kind: BlockKind, level: numb
     const textIndent = hanging ? -hanging / 1440 : firstLine / 1440;
     const rounded = Math.round(Math.max(-3, Math.min(3, textIndent)) * 100) / 100;
     if (Math.abs(rounded) >= (exact ? 0.005 : 0.05)) attrs.textIndent = rounded;
+    const rightInches = (para.right ?? 0) / 1440;
+    const rightIndent = Math.round(Math.max(0, Math.min(8, rightInches)) * 100) / 100;
+    if (rightIndent >= (exact ? 0.005 : 0.05)) attrs.rightIndent = rightIndent;
   }
   if (para.bidi) attrs.dir = "rtl";
   return attrs;
