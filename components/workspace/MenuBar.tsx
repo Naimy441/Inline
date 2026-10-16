@@ -10,6 +10,9 @@ import { modeMenuItems } from "@/components/workspace/modes";
 import {
   changeCase,
   clearFormatting,
+  insertBibliography,
+  insertCitation,
+  insertFootnote,
   insertHorizontalRule,
   insertTableOfContents,
   insertPageBreak,
@@ -23,6 +26,7 @@ import {
 import { addColumnAfter, addColumnBefore, addRowAfter, addRowBefore, deleteColumn, deleteRow, deleteTable, isInTable, toggleHeaderRow } from "prosemirror-tables";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { insertEquation } from "@/lib/editor/math";
+import { BUILTIN_COMMANDS } from "@/lib/agent/commands";
 
 export type MenuActions = {
   newDocument: () => void;
@@ -81,7 +85,7 @@ const MENU_TIPS: Record<string, string> = {
   File: "New, copy, download, print and history",
   Edit: "Undo, clipboard and find",
   View: "Zoom, mode, panels and theme",
-  Insert: "Links, images, tables and breaks",
+  Insert: "Links, images, citations, tables and breaks",
   Format: "Text, paragraph and list styles",
   Tools: "Spelling, word count and Claude",
   Help: "Shortcuts and connecting Claude Code",
@@ -211,6 +215,10 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       { label: "Special characters…", onSelect: actions.specialCharacters },
       { label: "Table of contents", onSelect: () => !run(insertTableOfContents) && actions.notice("Add some headings first; the table of contents lists them.") },
       { kind: "separator" },
+      { label: "Footnote", onSelect: () => !run(insertFootnote) && actions.notice("Put the cursor in a paragraph to add a footnote.") },
+      { label: "Citation", onSelect: () => !run(insertCitation) && actions.notice("Put the cursor in a paragraph to add a citation.") },
+      { label: "Bibliography", onSelect: () => run(insertBibliography) },
+      { kind: "separator" },
       { label: "Horizontal line", onSelect: () => run(insertHorizontalRule) },
       { label: "Page break", shortcut: `⌘⏎`, onSelect: () => run(insertPageBreak) },
       {
@@ -308,6 +316,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
         : ([
             { kind: "separator" },
             { label: "Check spelling & grammar here", shortcut: `⌘⌥X`, onSelect: actions.checkSpelling },
+            { label: "Ask Claude to add citations", onSelect: () => actions.ask(BUILTIN_COMMANDS.find((command) => command.name === "cite")!.prompt) },
             { label: "Ask Claude to proofread", onSelect: () => actions.ask("Proofread the document and fix spelling, grammar and punctuation. Don't change the meaning or voice.") },
             { label: "Ask Claude for feedback", onSelect: () => actions.ask("Read the document and give me your three most important suggestions to improve it. Don't edit yet.") },
             {

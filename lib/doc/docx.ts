@@ -169,6 +169,7 @@ async function inlineContent(node: PMNode, ctx: Context, prefix = "") {
     if (child.isText && child.marks.some((mark) => mark.type.name === "math")) run += latexToOmml(child.text ?? "", false);
     else if (child.isText) run += textRun(child.text ?? "", child.marks, size);
     else if (child.type.name === "hard_break") run += "<w:r><w:br/></w:r>";
+    else if (child.type.name === "footnote_ref") run += textRun(String(child.attrs.label || ""), [schema.marks.superscript.create()], size);
     else if (child.type.name === "inline_image") run += await inlineImageRun(child, ctx, size);
     if (href && /^(https?:|mailto:|tel:)/i.test(href)) {
       if (!link) link = { href, runs: "" };
@@ -284,8 +285,10 @@ async function imageParagraph(node: PMNode, ctx: Context) {
  */
 async function blockXml(node: PMNode, ctx: Context, list?: { numId: number; level: number; depth: number; left: number }, indentTwips = 0, next?: PMNode | null): Promise<string> {
   switch (node.type.name) {
-    case "paragraph":
-      return `<w:p>${paragraphProps(node, { numbering: list, indentTwips })}${await inlineContent(node, ctx)}</w:p>`;
+    case "paragraph": {
+      const note = node.attrs.footnote ? textRun(String(node.attrs.footnote), [schema.marks.superscript.create()]) : "";
+      return `<w:p>${paragraphProps(node, { numbering: list, indentTwips })}${note}${await inlineContent(node, ctx)}</w:p>`;
+    }
     case "title":
       return `<w:p>${paragraphProps(node, { style: "Title" })}${await inlineContent(node, ctx)}</w:p>`;
     case "subtitle":

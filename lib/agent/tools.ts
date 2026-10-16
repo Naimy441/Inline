@@ -304,7 +304,7 @@ export const TOOLS = [
     title: "Read document",
     description:
       "Read a document as Markdown with line numbers (cat -n format), like the Read tool. Read before editing so edit_document's old_string matches exactly.\n\n" +
-      "Markdown conventions in Inline documents: one paragraph per line, blank line between blocks; `# Text {.title}` is the document title style and `Text {.subtitle}` the subtitle; `{align=center|right|justify}` and `{indent=N}` set paragraph alignment and indent; ==highlight==, <u>underline</u>, <sup>x</sup>, <sub>x</sub>; `&nbsp;` is an intentionally empty paragraph; `\\pagebreak` is a page break; images are `![alt](url){width=50%}`. Colors, fonts, comments and locked passages are not shown but are preserved when you edit around them.",
+      "Markdown conventions in Inline documents: one paragraph per line, blank line between blocks; `# Text {.title}` is the document title style and `Text {.subtitle}` the subtitle; `{align=center|right|justify}` and `{indent=N}` set paragraph alignment and indent; ==highlight==, <u>underline</u>, <sup>x</sup>, <sub>x</sub>; <cite>(Author, Year)</cite> is an inline citation; [^1] is a footnote marker and [^1]: The note. is its text; {.bibliography} is a works-cited entry (hanging indent); `&nbsp;` is an intentionally empty paragraph; `\\pagebreak` is a page break; images are `![alt](url){width=50%}`. Colors, fonts, comments and locked passages are not shown but are preserved when you edit around them.",
     shape: {
       document_id: documentId,
       offset: z.number().int().min(1).optional().describe("Line number to start reading from."),
@@ -615,7 +615,7 @@ export const TOOLS = [
     name: "set_paragraph_style",
     title: "Set paragraph style",
     description:
-      "Change the paragraph style of the blocks on the given lines: type (paragraph, heading with level 1-6, title, subtitle), alignment, indent level, first-line or hanging indent, line spacing and space before/after. Lists, tables and quotes are changed with edit_document instead.",
+      "Change the paragraph style of the blocks on the given lines: type (paragraph, heading with level 1-6, title, subtitle), alignment, indent level, first-line or hanging indent, line spacing, space before/after, and whether the paragraph is a bibliography entry. Lists, tables and quotes are changed with edit_document instead. Footnotes and inline citations are written in Markdown with edit_document ([^1], [^1]: note, <cite>…</cite>).",
     shape: {
       document_id: documentId,
       from_line: z.number().int().min(1),
@@ -628,6 +628,7 @@ export const TOOLS = [
       space_before: z.number().min(0).max(144).nullable().optional().describe("Points of space before, or null for default."),
       space_after: z.number().min(0).max(144).nullable().optional().describe("Points of space after, or null for default."),
       text_indent: z.number().min(-3).max(3).nullable().optional().describe("First-line indent in inches (0.5 for essays); negative for a hanging indent (-0.5 for works cited); null for none."),
+      bibliography: z.boolean().nullable().optional().describe("true marks a works-cited entry and hangs the first line 0.5in when it has no indent of its own; false clears that mark."),
     },
     write: true,
     async handler(args, ctx) {

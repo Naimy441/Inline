@@ -520,6 +520,8 @@ export type BlockStyle = {
   space_after?: number | null;
   /** First-line indent in inches; negative for a hanging indent; null for none. */
   text_indent?: number | null;
+  /** Mark (true) or clear (false) a works-cited entry. Marking hangs the line half an inch when it has no indent of its own. */
+  bibliography?: boolean | null;
 };
 
 export function applyBlockStyle(tr: Transform, lines: { from: number; to: number }, style: BlockStyle): number {
@@ -542,6 +544,10 @@ export function applyBlockStyle(tr: Transform, lines: { from: number; to: number
     if (style.space_before !== undefined) attrs.spaceBefore = style.space_before;
     if (style.space_after !== undefined) attrs.spaceAfter = style.space_after;
     if (style.text_indent !== undefined) attrs.textIndent = style.text_indent ? Math.max(-3, Math.min(3, style.text_indent)) : null;
+    if (style.bibliography != null) {
+      attrs.bibliography = style.bibliography;
+      if (style.bibliography && style.text_indent === undefined && !attrs.textIndent) attrs.textIndent = -0.5;
+    }
     tr.setNodeMarkup(range.pos, type, attrs, node.marks);
   }
   return ranges.length;

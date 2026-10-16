@@ -116,6 +116,39 @@ img.ProseMirror-separator {
   color: #666;
 }
 
+.doc-content cite {
+  font-style: normal;
+}
+
+.doc-content sup.footnote-ref {
+  font-size: 0.75em;
+  line-height: 0;
+  cursor: pointer;
+}
+
+.doc-content p.doc-footnote {
+  font-size: 10pt;
+  line-height: 1.2;
+  margin: 10pt 0 2pt;
+  padding: 4pt 0 0 1.5em;
+  text-indent: -1.5em;
+  border-top: 1px solid var(--border-strong);
+}
+
+.doc-content p.doc-footnote + p.doc-footnote {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.doc-content p.doc-footnote::before {
+  content: attr(data-footnote);
+  font-size: 0.75em;
+  vertical-align: super;
+  line-height: 0;
+  padding-right: 0.2em;
+}
+
 .doc-content h1,
 .doc-content h2,
 .doc-content h3,

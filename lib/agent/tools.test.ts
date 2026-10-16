@@ -723,6 +723,32 @@ describe("set_paragraph_style", () => {
     assert.match(settings.text, /align=justify/);
   });
 
+  test("bibliography marks a works-cited entry and hangs it", async () => {
+    const { doc, ctx } = await setup();
+    const result = await runTool("set_paragraph_style", { from_line: 3, bibliography: true }, ctx);
+    assert.equal(result.isError, undefined, result.text);
+    assert.equal(doc.doc.child(1).attrs.bibliography, true);
+    assert.equal(doc.doc.child(1).attrs.textIndent, -0.5);
+    assert.match(md(doc), /\{\.bibliography\}/);
+  });
+
+  test("edit_document inserts a citation, a footnote and a bibliography entry", async () => {
+    const { doc, ctx } = await setup();
+    const result = await runTool(
+      "edit_document",
+      {
+        old_string: "The quick brown fox jumps over the lazy dog.",
+        new_string: "The quick brown fox jumps over the lazy dog.<cite>(Smith, 2020)</cite>[^1]\n\n[^1]: Smith, Ada. *Foxes*. 2020.\n\n## References\n\nSmith, Ada. *Foxes*. Publisher, 2020. {.bibliography}",
+      },
+      ctx,
+    );
+    assert.equal(result.isError, undefined, result.text);
+    const text = md(doc);
+    assert.match(text, /<cite>\(Smith, 2020\)<\/cite>\[\^1\]/);
+    assert.match(text, /\[\^1\]: Smith, Ada\. \*Foxes\*\. 2020\./);
+    assert.match(text, /Smith, Ada\. \*Foxes\*\. Publisher, 2020\. \{\.bibliography\}/);
+  });
+
   test("a range restyles every block in it", async () => {
     const { doc, ctx } = await setup();
     const result = await runTool("set_paragraph_style", { from_line: 1, to_line: 3, align: "center" }, ctx);

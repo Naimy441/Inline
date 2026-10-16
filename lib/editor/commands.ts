@@ -1,9 +1,12 @@
 import { lift, setBlockType, toggleMark, wrapIn } from "prosemirror-commands";
-import type { Attrs, MarkType, Node as PMNode, NodeType } from "prosemirror-model";
+import { Fragment, type Attrs, type MarkType, type Node as PMNode, type NodeType } from "prosemirror-model";
 import { liftListItem, sinkListItem, wrapInList } from "prosemirror-schema-list";
 import { NodeSelection, TextSelection, type Command, type EditorState } from "prosemirror-state";
 import { isInTable } from "prosemirror-tables";
 import { MAX_INDENT, safeHref, schema, type Align } from "@/lib/doc/schema";
+
+const CITATION_PLACEHOLDER = "(Author, Year)";
+const BIBLIOGRAPHY_PLACEHOLDER = "Author. Title. Publisher, Year.";
 
 /** Editing commands shared by the toolbar, menus, keymap and command palette. */
 
@@ -287,6 +290,63 @@ function insertBlock(node: PMNode, enter = false): Command {
 
 export const insertHorizontalRule = insertBlock(nodes.horizontal_rule!.create());
 export const insertPageBreak = insertBlock(nodes.page_break!.create());
+
+function nextFootnoteLabel(doc: PMNode) {
+  let max = 0;
+  doc.descendants((node) => {
+    const raw = node.type.name === "footnote_ref" ? node.attrs.label : node.attrs.footnote;
+    const n = typeof raw === "string" && /^\d+$/.test(raw) ? Number(raw) : 0;
+    if (n > max) max = n;
+  });
+  return String(max + 1);
+}
+
+/** Insert a numbered footnote marker and its note, and put the cursor in the note. */
+export const insertFootnote: Command = (state, dispatch) => {
+  const { $from } = state.selection;
+  if (!$from.parent.isTextblock || $from.parent.type.spec.code) return false;
+  const label = nextFootnoteLabel(state.doc);
+  const ref = nodes.footnote_ref!.create({ label });
+  const note = nodes.paragraph!.create({ footnote: label });
+  if (!dispatch) return true;
+  const tr = state.tr.insert(state.selection.to, ref);
+  const at = tr.doc.content.size;
+  tr.insert(at, note);
+  tr.setSelection(TextSelection.create(tr.doc, at + 1));
+  dispatch(tr.scrollIntoView());
+  return true;
+};
+
+/** Insert a parenthetical citation and select the placeholder so it can be typed over. */
+export const insertCitation: Command = (state, dispatch) => {
+  const { $from } = state.selection;
+  if (!$from.parent.isTextblock || $from.parent.type.spec.code) return false;
+  const mark = schema.marks.citation!.create();
+  if (!dispatch) return true;
+  const from = state.selection.from;
+  const tr = state.tr.replaceSelectionWith(schema.text(CITATION_PLACEHOLDER, [mark]), false);
+  tr.setSelection(TextSelection.create(tr.doc, from + 1, from + CITATION_PLACEHOLDER.length - 1));
+  tr.setStoredMarks([mark]);
+  dispatch(tr.scrollIntoView());
+  return true;
+};
+
+/** Append a References heading and one hanging bibliography entry. */
+export const insertBibliography: Command = (state, dispatch) => {
+  const heading = nodes.heading!.create({ level: 2 }, schema.text("References"));
+  const entry = nodes.paragraph!.create({ bibliography: true, textIndent: -0.5 }, schema.text(BIBLIOGRAPHY_PLACEHOLDER));
+  if (!dispatch) return true;
+  const onlyEmpty = state.doc.childCount === 1 && state.doc.firstChild?.isTextblock && state.doc.firstChild.content.size === 0;
+  const tr = state.tr;
+  const at = onlyEmpty ? 0 : state.doc.content.size;
+  const block = Fragment.from([heading, entry]);
+  if (onlyEmpty) tr.replaceWith(0, state.doc.content.size, block);
+  else tr.insert(at, block);
+  const from = at + heading.nodeSize + 1;
+  tr.setSelection(TextSelection.create(tr.doc, from, from + BIBLIOGRAPHY_PLACEHOLDER.length));
+  dispatch(tr.scrollIntoView());
+  return true;
+};
 
 export function insertImage(src: string, alt = "", width: string | null = null): Command {
   return insertBlock(nodes.image!.create({ src, alt, width, align: "center" }));

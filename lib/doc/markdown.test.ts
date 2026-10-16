@@ -42,6 +42,9 @@ describe("Markdown dialect round trip", () => {
     ["line breaks inside a paragraph", "Line one<br>Line two"],
     ["empty paragraphs", `First\n\n${EMPTY_PARAGRAPH}\n\nSecond`],
     ["tables", "| Name | Score |\n| --- | --- |\n| Ada | 10 |"],
+    ["inline citations", "See <cite>(Smith, 2020)</cite> and <cite>(Smith, *Title*, 2020)</cite> today."],
+    ["footnotes", "A claim about sources.[^1] Another.[^smith]\n\n[^1]: The note with *italics*.\n\n[^smith]: A named note."],
+    ["bibliography entries", "Smith, Ada. *Title*. Publisher, 2020. {.bibliography}\n\nWider entry. {.bibliography hanging=0.75}"],
   ] as const;
 
   for (const [name, markdown] of stable) {
@@ -49,7 +52,7 @@ describe("Markdown dialect round trip", () => {
       const once = roundTrip(markdown);
       assert.equal(roundTrip(once), once, "serialization is idempotent");
       for (const word of markdown.match(/[A-Za-z]{3,}/g) ?? []) {
-        if (["align", "center", "indent", "title", "subtitle", "nbsp", "pagebreak", "https", "example", "com", "docs", "sup", "sub"].includes(word)) continue;
+        if (["align", "center", "indent", "title", "subtitle", "nbsp", "pagebreak", "https", "example", "com", "docs", "sup", "sub", "cite"].includes(word)) continue;
         assert.ok(once.includes(word), `"${word}" survives`);
       }
     });
@@ -98,6 +101,29 @@ describe("parseMarkdown", () => {
 
   it("returns an empty list for blank input", () => {
     assert.equal(parseMarkdown("   \n\n").length, 0);
+  });
+
+  it("stores citations, footnote markers, footnote text and bibliography entries", () => {
+    const doc = markdownToDoc("See <cite>(Smith, 2020)</cite>.[^1]\n\n[^1]: The note.\n\nSmith, Ada. *Title*. 2020. {.bibliography}");
+    assert.deepEqual(marksOf(doc, "(Smith, 2020)"), ["citation"]);
+    let marker = false;
+    let note = false;
+    let entry = false;
+    doc.descendants((node) => {
+      if (node.type.name === "footnote_ref" && node.attrs.label === "1") marker = true;
+      if (node.attrs.footnote === "1" && node.textContent === "The note.") note = true;
+      if (node.attrs.bibliography && node.attrs.textIndent === -0.5) entry = true;
+    });
+    assert.equal(marker && note && entry, true);
+    assert.match(docToMarkdown(doc), /\[\^1\]: The note\./);
+    assert.match(docToMarkdown(doc), /\{\.bibliography\}/);
+    assert.doesNotMatch(docToMarkdown(doc), /hanging=0\.5/);
+  });
+
+  it("keeps a literal [^1] as text", () => {
+    const markdown = "See \\[^1] here.";
+    assert.equal(markdownToDoc(markdown).textContent, "See [^1] here.");
+    assert.equal(roundTrip(markdown), markdown);
   });
 });
 
