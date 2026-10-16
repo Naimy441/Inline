@@ -75,10 +75,15 @@ function FontList({ value, onPick }: { value: string; onPick: (value: string) =>
   useEffect(() => {
     let live = true;
     void googleFonts().then((fonts) => live && setGoogle(fonts));
-    void documentFonts(true).then((fonts) => {
-      if (!live) return;
-      setLibrary(fonts);
-    });
+    // The page may already have the library; show that at once, then refresh in case an import just added fonts.
+    void documentFonts()
+      .then((fonts) => {
+        if (live) setLibrary(fonts);
+        return documentFonts(true);
+      })
+      .then((fonts) => {
+        if (live) setLibrary(fonts);
+      });
     return () => {
       live = false;
     };
