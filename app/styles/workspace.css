@@ -1,8 +1,8 @@
-/* Editor workspace chrome: title bar, toolbar, canvas, side panels, status bar. */
+/* Editor workspace chrome: title bar, toolbar, canvas, and side panels. */
 
 .workspace {
   display: grid;
-  grid-template-rows: var(--titlebar-h) var(--toolbar-h) minmax(0, 1fr) var(--statusbar-h);
+  grid-template-rows: var(--titlebar-h) var(--toolbar-h) minmax(0, 1fr);
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
@@ -500,10 +500,19 @@
   min-width: 0;
 }
 
+.canvas-frame {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
 .canvas {
   position: relative;
   flex: 1;
   min-width: 0;
+  min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
   /* One finger pans the page on both axes. A two-finger pinch is handled by
@@ -1824,17 +1833,24 @@
   }
 }
 
-/* Status bar */
+/* Word and page counts float in the bottom-left margin, with no bar behind them. */
 
-.statusbar {
+.status-corner {
+  position: absolute;
+  z-index: 4;
+  left: 8px;
+  bottom: 6px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 2px;
-  padding: 0 8px;
-  background: var(--canvas);
-  font-size: 12px;
+  align-content: flex-end;
+  gap: 0 2px;
+  max-width: calc(var(--text-left, 200px) - 16px);
   color: var(--muted);
-  overflow: hidden;
+  font-size: 12px;
+  pointer-events: none;
+  background: none;
+  user-select: none;
 }
 
 .status-item {
@@ -1866,8 +1882,10 @@ button.status-item:hover {
   color: var(--accent-text);
 }
 
-.status-spacer {
-  flex: 1;
+.status-corner .status-item {
+  pointer-events: auto;
+  min-width: 0;
+  max-width: 100%;
 }
 
 /*
@@ -1936,7 +1954,7 @@ button.status-item:hover {
     position: absolute;
     top: calc(var(--titlebar-h) + var(--toolbar-h));
     right: 0;
-    bottom: var(--statusbar-h);
+    bottom: 0;
     z-index: 30;
     width: min(100vw, var(--panel-width));
     box-shadow: var(--shadow-lg);
@@ -2268,10 +2286,9 @@ button.status-item:hover {
   }
 }
 
-/* The word toolbar is not a grid item while it is hidden, so the template
-   drops that row. Leaving it in place stretched the status bar over the canvas. */
+/* The word toolbar is not a grid item while it is hidden, so the template drops that row. */
 .workspace.is-canvas {
-  grid-template-rows: var(--titlebar-h) minmax(0, 1fr) var(--statusbar-h);
+  grid-template-rows: var(--titlebar-h) minmax(0, 1fr);
 }
 
 .workspace.is-canvas .toolbar {

@@ -241,7 +241,8 @@ export function Workspace({ documentId }: { documentId: string }) {
   }, [conversionChat, chatKey]);
 
   const canvasPad = canvasWidth && canvasWidth < 900 ? 16 : 40;
-  const pageWidth = geometryFor(meta).pageWidth;
+  const geometry = geometryFor(meta);
+  const pageWidth = geometry.pageWidth;
   const fitZoom = canvasWidth ? Math.max(0.25, Math.min(1, Math.floor(((canvasWidth - canvasPad * 2) / pageWidth) * 100) / 100)) : 1;
   const effectiveZoom = zoom === "fit" ? fitZoom : zoom;
   zoomNow.current = effectiveZoom;
@@ -709,6 +710,16 @@ export function Workspace({ documentId }: { documentId: string }) {
 
   const openComments = ui.comments.filter((comment) => !comment.resolved).length;
   const isCanvas = meta?.kind === "canvas";
+  // Keep the floating counters in the margin to the left of the text.
+  const textLeft = (() => {
+    if (!canvasWidth) return 200;
+    if (isCanvas) {
+      const docWidth = Math.min(820, Math.max(0, canvasWidth - 48));
+      return Math.max(24, (canvasWidth - docWidth) / 2 + 40);
+    }
+    const pageLeft = Math.max(canvasPad, (canvasWidth - pageWidth * effectiveZoom) / 2);
+    return pageLeft + geometry.marginLeft * effectiveZoom;
+  })();
   const working = Boolean(ui.activity && ui.activity.status !== "idle");
   const shownPanel: Panel = focusMode && panel === "agent" ? null : panel;
 
@@ -862,6 +873,7 @@ export function Workspace({ documentId }: { documentId: string }) {
             <WithEditorState session={session}>{(state) => <OutlinePanel session={session} state={state} meta={meta} readOnly={ui.mode === "viewing"} onClose={toggleOutline} />}</WithEditorState>
           </>
         )}
+        <div className="canvas-frame" style={{ ["--text-left" as string]: `${textLeft}px` }}>
         <main
           ref={canvasRef}
           className={`canvas${(versionShown && shownPanel === "history") || draftPreview ? " is-previewing" : ""}${!shownPanel && (draftComment || ui.comments.some((comment) => !comment.resolved)) && marginFits(canvasRef.current) ? " with-comments" : ""}`}
@@ -928,6 +940,20 @@ export function Workspace({ documentId }: { documentId: string }) {
           {!isCanvas && <WithEditorState session={session}>{(state) => <SelectionBubble session={session} state={state} linkEditing={linkEditing} onLinkEditing={setLinkEditing} prompting={prompting && !focusMode} onPrompting={setPrompting} onInlineAsk={inlineAsk} hideAi={focusMode} />}</WithEditorState>}
           {!isCanvas && <WithEditorState session={session}>{(state) => <PictureBar session={session} state={state} />}</WithEditorState>}
         </main>
+        <footer className="status-corner">
+          <button type="button" className="status-item" onClick={() => setCounting(true)}>
+            <WithEditorState session={session}>{(state) => <>{(state ? docWordCount(state.doc) : (meta?.wordCount ?? 0)).toLocaleString()} words</>}</WithEditorState>
+          </button>
+          <span className="status-item">{isCanvas ? "Canvas" : `${ui.pages} page${ui.pages === 1 ? "" : "s"}`}</span>
+          <TabStatus documentId={documentId} open={outline} onToggle={toggleOutline} />
+          {ui.hunks.length > 0 && <span className="status-item is-accent">{ui.hunks.length} pending</span>}
+          {ui.mode !== "editing" && (
+            <button type="button" className={`status-item status-mode is-${ui.mode}`} onClick={() => void session.setMode("editing")} data-tip="Back to editing">
+              {EDITOR_MODES[ui.mode].icon(13)} {EDITOR_MODES[ui.mode].label}
+            </button>
+          )}
+        </footer>
+        </div>
 
         {shownPanel && (
           <div className="panel-shell">
@@ -969,21 +995,6 @@ export function Workspace({ documentId }: { documentId: string }) {
           </div>
         )}
       </div>
-
-      <footer className="statusbar">
-        <TabStatus documentId={documentId} open={outline} onToggle={toggleOutline} />
-        {ui.hunks.length > 0 && <span className="status-item is-accent">{ui.hunks.length} pending</span>}
-        {ui.mode !== "editing" && (
-          <button type="button" className={`status-item status-mode is-${ui.mode}`} onClick={() => void session.setMode("editing")} data-tip="Back to editing">
-            {EDITOR_MODES[ui.mode].icon(13)} {EDITOR_MODES[ui.mode].label}
-          </button>
-        )}
-        <span className="status-spacer" />
-        <button type="button" className="status-item" onClick={() => setCounting(true)}>
-          <WithEditorState session={session}>{(state) => <>{(state ? docWordCount(state.doc) : (meta?.wordCount ?? 0)).toLocaleString()} words</>}</WithEditorState>
-        </button>
-        <span className="status-item">{isCanvas ? "Canvas" : `${ui.pages} page${ui.pages === 1 ? "" : "s"}`}</span>
-      </footer>
 
       <PageSetupDialog open={Boolean(setup)} initialTab={setup?.tab} session={session} settings={meta?.settings} onClose={() => setSetup(null)} />
       <StyleDialog open={styleEditor !== null} styleId={styleEditor?.id ?? null} session={session} settings={meta?.settings} onClose={() => setStyleEditor(null)} />
@@ -1233,7 +1244,7 @@ function WordCountTable({ session }: { session: DocumentSession }) {
 }
 
 
-/** The open tab's name in the status bar, when the document has more than one tab. */
+/** The open tab's name, when the document has more than one tab. */
 function TabStatus({ documentId, open, onToggle }: { documentId: string; open: boolean; onToggle: () => void }) {
   const tabs = useTabs(documentId);
   const current = tabs && tabs.length > 1 ? tabs.find((tab) => tab.id === documentId) : null;
