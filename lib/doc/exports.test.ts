@@ -24,6 +24,15 @@ describe("HTML export", () => {
     assert.equal(escapeHtml(`<a href="x">&</a>`), "&lt;a href=&quot;x&quot;&gt;&amp;&lt;/a&gt;");
   });
 
+  it("renders citations, footnotes and bibliography entries", () => {
+    const html = fragmentToHtml(markdownToDoc("See <cite>(Smith, 2020)</cite>.[^1]\n\n[^1]: The note.\n\nSmith. {.bibliography}"));
+    assert.match(html, /<cite>\(Smith, 2020\)<\/cite>/);
+    assert.match(html, /<sup class="footnote-ref" data-footnote="1">1<\/sup>/);
+    assert.match(html, /class="doc-footnote" data-footnote="1"/);
+    assert.match(html, /class="doc-bibliography"/);
+    assert.match(html, /text-indent: -0.5in/);
+  });
+
   it("renders blocks, marks, links and tables", () => {
     const html = fragmentToHtml(markdownToDoc(SAMPLE));
     assert.match(html, /<strong>bold<\/strong>/);
@@ -58,6 +67,14 @@ describe("Word export", () => {
     assert.match(text, /<w:hyperlink r:id="[^"]+">/);
     assert.match(text, /Target="file:\/\/\/tmp\/notes\.pdf" TargetMode="External"/);
     assert.match(docToMarkdown(await docxToDoc(readZip(bytes))), /\[notes\]\(file:\/\/\/tmp\/notes\.pdf\)/);
+  });
+
+  it("keeps citation text, footnote markers and a hanging bibliography entry", async () => {
+    const text = latin1(await documentToDocx(markdownToDoc("See <cite>(Smith, 2020)</cite>.[^1]\n\n[^1]: The note.\n\nSmith. {.bibliography}"), meta(), async () => null));
+    assert.ok(text.includes("(Smith, 2020)"));
+    assert.match(text, /<w:vertAlign w:val="superscript"\/>/);
+    assert.ok(text.includes("The note."));
+    assert.match(text, /w:hanging="720"/);
   });
 
   it("uses the document's paper size and margins", async () => {

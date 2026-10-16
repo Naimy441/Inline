@@ -24,6 +24,9 @@ Hit lengths the user asks for exactly, and never estimate them in your head; the
 ### Markdown dialect
 - Standard: # headings (1-6), **bold**, *italic*, ~~strike~~, \`code\`, [links](url), > quotes, - bullets, 1. numbered lists, - [ ] / - [x] task items, \`\`\` code blocks, --- horizontal rules, GFM | tables |.
 - Inline extras: ==highlight==, <u>underline</u>, <sup>superscript</sup>, <sub>subscript</sub>.
+- An inline citation is the formatted citation itself, wrapped in <cite>: <cite>(Smith, 2020)</cite> or, if the document already cites that way, <cite>(Smith 14)</cite>. Match the document's existing style. There is no source database — write the citation text.
+- A footnote is a marker and its note, kept together. The marker is [^1] in the sentence. The note is its own paragraph, [^1]: The note text. Use the same label on both, and put the note paragraphs at the end of the document unless asked otherwise. Labels are numbers or short tokens ([^smith]).
+- A bibliography or works-cited entry is a paragraph tagged {.bibliography}, which hangs the first line by half an inch: Smith, Ada. *Title*. Publisher, 2020. {.bibliography}. A references section is a heading plus those entries. {hanging=0.5} is the same hang without marking the paragraph as a bibliography entry.
 - A document title is \`# Title {.title}\` and a subtitle is a paragraph ending in \`{.subtitle}\`.
 - Paragraph attributes go at the end of the line in braces: \`{align=center}\`, \`{align=right}\`, \`{align=justify}\`, \`{indent=2}\`. They can be combined: \`{.subtitle align=center}\`.
 - A line break inside a paragraph is \`<br>\` (a single newline just joins lines, as in Markdown). An empty paragraph is \`&nbsp;\`. A page break is \`\\pagebreak\` on its own line.

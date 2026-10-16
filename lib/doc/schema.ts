@@ -63,6 +63,12 @@ function acceptableFileHref(href: string): boolean {
   return Boolean(url.pathname && url.pathname !== "/");
 }
 
+/** A footnote label Markdown can round-trip inside `[^label]`: a short token, no spaces. */
+export function footnoteLabel(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/.test(value) ? value : null;
+}
+
 export const ALIGNMENTS: Align[] = ["left", "center", "right", "justify"];
 
 /** Numbered-list marker styles, as CSS names them. */
@@ -96,6 +102,10 @@ const blockAttrs = {
   spaceAfter: { default: null as number | null },
   /** First-line indent in inches; negative is a hanging indent (works cited, bibliographies). */
   textIndent: { default: null as number | null },
+  /** A works-cited entry. The hanging indent is `textIndent` (half an inch when the entry doesn't say otherwise). */
+  bibliography: { default: false },
+  /** When set, this paragraph is the text of the footnote with this label. The marker in the text is a `footnote_ref`. */
+  footnote: { default: null as string | null },
   /**
    * "rtl" for right-to-left text (Arabic, Hebrew). As in Word, "left" and
    * "right" alignment then mean the paragraph's start and end: a right-to-left
@@ -191,6 +201,9 @@ export function sameBorders(a: Borders | null | undefined, b: Borders | null | u
 
 function blockDomAttrs(node: PMNode, extra: Record<string, string> = {}) {
   const attrs: Record<string, string> = { ...extra };
+  const classes = [extra.class, node.attrs.bibliography ? "doc-bibliography" : "", node.attrs.footnote ? "doc-footnote" : ""].filter(Boolean);
+  if (classes.length) attrs.class = classes.join(" ");
+  if (node.attrs.footnote) attrs["data-footnote"] = String(node.attrs.footnote);
   if (node.attrs.id) attrs["data-id"] = node.attrs.id;
   if (node.attrs.dir === "rtl") attrs.dir = "rtl";
   // What a style can't say exactly travels with the paragraph when it is copied and pasted.
@@ -256,6 +269,8 @@ function parseBlockAttrs(dom: HTMLElement) {
     tabs: jsonAttr<TabStop[]>(dom, "data-tabs", isTabs),
     lineBreaks: dom.getAttribute("data-line-breaks") || null,
     borders: jsonAttr<Borders>(dom, "data-borders", isBorders),
+    bibliography: (typeof dom.className === "string" ? dom.className : "").split(/\s+/).includes("doc-bibliography"),
+    footnote: footnoteLabel(dom.getAttribute("data-footnote")),
   };
 }
 
@@ -530,6 +545,30 @@ const nodes: Record<string, NodeSpec> = {
   },
 
   /**
+   * A footnote marker. The note's words live in the paragraph whose `footnote`
+   * attribute is this label, written in Markdown as `[^label]` and `[^label]: text`.
+   */
+  footnote_ref: {
+    inline: true,
+    group: "inline",
+    atom: true,
+    selectable: true,
+    attrs: { label: { default: "1" } },
+    leafText: () => "",
+    parseDOM: [
+      {
+        tag: "sup.footnote-ref",
+        priority: 60,
+        getAttrs: (dom) => {
+          const label = footnoteLabel((dom as HTMLElement).getAttribute("data-footnote") || (dom as HTMLElement).textContent);
+          return label ? { label } : false;
+        },
+      },
+    ],
+    toDOM: (node): DOMOutputSpec => ["sup", { class: "footnote-ref", "data-footnote": node.attrs.label }, String(node.attrs.label || "1")],
+  },
+
+  /**
    * A picture set in a line of text, like a character (an icon beside a
    * phone number). Its size is in CSS pixels; `opacity` fades it (Word's and
    * Google's picture transparency).
@@ -663,6 +702,13 @@ const marks: Record<string, MarkSpec> = {
     toDOM: (): DOMOutputSpec => ["sup", 0],
   },
 
+  /** A formatted inline citation, such as (Smith, 2020). The text is the citation; there is no source record behind it. */
+  citation: {
+    inclusive: false,
+    parseDOM: [{ tag: "cite" }],
+    toDOM: (): DOMOutputSpec => ["cite", 0],
+  },
+
   subscript: {
     excludes: "superscript",
     parseDOM: [{ tag: "sub" }, { style: "vertical-align=sub" }],
@@ -741,7 +787,7 @@ export const schema = new Schema({ nodes, marks });
 export type NodeName = keyof typeof nodes;
 
 /** Marks that the Markdown view can express. Everything else is preserved invisibly. */
-export const MARKDOWN_MARKS = new Set(["bold", "italic", "underline", "strike", "code", "math", "link", "superscript", "subscript", "highlight"]);
+export const MARKDOWN_MARKS = new Set(["bold", "italic", "underline", "strike", "code", "math", "link", "superscript", "subscript", "highlight", "citation"]);
 
 /** The code block language that makes it a displayed equation. */
 export const MATH_LANGUAGE = "math";

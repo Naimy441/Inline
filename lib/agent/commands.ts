@@ -26,7 +26,7 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
     name: "cite",
     description: "Find sources and add citations",
     prompt:
-      "Find reliable sources for the document's factual claims with web search. Add inline citations in the document's existing style (or (Author, Year) if it has none) and a References section at the end with full entries. Don't change the claims themselves; comment on any you couldn't support.",
+      "Find reliable sources for the document's factual claims with web search. Add inline citations with <cite>…</cite> in the document's existing style (or <cite>(Author, Year)</cite> if it has none) and a References section of {.bibliography} entries. Use footnotes ([^1] in the text and a [^1]: paragraph for each note) only when the user asks for footnotes. Don't change the claims themselves; comment on any you couldn't support.",
   },
   { name: "deslop", description: "Remove AI-sounding phrasing", prompt: "Run clean_ai_tells on the document. Then rewrite any passages that still sound generic or AI-written, keeping the meaning and the author's voice. Use normal punctuation and real Markdown lists." },
 ];

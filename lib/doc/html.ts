@@ -115,6 +115,11 @@ figure.align-center { text-align: center; } figure.align-right { text-align: rig
 li.task-item { list-style: none; }
 li.task-item[data-checked="true"]::before { content: "☑ "; } li.task-item[data-checked="false"]::before { content: "☐ "; }
 .page-break { break-after: page; }
+cite { font-style: normal; }
+sup.footnote-ref { font-size: 0.75em; line-height: 0; }
+p.doc-footnote { font-size: 10pt; line-height: 1.2; margin: 10pt 0 2pt; padding: 4pt 0 0 1.5em; text-indent: -1.5em; border-top: 1px solid #c4c7c5; }
+p.doc-footnote + p.doc-footnote { border-top: 0; margin-top: 0; padding-top: 0; }
+p.doc-footnote::before { content: attr(data-footnote); font-size: 0.75em; vertical-align: super; line-height: 0; padding-right: 0.2em; }
 mark { padding: 0 1px; }
 .math-display { margin: 0 0 ${settings.paragraphSpacing}pt; text-align: center; }
 math { font-size: 1.1em; }

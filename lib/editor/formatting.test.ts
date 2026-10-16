@@ -10,6 +10,9 @@ import {
   currentAlign,
   currentLineHeight,
   indent,
+  insertBibliography,
+  insertCitation,
+  insertFootnote,
   insertHorizontalRule,
   insertPageBreak,
   insertTable,
@@ -209,5 +212,26 @@ describe("blocks", () => {
     assert.equal(cells, 6);
     assert.equal(table.state.selection.$from.parent.type.name, "paragraph");
     assert.equal(table.state.selection.$from.node(-1).type.name, "table_header", "the cursor lands in the first cell");
+  });
+
+  it("inserts a footnote marker and its note", () => {
+    const first = run(stateFor("Claim here.", 12), insertFootnote);
+    assert.match(first.md, /Claim here\.\[\^1\]/);
+    assert.match(first.md, /\[\^1\]:/);
+    assert.equal(first.state.selection.$from.parent.attrs.footnote, "1");
+    const second = run(first.state, insertFootnote);
+    assert.match(second.md, /\[\^2\]/);
+    assert.equal(second.state.selection.$from.parent.attrs.footnote, "2");
+  });
+
+  it("inserts a citation and a bibliography entry", () => {
+    const cited = run(stateFor("Claim here.", 11), insertCitation);
+    assert.match(cited.md, /<cite>\(Author, Year\)<\/cite>/);
+    assert.equal(cited.state.selection.$from.parent.textContent.includes("Author, Year"), true);
+    const listed = run(stateFor("Body.", 1), insertBibliography);
+    assert.match(listed.md, /## References/);
+    assert.match(listed.md, /Author\. Title\. Publisher, Year\. \{\.bibliography\}/);
+    assert.equal(listed.state.doc.lastChild?.attrs.bibliography, true);
+    assert.equal(listed.state.doc.lastChild?.attrs.textIndent, -0.5);
   });
 });

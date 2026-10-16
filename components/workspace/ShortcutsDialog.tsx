@@ -63,6 +63,8 @@ const GROUPS: Array<[string, Array<[string, string]>]> = [
       ["Quote / code block", "> + space / ```"],
       ["Divider", "---"],
       ["Bold / italic / highlight", "**text** / *text* / ==text=="],
+      ["Footnote", "[^1] and [^1]: note"],
+      ["Citation / bibliography", "<cite>…</cite> / {.bibliography}"],
     ],
   ],
 ];

@@ -59,6 +59,32 @@ function blockIdPlugin() {
   });
 }
 
+/** Enter in a footnote copies its label onto the new paragraph; keep the label on the first one only. */
+function footnoteLabelPlugin() {
+  return new Plugin({
+    appendTransaction(transactions, _old, state) {
+      if (!transactions.some((tr) => tr.docChanged)) return null;
+      const seen = new Set<string>();
+      const clear: number[] = [];
+      state.doc.descendants((node, pos) => {
+        if (!node.isBlock) return;
+        const label = node.attrs.footnote as string | null;
+        if (!label) return;
+        if (seen.has(label)) clear.push(pos);
+        else seen.add(label);
+      });
+      if (!clear.length) return null;
+      const tr = state.tr;
+      for (let i = clear.length - 1; i >= 0; i -= 1) {
+        const pos = clear[i]!;
+        const node = tr.doc.nodeAt(pos);
+        if (node?.attrs.footnote) tr.setNodeMarkup(pos, undefined, { ...node.attrs, footnote: null });
+      }
+      return tr;
+    },
+  });
+}
+
 function markInputRule(pattern: RegExp, type: MarkType) {
   return new InputRule(pattern, (state, match, start, end) => {
     const text = match[2];
@@ -232,7 +258,7 @@ function buildKeymap(extra: Record<string, Command>) {
 
 /** Paste plain text that looks like Markdown as rich content. */
 function markdownPastePlugin() {
-  const looksLikeMarkdown = (text: string) => /(^|\n)(#{1,6} |[-*+] |\d+\. |> |```|\|.+\|)|\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\)/.test(text);
+  const looksLikeMarkdown = (text: string) => /(^|\n)(#{1,6} |[-*+] |\d+\. |> |```|\|.+\|)|\[\^[A-Za-z0-9]|\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\)|<cite>/.test(text);
   return new Plugin({
     props: {
       clipboardTextParser(text, $context, plain) {
@@ -254,6 +280,18 @@ function markdownPastePlugin() {
         return followLink(link.attrs.href as string)(view.state, view.dispatch);
       },
       handleClickOn(view, _pos, node, nodePos, event) {
+        if (node.type === nodes.footnote_ref) {
+          const label = node.attrs.label;
+          let target = -1;
+          view.state.doc.descendants((child, pos) => {
+            if (target < 0 && child.attrs.footnote === label) target = pos + 1;
+            return target < 0;
+          });
+          if (target < 0) return false;
+          event.preventDefault();
+          view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(target))).scrollIntoView());
+          return true;
+        }
         // Task checkboxes are drawn with CSS in the left gutter of the item.
         if (node.type !== nodes.list_item || node.attrs.checked == null) return false;
         const target = event.target as HTMLElement;
@@ -311,6 +349,7 @@ export function editorPlugins(options: EditorPluginOptions) {
     tableEditing(),
     collab({ version: options.version, clientID: options.clientID }),
     blockIdPlugin(),
+    footnoteLabelPlugin(),
     markdownPastePlugin(),
     reviewPlugin(options.review),
     presencePlugin(),
