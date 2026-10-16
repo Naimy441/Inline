@@ -194,6 +194,14 @@ export function parseTextIndent(value: string): number | null {
   return Number.isFinite(rounded) && rounded !== 0 ? rounded : null;
 }
 
+/** Space above or below a block given in points ("12pt", as Google Docs, Word and Inline's own copies write it); null otherwise. */
+function parseSpace(value: string | undefined): number | null {
+  const match = value?.trim().match(/^([\d.]+)pt$/);
+  if (!match) return null;
+  const pt = Number(match[1]);
+  return Number.isFinite(pt) && pt <= 400 ? pt : null;
+}
+
 function parseBlockAttrs(dom: HTMLElement) {
   const style = dom.style;
   const rtl = dom.getAttribute("dir") === "rtl";
@@ -214,8 +222,8 @@ function parseBlockAttrs(dom: HTMLElement) {
     align: ALIGNMENTS.includes(align) ? align : "left",
     indent: Math.max(0, Math.min(MAX_INDENT, indent)),
     lineHeight: style?.lineHeight && /^[\d.]+$/.test(style.lineHeight) ? style.lineHeight : null,
-    spaceBefore: null,
-    spaceAfter: null,
+    spaceBefore: parseSpace(style?.marginTop),
+    spaceAfter: parseSpace(style?.marginBottom),
     textIndent: parseTextIndent(style?.textIndent || ""),
     dir: rtl ? ("rtl" as const) : null,
     fontSize: fontSize > 0 && fontSize <= 400 ? fontSize : null,

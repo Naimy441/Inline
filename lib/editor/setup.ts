@@ -10,6 +10,7 @@ import { findWrapping } from "prosemirror-transform";
 import { splitListItem } from "prosemirror-schema-list";
 import { Plugin, TextSelection, type Command, type EditorState, type Transaction } from "prosemirror-state";
 import { columnResizing, goToNextCell, tableEditing } from "prosemirror-tables";
+import type { EditorView } from "prosemirror-view";
 import { blockIdFixes } from "@/lib/doc/ids";
 import { parseMarkdown } from "@/lib/doc/markdown";
 import { schema } from "@/lib/doc/schema";
@@ -37,6 +38,7 @@ import { paginationPlugin, type PageGeometry, type PageLayout } from "@/lib/edit
 import { bordersPlugin } from "@/lib/editor/borders";
 import { lineFitPlugin } from "@/lib/editor/lineFit";
 import { tabsPlugin } from "@/lib/editor/tabs";
+import { pasteIntoEmptyTextblock, transformPastedHtml } from "@/lib/editor/paste";
 import { justifyPlugin } from "@/lib/editor/justify";
 import { placeholderPlugin } from "@/lib/editor/placeholder";
 import { presencePlugin } from "@/lib/editor/presence";
@@ -205,11 +207,24 @@ function buildKeymap(extra: Record<string, Command>) {
   return keymap(bindings);
 }
 
-/** Paste plain text that looks like Markdown as rich content. */
+/** Views whose paste in progress starts with a whole Google Docs paragraph (lib/editor/paste.ts). */
+const wholeParagraphs = new WeakMap<EditorView, boolean>();
+
+/** Paste plain text that looks like Markdown as rich content, and Google Docs' HTML as Google shows it. */
 function markdownPastePlugin() {
   const looksLikeMarkdown = (text: string) => /(^|\n)(#{1,6} |[-*+] |\d+\. |> |```|\|.+\|)|\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\)/.test(text);
   return new Plugin({
     props: {
+      transformPastedHTML(html, view) {
+        const result = transformPastedHtml(html);
+        wholeParagraphs.set(view, result.paragraphs);
+        return result.html;
+      },
+      transformPasted(slice, view) {
+        const whole = wholeParagraphs.get(view);
+        wholeParagraphs.delete(view);
+        return whole ? pasteIntoEmptyTextblock(slice, view.state) : slice;
+      },
       clipboardTextParser(text, $context, plain) {
         if (plain || $context.parent.type.spec.code || !looksLikeMarkdown(text)) return null as unknown as Slice;
         try {
