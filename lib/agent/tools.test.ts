@@ -75,6 +75,7 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   analyze_writing: {},
   count_words: {},
   get_page_count: {},
+  screenshot_page: { page: 1 },
   list_documents: {},
   create_document: { title: "Another" },
   open_document: { document_id: "missing" },
@@ -1127,6 +1128,51 @@ describe("get_page_count", () => {
       setTimeout(() => doc.setLayout({ version: doc.version, pages: 3, starts: [], lastPageFill: 0.5 }), 50);
       const result = await runTool("get_page_count", {}, ctx);
       assert.match(result.text, /fills 3 pages, as laid out/);
+    } finally {
+      stop();
+    }
+  });
+});
+
+describe("screenshot_page", () => {
+  /** A 1×1 PNG. The editor posts real page pictures; the tool only needs bytes it can hand to Claude. */
+  const png = Uint8Array.from(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"));
+
+  test("needs the document open in an editor", async () => {
+    const { ctx } = await setup();
+    const result = await runTool("screenshot_page", { page: 1 }, ctx);
+    assert.equal(result.isError, true);
+    assert.match(result.text, /open/);
+    assert.equal(result.images, undefined);
+  });
+
+  test("refuses a page the editor has already measured past the end", async () => {
+    const { doc, ctx } = await setup();
+    doc.setLayout({ version: doc.version, pages: 1, starts: [], lastPageFill: 0.4 });
+    const result = await runTool("screenshot_page", { page: 2 }, ctx);
+    assert.equal(result.isError, true);
+    assert.match(result.text, /1 page/);
+    assert.match(result.text, /Pass a page from 1 to 1/);
+  });
+
+  test("returns the picture the editor sends", async () => {
+    const { doc, ctx } = await setup();
+    const { deliverPageRenders } = await import("@/lib/server/renders");
+    doc.setLayout({ version: doc.version, pages: 2, starts: [findText(doc.doc, "Findings")], lastPageFill: 0.2 });
+    const stop = doc.subscribe((event) => {
+      if (event.type !== "command" || event.command.kind !== "render_pages") return;
+      assert.deepEqual(event.command.pages, [1]);
+      assert.equal(event.command.scale, 1.5);
+      deliverPageRenders(doc.id, event.command.requestId, [{ page: 1, png }]);
+    });
+    try {
+      const result = await runTool("screenshot_page", { page: 2 }, ctx);
+      assert.equal(result.isError, undefined, result.text);
+      assert.match(result.text, /Page 2 of 2 of "Field notes"/);
+      assert.match(result.text, /Look at the picture, then fix/);
+      assert.equal(result.images?.length, 1);
+      assert.equal(result.images?.[0]?.mimeType, "image/png");
+      assert.equal(result.images?.[0]?.data, Buffer.from(png).toString("base64"));
     } finally {
       stop();
     }

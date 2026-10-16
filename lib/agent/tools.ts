@@ -35,6 +35,7 @@ import { findMisspellings, speller, type Misspelling } from "@/lib/server/spellc
 import { normalizeWord } from "@/lib/doc/words";
 import { detectAiTropes } from "@/lib/writing/tropes";
 import { describePageStarts, pageCount, pageCountNow } from "@/lib/agent/pages";
+import { RenderUnavailableError, requestPageRenders } from "@/lib/server/renders";
 import { FOLDER_COLORS } from "@/lib/doc/folders";
 import { createFolder, deleteFolder, FolderError, folderPathName, updateFolder } from "@/lib/server/folders";
 import { formatFolderTree, formatLibrary, library, MAX_EXCERPT_WORDS, moveDocuments, resolveFolder } from "@/lib/server/library";
@@ -556,6 +557,53 @@ export const TOOLS = [
       }
       lines.push(`${words.toLocaleString()} words; about ${count.wordsPerPage.toLocaleString()} words fit on a full page of paragraphs with this formatting. Headings, lists, tables, images and page breaks change that.`);
       return ok(lines.join("\n"));
+    },
+  }),
+
+  defineTool({
+    name: "screenshot_page",
+    title: "Screenshot page",
+    description:
+      "A picture of one page as the user's editor lays it out (the way it would print), so you can see layout the Markdown does not show: a crowded or split table, an image that is too big, uneven spacing, a stray font, or a last page with only a line or two. Home-page thumbnails are only a small picture of the first page; this is the page itself. Needs the document open in Inline. Page numbers are 1-based.\n\n" +
+      "Use it when the user wants the document to look good and the picture is the right signal. get_page_count is enough for how many pages there are and how full the last page is. After you change a page you judged from a picture, call screenshot_page again.",
+    shape: {
+      document_id: documentId,
+      page: z.number().int().min(1).describe("Page number to picture (1-based)."),
+    },
+    write: false,
+    async handler(args, ctx) {
+      const doc = await resolveDocument(ctx, args.document_id);
+      const count = pageCountNow(doc);
+      const visible = count.showing ?? count.pages;
+      if (count.measured && args.page > visible) {
+        return fail(`"${doc.meta.title}" is ${visible} page${visible === 1 ? "" : "s"} in the editor. Pass a page from 1 to ${visible}.`);
+      }
+      const start = args.page <= 1 ? 0 : count.starts?.[args.page - 2];
+      const end = count.starts?.[args.page - 1];
+      showActivity(ctx, doc, {
+        chatId: ctx.author,
+        status: "reading",
+        label: `Looking at page ${args.page}`,
+        ...(count.measured && start !== undefined ? { range: { from: start, to: Math.max(start + 1, end ?? doc.doc.content.size) } } : {}),
+      });
+      let rendered;
+      try {
+        rendered = await requestPageRenders(doc, [args.page - 1], { scale: 1.5 });
+      } catch (error) {
+        if (error instanceof RenderUnavailableError) return fail(error.message);
+        throw error;
+      }
+      const shot = rendered.find((item) => item.page === args.page - 1) ?? rendered[0];
+      if (!shot?.png.byteLength) return fail(`Page ${args.page} isn't in the document, or the editor couldn't picture it.`);
+      const of = count.measured ? ` of ${visible}` : "";
+      return {
+        text: [
+          `Page ${args.page}${of} of "${doc.meta.title}" (id ${doc.id}), as the editor lays it out.`,
+          "The picture is what the user sees on that page, including spacing, fonts, images and where a table or heading breaks. Text still struck through for review is still on the page.",
+          "Look at the picture, then fix the document. Markdown does not show fonts or most spacing.",
+        ].join("\n"),
+        images: [{ data: Buffer.from(shot.png).toString("base64"), mimeType: "image/png" }],
+      };
     },
   }),
 
