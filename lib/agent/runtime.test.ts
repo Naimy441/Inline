@@ -650,6 +650,18 @@ describe("costs, usage and rewinding", () => {
     assert.doesNotMatch(fake.turns[2]!.context, /Since your last reply/, "each event is told once");
   });
 
+  it("does not carry a pause limit into the next chat", async () => {
+    useModel((_turn, claude) => claude.say("ok"));
+    const runtime = agentRuntime();
+    runtime.setDefaults({ usageLimit: 50, effort: "high" });
+    const { chat } = await newChat();
+    assert.equal(chat.state.settings.usageLimit, undefined);
+    assert.equal(chat.state.settings.effort, "high");
+    const limited = await newChat({ settings: { usageLimit: 75 } });
+    assert.equal(limited.chat.state.settings.usageLimit, 75);
+    runtime.setDefaults({ effort: "medium" });
+  });
+
   it("pauses at the user's usage limit instead of starting a reply", async () => {
     const fake = useModel((_turn, claude) => claude.say("hi"));
     fake.planLimits = { five_hour: 82, seven_day: 40 };
