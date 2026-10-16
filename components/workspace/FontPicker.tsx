@@ -3,21 +3,22 @@
 import { Check, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Popover } from "@/components/ui/Popover";
-import { ensureFonts, googleFonts, previewFamily, previewFont } from "@/lib/client/fonts";
+import { documentFonts, ensureFonts, googleFonts, loadDocumentFonts, previewFamily, previewFont, savedFontChoices, type DocumentFont } from "@/lib/client/fonts";
 import { primaryFamily } from "@/lib/doc/fontMetrics";
 import { FONT_FAMILIES, googleFontValue, type GoogleFont } from "@/lib/doc/settings";
 
-type Option = { label: string; value: string; google: boolean };
+type Option = { label: string; value: string; group: "standard" | "imported" | "google" };
 
 /** Rows drawn at a time; scrolling near the end of the list draws the next batch. */
 const PAGE_ROWS = 100;
 
-const STANDARD: Option[] = FONT_FAMILIES.map((font) => ({ label: font.label, value: font.value, google: false }));
+const STANDARD: Option[] = FONT_FAMILIES.map((font) => ({ label: font.label, value: font.value, group: "standard" }));
 
 /**
- * A font menu with a search box: the standard fonts, then every Google Fonts
- * family (lib/client/fonts.ts), each shown in its own face. A Google font is
- * fetched and kept the first time it is picked.
+ * A font menu with a search box: the standard fonts, then fonts imports have
+ * kept (lib/server/fonts.ts, shared by every document), then every Google
+ * Fonts family. A Google font is fetched and kept the first time it is picked.
+ * An imported font is loaded so the text is drawn in it.
  */
 export function FontPicker({ value, onPick, className, label, children }: { value: string; onPick: (value: string) => void; className: string; label: string; children: ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -57,6 +58,7 @@ export function FontPicker({ value, onPick, className, label, children }: { valu
 function FontList({ value, onPick }: { value: string; onPick: (value: string) => void }) {
   const [query, setQuery] = useState("");
   const [google, setGoogle] = useState<GoogleFont[] | null>(null);
+  const [library, setLibrary] = useState<DocumentFont[] | null>(null);
   const [active, setActive] = useState(0);
   const [shown, setShown] = useState(PAGE_ROWS);
   const list = useRef<HTMLDivElement>(null);
@@ -73,6 +75,15 @@ function FontList({ value, onPick }: { value: string; onPick: (value: string) =>
   useEffect(() => {
     let live = true;
     void googleFonts().then((fonts) => live && setGoogle(fonts));
+    // The page may already have the library; show that at once, then refresh in case an import just added fonts.
+    void documentFonts()
+      .then((fonts) => {
+        if (live) setLibrary(fonts);
+        return documentFonts(true);
+      })
+      .then((fonts) => {
+        if (live) setLibrary(fonts);
+      });
     return () => {
       live = false;
     };
@@ -81,7 +92,9 @@ function FontList({ value, onPick }: { value: string; onPick: (value: string) =>
   const { options, start } = useMemo(() => {
     const needle = query.trim().toLowerCase();
     const standardNames = new Set(STANDARD.map((option) => primaryFamily(option.value).toLowerCase()));
-    const googleOptions = (google ?? []).filter((font) => !standardNames.has(font.family.toLowerCase())).map<Option>((font) => ({ label: font.family, value: googleFontValue(font), google: true }));
+    const googleNames = new Set((google ?? []).map((font) => font.family.toLowerCase()));
+    const imported = savedFontChoices(library ?? [], [...standardNames, ...googleNames]).map<Option>((font) => ({ label: font.label, value: font.value, group: "imported" }));
+    const googleOptions = (google ?? []).filter((font) => !standardNames.has(font.family.toLowerCase())).map<Option>((font) => ({ label: font.family, value: googleFontValue(font), group: "google" }));
     const matches = (option: Option) => !needle || option.label.toLowerCase().includes(needle);
     // The name itself, then names that start with the search, then names that only contain it.
     const rank = (option: Option) => {
@@ -89,12 +102,21 @@ function FontList({ value, onPick }: { value: string; onPick: (value: string) =>
       return name === needle ? 0 : name.startsWith(needle) ? 1 : 2;
     };
     const standard = STANDARD.filter(matches);
+    const brought = imported.filter(matches);
     const found = googleOptions.filter(matches).sort((a, b) => rank(a) - rank(b));
-    const options = [...standard, ...found];
+    const options = [...standard, ...brought, ...found];
     // The arrow keys start from the current font, or from the best match once there's a search.
     const start = needle ? 0 : Math.max(0, options.findIndex((option) => primaryFamily(option.value).toLowerCase() === current));
     return { options, start };
-  }, [google, query, current]);
+  }, [google, library, query, current]);
+
+  // Load the imported faces once they're known, so a row and text set in that font draw in it.
+  useEffect(() => {
+    if (!library?.length) return;
+    const skip = [...STANDARD.map((option) => primaryFamily(option.value)), ...(google ?? []).map((font) => font.family)];
+    const choices = savedFontChoices(library, skip);
+    if (choices.length) void loadDocumentFonts(choices.map((font) => font.label).join("\n"));
+  }, [library, google]);
 
   useEffect(() => {
     setActive(start);
@@ -138,7 +160,8 @@ function FontList({ value, onPick }: { value: string; onPick: (value: string) =>
     list.current?.querySelector(`[data-index="${active}"]`)?.scrollIntoView({ block: "nearest" });
   }, [active]);
 
-  const firstGoogle = rows.findIndex((row) => row.google);
+  const firstImported = rows.findIndex((row) => row.group === "imported");
+  const firstGoogle = rows.findIndex((row) => row.group === "google");
   return (
     <div className="font-picker-body">
       <input
@@ -164,15 +187,16 @@ function FontList({ value, onPick }: { value: string; onPick: (value: string) =>
       <div ref={list} className="font-picker-list" role="listbox" aria-label="Fonts">
         {rows.map((row, index) => (
           <div key={row.value} role="presentation">
+            {index === firstImported && <div className="menu-label">Imported fonts</div>}
             {index === firstGoogle && <div className="menu-label">Google Fonts</div>}
             <button
               type="button"
               role="option"
               aria-selected={primaryFamily(row.value).toLowerCase() === current}
               data-index={index}
-              data-preview={row.google ? row.label : undefined}
+              data-preview={row.group === "google" ? row.label : undefined}
               className={`menu-item font-picker-item${index === active ? " is-active" : ""}`}
-              style={{ fontFamily: row.google ? `"${previewFamily(row.label)}", ${row.value}` : row.value }}
+              style={{ fontFamily: row.group === "google" ? `"${previewFamily(row.label)}", ${row.value}` : row.value }}
               onMouseDown={(event) => event.preventDefault()}
               onMouseMove={() => setActive(index)}
               onClick={() => onPick(row.value)}

@@ -1,6 +1,6 @@
 import { lineMetrics, primaryFamily, registerLineMetrics } from "@/lib/doc/fontMetrics";
 import { api } from "@/lib/client/api";
-import type { GoogleFont } from "@/lib/doc/settings";
+import { FONT_FAMILIES, type GoogleFont } from "@/lib/doc/settings";
 
 /**
  * The fonts imported documents brought (lib/server/fonts.ts), made available
@@ -111,15 +111,50 @@ export function googleFonts(): Promise<GoogleFont[]> {
 const ensuring = new Map<string, Promise<boolean>>();
 
 /**
- * Make sure each of these font families (CSS font-family values) is on the page: a Google Fonts
- * family the server hasn't kept yet is fetched and kept (so PDFs and Word copies have it too),
- * then loaded. Families that aren't Google's (Arial, a font an import brought) are left alone.
- * Resolves to whether any font was added.
+ * The CSS font-family for a font kept from an import: the family itself, then
+ * the stand-in its missing letters come from (a PDF subset), or a generic of
+ * the same kind.
+ */
+export function savedFontValue(family: string, fallback?: string | null): string {
+  const name = family.replace(/"/g, "").trim();
+  const quoted = `"${name}"`;
+  const standIn = fallback?.replace(/"/g, "").trim();
+  if (standIn && standIn.toLowerCase() !== name.toLowerCase()) {
+    const known = FONT_FAMILIES.find((font) => font.label.toLowerCase() === standIn.toLowerCase());
+    return known ? `${quoted}, ${known.value}` : `${quoted}, "${standIn}", sans-serif`;
+  }
+  const generic = /mono|courier|typewriter|menlo|consolas/i.test(name) ? "monospace" : /serif|times|roman|garamond|georgia|cambria|book/i.test(name) && !/sans/i.test(name) ? "serif" : "sans-serif";
+  return `${quoted}, ${generic}`;
+}
+
+/** One menu row per kept family. `skip` is families the menu already lists (the standard fonts, Google's). */
+export function savedFontChoices(fonts: Array<Pick<DocumentFont, "family" | "fallback">>, skip: Iterable<string> = []): Array<{ label: string; value: string }> {
+  const taken = new Set([...skip].map((name) => name.toLowerCase()));
+  const byFamily = new Map<string, { family: string; fallback?: string | null }>();
+  for (const font of fonts) {
+    const family = font.family.trim();
+    const key = family.toLowerCase();
+    if (!key || taken.has(key) || byFamily.has(key)) continue;
+    byFamily.set(key, font);
+  }
+  return [...byFamily.values()]
+    .sort((a, b) => a.family.localeCompare(b.family, undefined, { sensitivity: "base" }))
+    .map((font) => ({ label: font.family, value: savedFontValue(font.family, font.fallback) }));
+}
+
+/**
+ * Make sure each of these font families (CSS font-family values) is on the page: a font the
+ * library already has (one an import brought, shared by every document) is loaded, and a Google
+ * Fonts family the server hasn't kept yet is fetched and kept. Resolves to whether any font was added.
  */
 export async function ensureFonts(values: Iterable<string>): Promise<boolean> {
   const families = [...new Set([...values].map((value) => primaryFamily(value)).filter(Boolean))];
   if (!families.length) return false;
-  const kept = new Set((await documentFonts()).map((font) => font.family.toLowerCase()));
+  const fonts = await documentFonts();
+  const kept = new Set(fonts.map((font) => font.family.toLowerCase()));
+  const present = families.filter((family) => kept.has(family.toLowerCase()));
+  // A font kept from another document is not on this page until its face is loaded.
+  if (present.length) await loadDocumentFonts(present.join("\n"));
   const missing = families.filter((family) => !kept.has(family.toLowerCase()));
   if (!missing.length) return false;
   const google = new Map((await googleFonts()).map((font) => [font.family.toLowerCase(), font.family]));

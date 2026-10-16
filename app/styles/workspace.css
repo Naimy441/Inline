@@ -259,7 +259,7 @@
   flex: 1 0 8px;
 }
 
-/* Font picker (FontPicker.tsx): a search box over the standard fonts and Google Fonts. Above dialogs, for Page setup's. */
+/* Font picker (FontPicker.tsx): a search box over the standard fonts, fonts an import kept, and Google Fonts. Above dialogs, for Page setup's. */
 .popover.font-picker {
   z-index: 95;
   width: 280px;
