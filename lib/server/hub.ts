@@ -127,6 +127,11 @@ export class StaleEpochError extends Error {
   }
 }
 
+/** A timestamp strictly after the previous one, even when both happen in the same millisecond. */
+function newerThan(previous: number) {
+  return Math.max(Date.now(), previous + 1);
+}
+
 export class LiveDocument {
   doc: PMNode;
   version = 0;
@@ -286,7 +291,7 @@ export class LiveDocument {
       clientIDs: tr.steps.map(() => clientID),
       ...(hunksChanged ? { hunks: this.hunksJSON() } : {}),
     });
-    this.meta = { ...this.meta, updatedAt: Date.now() };
+    this.meta = { ...this.meta, updatedAt: newerThan(this.meta.updatedAt) };
     this.dirtySinceRewind = true;
     this.lastUsed = Date.now();
     // The title follows the first line as the letters arrive, not after the save delay.
@@ -332,7 +337,9 @@ export class LiveDocument {
       next.autoTitle = false;
     }
     if (patch.settings !== undefined) next.settings = patchSettings(this.meta.settings, patch.settings);
-    next.updatedAt = Date.now();
+    // Strictly newer than the last change, so two saves in one millisecond stay ordered
+    // and a late response cannot overwrite the one that landed after it.
+    next.updatedAt = newerThan(this.meta.updatedAt);
     const retitled = next.title !== this.meta.title;
     this.meta = next;
     this.emit({ type: "meta", meta: this.meta });
@@ -425,7 +432,7 @@ export class LiveDocument {
 
   /** A change to comments alone: the Word copy holds them too, so it counts as an update. */
   private commentsChanged() {
-    this.meta = { ...this.meta, updatedAt: Date.now() };
+    this.meta = { ...this.meta, updatedAt: newerThan(this.meta.updatedAt) };
     this.emit({ type: "comments", comments: this.comments });
     this.schedulePersist();
   }
