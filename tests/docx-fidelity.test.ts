@@ -7,7 +7,6 @@ import { readDocx, type ImportedDocx } from "@/lib/doc/docxImport";
 import { markdownToDoc } from "@/lib/doc/markdown";
 import { schema } from "@/lib/doc/schema";
 import { DEFAULT_SETTINGS, FONT_FAMILIES, type DocComment, type DocumentMeta, type DocumentSettings } from "@/lib/doc/settings";
-import { DOCUMENT_THEMES } from "@/lib/doc/styles";
 import { readZip } from "@/lib/server/unzip";
 import { comparable, commentEnd, commentStart, googleDocx, horizontalRule, image, link, LIST, pageBreak, para, png, rtlRun, run, table, tabEnd, tabTitle } from "./support/googleDocx";
 
@@ -474,19 +473,21 @@ describe("Inline's Word copy reads back as the same document", () => {
     assertSameDocument(original, await throughWord(original));
   });
 
-  test("a theme and a shared style come back on the style, not copied onto each paragraph", async () => {
-    const classic = DOCUMENT_THEMES.find((item) => item.id === "classic")!;
-    const callout = { id: "Callout", name: "Callout", basedOn: "Normal", next: "Normal", font: { theme: "heading" as const }, size: 18, spaceBefore: 4, spaceAfter: 4, lineHeight: 1.3, color: { theme: "accent4" as const }, italic: null };
-    const settings: DocumentSettings = { ...DEFAULT_SETTINGS, fontFamily: classic.bodyFont, theme: classic, styles: [callout] };
+  test("a shared style comes back on the style, not copied onto each paragraph", async () => {
+    const callout = { id: "Callout", name: "Callout", basedOn: "Normal", next: "Normal", font: { family: "Georgia, serif" }, size: 18, spaceBefore: 4, spaceAfter: 4, lineHeight: 1.3, color: { hex: "#1a73e8" }, italic: null };
+    const settings: DocumentSettings = { ...DEFAULT_SETTINGS, styles: [callout] };
     const doc = schema.nodes.doc!.create(null, [
       schema.nodes.heading!.create({ level: 1 }, [schema.text("Hello")]),
       schema.nodes.paragraph!.create({ style: "Callout" }, [schema.text("One")]),
       schema.nodes.paragraph!.create({ style: "Callout", fontSize: 14 }, [schema.text("Two")]),
     ]);
     const back = await throughWord({ settings, tabs: [{ title: null, doc, comments: [] }] });
-    assert.equal(back.settings.theme?.id, "classic");
-    assert.equal(back.settings.fontFamily, classic.bodyFont);
-    assert.equal(back.settings.styles?.find((item) => item.id === "Callout")?.size, 18);
+    assert.equal("theme" in back.settings, false);
+    assert.equal(back.settings.fontFamily, DEFAULT_SETTINGS.fontFamily);
+    const stored = back.settings.styles?.find((item) => item.id === "Callout");
+    assert.equal(stored?.size, 18);
+    assert.deepEqual(stored?.font, { family: "Georgia, serif" });
+    assert.deepEqual(stored?.color, { hex: "#1a73e8" });
     const heading = back.tabs[0]!.doc.child(0)!;
     assert.equal(heading.type.name, "heading");
     assert.equal(heading.attrs.style, null);
@@ -518,10 +519,9 @@ describe("the Word file itself", () => {
     const heading = (level: number) => new RegExp(`<w:style w:type="paragraph" w:styleId="Heading${level}">.*?</w:style>`).exec(xml)![0];
     for (const level of [1, 2, 3, 4, 5, 6]) assert.doesNotMatch(heading(level), /<w:b\/>/, `heading ${level} isn't bold`);
     assert.match(heading(3), /<w:color w:val="434343"/);
-    const theme = new TextDecoder().decode(readZip(await documentToDocx(markdownToDoc("x"), meta(DEFAULT_SETTINGS), loadImage)).get("word/theme/theme1.xml")!);
-    assert.match(theme, /<a:majorFont>/);
-    assert.match(theme, /typeface="Arial"/);
     assert.match(heading(6), /<w:i\/>/);
+    assert.doesNotMatch(xml, /asciiTheme|themeColor/);
+    assert.equal(readZip(await documentToDocx(markdownToDoc("x"), meta(DEFAULT_SETTINGS), loadImage)).has("word/theme/theme1.xml"), false);
   });
 
   test("a table gets an empty paragraph after it only where Word needs one", async () => {

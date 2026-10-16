@@ -53,7 +53,7 @@ import {
   toggleList,
   type BlockKind,
 } from "@/lib/editor/commands";
-import { activeTheme, findStyle, resolveStyle, stylePreview, stylesOf } from "@/lib/doc/styles";
+import { findStyle, resolveStyle, stylePreview, stylesOf } from "@/lib/doc/styles";
 import { IconButton } from "@/components/ui/Button";
 import { MenuButton, type MenuItem } from "@/components/ui/Menu";
 import { Popover } from "@/components/ui/Popover";
@@ -165,7 +165,7 @@ const ToolbarView = memo(function ToolbarView({
   const disabled = !format.ready || viewing;
   const { align, list, family, lineHeight } = format;
   const sheet = stylesOf(meta?.settings ?? {});
-  const theme = activeTheme(meta?.settings ?? { fontFamily: FONT_FAMILIES[0].value });
+  const documentFont = meta?.settings.fontFamily ?? FONT_FAMILIES[0].value;
   const styleName = format.styleId ? (findStyle(sheet, format.styleId)?.name ?? "Normal text") : null;
   const defaultSize = meta?.settings.fontSize ?? 11;
   const size = format.sizeAttr ? Number.parseFloat(format.sizeAttr) : defaultSize;
@@ -181,11 +181,14 @@ const ToolbarView = memo(function ToolbarView({
   const moreRef = useRef<HTMLButtonElement>(null);
   const [moreOpen, setMoreOpen] = useState(false);
   const closeMore = useCallback(() => setMoreOpen(false), []);
-  // A touch can blur the document on pointerdown, before mousedown's preventDefault
-  // runs and before the click reads the selection. Remember the range first.
-  const rememberTouchSelection = (event: PointerEvent) => {
-    if (event.pointerType === "mouse" || event.button !== 0) return;
-    session.captureDomSelection();
+  // Pointerdown can blur the document before mousedown's preventDefault runs,
+  // and before the click reads the selection. Remember the range first. A font
+  // size field is left alone so typing there still moves the caret.
+  const rememberSelection = (event: PointerEvent) => {
+    if (event.button !== 0) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest("input, textarea, select")) return;
+    session.holdDomSelection();
   };
 
   const alignIcon = { left: <AlignLeft size={16} />, center: <AlignCenter size={16} />, right: <AlignRight size={16} />, justify: <AlignJustify size={16} /> }[align];
@@ -223,7 +226,7 @@ const ToolbarView = memo(function ToolbarView({
                 label: item.name,
                 checked: format.styleId === item.id,
                 shortcut: item.id === "Normal" ? "⌘⌥0" : item.id === "Heading1" ? "⌘⌥1" : item.id === "Heading2" ? "⌘⌥2" : item.id === "Heading3" ? "⌘⌥3" : item.id === "Heading4" ? "⌘⌥4" : undefined,
-                labelStyle: resolved ? stylePreview(resolved, theme) : undefined,
+                labelStyle: resolved ? stylePreview(resolved, documentFont) : undefined,
                 onSelect: () => run(applyStyle(item.id, sheet)),
               };
             }),
@@ -346,7 +349,7 @@ const ToolbarView = memo(function ToolbarView({
   ];
 
   return (
-    <div ref={rowRef} className={`toolbar${viewing ? " is-viewing" : ""}`} role="toolbar" aria-label="Formatting" onPointerDown={rememberTouchSelection} onMouseDown={keepEditorSelection}>
+    <div ref={rowRef} className={`toolbar${viewing ? " is-viewing" : ""}`} role="toolbar" aria-label="Formatting" onPointerDown={rememberSelection} onMouseDown={keepEditorSelection}>
       {groups.slice(0, fit)}
       {fit < groups.length && (
         <Group edit={false} className="tb-more-group">
@@ -360,7 +363,7 @@ const ToolbarView = memo(function ToolbarView({
         {EDITOR_MODES[mode].icon(15)}
         <span className="tb-select-text">{EDITOR_MODES[mode].label}</span> <ChevronDown size={13} />
       </MenuButton>
-      <Popover open={moreOpen && fit < groups.length} onClose={closeMore} anchor={moreRef} placement="bottom-end" role="toolbar" className={`tb-overflow${viewing ? " is-viewing" : ""}`} onPointerDown={rememberTouchSelection} onMouseDown={keepEditorSelection}>
+      <Popover open={moreOpen && fit < groups.length} onClose={closeMore} anchor={moreRef} placement="bottom-end" role="toolbar" className={`tb-overflow${viewing ? " is-viewing" : ""}`} onPointerDown={rememberSelection} onMouseDown={keepEditorSelection}>
         {groups.slice(fit)}
       </Popover>
     </div>

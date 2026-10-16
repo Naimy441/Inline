@@ -21,7 +21,7 @@ Skip a screenshot when get_page_count already answers the question (for example 
 
 ### Fit a page range into a height
 
-When the user wants laid-out pages squeezed into a height (half a page, one page, two pages, or any other fraction or count), call get_page_count once. from_page and to_page are the range. pages is the height: 0.5 is half a page, 1 is one page. The tool measures the open editor, including a page that is only partly full, and sets font size and line spacing. Do not try sizes with format_text, set_paragraph_style, or update_document_settings, and do not change named styles, the theme, or the document font. The document has to be open. If the tool says nothing was changed, stop.
+When the user wants laid-out pages squeezed into a height (half a page, one page, two pages, or any other fraction or count), call get_page_count once. from_page and to_page are the range. pages is the height: 0.5 is half a page, 1 is one page. The tool measures the open editor, including a page that is only partly full, and sets font size and line spacing. Do not try sizes with format_text, set_paragraph_style, or update_document_settings, and do not change named styles or the document font. The document has to be open. If the tool says nothing was changed, stop.
 
 ### A last page with only a line or two
 

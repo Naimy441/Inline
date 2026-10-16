@@ -3,8 +3,8 @@
  * the agent tools. Everything here is plain JSON.
  */
 
-import type { DocumentTheme, ParagraphStyle } from "@/lib/doc/styles";
-import { normalizeStyleSheet, normalizeTheme, styleLayoutKey } from "@/lib/doc/styles";
+import type { ParagraphStyle } from "@/lib/doc/styles";
+import { normalizeStyleSheet, styleLayoutKey } from "@/lib/doc/styles";
 
 export type PaperSize = "letter" | "a4" | "legal" | "statement";
 export type Orientation = "portrait" | "landscape";
@@ -95,8 +95,6 @@ export type DocumentSettings = {
    * Heading 1–6, Quote, Code), so documents from before styles still open.
    */
   styles?: ParagraphStyle[];
-  /** Heading font, body font and colors. Absent means the document font and the usual page colors. */
-  theme?: DocumentTheme;
 };
 
 /** Equations' usual size against their text. */
@@ -318,8 +316,7 @@ export function normalizeSettings(input: unknown, base: DocumentSettings = DEFAU
     })(),
     ...(() => {
       const styles = raw.styles === undefined ? base.styles : raw.styles === null ? undefined : normalizeStyleSheet(raw.styles);
-      const theme = raw.theme === undefined ? base.theme : raw.theme === null ? undefined : normalizeTheme(raw.theme);
-      return { ...(styles ? { styles } : {}), ...(theme ? { theme } : {}) };
+      return styles ? { styles } : {};
     })(),
   };
 }

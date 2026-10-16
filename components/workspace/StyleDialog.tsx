@@ -5,56 +5,39 @@ import type { DocumentSession } from "@/lib/client/documentSession";
 import { currentStyleId, replaceStyleUses } from "@/lib/editor/commands";
 import { FONT_FAMILIES, type DocumentSettings } from "@/lib/doc/settings";
 import {
-  activeTheme,
   dropStyle,
   findStyle,
   isBuiltinStyle,
+  isDefaultStyleFont,
   newStyleId,
   resolveStyle,
   styleIdFromName,
-  resolvedColorHex,
-  resolvedFontFamily,
   stylesOf,
   stylesToStore,
   wouldCycle,
   type ColorRef,
   type FontRef,
   type ParagraphStyle,
-  type ThemeColor,
 } from "@/lib/doc/styles";
 import { Button } from "@/components/ui/Button";
 import { Dialog } from "@/components/ui/Dialog";
 import { toast } from "@/components/ui/Toast";
 
-const THEME_COLORS: Array<{ value: ThemeColor; label: string }> = [
-  { value: "text", label: "Theme text" },
-  { value: "accent1", label: "Accent 1" },
-  { value: "accent2", label: "Accent 2" },
-  { value: "accent3", label: "Accent 3" },
-  { value: "accent4", label: "Accent 4" },
-  { value: "accent5", label: "Accent 5" },
-  { value: "accent6", label: "Accent 6" },
-];
-
 function fontValue(font: FontRef | null) {
-  if (!font) return "";
-  return "theme" in font ? `theme:${font.theme}` : font.family;
+  return font?.family ?? "";
 }
 
 function fontFrom(value: string): FontRef | null {
-  if (value === "theme:body" || value === "theme:heading") return { theme: value.slice(6) as "body" | "heading" };
   if (!value) return null;
   return { family: value };
 }
 
 function colorValue(color: ColorRef | null) {
-  if (!color) return "";
-  return "theme" in color ? `theme:${color.theme}` : "hex";
+  return color ? "hex" : "";
 }
 
 function colorFrom(value: string, hex: string): ColorRef | null {
   if (!value) return null;
-  if (value.startsWith("theme:")) return { theme: value.slice(6) as ThemeColor };
   return /^#[0-9a-f]{6}$/i.test(hex) ? { hex: hex.toLowerCase() } : null;
 }
 
@@ -62,7 +45,7 @@ function openedDraft(styleId: string | null, settings: DocumentSettings, session
   const sheet = stylesOf(settings);
   if (styleId) {
     const found = findStyle(sheet, styleId);
-    if (found) return { draft: { ...found }, hex: found.color && "hex" in found.color ? found.color.hex : "#202124" };
+    if (found) return { draft: { ...found }, hex: found.color?.hex ?? "#202124" };
   }
   const current = session.view ? currentStyleId(session.view.state) : null;
   const base = current && findStyle(sheet, current) ? current : "Normal";
@@ -121,12 +104,12 @@ export function StyleDialog({
 
   if (!settings) return null;
   const sheet = stylesOf(settings);
-  const theme = activeTheme(settings);
   const resolved = resolveStyle([...sheet.filter((item) => item.id !== draft.id), draft], draft.id);
+  const previewFont = resolved?.font?.family;
   const preview = resolved
     ? {
-        fontFamily: resolvedFontFamily(resolved.font, theme) ?? undefined,
-        color: resolvedColorHex(resolved.color, theme) ?? undefined,
+        fontFamily: previewFont && !isDefaultStyleFont(previewFont) ? previewFont : settings.fontFamily,
+        color: resolved.color && resolved.color.hex.toLowerCase() !== "#202124" ? resolved.color.hex : undefined,
         fontStyle: resolved.italic ? ("italic" as const) : undefined,
         fontSize: `${Math.min(resolved.size ?? settings.fontSize, 28)}pt`,
         lineHeight: resolved.lineHeight ?? undefined,
@@ -239,8 +222,7 @@ export function StyleDialog({
           Font
           <select className="input" value={fontValue(draft.font)} onChange={(event) => set({ font: fontFrom(event.target.value) })}>
             <option value="">Inherit</option>
-            <option value="theme:body">Theme body</option>
-            <option value="theme:heading">Theme heading</option>
+            {draft.font && !FONT_FAMILIES.some((font) => font.value === draft.font?.family) && <option value={draft.font.family}>{draft.font.family}</option>}
             {FONT_FAMILIES.map((font) => (
               <option key={font.value} value={font.value}>
                 {font.label}
@@ -276,21 +258,16 @@ export function StyleDialog({
           Color
           <select className="input" value={colorValue(draft.color)} onChange={(event) => set({ color: colorFrom(event.target.value, hex) })}>
             <option value="">Inherit</option>
-            {THEME_COLORS.map((color) => (
-              <option key={color.value} value={`theme:${color.value}`}>
-                {color.label}
-              </option>
-            ))}
             <option value="hex">Custom</option>
           </select>
         </label>
-        {draft.color && "hex" in draft.color && (
+        {draft.color && (
           <label className="field">
             Custom color
             <input className="input" type="color" value={hex} onChange={(event) => { setHex(event.target.value); set({ color: { hex: event.target.value } }); }} />
           </label>
         )}
-        <div className="span-2" style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "12px 14px", background: theme.colors.background }}>
+        <div className="span-2" style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "12px 14px", background: "var(--paper)" }}>
           <div style={preview}>The quick brown fox jumps over the lazy dog.</div>
         </div>
       </div>
