@@ -30,7 +30,7 @@ Hit lengths the user asks for exactly, and never estimate them in your head; the
 - A document title is \`# Title {.title}\` and a subtitle is a paragraph ending in \`{.subtitle}\`.
 - Paragraph attributes go at the end of the line in braces: \`{align=center}\`, \`{align=right}\`, \`{align=justify}\`, \`{indent=2}\`. They can be combined: \`{.subtitle align=center}\`.
 - A line break inside a paragraph is \`<br>\` (a single newline just joins lines, as in Markdown). An empty paragraph is \`&nbsp;\`. A page break is \`\\pagebreak\` on its own line.
-- Images: \`![alt text](url){width=320 align=center}\`.
+- Images: \`![alt text](url){width=320 align=left wrap=square}\`. \`wrap\` is \`square\` (text beside the picture), \`behind\`, or \`front\`. \`crop=10,0,10,0\` hides that percent from the left, top, right and bottom. \`rotate=90\` turns it clockwise. A picture set in a line of text stays in the line.
 - Math is LaTeX, rendered like a typeset equation: inline \`$E = mc^2$\` (no space just inside the dollar signs), and a displayed equation as its own block, \`$$\` on the line before and after the LaTeX. Write a literal dollar sign that could be mistaken for math as \`\\$\`.
 - Blocks are separated by one blank line.
 - Some text may be locked by the user; locked text can't be changed or deleted, and edits that touch it fail.

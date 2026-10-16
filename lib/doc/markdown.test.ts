@@ -93,6 +93,37 @@ describe("parseMarkdown", () => {
     assert.equal(Number((found as PMNode).attrs.width), 320);
   });
 
+  it("keeps wrap, crop and rotation on a picture, and a picture in the line", () => {
+    const markdown = "![A cat](https://example.com/cat.png){width=220px align=left wrap=square crop=25,10,0,0 rotate=90}";
+    const image = markdownToDoc(markdown).child(0);
+    assert.equal(image.attrs.alt, "A cat");
+    assert.equal(image.attrs.width, "220px");
+    assert.equal(image.attrs.wrap, "square");
+    assert.deepEqual(image.attrs.crop, { l: 0.25, t: 0.1, r: 0, b: 0 });
+    assert.equal(image.attrs.rotate, 90);
+    const again = markdownToDoc(docToMarkdown(markdownToDoc(markdown))).child(0);
+    assert.equal(again.attrs.wrap, "square");
+    assert.deepEqual(again.attrs.crop, image.attrs.crop);
+    assert.equal(again.attrs.rotate, 90);
+    assert.match(docToMarkdown(markdownToDoc(markdown)), /width=220px/);
+
+    const lineDoc = markdownToDoc('Mark <img src="/api/uploads/a.png" width="80" height="40" alt="icon" data-crop="50,0,0,0" data-rotate="15"> here');
+    const line = lineDoc.child(0);
+    const inline = [...Array(line.childCount)].map((_, index) => line.child(index)).find((child) => child.type.name === "inline_image");
+    assert.ok(inline);
+    assert.equal(inline.attrs.alt, "icon");
+    assert.equal(inline.attrs.width, 80);
+    assert.deepEqual(inline.attrs.crop, { l: 0.5, t: 0, r: 0, b: 0 });
+    assert.equal(inline.attrs.rotate, 15);
+    const written = docToMarkdown(lineDoc);
+    assert.match(written, /data-crop="50,0,0,0"/);
+    assert.match(written, /data-rotate="15"/);
+    const reread = markdownToDoc(written).child(0).child(1);
+    assert.equal(reread.type.name, "inline_image");
+    assert.deepEqual(reread.attrs.crop, inline.attrs.crop);
+    assert.equal(reread.attrs.rotate, 15);
+  });
+
   it("treats a single newline as a soft wrap, as Markdown does", () => {
     const doc = markdownToDoc("one\ntwo");
     assert.equal(doc.childCount, 1);
