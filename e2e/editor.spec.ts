@@ -293,6 +293,73 @@ test("an untitled document takes its title from the first line", async ({ page }
   await expect(page.locator(".title-input")).toHaveValue("Quarterly planning notes", { timeout: 10_000 });
 });
 
+test("the document name follows the first line until someone sets it", async ({ page }) => {
+  await newBlankDocument(page);
+  const title = page.locator(".title-input");
+  const doc = page.locator(".doc-content");
+  await expect(title).toHaveValue("Untitled document");
+  await doc.click();
+  await page.keyboard.type("Quarterly planning");
+  await expect(title).toHaveValue("Quarterly planning");
+
+  const styleAs = async (name: string) => {
+    await page.getByRole("button", { name: "Paragraph style" }).click();
+    await page.locator(".menu-text", { hasText: new RegExp(`^${name}$`) }).click();
+  };
+  await styleAs("Heading 1");
+  await expect(doc.locator("h1")).toHaveText("Quarterly planning");
+  await expect(title).toHaveValue("Quarterly planning");
+  await styleAs("Title");
+  await expect(doc.locator(".doc-title")).toHaveText("Quarterly planning");
+  await expect(title).toHaveValue("Quarterly planning");
+  await doc.locator(".doc-title").click();
+
+  await page.evaluate(() => {
+    const input = document.querySelector<HTMLInputElement>(".title-input")!;
+    const seen: string[] = [input.value];
+    (window as unknown as { __titles: string[] }).__titles = seen;
+    const proto = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+    if (!proto?.get || !proto.set) return;
+    Object.defineProperty(input, "value", {
+      configurable: true,
+      get() {
+        return proto.get!.call(this);
+      },
+      set(next: string) {
+        if (seen[seen.length - 1] !== next) seen.push(next);
+        proto.set!.call(this, next);
+      },
+    });
+  });
+  for (let i = 0; i < "planning".length; i += 1) await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("Enter");
+  await expect(doc.locator(".doc-title")).toHaveCount(2);
+  await expect(doc.locator(".doc-title").nth(0)).toHaveText("Quarterly ");
+  await expect(doc.locator(".doc-title").nth(1)).toHaveText("planning");
+  await expect(title).toHaveValue("Quarterly");
+  const duringSplit = await page.evaluate(() => (window as unknown as { __titles: string[] }).__titles);
+  expect(duringSplit.every((value) => value !== "Untitled document")).toBe(true);
+  expect(duringSplit.at(-1)).toBe("Quarterly");
+
+  await title.click();
+  await title.fill("Chosen name");
+  await title.press("Enter");
+  await expect(title).toHaveValue("Chosen name");
+  await doc.locator(".doc-title").first().click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" notes");
+  await expect(doc.locator(".doc-title").first()).toHaveText("Quarterly  notes");
+  await expect(title).toHaveValue("Chosen name");
+  await page.keyboard.press("Home");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Enter");
+  await expect(doc.locator(".doc-title").nth(0)).toHaveText("Qu");
+  await expect(doc.locator(".doc-title").nth(1)).toHaveText("arterly  notes");
+  await expect(title).toHaveValue("Chosen name");
+  await expect(doc.locator(".doc-title").nth(2)).toHaveText("planning");
+});
+
 test("a long first line stays a short title while it is typed", async ({ page }) => {
   await newBlankDocument(page);
   await page.locator(".doc-content").click();

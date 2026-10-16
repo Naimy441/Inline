@@ -11,7 +11,7 @@ import { DocumentSession, geometryFor, type ClientCommand, type DocumentUiState,
 import { useTheme } from "@/lib/client/theme";
 import { useShortcut } from "@/lib/client/platform";
 import { docPlainText, docWordCount, followedDocumentTitle, wordCount } from "@/lib/doc/editing";
-import { type DocComment, type DocumentMeta } from "@/lib/doc/settings";
+import { cleanTitle, type DocComment, type DocumentMeta } from "@/lib/doc/settings";
 import { insertImage, insertText } from "@/lib/editor/commands";
 import { AgentPanel, type AgentPanelHandle } from "@/components/agent/AgentPanel";
 import { Spark } from "@/components/agent/Activity";
@@ -1203,9 +1203,14 @@ function WithEditorState({ session, children }: { session: DocumentSession; chil
 
 function TitleInput({ meta, session, onRename }: { meta: DocumentMeta | null; session: DocumentSession; onRename: (title: string) => void }) {
   const editorState = useSyncExternalStore(session.editor.subscribe, session.editor.get, session.editor.get);
-  // Follow the first Title block as it is typed. A title the user typed themselves stays put.
-  const live = meta?.autoTitle && editorState ? followedDocumentTitle(editorState.doc) : null;
-  const shown = live ?? meta?.title ?? "";
+  // The name the user just typed, shown until the server agrees they named the document.
+  const [pinned, setPinned] = useState<string | null>(null);
+  useEffect(() => {
+    if (pinned != null && meta?.autoTitle === false) setPinned(null);
+  }, [meta, pinned]);
+  // Follow the first line as it is typed. A name the user set stays put, including while that save is still on its way.
+  const live = pinned == null && meta?.autoTitle && editorState ? (followedDocumentTitle(editorState.doc) ?? "Untitled document") : null;
+  const shown = live ?? pinned ?? meta?.title ?? "";
   const [draft, setDraft] = useState<string | null>(null);
   const value = draft ?? shown;
   useLayoutEffect(() => {
@@ -1224,7 +1229,11 @@ function TitleInput({ meta, session, onRename }: { meta: DocumentMeta | null; se
       }}
       onChange={(event) => setDraft(event.target.value)}
       onBlur={() => {
-        if (draft != null && draft.trim() && draft.trim() !== shown) onRename(draft.trim());
+        const next = draft?.trim() ? cleanTitle(draft) : "";
+        if (next && next !== shown) {
+          setPinned(next);
+          onRename(next);
+        }
         setDraft(null);
       }}
       onKeyDown={(event) => {
