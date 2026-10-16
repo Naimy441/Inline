@@ -3,6 +3,7 @@
 import { Check, CloudOff, Download, History, ListTree, Loader2, MessageSquare, Moon, MoreHorizontal, PanelRight, Sparkles, Sun } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { flushSync } from "react-dom";
 import type { EditorState } from "prosemirror-state";
 import type { SelectionContext } from "@/lib/agent/types";
 import { api, patch, post, uploadFile } from "@/lib/client/api";
@@ -416,8 +417,13 @@ export function Workspace({ documentId }: { documentId: string }) {
     const { from, to } = session.view.state.selection;
     // With no side panel open and room beside the page, the comment is written in the margin next to its text.
     const sidePanel = focusRef.current && panel === "agent" ? null : panel;
-    if (sidePanel !== null || !marginFits(canvasRef.current)) setPanel("comments");
-    setDraftComment({ from, to });
+    // Paint the field before this shortcut returns. The next key is already waiting,
+    // and it has to land in the comment, not replace the selected text.
+    flushSync(() => {
+      if (sidePanel !== null || !marginFits(canvasRef.current)) setPanel("comments");
+      setDraftComment({ from, to });
+    });
+    document.querySelector<HTMLTextAreaElement>(".comment-card.is-draft .comment-input")?.focus({ preventScroll: true });
     session.setCommentDraft({ from, to });
   }, [session, setPanel, panel]);
   const endDraft = useCallback(() => {
