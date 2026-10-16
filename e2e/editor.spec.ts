@@ -97,7 +97,7 @@ test("long documents flow onto a second page", async ({ page }) => {
 test("comments attach to the selected text", async ({ page }) => {
   await newBlankDocument(page);
   await page.locator(".doc-content").click();
-  await page.keyboard.type("Commentable sentence here.");
+  await page.keyboard.type("A sentence worth a source.");
   await page.keyboard.press("Home");
   await page.keyboard.press("Shift+End");
   await page.keyboard.press("Control+Alt+m");
