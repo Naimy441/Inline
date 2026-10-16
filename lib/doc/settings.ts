@@ -112,7 +112,7 @@ export type DocumentMeta = {
   settings: DocumentSettings;
   wordCount: number;
   preview: string;
-  /** True until someone names the document; meanwhile the title follows its first line, like Google Docs. */
+  /** True until someone names the document. Meanwhile the title follows the first Title block, or the first line when there is none. */
   autoTitle?: boolean;
   /** Document tabs: set on every tab but the root (the tab the document began with), naming the root, which holds the title and the tab order. */
   parentId?: string;

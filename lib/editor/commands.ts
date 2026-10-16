@@ -2,6 +2,7 @@ import { chainCommands, lift, setBlockType, splitBlock, toggleMark, wrapIn } fro
 import { type Attrs, type MarkType, type Node as PMNode, type NodeType } from "prosemirror-model";
 import { liftListItem, sinkListItem, wrapInList } from "prosemirror-schema-list";
 import { NodeSelection, TextSelection, type Command, type EditorState } from "prosemirror-state";
+import { canSplit } from "prosemirror-transform";
 import { isInTable } from "prosemirror-tables";
 import { pictureCrop, pictureRotate, pictureWrap, type PictureCrop, type PictureWrap } from "@/lib/doc/picture";
 import { fileLinkHref, MAX_INDENT, safeHref, schema, type Align } from "@/lib/doc/schema";
@@ -166,11 +167,14 @@ function attrsForStyle(node: PMNode, type: NodeType, styleId: string, role: { ro
   return attrs;
 }
 
-function applyStyleToBlock(tr: import("prosemirror-state").Transaction, pos: number, node: PMNode, styleId: string, sheet: readonly ParagraphStyle[]) {
+function applyStyleToBlock(tr: import("prosemirror-state").Transaction, pos: number, node: PMNode, styleId: string, sheet: readonly ParagraphStyle[], placed = false) {
   const role = structuralRole(sheet, styleId);
   if (role.role === "quote") return false;
   const type = typeForRole(role.role);
-  const mapped = tr.mapping.map(pos);
+  // `pos` usually comes from the document before `tr`'s steps. A position that
+  // is already in tr.doc must not be mapped again: the split step would push
+  // it into the text, and the markup change would keep only the first character.
+  const mapped = placed ? pos : tr.mapping.map(pos);
   const attrs = attrsForStyle(node, type, styleId, role);
   try {
     if (type === nodes.code_block || node.type === nodes.code_block) tr.setBlockType(mapped, mapped + node.nodeSize, type, attrs);
@@ -272,25 +276,51 @@ function applyQuoteStyle(styleId: string, role: { role: StyleRole; level: number
 /**
  * Enter keeps the first paragraph's style and gives the new one the style
  * that style names as next (a heading's next style is Normal).
+ *
+ * A Title splits into two Titles when the caret is not at the end, so the
+ * text before the caret stays and the text after it moves into the title
+ * below. Enter at the end still opens the following block.
  */
 export function splitWithNextStyle(sheet: () => readonly ParagraphStyle[]): Command {
   return (state, dispatch, view) => {
-    const parent = state.selection.$from.parent;
-    if (!parent.isTextblock) return false;
+    const { $from, $to } = state.selection;
+    const parent = $from.parent;
+    if (!parent.isTextblock || !$from.sameParent($to)) return splitBlock(state, dispatch, view);
     const styles = sheet();
-    const nextId = resolveStyle(styles, nodeStyleId(parent))?.next;
-    if (!nextId || nextId === nodeStyleId(parent) || !findStyle(styles, nextId)) return splitBlock(state, dispatch, view);
+    const styleId = nodeStyleId(parent);
+    const atEnd = $to.parentOffset === parent.content.size;
+    if (structuralRole(styles, styleId).role === "title" && !atEnd) return splitKeepingType(state, dispatch);
+    const nextId = resolveStyle(styles, styleId)?.next;
+    if (!nextId || nextId === styleId || !findStyle(styles, nextId)) return splitBlock(state, dispatch, view);
+    // At the start, the new block is the empty one above. The block that holds
+    // the text keeps its style. Anywhere else the caret lands in the new block.
+    const atStart = state.selection.empty && $from.parentOffset === 0;
     return splitBlock(
       state,
       dispatch &&
         ((tr) => {
-          const $pos = tr.selection.$from;
-          if ($pos.parent.isTextblock) applyStyleToBlock(tr, $pos.before($pos.depth), $pos.parent, nextId, styles);
+          if (!atStart) {
+            const $pos = tr.selection.$from;
+            if ($pos.parent.isTextblock) applyStyleToBlock(tr, $pos.before($pos.depth), $pos.parent, nextId, styles, true);
+          }
           dispatch(tr.scrollIntoView());
         }),
       view,
     );
   };
+}
+
+/** Split one textblock into two of the same type, after deleting a selection. */
+function splitKeepingType(state: EditorState, dispatch?: (tr: import("prosemirror-state").Transaction) => void) {
+  const { $from, $to } = state.selection;
+  if (!$from.sameParent($to) || !$from.parent.isTextblock) return false;
+  if (!dispatch) return !state.selection.empty || canSplit(state.doc, $from.pos);
+  const tr = state.tr;
+  if (!state.selection.empty) tr.deleteSelection();
+  const pos = tr.selection.from;
+  if (!canSplit(tr.doc, pos)) return false;
+  dispatch(tr.split(pos).scrollIntoView());
+  return true;
 }
 
 function textblocksInSelection(state: EditorState) {

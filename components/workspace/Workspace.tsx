@@ -10,8 +10,8 @@ import { api, patch, post, uploadFile } from "@/lib/client/api";
 import { DocumentSession, geometryFor, type ClientCommand, type DocumentUiState, type EditorMode } from "@/lib/client/documentSession";
 import { useTheme } from "@/lib/client/theme";
 import { useShortcut } from "@/lib/client/platform";
-import { docPlainText, docWordCount, openingLine, wordCount } from "@/lib/doc/editing";
-import { titleFromText, type DocComment, type DocumentMeta } from "@/lib/doc/settings";
+import { docPlainText, docWordCount, followedDocumentTitle, wordCount } from "@/lib/doc/editing";
+import { type DocComment, type DocumentMeta } from "@/lib/doc/settings";
 import { insertImage, insertText } from "@/lib/editor/commands";
 import { AgentPanel, type AgentPanelHandle } from "@/components/agent/AgentPanel";
 import { Spark } from "@/components/agent/Activity";
@@ -1060,8 +1060,8 @@ function WithEditorState({ session, children }: { session: DocumentSession; chil
 
 function TitleInput({ meta, session, onRename }: { meta: DocumentMeta | null; session: DocumentSession; onRename: (title: string) => void }) {
   const editorState = useSyncExternalStore(session.editor.subscribe, session.editor.get, session.editor.get);
-  // Follow the first line as it is typed. The saved title arrives a moment later and matches this.
-  const live = meta?.autoTitle && editorState ? titleFromText(openingLine(editorState.doc)) : null;
+  // Follow the first Title block as it is typed. A title the user typed themselves stays put.
+  const live = meta?.autoTitle && editorState ? followedDocumentTitle(editorState.doc) : null;
   const shown = live ?? meta?.title ?? "";
   const [draft, setDraft] = useState<string | null>(null);
   const value = draft ?? shown;

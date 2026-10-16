@@ -1,6 +1,6 @@
 import { Node as PMNode } from "prosemirror-model";
 import { Step, Transform } from "prosemirror-transform";
-import { docPlainText, docWordCount, openingLine, rangeMarkTexts, wordCount } from "@/lib/doc/editing";
+import { docPlainText, docWordCount, followedDocumentTitle, rangeMarkTexts, wordCount } from "@/lib/doc/editing";
 import { blockIdFixes, ensureBlockIds, newId } from "@/lib/doc/ids";
 import { canvasToMarkdown, normalizeCanvasHtml, normalizeStoredCanvas, pageToCanvasHtml, sameProjection, starterCanvasHtml, type CanvasFile, type CanvasOutput } from "@/lib/doc/canvas";
 import { markdownToDoc } from "@/lib/doc/markdown";
@@ -11,7 +11,6 @@ import {
   cleanTitle,
   layoutKey,
   normalizeSettings,
-  titleFromText,
   patchSettings,
   type CommentAuthor,
   type DocComment,
@@ -660,10 +659,10 @@ export class LiveDocument {
     }, PERSIST_DELAY_MS);
   }
 
-  /** While the document is still untitled, keep its name on the first line, already shortened. */
+  /** While the document is still untitled, keep its name on the first Title block (or the first line). */
   private syncAutoTitle() {
     if (!this.meta.autoTitle) return;
-    const title = titleFromText(openingLine(this.doc));
+    const title = followedDocumentTitle(this.doc);
     if (!title || title === this.meta.title) return;
     this.meta = { ...this.meta, title };
     this.emit({ type: "meta", meta: this.meta });
