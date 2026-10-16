@@ -2,6 +2,9 @@
 
 .doc-content {
   position: relative;
+  /* Its own formatting context, so the first block's space above it stays inside the editor rather than
+     moving the editor down with it: pagination (lib/editor/pagination.ts) measures pages from the editor's top. */
+  display: flow-root;
   min-height: inherit;
   color: var(--paper-text);
   /* Font, size and spacing come from the document's settings on .page-content. */

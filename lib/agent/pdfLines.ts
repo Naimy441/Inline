@@ -88,14 +88,22 @@ export type LockedLines = Array<{ pos: number; value: string | null }>;
  */
 export function lineBreaksFor(doc: PMNode, from: number, to: number, lines: PdfTextLine[]): LockedLines {
   const blocks: Array<{ node: PMNode; pos: number }> = [];
+  const result: LockedLines = [];
   doc.nodesBetween(from, to, (node, pos) => {
     if (node.isTextblock) {
-      if (!node.type.spec.code) blocks.push({ node, pos });
+      let broken = false;
+      node.forEach((child) => {
+        if (child.type.name === "hard_break") broken = true;
+      });
+      // A paragraph that breaks its own lines (code, a centered title) has nothing to keep.
+      if (broken) {
+        if (node.attrs.lineBreaks) result.push({ pos, value: null });
+      } else if (!node.type.spec.code) blocks.push({ node, pos });
       return false;
     }
     return true;
   });
-  if (!blocks.length) return [];
+  if (!blocks.length) return result;
   const docWords: DocWord[] = [];
   const kinds: string[] = [];
   blocks.forEach(({ node }, index) => {
@@ -139,7 +147,6 @@ export function lineBreaksFor(doc: PMNode, from: number, to: number, lines: PdfT
     return [...counts].sort((a, b) => b[1] - a[1])[0]![0];
   });
 
-  const result: LockedLines = [];
   blocks.forEach(({ node, pos }, block) => {
     const own = ordered.map((line, index) => ({ line, index })).filter(({ index }) => lineBlock[index] === block);
     const fail = () => {

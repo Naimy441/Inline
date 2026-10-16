@@ -742,7 +742,11 @@ export const TOOLS = [
       if (!Object.keys(settings).length && args.title === undefined) return fail("No settings given.");
       const meta = doc.updateMeta({ title: args.title, settings: Object.keys(settings).length ? (settings as Partial<DocumentSettings>) : undefined });
       ctx.onChange?.({ documentId: doc.id, title: meta.title, tool: "update_document_settings", added: 0, removed: 0 });
-      return ok(`Updated settings of "${meta.title}":\n${JSON.stringify({ title: meta.title, ...meta.settings }, null, 2)}`);
+      // An imported PDF's converted pages were lined up for the old page and text: they all move.
+      const converted = meta.pdfImport?.converted ?? [];
+      const moved = converted.length && (settings.pageSetup || settings.fontFamily || settings.fontSize !== undefined || settings.lineSpacing !== undefined || settings.paragraphSpacing !== undefined);
+      const warning = moved ? `\n\nThis changes where everything sits on every page: the converted pages (${[...new Set(converted)].sort((a, b) => a - b).join(", ")}) were lined up for the old settings, so run align_pdf_page on each of them again, and compare them.` : "";
+      return ok(`Updated settings of "${meta.title}":\n${JSON.stringify({ title: meta.title, ...meta.settings }, null, 2)}${warning}`);
     },
   }),
 

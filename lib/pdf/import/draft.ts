@@ -36,6 +36,8 @@ export type DraftContext = {
   advance?: (font: string, char: string) => number | null;
   /** A picture of a region of the page, if one was cut out (see PageDraft.needs). */
   cropFor?: (box: PdfBox) => string | null;
+  /** The color a run is drawn in (#rrggbb), when it could be seen (lib/pdf/import/inkColor.ts). */
+  color?: (run: PdfTextRun) => string | null;
 };
 
 /** The draft, what to check in it, and regions to cut out as pictures before drafting again (equations that can't be read). */
@@ -62,9 +64,64 @@ type Line = {
   display: boolean;
   marker: string | null;
   frame: PdfRule | null;
+  /** Set in a font whose letters are all one width (code). */
+  mono: boolean;
 };
 
-type Block = { kind: "paragraph" | "heading" | "display"; lines: Line[]; frame: PdfRule | null } | { kind: "picture"; box: PdfBox; url: string; frame?: PdfRule | null };
+type Block = { kind: "paragraph" | "heading" | "display" | "code"; lines: Line[]; frame: PdfRule | null } | { kind: "picture"; box: PdfBox; url: string; frame?: PdfRule | null };
+
+/** A frame cut by the page's edge (a notebook cell running onto the next page): the side it has no line on. */
+type Frame = PdfRule & { open?: "top" | "bottom" };
+
+/** Fonts whose letters are all one width: code. */
+const MONOSPACE = /mono|courier|menlo|consol|cmtt|typewriter|sfmono|inconsolata|fira ?code|source ?code|lucida ?console|andale|^cmitt|^cmsltt/i;
+
+/**
+ * Bold and italic that Markdown can't read as written, as their HTML tags:
+ * ** opens only before a letter or after a space or punctuation, so in code
+ * ("semester**=**'fall26'") it would be read as text.
+ */
+function fixEmphasis(text: string) {
+  const space = (char: string) => !char || /\s/.test(char);
+  const punct = (char: string) => /[\p{P}\p{S}]/u.test(char);
+  const opens = (before: string, first: string) => !space(first) && (!punct(first) || space(before) || punct(before));
+  const closes = (last: string, after: string) => !space(last) && (!punct(last) || space(after) || punct(after));
+  const fix = (pattern: RegExp, tag: string) =>
+    (input: string) =>
+      input.replace(pattern, (whole: string, body: string, offset: number, all: string) => {
+        const ok = opens(all[offset - 1] ?? "", body[0] ?? "") && closes(body[body.length - 1] ?? "", all[offset + whole.length] ?? "");
+        return ok ? whole : `<${tag}>${body}</${tag}>`;
+      });
+  const bold = fix(/\*\*([^*]+?)\*\*/g, "strong");
+  const italic = fix(/(?<![*\\])\*(?!\*)([^*]+?)(?<!\\)\*(?!\*)/g, "em");
+  return italic(bold(text));
+}
+
+/**
+ * Frames the page's edge cuts: two upright lines of the same height that run
+ * off the top or bottom of the page, with a rule across their other end.
+ */
+function openFrames(rules: PdfRule[], height: number): Frame[] {
+  const uprights = rules.filter((rule) => rule.kind === "vline");
+  const across = rules.filter((rule) => rule.kind === "hline");
+  const frames: Frame[] = [];
+  for (const left of uprights) {
+    for (const right of uprights) {
+      if (right.box.x <= left.box.x + 24) continue;
+      const top = Math.max(left.box.y, right.box.y);
+      const bottom = Math.min(left.box.y + left.box.height, right.box.y + right.box.height);
+      if (Math.abs(left.box.y - right.box.y) > 2 || Math.abs(left.box.y + left.box.height - right.box.y - right.box.height) > 2) continue;
+      const offTop = top < 2;
+      const offBottom = bottom > height - 2 || across.every((rule) => Math.abs(rule.box.y - bottom) > 2);
+      const closes = (y: number) => across.some((rule) => Math.abs(rule.box.y - y) < 2 && rule.box.x <= left.box.x + 2 && rule.box.x + rule.box.width >= right.box.x - 2);
+      const open = offTop && closes(bottom) ? "top" : !offTop && closes(top) && (offBottom || bottom > height * 0.9) ? "bottom" : null;
+      if (!open) continue;
+      const y = Math.max(0, top);
+      frames.push({ kind: "frame", box: { x: left.box.x, y, width: right.box.x + right.box.width - left.box.x, height: Math.min(height, bottom) - y }, width: left.width, color: left.color, open });
+    }
+  }
+  return frames;
+}
 
 const isMathRun = (run: PdfTextRun, size: number) => TEX_MATH_FONT.test(run.font) || Math.abs(run.dy ?? 0) > size * 0.12 || (run.size < size * 0.8 && !/[a-z]{3}/i.test(run.text));
 
@@ -354,7 +411,7 @@ export function draftPage(ctx: DraftContext): PageDraft {
   const { used, parts, removed } = findFractions(lines0, page.rules);
   skipRuns = removed;
   const bars: MathBar[] = page.rules.filter((rule) => rule.kind === "hline" && rule.box.width < 120).map((rule) => ({ x: rule.box.x, right: rule.box.x + rule.box.width, y: rule.box.y }) as MathBar & { y: number });
-  const frames = page.rules.filter((rule) => rule.kind === "frame");
+  const frames: Frame[] = [...page.rules.filter((rule) => rule.kind === "frame"), ...openFrames(page.rules, page.height)];
   const frameOf = (line: PdfTextLine) => frames.find((frame) => line.baseline > frame.box.y && line.baseline < frame.box.y + frame.box.height && line.box.x >= frame.box.x - 1 && line.box.x + line.box.width <= frame.box.x + frame.box.width + 1) ?? null;
 
   const lines: Line[] = lines0
@@ -396,6 +453,7 @@ export function draftPage(ctx: DraftContext): PageDraft {
         display,
         marker,
         frame: frameOf(source),
+        mono: !display && source.runs.some((run) => run.text.trim()) && source.runs.every((run) => !run.text.trim() || MONOSPACE.test(run.font)),
       };
     })
     .sort((a, b) => a.baseline - b.baseline || a.x - b.x);
@@ -403,13 +461,18 @@ export function draftPage(ctx: DraftContext): PageDraft {
   // --- lines into blocks ---
   const gapOf = (size: number) => size * (summary.lineSpacing || 1.2);
   const blocks: Block[] = [];
-  let current: (Block & { kind: "paragraph" | "heading" | "display" }) | null = null;
+  let current: (Block & { kind: "paragraph" | "heading" | "display" | "code" }) | null = null;
   const headingSize = ctx.fontSize * 1.12;
   for (const line of lines) {
-    const kind = line.display ? "display" : line.size >= headingSize && line.bold ? "heading" : "paragraph";
+    // A heading is set larger than the text, in bold, or much larger in any weight (a notebook's or a web page's headings).
+    const kind = line.display ? "display" : line.mono ? "code" : (line.size >= headingSize && line.bold) || line.size >= ctx.fontSize * 1.3 ? "heading" : "paragraph";
     const previous = current?.lines[current.lines.length - 1];
     let join = Boolean(current && previous && current.kind === kind && kind !== "display");
-    if (join && previous && current) {
+    if (join && previous && current && kind === "code") {
+      // Code keeps its lines: one block for a frame's lines (a notebook cell), blank lines and all, or for lines that follow one another.
+      const gap = line.baseline - previous.baseline;
+      join = line.frame === previous.frame && Math.abs(line.size - previous.size) < 0.6 && gap > 0 && gap <= gapOf(line.size) * (line.frame ? 4.5 : 1.35);
+    } else if (join && previous && current) {
       const right = line.frame ? line.frame.box.x + line.frame.box.width : areaRight;
       const gap = line.baseline - previous.baseline;
       const firstWord = (() => {
@@ -435,6 +498,22 @@ export function draftPage(ctx: DraftContext): PageDraft {
       blocks.push(current);
     }
   }
+  // A code block's line pitch: the gap between lines that follow one another (wider gaps are blank lines).
+  const codePitch = new Map<Line, number>();
+  for (const block of blocks) {
+    if (block.kind !== "code") continue;
+    const gaps = block.lines.slice(1).map((line, index) => line.baseline - block.lines[index]!.baseline);
+    const pitch = gaps.length ? Math.min(...gaps) : gapOf(block.lines[0]!.size);
+    for (const line of block.lines) codePitch.set(line, pitch);
+  }
+  // The colors the text is drawn in, and each block's own (the color most of its letters have).
+  const colorOf = (run: PdfTextRun) => ctx.color?.(run) ?? null;
+  const blockColor = (block: Block & { lines: Line[] }) => {
+    const counts = new Map<string, number>();
+    for (const line of block.lines) for (const segment of line.segments) if (segment.kind === "text") counts.set(colorOf(segment.run) ?? "#000000", (counts.get(colorOf(segment.run) ?? "#000000") ?? 0) + segment.text.replace(/\s/g, "").length);
+    return [...counts].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "#000000";
+  };
+
   // Equations that can't be read back — drawn in pieces, or with letters the PDF misnames — are pictures of the original until Claude writes them.
   const needs: PdfBox[] = [];
   const mathy = (block: Block) =>
@@ -511,20 +590,35 @@ export function draftPage(ctx: DraftContext): PageDraft {
   const baselineOffset = (size: number, lh: number) => ((lh - metrics.ascent - metrics.descent) / 2 + metrics.ascent) * size;
 
   /** A frame's borders, the same on each paragraph in it so they share it: around the text with the space it had, and above its first line and below its last the space that puts their baselines where TeX did (TeX measures from the letters; a page's line is as tall as its font). */
-  const frameAttrs = (frame: PdfRule) => {
+  const frameAttrs = (frame: Frame) => {
     const inFrame = lines.filter((line) => line.frame === frame);
     const left = inFrame.length ? Math.min(...inFrame.map((line) => line.x)) : frame.box.x + 3;
-    const out = [".box", `border-width=${round1(frame.width)}`, `border-space=${round1(Math.max(0, left - frame.box.x - frame.width))}`];
+    // A frame the page's edge cuts has no line on that side.
+    const sides = frame.open === "top" ? `border="left right bottom"` : frame.open === "bottom" ? `border="top left right"` : ".box";
+    const out = [sides, `border-width=${round1(frame.width)}`, `border-space=${round1(Math.max(0, left - frame.box.x - frame.width))}`];
     const firstLine = inFrame[0];
     const lastLine = inFrame[inFrame.length - 1];
-    if (firstLine) out.push(`border-space-top=${round1(Math.max(0, firstLine.baseline - frame.box.y - frame.width - baselineOffset(firstLine.size, ctx.lineSpacing)))}`);
-    if (lastLine) out.push(`border-space-bottom=${round1(Math.max(0, frame.box.y + frame.box.height - frame.width - lastLine.baseline - (lastLine.size * ctx.lineSpacing - baselineOffset(lastLine.size, ctx.lineSpacing))))}`);
+    const lh = (line: Line) => (line.mono && codePitch.get(line) ? codePitch.get(line)! / line.size : ctx.lineSpacing);
+    if (firstLine && frame.open !== "top") out.push(`border-space-top=${round1(Math.max(0, firstLine.baseline - frame.box.y - frame.width - baselineOffset(firstLine.size, lh(firstLine))))}`);
+    if (lastLine && frame.open !== "bottom") out.push(`border-space-bottom=${round1(Math.max(0, frame.box.y + frame.box.height - frame.width - lastLine.baseline - (lastLine.size * lh(lastLine) - baselineOffset(lastLine.size, lh(lastLine)))))}`);
+    if (frame.color && frame.color !== "#000000") out.push(`border-color=${frame.color}`);
     return out;
   };
+
+  /** The room a frame takes above its first line or below its last: its line and the space inside it. */
+  const framePad = (frame: Frame, side: "top" | "bottom") => {
+    if (frame.open === side) return 0;
+    const token = frameAttrs(frame).find((item) => item.startsWith(`border-space-${side}=`));
+    return frame.width + (token ? Number(token.split("=")[1]) : 0);
+  };
+  // The paragraph between two frames: its line, at the smallest size drawn.
+  const separator = 2.25 * ctx.lineSpacing;
 
   // --- blocks into Markdown ---
   const out: string[] = [];
   let lastBottom: number | null = null;
+  /** How far below its baseline the block before ends (its line's descent). */
+  let lastDescent = 0;
   let lastFrame: PdfRule | null = null;
   const docLine = ctx.lineSpacing;
 
@@ -535,7 +629,9 @@ export function draftPage(ctx: DraftContext): PageDraft {
       const left0 = frame ? Math.min(...lines.filter((line) => line.frame === frame).map((line) => line.x)) : area.left;
       const center = frame ? frame.box.x + frame.box.width / 2 : areaCenter;
       const centered = Math.abs(block.box.x + block.box.width / 2 - center) < 2;
-      const before = lastBottom === null ? Math.max(0, block.box.y - area.top) : Math.max(0, block.box.y - lastBottom);
+      const leaving = lastFrame && lastFrame !== frame ? framePad(lastFrame, "bottom") : 0;
+      const between = frame && lastFrame && frame !== lastFrame ? separator : 0;
+      const before = lastBottom === null ? Math.max(0, block.box.y - area.top) : Math.max(0, block.box.y - lastBottom - lastDescent - leaving - between);
       // Its paragraph's text is tiny, so the line is no taller than the picture.
       const attrs = [centered ? "align=center" : block.box.x - left0 > 0.5 ? (frame ? `first-line=${inches(block.box.x - left0)}` : `left=${round1(block.box.x - left0)}`) : "", `before=${round1(before)}`, "after=0", "size=1", "line=1"];
       if (frame && left0 - area.left > 0.5) attrs.push(`left=${round1(left0 - area.left)}`);
@@ -543,17 +639,22 @@ export function draftPage(ctx: DraftContext): PageDraft {
       if (frame && lastFrame && frame !== lastFrame) out.push(`&nbsp; {size=1 before=0 after=0}`);
       out.push(`<img src="${block.url}" width="${Math.round((block.box.width * 4) / 3)}" height="${Math.round((block.box.height * 4) / 3)}"> {${attrs.filter(Boolean).join(" ")}}`);
       lastBottom = block.box.y + block.box.height;
+      lastDescent = 0;
       lastFrame = frame;
       continue;
     }
     const first = block.lines[0]!;
     const last = block.lines[block.lines.length - 1]!;
     const size = median(block.lines.map((line) => line.size));
-    const lineHeight = block.lines.length > 1 ? median(block.lines.slice(1).map((line, index) => line.baseline - block.lines[index]!.baseline)) / size : null;
+    const lineHeight = block.kind === "code" ? codePitch.get(first)! / size : block.lines.length > 1 ? median(block.lines.slice(1).map((line, index) => line.baseline - block.lines[index]!.baseline)) / size : null;
     const own = lineHeight && Math.abs(lineHeight - docLine) > 0.03 && lineHeight < 3 ? Math.round(lineHeight * 1000) / 1000 : null;
     const lh = own ?? docLine;
     // Space above: the baseline-to-baseline gap beyond a line's height (alignment measures and corrects it).
-    const before = lastBottom === null ? Math.max(0, first.baseline - area.top - size * lh * 0.8) : Math.max(0, first.baseline - lastBottom - size * lh);
+    // Frames add the room inside them above the first line and below the last; a paragraph between two frames adds its own.
+    const entering = block.frame && block.frame !== lastFrame ? framePad(block.frame, "top") : 0;
+    const leaving = lastFrame && lastFrame !== block.frame ? framePad(lastFrame, "bottom") : 0;
+    const between = block.frame && lastFrame && block.frame !== lastFrame ? separator : 0;
+    const before = lastBottom === null ? Math.max(0, first.baseline - area.top - size * lh * 0.8 - entering) : Math.max(0, first.baseline - lastBottom - size * lh - entering - leaving - between);
     const attrs: string[] = [];
     if (Math.abs(size - ctx.fontSize) > 0.25) attrs.push(`size=${round1(size)}`);
     if (own) attrs.push(`line=${own}`);
@@ -561,40 +662,101 @@ export function draftPage(ctx: DraftContext): PageDraft {
     // Frames: each paragraph in one says so; two frames in a row need a paragraph between them.
     const frame = block.frame;
     const left0 = frame ? Math.min(...lines.filter((line) => line.frame === frame).map((line) => line.x)) : area.left;
-    if (frame && lastFrame && frame !== lastFrame) out.push(`&nbsp; {size=1 before=0 after=${round1(Math.max(0, frame.box.y - (lastFrame.box.y + lastFrame.box.height)) * 0.5)}}`);
+    if (frame && lastFrame && frame !== lastFrame) out.push(`&nbsp; {size=1 before=0 after=0}`);
     if (frame) attrs.push(...frameAttrs(frame));
     lastFrame = frame;
 
+    const ownColor = blockColor(block);
+    const segmentText = (segment: Segment) => {
+      // An equation that wouldn't typeset is its letters, as text, until Claude writes it.
+      if (segment.kind === "math") return segment.flags.some((flag) => /doesn't typeset/.test(flag)) && segment.plain ? escapeText(segment.plain) : `$${segment.tex}$`;
+      // TeX's bullet (\bullet) is the bullet operator, which the stand-in font has: text, not an equation.
+      if (/^\s*[•∙]\s*$/.test(segment.text)) return `∙${/\s$/.test(segment.text) ? " " : ""}`;
+      return styleText(segment.text, segment.run);
+    };
+    /** Text of a run, escaped, with its bold, italic, font, size and color. */
+    const styleText = (raw: string, run: PdfTextRun) => {
+      const text = escapeText(raw);
+      if (!text.trim()) return text;
+      const lead = /^\s*/.exec(text)![0];
+      const trail = /\s*$/.exec(text)![0];
+      let body = text.trim();
+      if (run.bold) body = `**${body}**`;
+      if (run.italic && !/^(cmti|cmsl|sfti)/i.test(run.font) && !run.bold) body = `*${body}*`;
+      else if (run.italic && /^(cmti|sfti)/i.test(run.font)) body = `*${body}*`;
+      const face = ctx.fonts[run.font];
+      const styles: string[] = [];
+      if (face && face.family !== ctx.family && !/^[•∙◦▪–]$/.test(raw.trim())) styles.push(`font-family: '${face.family}'`);
+      if (Math.abs(run.size - size) > 0.3 && Math.abs(run.dy ?? 0) < 0.5) styles.push(`font-size: ${round1(run.size)}pt`);
+      const color = colorOf(run) ?? "#000000";
+      if (color !== ownColor) styles.push(`color: ${color}`);
+      if (styles.length) body = `<span style="${styles.join("; ")}">${body}</span>`;
+      return lead + body + trail;
+    };
     const content = (line: Line, index: number) =>
       line.segments
-        .map((segment) => {
-          const tab = segment.tab ? "&#9;" : "";
-          // An equation that wouldn't typeset is its letters, as text, until Claude writes it.
-          if (segment.kind === "math") return segment.flags.some((flag) => /doesn't typeset/.test(flag)) && segment.plain ? tab + escapeText(segment.plain) : `${tab}$${segment.tex}$`;
-          // TeX's bullet (\bullet) is the bullet operator, which the stand-in font has: text, not an equation.
-          if (/^\s*[•∙]\s*$/.test(segment.text)) return `${tab}∙${/\s$/.test(segment.text) ? " " : ""}`;
-          let text = escapeText(segment.text);
-          if (!text.trim()) return tab + text;
-          const lead = /^\s*/.exec(text)![0];
-          const trail = /\s*$/.exec(text)![0];
-          let body = text.trim();
-          const run = segment.run;
-          const isHeading = block.kind === "heading";
-          if (run.bold && !isHeading) body = `**${body}**`;
-          if (run.italic && !/^(cmti|cmsl|sfti)/i.test(run.font) && !run.bold) body = `*${body}*`;
-          else if (run.italic && /^(cmti|sfti)/i.test(run.font)) body = `*${body}*`;
-          if (isHeading) body = `**${body}**`;
-          const face = ctx.fonts[run.font];
-          const styles: string[] = [];
-          if (face && face.family !== ctx.family && !/^[•∙◦▪–]$/.test(segment.text.trim())) styles.push(`font-family: '${face.family}'`);
-          if (Math.abs(run.size - size) > 0.3 && Math.abs(run.dy ?? 0) < 0.5) styles.push(`font-size: ${round1(run.size)}pt`);
-          if (styles.length) body = `<span style="${styles.join("; ")}">${body}</span>`;
-          text = lead + body + trail;
-          return tab + text;
-        })
+        .map((segment) => (segment.tab ? "&#9;" : "") + segmentText(segment))
         .join("")
         .replace(index === 0 ? /^\s+/ : /^$/, "");
 
+    if (block.kind === "code") {
+      // Code as the PDF sets it: its lines kept (blank ones too), each indented by spaces in the font's one letter width.
+      const minX = Math.min(...block.lines.map((line) => line.x));
+      // The letter width: a run's drawn width over its letters (a run may or may not take in the space after it).
+      const widths = block.lines.flatMap((line) => line.source.runs.filter((run) => [...run.text.trim()].length >= 3).map((run) => run.width / [...run.text.trimEnd()].length));
+      const letter = widths.length ? median(widths) : size * 0.6;
+      const pitch = codePitch.get(first)!;
+      const columns = (from: number, to: number) => Math.max(0, Math.round((to - from) / letter));
+      const rows = block.lines.map((line, index) => {
+        // Each letter in its column: the line's text with the spaces between runs, then runs of one style written together.
+        const pieces: Array<{ text: string; run: PdfTextRun | null; segment?: Segment }> = [];
+        let column = index === 0 ? columns(minX, line.x) : 0;
+        for (const segment of line.segments) {
+          const at = columns(minX, segment.x);
+          if (at > column && (index > 0 || pieces.length)) pieces.push({ text: " ".repeat(at - column), run: null });
+          column = Math.max(column, at);
+          if (segment.kind === "text") pieces.push({ text: segment.text, run: segment.run });
+          else pieces.push({ text: "", run: null, segment });
+          column += [...(segment.kind === "text" ? segment.text : (segment.plain ?? segment.tex))].length;
+        }
+        const style = (run: PdfTextRun) => `${run.font}|${run.bold}|${run.italic}|${Math.round(run.size * 10)}|${colorOf(run) ?? ""}`;
+        let out = "";
+        for (let k = 0; k < pieces.length; k += 1) {
+          const piece = pieces[k]!;
+          if (piece.segment) {
+            out += segmentText(piece.segment);
+            continue;
+          }
+          if (!piece.run) {
+            out += piece.text;
+            continue;
+          }
+          // Runs of one style, and the spaces between them, are one piece of text.
+          let text = piece.text;
+          while (k + 1 < pieces.length) {
+            const next = pieces[k + 1]!;
+            const after = pieces[k + 2];
+            if (next.run && style(next.run) === style(piece.run)) text += next.text;
+            else if (!next.run && !next.segment && after?.run && style(after.run) === style(piece.run)) text += next.text + after.text, (k += 1);
+            else break;
+            k += 1;
+          }
+          out += styleText(text, piece.run);
+        }
+        const blank = index === 0 ? 0 : Math.max(0, Math.round((line.baseline - block.lines[index - 1]!.baseline) / pitch) - 1);
+        return "<br>".repeat(blank) + out;
+      });
+      const left = minX - left0;
+      if (frame && left0 - area.left > 0.5) attrs.push(`left=${round1(left0 - area.left)}`);
+      else if (!frame && left > 0.5) attrs.push(`left=${round1(left)}`);
+      if (first.x - minX > 0.5) attrs.push(`first-line=${inches(first.x - minX)}`);
+      if (ownColor !== "#000000") attrs.push(`color=${ownColor}`);
+      attrs.push(`before=${round1(before)}`, "after=0");
+      out.push(`${fixEmphasis(escapeStart(rows.join("<br>").replace(/^\s+/, "")))} {${attrs.join(" ")}}`);
+      lastBottom = last.baseline;
+      lastDescent = size * lh - baselineOffset(size, lh);
+      continue;
+    }
     // TeX centers a displayed equation in a list item over the item's text: so is it here, from that indent.
     const displayIndent = block.kind === "display" ? Math.max(0, 2 * ((first.x + first.right) / 2 - (frame ? (left0 + (frame.box.x + frame.box.width - (left0 - frame.box.x))) / 2 : areaCenter))) : 0;
     if (block.kind === "display" && !frame && displayIndent > 1.5) {
@@ -602,6 +764,7 @@ export function draftPage(ctx: DraftContext): PageDraft {
       out.push(`$\\displaystyle ${tex}$ {align=center left=${round1(displayIndent)} before=${round1(before)} after=0}`);
       noteMath(block, concerns);
       lastBottom = last.baseline;
+      lastDescent = size * lh - baselineOffset(size, lh);
       continue;
     }
     if (block.kind === "display" && !frame) {
@@ -609,6 +772,7 @@ export function draftPage(ctx: DraftContext): PageDraft {
       out.push(`$$\n${block.lines.length > 1 ? `\\begin{gathered}${tex}\\end{gathered}` : tex}\n$$ {before=${round1(before)} after=0}`);
       noteMath(block, concerns);
       lastBottom = last.baseline;
+      lastDescent = size * lh - baselineOffset(size, lh);
       continue;
     }
     if (block.kind === "display") {
@@ -617,6 +781,7 @@ export function draftPage(ctx: DraftContext): PageDraft {
       out.push(`$\\displaystyle ${tex}$ {align=center before=${round1(before)} after=0 ${attrs.join(" ")}}`.replace(/ }$/, "}"));
       noteMath(block, concerns);
       lastBottom = last.baseline;
+      lastDescent = size * lh - baselineOffset(size, lh);
       continue;
     }
 
@@ -664,7 +829,7 @@ export function draftPage(ctx: DraftContext): PageDraft {
     }
     if (markerTab !== null) stops.unshift(`${round1(markerTab)}:left`);
     if (stops.length) attrs.push(`tabs="${stops.join(" ")}"`);
-    if (block.kind === "heading") attrs.push("color=#000000");
+    if (block.kind === "heading" || ownColor !== "#000000") attrs.push(`color=${ownColor}`);
     attrs.push(`before=${round1(before)}`, "after=0");
 
     // The text: lines joined (a word broken at a line's end joined again); centered lines keep their breaks.
@@ -682,11 +847,13 @@ export function draftPage(ctx: DraftContext): PageDraft {
       else if (/\p{L}-$/u.test(text) && /^\p{Ll}/u.test(piece)) text = text.slice(0, -1) + piece;
       else text += /\s$/.test(text) ? piece.trimStart() : ` ${piece.trimStart()}`;
     });
-    text = escapeStart(text.replace(/\*\*\s*\*\*/g, " ").replace(/(&emsp;|&ensp;)\s+/g, "$1").trim());
-    const prefix = block.kind === "heading" ? (size >= ctx.fontSize * 1.15 ? "## " : "### ") : "";
+    text = fixEmphasis(escapeStart(text.replace(/\*\*\s*\*\*/g, " ").replace(/(&emsp;|&ensp;)\s+/g, "$1").trim()));
+    // Heading levels by size: a title twice the text's size, then sections, then subsections.
+    const prefix = block.kind === "heading" ? (size >= ctx.fontSize * 2 ? "# " : size >= ctx.fontSize * (first.bold ? 1.15 : 1.6) ? "## " : "### ") : "";
     out.push(`${prefix}${text} {${attrs.join(" ")}}`);
     noteMath(block, concerns);
     lastBottom = last.baseline;
+    lastDescent = size * lh - baselineOffset(size, lh);
   }
   if (page.graphics.length > ctx.crops.length) concerns.push(`${page.graphics.length - ctx.crops.length} drawing(s) couldn't be cut out: crop them with crop_pdf_region.`);
   const header = summary.headerRule && summary.header ? summary.header.y : null;

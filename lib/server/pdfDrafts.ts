@@ -1,11 +1,12 @@
 import { primaryFamily } from "@/lib/doc/fontMetrics";
 import { pageSize } from "@/lib/doc/settings";
 import { draftPage, type PageDraft } from "@/lib/pdf/import/draft";
-import type { PdfBox } from "@/lib/pdf/import/types";
+import { runColors } from "@/lib/pdf/import/inkColor";
+import type { PdfBox, PdfPageAnalysis, PdfTextRun } from "@/lib/pdf/import/types";
 import { parseTrueType, type TrueTypeFont } from "@/lib/pdf/truetype";
 import type { LiveDocument } from "@/lib/server/hub";
 import { log } from "@/lib/server/log";
-import { cropRegion, readUpload, writePdfImport, type PdfImportRecord } from "@/lib/server/pdfImports";
+import { cropRegion, pageBitmap, readUpload, writePdfImport, type PdfImportRecord } from "@/lib/server/pdfImports";
 
 /**
  * Drafts of an imported PDF's pages (lib/pdf/import/draft.ts), for Claude
@@ -24,6 +25,20 @@ async function fontOf(url: string) {
   parsed.set(url, font);
   while (parsed.size > 64) parsed.delete(parsed.keys().next().value!);
   return font;
+}
+
+const colorsByPage = new WeakMap<PdfPageAnalysis, Map<PdfTextRun, string>>();
+
+/** The colors a page's text runs are drawn in, read off its picture (once per page). */
+export async function pageColors(record: PdfImportRecord, number: number): Promise<Map<PdfTextRun, string>> {
+  const page = record.manifest.pages[number - 1];
+  if (!page) return new Map();
+  const known = colorsByPage.get(page);
+  if (known) return known;
+  const bitmap = await pageBitmap(record, number).catch(() => null);
+  const colors = bitmap ? runColors(bitmap, record.manifest.renderScale, page.lines) : new Map<PdfTextRun, string>();
+  colorsByPage.set(page, colors);
+  return colors;
 }
 
 const sameBox = (a: PdfBox, b: PdfBox) => Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5 && Math.abs(a.width - b.width) < 0.5 && Math.abs(a.height - b.height) < 0.5;
@@ -49,6 +64,7 @@ export async function pageDraft(doc: LiveDocument, record: PdfImportRecord, numb
     return font && glyph ? font.advance(glyph) / font.unitsPerEm : null;
   };
 
+  const colors = await pageColors(record, number);
   let changed = false;
   // Drawings cut out as pictures, with room for their labels.
   if (!assets.crops) {
@@ -76,6 +92,7 @@ export async function pageDraft(doc: LiveDocument, record: PdfImportRecord, numb
       crops: assets.crops ?? [],
       advance,
       cropFor: (box) => assets.equations?.find((item) => sameBox(item.box, box))?.url ?? null,
+      color: (run) => colors.get(run) ?? null,
     });
   let draft = make();
   if (draft.needs.length) {
