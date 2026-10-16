@@ -243,6 +243,49 @@ test("an error explains itself and Retry runs the message again", async ({ page,
   await expect(page.locator(".msg-assistant")).toHaveCount(1);
 });
 
+test("developer options copy one turn or the whole chat, and hide those actions when off", async ({ page, request }) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await openWithClaude(page, request, "The meeting is on Tuesday.");
+  await ask(page, 'replace "Tuesday" with "Thursday"');
+  await expect(lastReply(page)).toContainText("Replaced Tuesday with Thursday.");
+  await expect(lastReply(page).locator(".change-card")).toContainText("Edited");
+  await expect(page.getByRole("button", { name: "Copy turn" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Copy chat history" })).toHaveCount(0);
+
+  await page.locator(".menubar-item", { hasText: "Help" }).click();
+  const devOptions = page.getByRole("menuitemcheckbox", { name: /Developer options/ });
+  await expect(devOptions).toHaveAttribute("aria-checked", "false");
+  await devOptions.click();
+
+  await expect(page.getByRole("button", { name: "Copy turn" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Copy chat history" })).toBeVisible();
+  await page.getByRole("button", { name: "Copy turn" }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("Replaced Tuesday with Thursday.");
+  const turn = await page.evaluate(() => navigator.clipboard.readText());
+  expect(turn).toContain('Prompt:\nreplace "Tuesday" with "Thursday"');
+  expect(turn).toContain("Thoughts:\nI'll read the document, then make the edit.");
+  expect(turn).toContain("read_document");
+  expect(turn).toContain("edit_document");
+  expect(turn).toContain("Tool calls:");
+  expect(turn).not.toContain("Turn 2");
+
+  await ask(page, "Say hello back");
+  await expect(lastReply(page)).toContainText("You said: Say hello back");
+  await page.getByRole("button", { name: "Copy chat history" }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("Turn 2");
+  const history = await page.evaluate(() => navigator.clipboard.readText());
+  expect(history).toContain("Turn 1");
+  expect(history).toContain('replace "Tuesday" with "Thursday"');
+  expect(history).toContain("Turn 2");
+  expect(history).toContain("Prompt:\nSay hello back");
+  expect(history).toContain("Response:\nYou said: Say hello back");
+
+  await page.locator(".menubar-item", { hasText: "Help" }).click();
+  await page.getByRole("menuitemcheckbox", { name: /Developer options/ }).click();
+  await expect(page.getByRole("button", { name: "Copy turn" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Copy chat history" })).toHaveCount(0);
+});
+
 test("the conversation survives a reload", async ({ page, request }) => {
   await openWithClaude(page, request, "Text.");
   await ask(page, "Remember this message");

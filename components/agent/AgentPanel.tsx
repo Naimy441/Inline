@@ -1,9 +1,10 @@
 "use client";
 
-import { Check, CircleDashed, FolderTree, History, Loader2, MessageSquarePlus, Plus, RefreshCw, Terminal, X } from "lucide-react";
+import { Check, CircleDashed, Copy, FolderTree, History, Loader2, MessageSquarePlus, Plus, RefreshCw, Terminal, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Attachment, ChatMessage, DocumentMention, ChatSettings, SelectionContext, Todo } from "@/lib/agent/types";
+import { formatChatHistory, formatPromptTurn, turnForMessage } from "@/lib/agent/devCopy";
 import { ActivityLine, isWaiting } from "@/components/agent/Activity";
 import { refreshAgentStatus, useAgentStatus } from "@/lib/client/agentStatus";
 import { acquireChat, ChatSession, newChatId, peekChat, releaseChat, rememberChat, rememberedChat, warmChat, type ChatUiState } from "@/lib/client/chatSession";
@@ -16,6 +17,7 @@ import { Dialog } from "@/components/ui/Dialog";
 import { toast } from "@/components/ui/Toast";
 import { api, post } from "@/lib/client/api";
 import { loadDraftSelection, saveDraftSelection } from "@/lib/client/drafts";
+import { loadPreferences, preferences } from "@/lib/client/preferences";
 
 export type AgentPanelHandle = {
   ask: (selection: SelectionContext | null, text?: string) => void;
@@ -231,6 +233,22 @@ export const AgentPanel = forwardRef<
   reviewRef.current = onReview;
   const retry = useCallback(() => void sessionRef.current?.retry(), []);
   const review = useCallback((action: "next" | "accept" | "reject", ids: string[]) => reviewRef.current?.(action, ids), []);
+  useEffect(() => {
+    loadPreferences();
+  }, []);
+  const devOptions = useSyncExternalStore(preferences.subscribe, () => preferences.get().devOptions, () => false);
+  const copyTurn = useCallback((messageId: string) => {
+    const messages = sessionRef.current?.ui.get().chat?.messages;
+    if (!messages) return;
+    const turn = turnForMessage(messages, messageId);
+    if (!turn) return;
+    void writeClipboard(formatPromptTurn(turn), "Copied this turn.");
+  }, []);
+  const copyHistory = useCallback(() => {
+    const messages = sessionRef.current?.ui.get().chat?.messages;
+    if (!messages?.length) return;
+    void writeClipboard(formatChatHistory(messages), "Copied the chat history.");
+  }, []);
 
   const [rewinding, setRewinding] = useState<{ versionId: string; messageId: string } | null>(null);
   const [restoring, setRestoring] = useState(false);
@@ -259,6 +277,11 @@ export const AgentPanel = forwardRef<
           <span className="panel-title-text">{chat?.title && chat.messages.length ? chat.title : "New chat"}</span>
         </div>
         <div className="panel-actions">
+          {devOptions && chat && chat.messages.length > 0 && (
+            <IconButton label="Copy chat history" size="sm" onClick={copyHistory}>
+              <Copy size={15} />
+            </IconButton>
+          )}
           <IconButton ref={historyButton} label="Chat history" size="sm" active={historyOpen} onClick={() => setHistoryOpen((value) => !value)}>
             <History size={15} />
           </IconButton>
@@ -308,7 +331,7 @@ export const AgentPanel = forwardRef<
           <Onboarding state={status.state} message={"message" in status ? status.message : ""} />
         ) : chat?.messages.length ? (
           <div className="messages">
-            <MessageList messages={chat.messages} hunks={hunks} onRetry={retry} onReview={review} documentId={documentId ?? undefined} onRestore={(versionId, messageId) => setRewinding({ versionId, messageId })} />
+            <MessageList messages={chat.messages} hunks={hunks} onRetry={retry} onReview={review} documentId={documentId ?? undefined} onRestore={(versionId, messageId) => setRewinding({ versionId, messageId })} onCopyTurn={devOptions ? copyTurn : undefined} />
             {chat.running && isWaiting(chat.status, lastAssistant(chat.messages)) && <ActivityLine status={chat.status} message={lastAssistant(chat.messages)} since={lastSent(chat.messages)} />}
           </div>
         ) : chatId && !chat && !ui.error ? (
@@ -382,6 +405,14 @@ export const AgentPanel = forwardRef<
     </aside>
   );
 });
+
+/** Copies text already in the chat. The transcript is not written anywhere else. */
+function writeClipboard(text: string, success: string) {
+  return navigator.clipboard.writeText(text).then(
+    () => toast(success, { tone: "success" }),
+    () => toast("Couldn't copy to the clipboard.", { tone: "error" }),
+  );
+}
 
 function lastAssistant(messages: ChatMessage[]) {
   const last = messages[messages.length - 1];

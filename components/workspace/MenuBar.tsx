@@ -49,6 +49,9 @@ export type MenuActions = {
   connectClaudeCode: () => void;
   wordCount: () => void;
   ask: (prompt: string) => void;
+  /** Help → Developer options. When on, Claude chats can copy a turn or the whole history. */
+  devOptions: boolean;
+  toggleDevOptions: () => void;
   /** Spelling and grammar for the selection or the current paragraph. */
   checkSpelling: () => void;
   specialCharacters: () => void;
@@ -84,7 +87,7 @@ const MENU_TIPS: Record<string, string> = {
   Insert: "Links, images, tables and breaks",
   Format: "Text, paragraph and list styles",
   Tools: "Spelling, word count and Claude",
-  Help: "Shortcuts and connecting Claude Code",
+  Help: "Shortcuts, Claude Code and developer options",
 };
 
 export function MenuBar({ session, actions, zoom, hunks }: { session: DocumentSession; actions: MenuActions; zoom: number; hunks: number }) {
@@ -324,6 +327,8 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
     Help: [
       { label: "Keyboard shortcuts", shortcut: `⌘/`, onSelect: actions.shortcuts },
       { label: "Connect Claude Code…", hint: "Copy the command to use Inline from your terminal", onSelect: actions.connectClaudeCode },
+      { kind: "separator" },
+      { label: "Developer options", hint: "Copy a turn or the whole chat for debugging", checked: actions.devOptions, onSelect: actions.toggleDevOptions },
     ],
   };
   return menus;
