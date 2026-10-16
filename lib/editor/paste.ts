@@ -1,6 +1,7 @@
 import { Slice } from "prosemirror-model";
 import type { EditorState } from "prosemirror-state";
 import { cssSizeToPt, schema } from "@/lib/doc/schema";
+import { restoreCopiedPictures } from "@/lib/editor/imageClipboard";
 
 /**
  * Google Docs writes a paragraph's line spacing on the clipboard as the
@@ -70,15 +71,21 @@ export function startsWithParagraph(root: HTMLElement) {
 }
 
 /**
- * `fixGoogleDocsHtml` for a pasted HTML string (ProseMirror's
- * transformPastedHTML). Other HTML comes back as it was. `paragraphs` says
- * the paste starts with a whole Google paragraph, formatting and all.
+ * Pasted HTML as Inline reads it (ProseMirror's transformPastedHTML):
+ * Google Docs' fixed by `fixGoogleDocsHtml`, and pictures copied from this
+ * Inline shown from their stored files again. Other HTML comes back as it
+ * was. `paragraphs` says the paste starts with a whole Google paragraph,
+ * formatting and all.
  */
-export function transformPastedHtml(html: string): { html: string; paragraphs: boolean } {
-  if (!html.includes("docs-internal-guid-") || typeof DOMParser === "undefined") return { html, paragraphs: false };
+export function transformPastedHtml(html: string, origin = typeof location === "undefined" ? "" : location.origin): { html: string; paragraphs: boolean } {
+  const google = html.includes("docs-internal-guid-");
+  const copied = html.includes("data-inline-src");
+  if (!(google || copied) || typeof DOMParser === "undefined") return { html, paragraphs: false };
   const parsed = new DOMParser().parseFromString(html, "text/html");
-  const paragraphs = startsWithParagraph(parsed.body);
-  return fixGoogleDocsHtml(parsed.body) ? { html: parsed.body.innerHTML, paragraphs } : { html, paragraphs: false };
+  const paragraphs = google && startsWithParagraph(parsed.body);
+  if (copied) restoreCopiedPictures(parsed.body, origin);
+  if (google) fixGoogleDocsHtml(parsed.body);
+  return { html: parsed.body.innerHTML, paragraphs };
 }
 
 /**

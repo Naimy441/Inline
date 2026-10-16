@@ -39,6 +39,7 @@ import { bordersPlugin } from "@/lib/editor/borders";
 import { lineFitPlugin } from "@/lib/editor/lineFit";
 import { tabsPlugin } from "@/lib/editor/tabs";
 import { endWithTextblock, pasteIntoEmptyTextblock, transformPastedHtml } from "@/lib/editor/paste";
+import { imageClipboardPlugin } from "@/lib/editor/imageClipboard";
 import { justifyPlugin } from "@/lib/editor/justify";
 import { placeholderPlugin } from "@/lib/editor/placeholder";
 import { presencePlugin } from "@/lib/editor/presence";
@@ -307,6 +308,7 @@ export function editorPlugins(options: EditorPluginOptions) {
     collab({ version: options.version, clientID: options.clientID }),
     blockIdPlugin(),
     markdownPastePlugin(),
+    imageClipboardPlugin(),
     reviewPlugin(options.review),
     presencePlugin(),
     commentsPlugin(options.onActivateComment),
