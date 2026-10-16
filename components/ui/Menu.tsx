@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, ChevronLeft, ChevronRight } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { useShortcut } from "@/lib/client/platform";
 import { useIsPhone } from "@/lib/client/viewport";
@@ -16,6 +16,8 @@ export type MenuItem =
       checked?: boolean;
       disabled?: boolean;
       danger?: boolean;
+      /** Preview of a paragraph style: font, size and color. */
+      labelStyle?: CSSProperties;
       onSelect?: () => void;
       submenu?: MenuItem[];
       hint?: string;
@@ -151,7 +153,7 @@ function MenuPopup({
               onClick={(event) => choose(item, event.currentTarget)}
             >
               <span className="menu-icon">{item.checked ? <Check size={14} /> : item.icon}</span>
-              <span className="menu-text">
+              <span className="menu-text" style={item.labelStyle}>
                 {item.label}
                 {item.hint && <span className="menu-hint">{item.hint}</span>}
               </span>
@@ -234,7 +236,7 @@ function MenuSheet({ open, onClose, items, className, title }: MenuProps) {
                 }}
               >
                 <span className="menu-icon">{item.checked ? <Check size={16} /> : item.icon}</span>
-                <span className="menu-text">
+                <span className="menu-text" style={item.labelStyle}>
                   {item.label}
                   {item.hint && <span className="menu-hint">{item.hint}</span>}
                 </span>

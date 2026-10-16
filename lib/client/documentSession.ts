@@ -9,6 +9,7 @@ import { EditorView } from "prosemirror-view";
 import type { HunkJSON } from "@/lib/doc/review";
 import { schema } from "@/lib/doc/schema";
 import { DEFAULT_TAB_STOP, layoutKey, pageSize, type DocComment, type DocumentMeta, type DocumentTab } from "@/lib/doc/settings";
+import { stylesOf } from "@/lib/doc/styles";
 import { setTabs } from "@/lib/client/tabs";
 import { api, ApiError, del, patch, post, Store, uploadFile } from "@/lib/client/api";
 import { setCommentState } from "@/lib/editor/comments";
@@ -559,6 +560,7 @@ export class DocumentSession {
         geometry: () => this.geometry(),
         tabStop: () => this.meta?.settings.tabStop ?? DEFAULT_TAB_STOP,
         fontLines: () => (this.meta ?? snapshot.meta)?.settings.lineModel === "font",
+        styles: () => stylesOf((this.meta ?? snapshot.meta)?.settings ?? {}),
         onPages: (layout) => {
           this.latestLayout = layout;
           this.ui.set((ui) => (ui.pages === layout.pages ? ui : { ...ui, pages: layout.pages }));

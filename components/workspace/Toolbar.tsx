@@ -35,38 +35,29 @@ import { EDITOR_MODES, modeMenuItems } from "@/components/workspace/modes";
 import { FONT_FAMILIES, type DocumentMeta } from "@/lib/doc/settings";
 import { MATH_LANGUAGE, schema, type Align } from "@/lib/doc/schema";
 import {
+  applyStyle,
   blockKind,
   clearFormatting,
   currentAlign,
   currentLineHeight,
+  currentStyleId,
   indent,
   listKind,
   markActive,
   markAttr,
   outdent,
   setAlign,
-  setBlock,
   setLineHeight,
   setMark,
   toggle,
   toggleList,
   type BlockKind,
 } from "@/lib/editor/commands";
+import { activeTheme, findStyle, resolveStyle, stylePreview, stylesOf } from "@/lib/doc/styles";
 import { IconButton } from "@/components/ui/Button";
 import { MenuButton, type MenuItem } from "@/components/ui/Menu";
 import { Popover } from "@/components/ui/Popover";
 import { FontPicker } from "@/components/workspace/FontPicker";
-
-const BLOCK_LABELS: Record<BlockKind, string> = {
-  paragraph: "Normal text",
-  title: "Title",
-  subtitle: "Subtitle",
-  h1: "Heading 1",
-  h2: "Heading 2",
-  h3: "Heading 3",
-  h4: "Heading 4",
-  code: "Code",
-};
 
 const ZOOMS = [0.5, 0.75, 0.9, 1, 1.25, 1.5, 2];
 
@@ -90,6 +81,7 @@ type Format = {
   canRedo: boolean;
   empty: boolean;
   kind: BlockKind | null;
+  styleId: string | null;
   align: Align;
   list: ReturnType<typeof listKind>;
   sizeAttr: string | null;
@@ -114,6 +106,7 @@ function formatOf(state: EditorState | null): Format {
     canRedo: Boolean(state && redoDepth(state)),
     empty: !state || state.selection.empty,
     kind: state ? blockKind(state) : null,
+    styleId: state ? currentStyleId(state) : null,
     equation: Boolean(state && state.selection.$from.parent.attrs.language === MATH_LANGUAGE),
     align: state ? currentAlign(state) : "left",
     list: state ? listKind(state) : null,
@@ -143,6 +136,7 @@ type ToolbarProps = {
   onLink: () => void;
   onComment: () => void;
   onImage: () => void;
+  onEditStyle: (styleId: string | null) => void;
   mode: EditorMode;
 };
 
@@ -163,12 +157,16 @@ const ToolbarView = memo(function ToolbarView({
   onLink,
   onComment,
   onImage,
+  onEditStyle,
   mode,
 }: ToolbarProps & { format: Format }) {
   const run = session.run.bind(session);
   const viewing = mode === "viewing";
   const disabled = !format.ready || viewing;
-  const { kind, align, list, family, lineHeight } = format;
+  const { align, list, family, lineHeight } = format;
+  const sheet = stylesOf(meta?.settings ?? {});
+  const theme = activeTheme(meta?.settings ?? { fontFamily: FONT_FAMILIES[0].value });
+  const styleName = format.styleId ? (findStyle(sheet, format.styleId)?.name ?? "Normal text") : null;
   const defaultSize = meta?.settings.fontSize ?? 11;
   const size = format.sizeAttr ? Number.parseFloat(format.sizeAttr) : defaultSize;
   const active = (name: "bold" | "italic" | "underline" | "strike" | "link") => format[name];
@@ -212,14 +210,23 @@ const ToolbarView = memo(function ToolbarView({
         <MenuButton
           className="tb-select tb-style"
           label="Paragraph style"
-          items={(Object.keys(BLOCK_LABELS) as BlockKind[]).map((key) => ({
-            label: BLOCK_LABELS[key],
-            checked: kind === key,
-            shortcut: key === "paragraph" ? `⌘⌥0` : key.startsWith("h") ? `⌘⌥${key.slice(1)}` : undefined,
-            onSelect: () => run(setBlock(key)),
-          }))}
+          items={[
+            ...sheet.map((item) => {
+              const resolved = resolveStyle(sheet, item.id);
+              return {
+                label: item.name,
+                checked: format.styleId === item.id,
+                shortcut: item.id === "Normal" ? "⌘⌥0" : item.id === "Heading1" ? "⌘⌥1" : item.id === "Heading2" ? "⌘⌥2" : item.id === "Heading3" ? "⌘⌥3" : item.id === "Heading4" ? "⌘⌥4" : undefined,
+                labelStyle: resolved ? stylePreview(resolved, theme) : undefined,
+                onSelect: () => run(applyStyle(item.id, sheet)),
+              };
+            }),
+            { kind: "separator" as const },
+            { label: "New style…", onSelect: () => onEditStyle(null) },
+            { label: "Modify style…", disabled: !format.styleId, onSelect: () => format.styleId && onEditStyle(format.styleId) },
+          ]}
         >
-          <span className="tb-select-text">{format.equation ? "Equation" : kind ? BLOCK_LABELS[kind] : "Mixed"}</span> <ChevronDown size={13} />
+          <span className="tb-select-text">{format.equation ? "Equation" : (styleName ?? "Mixed")}</span> <ChevronDown size={13} />
         </MenuButton>
         <FontPicker
           className="tb-select tb-font"
@@ -419,8 +426,12 @@ function FontSizeInput({ value, onCommit }: { value: number; onCommit: (value: n
         setDraft(null);
       }}
       onKeyDown={(event) => {
-        if (event.key === "Enter") (event.target as HTMLInputElement).blur();
+        if (event.key === "Enter") {
+          event.preventDefault();
+          (event.target as HTMLInputElement).blur();
+        }
         if (event.key === "Escape") {
+          event.preventDefault();
           setDraft(null);
           (event.target as HTMLInputElement).blur();
         }

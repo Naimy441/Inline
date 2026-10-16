@@ -14,6 +14,7 @@ import type { EditorView } from "prosemirror-view";
 import { blockIdFixes } from "@/lib/doc/ids";
 import { parseMarkdown } from "@/lib/doc/markdown";
 import { schema } from "@/lib/doc/schema";
+import { BUILTIN_STYLES, type ParagraphStyle } from "@/lib/doc/styles";
 import { DEFAULT_TAB_STOP } from "@/lib/doc/settings";
 import {
   clearFormatting,
@@ -25,6 +26,7 @@ import {
   outdent,
   setAlign,
   setBlock,
+  splitWithNextStyle,
   toggle,
   toggleBlockquote,
   toggleList,
@@ -219,7 +221,7 @@ const liftEmptyBlock: Command = (state, dispatch) => {
   return false;
 };
 
-function buildKeymap(extra: Record<string, Command>) {
+function buildKeymap(extra: Record<string, Command>, styles: () => readonly ParagraphStyle[]) {
   const mac = isApple();
   const bindings: Record<string, Command> = {
     "Mod-z": undo,
@@ -254,7 +256,7 @@ function buildKeymap(extra: Record<string, Command>) {
     "Mod-Home": goToDocumentEdge("start"),
     ...(mac ? { "Mod-ArrowDown": goToDocumentEdge("end"), "Mod-ArrowUp": goToDocumentEdge("start") } : {}),
     "Shift-Enter": insertHardBreak,
-    Enter: chainCommands(splitListItem(nodes.list_item!), liftEmptyBlock),
+    Enter: chainCommands(splitListItem(nodes.list_item!), liftEmptyBlock, splitWithNextStyle(styles)),
     // Tab and Shift-Tab never fall through to the browser, which would move focus out of the document.
     Tab: chainCommands(goToNextCell(1), insertTab, indent, () => true),
     "Shift-Tab": chainCommands(goToNextCell(-1), outdent, () => true),
@@ -361,6 +363,8 @@ export type EditorPluginOptions = {
   fontLines?: () => boolean;
   onPages?: (layout: PageLayout) => void;
   keys?: Record<string, Command>;
+  /** Named styles, read when Enter splits a paragraph, so the new one can take the style's next style. */
+  styles?: () => readonly ParagraphStyle[];
   placeholder?: string;
   /** Viewing mode: local edits are refused (changes from the server still apply). */
   readOnly?: () => boolean;
@@ -386,7 +390,7 @@ export function editorPlugins(options: EditorPluginOptions) {
     readSelectionPlugin(),
     // Before the keymaps: Enter and the arrows mean something else around an equation.
     mathPlugin(),
-    buildKeymap(options.keys ?? {}),
+    buildKeymap(options.keys ?? {}, options.styles ?? (() => BUILTIN_STYLES)),
     keymap(baseKeymap),
     history(),
     dropCursor({ color: "var(--accent)", width: 2 }),
