@@ -10,7 +10,8 @@ process.env.INLINE_DATA_DIR = mkdtempSync(path.join(tmpdir(), "inline-runtime-")
 import { mcpToolName } from "@/lib/agent/mcp";
 import { PAGE_LAYOUT_PLUGIN_DIR, PAGE_LAYOUT_SKILL } from "@/lib/agent/skills";
 import { agentRuntime, BUILTIN_TOOLS, setQueryImplementation, type ChatRuntime } from "@/lib/agent/runtime";
-import { fakeClaude, type FakeModel } from "@/lib/agent/testing/fakeClaude";
+import { FAKE_CONTEXT_USAGE, fakeClaude, type FakeModel } from "@/lib/agent/testing/fakeClaude";
+import { contextFromReport } from "@/lib/agent/contextUsage";
 import type { AssistantMessage, ChatEvent, ChatSettings, ToolPart, UserMessage } from "@/lib/agent/types";
 import { docToMarkdown } from "@/lib/doc/markdown";
 import { documentHub } from "@/lib/server/hub";
@@ -462,7 +463,7 @@ describe("queueing, interrupting and errors", () => {
     assert.ok(events.some((event) => event.type === "status" && event.status?.kind === "retrying" && event.status.attempt === 1));
     const limit = events.find((event) => event.type === "rate_limit");
     assert.deepEqual(limit && "rateLimit" in limit && limit.rateLimit, { status: "allowed_warning", resetsAt: 1_800_000_000, type: "five_hour", utilization: 0.9 });
-    assert.deepEqual(chat.state.context, { tokens: 24_000, maxTokens: 200_000, percentage: 12 });
+    assert.deepEqual(chat.state.context, contextFromReport(FAKE_CONTEXT_USAGE));
   });
 });
 

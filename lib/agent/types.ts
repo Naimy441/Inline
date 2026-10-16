@@ -159,7 +159,33 @@ export type ChatSummary = {
   preview: string;
 };
 
-export type ContextUsage = { tokens: number; maxTokens: number; percentage: number };
+/** What a context-window row represents. Classify on this, never on the display name. */
+export type ContextCategoryKind = "used" | "free" | "buffer" | "deferred";
+
+/** One row of the open chat's context window: messages, tools, the prompt, and so on. */
+export type ContextCategory = {
+  name: string;
+  tokens: number;
+  kind: ContextCategoryKind;
+  /** CSS color for the row's dot and its share of the bar. Free space leaves this empty. */
+  color: string;
+};
+
+/** A memory file Claude Code actually loaded into this chat's prompt. */
+export type ContextMemoryFile = { path: string; tokens: number };
+
+/**
+ * The open chat's context window. `maxTokens` is the model's own window.
+ * `categories` and `memoryFiles` are present once Claude Code has reported a
+ * breakdown; a totals-only value is not something to draw as a breakdown.
+ */
+export type ContextUsage = {
+  tokens: number;
+  maxTokens: number;
+  percentage: number;
+  categories?: ContextCategory[];
+  memoryFiles?: ContextMemoryFile[];
+};
 
 export type RateLimit = { status: "allowed" | "allowed_warning" | "rejected"; resetsAt?: number; type?: string; utilization?: number };
 

@@ -12,6 +12,7 @@ import { Composer, type ComposerHandle } from "@/components/agent/Composer";
 import { MessageList, type TurnHunk } from "@/components/agent/MessageView";
 import { Button, IconButton } from "@/components/ui/Button";
 import { ChatHistory } from "@/components/agent/ChatHistory";
+import { ContextPanel } from "@/components/agent/ContextPanel";
 import { UsageMeter } from "@/components/agent/UsageMeter";
 import { Dialog } from "@/components/ui/Dialog";
 import { toast } from "@/components/ui/Toast";
@@ -323,6 +324,7 @@ export const AgentPanel = forwardRef<
           <span className="panel-title-text">{chat?.title && chat.messages.length ? chat.title : "New chat"}</span>
         </div>
         <div className="panel-actions">
+          <ContextPanel context={chat?.context} />
           {devOptions && chat && chat.messages.length > 0 && (
             <IconButton label="Copy chat history" size="sm" onClick={copyHistory}>
               <Copy size={15} />
