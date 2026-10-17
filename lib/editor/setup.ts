@@ -46,6 +46,7 @@ import { lineFitPlugin } from "@/lib/editor/lineFit";
 import { tabsPlugin } from "@/lib/editor/tabs";
 import { endWithTextblock, pasteIntoEmptyTextblock, transformPastedHtml } from "@/lib/editor/paste";
 import { syncDomSelection } from "@/lib/editor/domSync";
+import { formatSelectionPlugin } from "@/lib/editor/formatSelection";
 import { imageClipboardPlugin } from "@/lib/editor/imageClipboard";
 import { justifyPlugin } from "@/lib/editor/justify";
 import { placeholderPlugin } from "@/lib/editor/placeholder";
@@ -420,6 +421,8 @@ export function editorPlugins(options: EditorPluginOptions) {
     reviewPlugin(options.review),
     presencePlugin(),
     commentsPlugin(options.onActivateComment),
+    // Paints a phrase while the font menu or the size field has focus (lib/editor/formatSelection.ts).
+    formatSelectionPlugin(),
     findPlugin(),
     invisiblesPlugin(options.showInvisibles ?? false),
     spellingPlugin(options.dictionary ?? [], { enabled: options.spellcheck ?? true }),

@@ -68,6 +68,59 @@ test("typing is saved and survives a reload", async ({ page }) => {
   await expect(page.locator(".doc-content strong")).toHaveText("bold");
 });
 
+test("font and font size apply to the phrase that was selected", async ({ page }) => {
+  await newBlankDocument(page);
+  const doc = page.locator(".doc-content");
+  await doc.click();
+  const sentence = "Alpha beta gamma delta.";
+  await page.keyboard.type(sentence);
+  await expect(doc.locator("p").first()).toHaveText(sentence);
+
+  const selectWord = async (word: string) => {
+    await doc.click();
+    await page.keyboard.press("Home");
+    const index = sentence.indexOf(word);
+    for (let i = 0; i < index; i += 1) await page.keyboard.press("ArrowRight");
+    for (let i = 0; i < word.length; i += 1) await page.keyboard.press("Shift+ArrowRight");
+    await expect.poll(() => page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe(word);
+  };
+
+  await selectWord("beta");
+  await page.getByRole("button", { name: "Font", exact: true }).click();
+  const fonts = page.getByRole("listbox", { name: "Fonts" });
+  await expect(fonts).toBeVisible();
+  // The search box has focus, and the phrase is still the selection.
+  await expect(page.getByRole("textbox", { name: "Search fonts" })).toBeFocused();
+  await expect(page.locator(".format-selection")).toHaveText("beta");
+  await fonts.getByRole("option", { name: "Georgia", exact: true }).click();
+  const beta = doc.locator("span", { hasText: /^beta$/ });
+  await expect(beta).toHaveAttribute("style", /font-family:[^;]*Georgia/);
+  await expect(doc.locator("p").first()).toHaveText(sentence);
+  await expect(beta).toHaveText("beta");
+
+  await selectWord("gamma");
+  const size = page.getByRole("textbox", { name: "Font size" });
+  await size.click();
+  await expect(size).toBeFocused();
+  await expect(page.locator(".format-selection")).toHaveText("gamma");
+  await size.fill("20");
+  await size.press("Enter");
+  const gamma = doc.locator("span", { hasText: /^gamma$/ });
+  await expect(gamma).toHaveAttribute("style", /font-size:\s*20pt/);
+  await expect(beta).toHaveAttribute("style", /font-family:[^;]*Georgia/);
+  await expect(beta).not.toHaveAttribute("style", /font-size/);
+  await expect(doc.locator("p").first()).toHaveText(sentence);
+
+  await selectWord("delta");
+  await page.getByRole("button", { name: "Increase font size" }).click();
+  await page.getByRole("button", { name: "Increase font size" }).click();
+  const delta = doc.locator("span", { hasText: /^delta$/ });
+  await expect(delta).toHaveAttribute("style", /font-size:\s*13pt/);
+  await expect(gamma).toHaveAttribute("style", /font-size:\s*20pt/);
+  await expect(beta).not.toHaveAttribute("style", /font-size/);
+  await expect(doc.locator("span", { hasText: /^Alpha/ })).toHaveCount(0);
+});
+
 test("a toolbar button acts on a selection the browser hasn't reported yet", async ({ page }) => {
   await newBlankDocument(page);
   await page.locator(".doc-content").click();

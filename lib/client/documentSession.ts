@@ -14,6 +14,7 @@ import { setTabs } from "@/lib/client/tabs";
 import { api, ApiError, del, patch, post, Store, uploadFile } from "@/lib/client/api";
 import { setCommentState } from "@/lib/editor/comments";
 import { keepVisibleSelection, retainHeldSelection, syncDomSelection, visibleTextSelection, type HeldRange } from "@/lib/editor/domSync";
+import { formatSelectionKey, retainFormattingRange, setFormatSelection, type FormatRange } from "@/lib/editor/formatSelection";
 import type { PdfDocumentModel, PdfImage } from "@/lib/pdf/pdfWriter";
 import { APPEARANCE_PAPER, screenshotPage, type PageAppearance } from "@/lib/pdf/screenAppearance";
 import { fitLinesNow } from "@/lib/editor/lineFit";
@@ -322,6 +323,14 @@ export class DocumentSession {
   /** A range a toolbar press must format, held across the click that would drop it. */
   private heldSelection: HeldRange | null = null;
   private selectionHoldTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * The phrase to format while the font menu or the size field is open. Unlike
+   * `heldSelection`, it is not dropped when a later press sees a caret: that
+   * press is the font row or the size field taking focus.
+   */
+  private formattingHold: FormatRange | null = null;
+  private formattingWatch = false;
+  private formattingRestoreQueued = false;
   private selectionTimer: ReturnType<typeof setTimeout> | null = null;
   private layoutTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingLayout: PageLayout | null = null;
@@ -615,6 +624,12 @@ export class DocumentSession {
         handleDOMEvents: {
           focus: () => {
             this.reportSelection();
+            // Blur of the size field commits before this. A focus that still
+            // has a held phrase is the reader clicking back into the page.
+            queueMicrotask(() => {
+              if (this.destroyed || !this.formattingHold || !this.view?.hasFocus()) return;
+              this.releaseFormattingSelection(false);
+            });
             return false;
           },
         },
@@ -660,6 +675,8 @@ export class DocumentSession {
     this.holdTimer = null;
     this.gestureTimer = null;
     this.selectionHoldTimer = null;
+    this.formattingHold = null;
+    this.unbindFormattingWatch();
     this.releaseHold(false);
     this.unbindScrollPin();
     this.view?.destroy();
@@ -735,6 +752,19 @@ export class DocumentSession {
   dispatch(tr: Transaction) {
     const view = this.view;
     if (!view) return;
+    if (this.formattingHold && tr.docChanged) {
+      const from = tr.mapping.map(this.formattingHold.from, 1);
+      const to = tr.mapping.map(this.formattingHold.to, -1);
+      this.formattingHold = from < to ? { from, to } : null;
+    }
+    // Focusing the font search or the size field collapses the DOM selection
+    // after the editor has already blurred. Put the phrase back. While the
+    // editor still has focus, rewriting it would steal the control's caret.
+    const pinned = this.formattingHold;
+    if (pinned && tr.getMeta(formatSelectionKey) === undefined && !tr.docChanged && tr.selectionSet && tr.selection.empty && pinned.to <= tr.doc.content.size) {
+      if (!view.hasFocus()) tr = tr.setSelection(TextSelection.create(tr.doc, pinned.from, pinned.to));
+      else this.queueFormattingRestore();
+    }
     // The reader moved the caret themselves: stop holding the old scroll position.
     if (this.heldScroll && tr.scrolledIntoView) this.releaseHold(false);
     const holding = Boolean(this.heldScroll);
@@ -1240,6 +1270,100 @@ export class DocumentSession {
       : null;
   }
 
+  /**
+   * Remember the phrase the font menu or the size field is about to change.
+   * Those controls have to take focus, and the browser then collapses the
+   * selection to a caret. The phrase stays — painted, and in the editor —
+   * until the change is applied or the control is dismissed.
+   */
+  holdFormattingSelection() {
+    const view = this.view;
+    if (!view) return;
+    if (view.hasFocus()) syncDomSelection(view);
+    const visible = visibleTextSelection(view);
+    const stateSel = view.state.selection;
+    const read = visible ?? (stateSel.empty ? null : { from: stateSel.from, to: stateSel.to });
+    const range = retainFormattingRange(this.formattingHold, read);
+    if (!range) return;
+    this.formattingHold = range;
+    this.heldSelection = { from: range.from, to: range.to, anchor: range.from };
+    if (this.selectionHoldTimer) clearTimeout(this.selectionHoldTimer);
+    this.selectionHoldTimer = null;
+    this.bindFormattingWatch();
+    const painted = formatSelectionKey.getState(view.state);
+    if (!painted || painted.from !== range.from || painted.to !== range.to) this.dispatch(setFormatSelection(view.state.tr, range));
+    this.queueFormattingRestore();
+  }
+
+  /** Drop the phrase held for a font or size change. `restore` puts it back as the editor selection. */
+  releaseFormattingSelection(restore: boolean) {
+    const range = this.formattingHold;
+    const view = this.view;
+    this.formattingHold = null;
+    this.heldSelection = null;
+    if (this.selectionHoldTimer) clearTimeout(this.selectionHoldTimer);
+    this.selectionHoldTimer = null;
+    this.unbindFormattingWatch();
+    if (!view) return;
+    const painted = formatSelectionKey.getState(view.state);
+    const restoreRange = Boolean(restore && range && view.state.selection.empty && range.from < range.to && range.to <= view.state.doc.content.size);
+    if (!painted && !restoreRange) {
+      if (restore) view.focus();
+      return;
+    }
+    let tr = view.state.tr;
+    if (painted) tr = setFormatSelection(tr, null);
+    if (restoreRange && range) tr = tr.setSelection(TextSelection.create(view.state.doc, range.from, range.to));
+    this.dispatch(tr);
+    if (restore) view.focus();
+  }
+
+  private bindFormattingWatch() {
+    const view = this.view;
+    if (!view || this.formattingWatch) return;
+    this.formattingWatch = true;
+    document.addEventListener("selectionchange", this.onFormattingSelectionChange);
+    view.dom.addEventListener("focusout", this.onFormattingFocusOut);
+  }
+
+  private unbindFormattingWatch() {
+    if (!this.formattingWatch) return;
+    this.formattingWatch = false;
+    document.removeEventListener("selectionchange", this.onFormattingSelectionChange);
+    this.view?.dom.removeEventListener("focusout", this.onFormattingFocusOut);
+  }
+
+  private onFormattingSelectionChange = () => {
+    if (!this.formattingHold || !this.view || this.view.hasFocus()) return;
+    this.queueFormattingRestore();
+  };
+
+  private onFormattingFocusOut = () => {
+    this.queueFormattingRestore();
+  };
+
+  private queueFormattingRestore() {
+    if (this.formattingRestoreQueued || !this.formattingHold) return;
+    this.formattingRestoreQueued = true;
+    queueMicrotask(() => {
+      this.formattingRestoreQueued = false;
+      const stillCaret = this.restoreFormattingSelection();
+      if (stillCaret) requestAnimationFrame(() => this.restoreFormattingSelection());
+    });
+  }
+
+  /** Put the held phrase back once the font or size control has focus. Returns whether it is still a caret. */
+  private restoreFormattingSelection() {
+    const view = this.view;
+    const range = this.formattingHold;
+    if (!view || !range || view.hasFocus()) return false;
+    if (range.from >= range.to || range.to > view.state.doc.content.size) return false;
+    const sel = view.state.selection;
+    if (!sel.empty && sel.from === range.from && sel.to === range.to) return false;
+    this.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, range.from, range.to)));
+    return view.state.selection.empty;
+  }
+
   private takeHeldSelection() {
     const held = this.heldSelection;
     this.heldSelection = null;
@@ -1255,9 +1379,18 @@ export class DocumentSession {
     // waiting returns without reading; force it. If a button took focus first,
     // the range is already gone. Those buttons keep it (see Toolbar).
     syncDomSelection(view);
+    const pinned = this.formattingHold;
     const held = this.takeHeldSelection();
-    if (view.state.selection.empty && held && held.from < held.to && held.to <= view.state.doc.content.size) {
-      this.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, held.from, held.to)));
+    this.formattingHold = null;
+    this.unbindFormattingWatch();
+    const size = view.state.doc.content.size;
+    const saved = pinned && pinned.from < pinned.to && pinned.to <= size ? pinned : held && held.from < held.to && held.to <= size ? held : null;
+    const painted = formatSelectionKey.getState(view.state);
+    if (painted || (view.state.selection.empty && saved)) {
+      let tr = view.state.tr;
+      if (painted) tr = setFormatSelection(tr, null);
+      if (view.state.selection.empty && saved) tr = tr.setSelection(TextSelection.create(view.state.doc, saved.from, saved.to));
+      this.dispatch(tr);
     }
     const result = command(view.state, (tr) => this.dispatch(tr), view);
     view.focus();

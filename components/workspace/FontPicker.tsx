@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, Loader2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { Popover } from "@/components/ui/Popover";
 import { documentFonts, ensureFonts, googleFonts, loadDocumentFonts, previewFamily, previewFont, savedFontChoices, type DocumentFont } from "@/lib/client/fonts";
 import { primaryFamily } from "@/lib/doc/fontMetrics";
@@ -20,10 +20,31 @@ const STANDARD: Option[] = FONT_FAMILIES.map((font) => ({ label: font.label, val
  * Fonts family. A Google font is fetched and kept the first time it is picked.
  * An imported font is loaded so the text is drawn in it.
  */
-export function FontPicker({ value, onPick, className, label, children }: { value: string; onPick: (value: string) => void; className: string; label: string; children: ReactNode }) {
+export function FontPicker({
+  value,
+  onPick,
+  className,
+  label,
+  children,
+  onDismiss,
+  onPointerDown,
+}: {
+  value: string;
+  onPick: (value: string) => void;
+  className: string;
+  label: string;
+  children: ReactNode;
+  /** The menu closed without a choice (Escape, outside click, or the button again). */
+  onDismiss?: () => void;
+  /** A press inside the menu, including the search box. The toolbar uses this to keep the phrase selected. */
+  onPointerDown?: (event: PointerEvent) => void;
+}) {
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
-  const close = useCallback(() => setOpen(false), []);
+  const close = useCallback(() => {
+    setOpen(false);
+    onDismiss?.();
+  }, [onDismiss]);
   return (
     <>
       <button
@@ -35,11 +56,16 @@ export function FontPicker({ value, onPick, className, label, children }: { valu
         aria-expanded={open}
         data-tip={label}
         onMouseDown={(event) => event.preventDefault()}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() =>
+          setOpen((current) => {
+            if (current) onDismiss?.();
+            return !current;
+          })
+        }
       >
         {children}
       </button>
-      <Popover open={open} onClose={close} anchor={anchor} className="font-picker" role="dialog">
+      <Popover open={open} onClose={close} anchor={anchor} className="font-picker" role="dialog" onPointerDown={onPointerDown}>
         {open && (
           <FontList
             value={value}
