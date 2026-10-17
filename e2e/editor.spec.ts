@@ -434,7 +434,8 @@ test("document tabs can be added, renamed, reordered, exported and deleted", asy
   await page.locator(".doc-content").click();
   await page.keyboard.type("Second tab text.");
   await expect(page.locator(".sync-status")).toHaveText(/Saved/);
-  await expect(page.locator(".status-tab")).toHaveText("Notes");
+  await expect(page.locator(".title-tab-name")).toHaveText("Notes");
+  await expect(page.locator(".status-tab")).toHaveCount(0);
 
   // Drag Notes above Tab 1.
   await pane.locator("li", { hasText: "Notes" }).dragTo(pane.locator("li", { hasText: "Tab 1" }), { targetPosition: { x: 40, y: 4 } });
@@ -454,6 +455,8 @@ test("document tabs can be added, renamed, reordered, exported and deleted", asy
   await page.getByRole("button", { name: "Delete tab" }).click();
   await expect(pane.locator(".tab-row")).toHaveCount(1);
   await expect(page.locator(".doc-content")).toContainText("Second tab text.");
+  await expect(page.locator(".title-tab")).toHaveCount(0);
+  await expect(page.locator(".status-tab")).toHaveCount(0);
   // The document lives on under the remaining tab.
   const firstId = new URL(firstUrl).pathname.split("/").pop();
   const list = (await (await page.request.get("/api/documents")).json()) as { documents: Array<{ id: string }> };
