@@ -320,7 +320,22 @@ button.crumb:hover {
 
 .doc-card-location {
   display: inline-flex;
+  align-items: center;
   flex: none;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* The folder path is part of the row. It shrinks; the icon and the timestamp do not. */
+.doc-card-location.has-name {
+  flex: 0 1 auto;
+  overflow: hidden;
+}
+
+.doc-card-place {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* --- list layout ----------------------------------------------------------- */

@@ -90,6 +90,7 @@ export function DocumentCard({
   trashed,
   folders,
   showLocation,
+  stableLocation = false,
   actions,
   selection,
 }: {
@@ -97,10 +98,14 @@ export function DocumentCard({
   trashed: boolean;
   folders: Map<string, Folder>;
   showLocation: boolean;
+  /** Search: the folder path sits in the meta row, and hover does not swap it in for the icon or the time. */
+  stableLocation?: boolean;
   actions: DocumentActions;
   selection?: Selection;
 }) {
   const folder = showLocation && doc.folderId ? folders.get(doc.folderId) : undefined;
+  const place = folder ? locationLabel(folders, doc) : "";
+  const named = Boolean(folder && stableLocation && place);
   const item: DragItem = { kind: "document", id: doc.id, title: doc.title };
   const selected = selection?.has("document", doc.id) ?? false;
   return (
@@ -120,8 +125,9 @@ export function DocumentCard({
         <span className="doc-card-title">{doc.title}</span>
         <div className="doc-card-meta">
           {folder ? (
-            <span className="doc-card-location" title={`In ${locationLabel(folders, doc)}`}>
+            <span className={`doc-card-location${named ? " has-name" : ""}`} title={named ? undefined : `In ${place}`}>
               <FolderGlyph color={folder.color} size={14} />
+              {named ? <span className="doc-card-place">{place}</span> : null}
             </span>
           ) : (
             <FileText size={14} className="doc-card-icon" />
