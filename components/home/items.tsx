@@ -90,6 +90,7 @@ export function DocumentCard({
   trashed,
   folders,
   showLocation,
+  hoverFolder = false,
   actions,
   selection,
 }: {
@@ -97,12 +98,20 @@ export function DocumentCard({
   trashed: boolean;
   folders: Map<string, Folder>;
   showLocation: boolean;
+  /** Search only: hovering the card crossfades the folder icon and the time into the folder name. */
+  hoverFolder?: boolean;
   actions: DocumentActions;
   selection?: Selection;
 }) {
   const folder = showLocation && doc.folderId ? folders.get(doc.folderId) : undefined;
+  const swap = Boolean(folder && hoverFolder);
   const item: DragItem = { kind: "document", id: doc.id, title: doc.title };
   const selected = selection?.has("document", doc.id) ?? false;
+  const time = (
+    <span className="doc-card-time" title={`${doc.wordCount.toLocaleString()} words`}>
+      {relativeTime(documentTime(doc, trashed))}
+    </span>
+  );
   return (
     <div
       className={`doc-card${selected ? " is-selected" : ""}`}
@@ -119,16 +128,26 @@ export function DocumentCard({
       <div className="doc-card-info">
         <span className="doc-card-title">{doc.title}</span>
         <div className="doc-card-meta">
-          {folder ? (
-            <span className="doc-card-location" title={`In ${locationLabel(folders, doc)}`}>
-              <FolderGlyph color={folder.color} size={14} />
+          {swap && folder ? (
+            <span className="doc-card-swap">
+              <span className="doc-card-swap-rest">
+                <FolderGlyph color={folder.color} size={14} />
+                {time}
+              </span>
+              <span className="doc-card-swap-name">{folder.name}</span>
             </span>
           ) : (
-            <FileText size={14} className="doc-card-icon" />
+            <>
+              {folder ? (
+                <span className="doc-card-location" title={`In ${locationLabel(folders, doc)}`}>
+                  <FolderGlyph color={folder.color} size={14} />
+                </span>
+              ) : (
+                <FileText size={14} className="doc-card-icon" />
+              )}
+              {time}
+            </>
           )}
-          <span className="doc-card-time" title={`${doc.wordCount.toLocaleString()} words`}>
-            {relativeTime(documentTime(doc, trashed))}
-          </span>
           <MenuButton label="Document actions" title={doc.title} items={documentMenuItems(doc, trashed, actions)} />
         </div>
       </div>

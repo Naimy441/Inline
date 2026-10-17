@@ -155,3 +155,53 @@ test("move a document with the Move dialog, making a new folder on the way", asy
   await page.getByRole("tab", { name: "Recent" }).click();
   await expect(page.locator(".doc-card", { hasText: title })).toBeVisible();
 });
+
+test("search hover swaps the folder icon and timestamp for the folder name", async ({ page, request }) => {
+  const stamp = Date.now();
+  const folderName = `Recipes ${stamp}`;
+  const title = `Sourdough ${stamp}`;
+  const loose = `Loose ${stamp}`;
+  const folder = ((await (await request.post("/api/folders", { data: { name: folderName } })).json()) as { folder: { id: string } }).folder;
+  const response = await request.post("/api/documents", { data: { title, markdown: `# ${title}\n\nStarter and salt.`, folderId: folder.id } });
+  expect(response.status()).toBe(201);
+  await createDocument(request, loose);
+  await page.goto("/");
+
+  await page.getByLabel("Search documents").fill(title);
+  const card = page.locator(".doc-card", { hasText: title });
+  const rest = card.locator(".doc-card-swap-rest");
+  const name = card.locator(".doc-card-swap-name");
+  await expect(card.locator(".doc-card-title")).toHaveText(title);
+  await expect(rest.locator(".folder-glyph")).toBeVisible();
+  await expect(rest.locator(".doc-card-time")).toBeVisible();
+  await expect(rest).toHaveCSS("opacity", "1");
+  await expect(name).toHaveText(folderName);
+  await expect(name).toHaveCSS("opacity", "0");
+
+  await card.hover();
+  await expect(rest).toHaveCSS("opacity", "0");
+  await expect(name).toHaveCSS("opacity", "1");
+  await expect(card.locator(".doc-card-title")).toHaveText(title);
+
+  await page.locator(".home-brand").hover();
+  await expect(rest).toHaveCSS("opacity", "1");
+  await expect(name).toHaveCSS("opacity", "0");
+
+  // A search result that is not in a folder does not swap.
+  await page.getByLabel("Search documents").fill(loose);
+  const plain = page.locator(".doc-card", { hasText: loose });
+  await expect(plain.locator(".doc-card-swap")).toHaveCount(0);
+  await expect(plain.locator(".doc-card-icon")).toBeVisible();
+  const plainTime = await plain.locator(".doc-card-time").innerText();
+  await plain.hover();
+  await expect(plain.locator(".doc-card-icon")).toBeVisible();
+  await expect(plain.locator(".doc-card-time")).toHaveText(plainTime);
+  await expect(plain.locator(".doc-card-swap")).toHaveCount(0);
+
+  // With the search cleared, hovering a document leaves the file icon and the time.
+  await page.getByLabel("Clear search").click();
+  await expect(plain.locator(".doc-card-swap")).toHaveCount(0);
+  await plain.hover();
+  await expect(plain.locator(".doc-card-icon")).toBeVisible();
+  await expect(plain.locator(".doc-card-time")).toHaveText(plainTime);
+});
