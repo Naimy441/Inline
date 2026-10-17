@@ -1,5 +1,5 @@
 import katex from "katex";
-import { DOMSerializer, type Node as PMNode } from "prosemirror-model";
+import { DOMSerializer, Fragment, type Node as PMNode } from "prosemirror-model";
 import { InputRule } from "prosemirror-inputrules";
 import { Plugin, PluginKey, TextSelection, type Command, type EditorState, type Transaction } from "prosemirror-state";
 import { Decoration, DecorationSet, type EditorView, type NodeView } from "prosemirror-view";
@@ -14,8 +14,9 @@ import { MATH_LANGUAGE, schema } from "@/lib/doc/schema";
  */
 
 type MathRange = { from: number; to: number; tex: string };
-type MathState = { editing: number | null; decorations: DecorationSet; any: boolean };
-type MathMeta = { edit: number | null };
+type MathState = { editing: number | null; decorations: DecorationSet; any: boolean; swallowSpace: boolean };
+/** `edit` opens or closes inline source. `swallowSpace` eats the space in the old `$$ ` shortcut. */
+type MathMeta = { edit?: number | null; swallowSpace?: boolean };
 
 export const mathKey = new PluginKey<MathState>("math");
 
@@ -52,13 +53,15 @@ function rangeAt(doc: PMNode, pos: number): MathRange | undefined {
   return mathRanges(doc).find((range) => range.from <= pos && pos <= range.to);
 }
 
-/** The displayed equation the selection is in, as [start, end] of the code block node. */
+function isDisplayMath(node: PMNode | null | undefined): node is PMNode {
+  return Boolean(node && node.type === schema.nodes.code_block && node.attrs.language === MATH_LANGUAGE);
+}
+
+/** The displayed equation the selection is in. */
 function blockAt(state: EditorState): { pos: number; node: PMNode } | null {
   const { $from, $to } = state.selection;
-  if (!$from.sameParent($to)) return null;
-  const parent = $from.parent;
-  if (parent.type !== schema.nodes.code_block || parent.attrs.language !== MATH_LANGUAGE) return null;
-  return { pos: $from.before(), node: parent };
+  if (!$from.sameParent($to) || !isDisplayMath($from.parent)) return null;
+  return { pos: $from.before(), node: $from.parent };
 }
 
 function render(tex: string, element: HTMLElement, displayMode: boolean) {
@@ -72,14 +75,17 @@ function render(tex: string, element: HTMLElement, displayMode: boolean) {
 
 function editingFor(prev: number | null, tr: Transaction, state: EditorState): number | null {
   const meta = tr.getMeta(mathKey) as MathMeta | undefined;
-  if (meta) return meta.edit;
-  const mapped = prev === null ? null : tr.mapping.map(prev, 1);
+  if (meta && "edit" in meta) return meta.edit ?? null;
+  // Bias -1 stays on the equation when the keystroke replaces its first character.
+  // Bias 1 would jump past that insertion and close the equation after one character.
+  const mapped = prev === null ? null : tr.mapping.map(prev, -1);
   const { from, to, empty, head } = state.selection;
   const range = rangeAt(state.doc, head);
   if (!range || from < range.from || to > range.to) return null;
   // Strictly inside: editing. On its edge: only if it was already being edited (arrowing out reveals nothing new).
   if ((head > range.from && head < range.to) || !empty) return range.from;
-  return mapped === range.from ? range.from : null;
+  if (mapped === null) return null;
+  return rangeAt(state.doc, mapped)?.from === range.from ? range.from : null;
 }
 
 function buildDecorations(state: EditorState, editing: number | null): DecorationSet {
@@ -143,7 +149,7 @@ function hasMath(doc: PMNode) {
   let found = false;
   doc.descendants((node) => {
     if (found) return false;
-    if (node.type === schema.nodes.code_block && node.attrs.language === MATH_LANGUAGE) found = true;
+    if (isDisplayMath(node)) found = true;
     return !node.isTextblock;
   });
   return found;
@@ -157,12 +163,106 @@ function closeEquation(view: EditorView, editing: number): boolean {
   return true;
 }
 
+/** Replace a displayed equation with a paragraph when it is the only block, otherwise delete it. */
+function deleteMathNode(tr: Transaction, pos: number, cursor: number) {
+  const node = tr.doc.nodeAt(pos);
+  if (!node) return;
+  const $pos = tr.doc.resolve(pos);
+  if ($pos.parent.childCount === 1) {
+    tr.replaceWith(pos, pos + node.nodeSize, schema.nodes.paragraph.create());
+    tr.setSelection(TextSelection.create(tr.doc, pos + 1));
+    return;
+  }
+  tr.delete(pos, pos + node.nodeSize);
+  // Keep the caret on the side it was on: before the equation, or after it.
+  const bias = cursor <= pos ? -1 : 1;
+  const mapped = Math.min(tr.mapping.map(cursor, bias), tr.doc.content.size);
+  tr.setSelection(TextSelection.near(tr.doc.resolve(mapped), bias));
+}
+
+/** Put the caret in the textblock after a displayed equation, adding a paragraph when there isn't one. */
+function placeCaretAfterDisplay(tr: Transaction, blockPos: number) {
+  const pos = tr.mapping.map(blockPos);
+  const node = tr.doc.nodeAt(pos);
+  if (!isDisplayMath(node)) return;
+  const after = pos + node.nodeSize;
+  const $after = tr.doc.resolve(after);
+  if ($after.nodeAfter?.isTextblock) {
+    tr.setSelection(TextSelection.create(tr.doc, after + 1));
+    return;
+  }
+  const paragraph = schema.nodes.paragraph.create()!;
+  const $block = tr.doc.resolve(pos);
+  if ($block.parent.canReplaceWith($block.indexAfter(), $block.indexAfter(), paragraph.type)) {
+    tr.insert(after, paragraph);
+    tr.setSelection(TextSelection.create(tr.doc, after + 1));
+    return;
+  }
+  tr.setSelection(TextSelection.create(tr.doc, pos + 1 + node.content.size));
+}
+
+/**
+ * Backspace and Delete inside a displayed equation edit its source directly.
+ * The browser leaves the first character of a code block in place, so the
+ * last character has to be removed in the document. One more press on an
+ * empty equation removes the node. From the neighboring paragraph, either
+ * key removes the node.
+ */
+function deleteDisplayMath(view: EditorView, key: "Backspace" | "Delete"): boolean {
+  const { state } = view;
+  const { $from, $to, empty, head } = state.selection;
+  const block = blockAt(state);
+  if (block && $from.sameParent($to)) {
+    if (!empty) {
+      view.dispatch(state.tr.delete($from.pos, $to.pos).scrollIntoView());
+      return true;
+    }
+    const size = block.node.content.size;
+    if (key === "Backspace" && $from.parentOffset > 0) {
+      view.dispatch(state.tr.delete($from.pos - 1, $from.pos).scrollIntoView());
+      return true;
+    }
+    if (key === "Delete" && $from.parentOffset < size) {
+      view.dispatch(state.tr.delete($from.pos, $from.pos + 1).scrollIntoView());
+      return true;
+    }
+    if (size === 0) {
+      const tr = state.tr;
+      deleteMathNode(tr, block.pos, head);
+      view.dispatch(tr.scrollIntoView());
+      return true;
+    }
+    return false;
+  }
+  if (!empty || !$from.parent.isTextblock || $from.depth < 1) return false;
+  const container = $from.node($from.depth - 1);
+  const index = $from.index($from.depth - 1);
+  if (key === "Backspace" && $from.parentOffset === 0 && index > 0) {
+    const before = container.child(index - 1);
+    if (!isDisplayMath(before)) return false;
+    const tr = state.tr;
+    deleteMathNode(tr, $from.before() - before.nodeSize, head);
+    view.dispatch(tr.scrollIntoView());
+    return true;
+  }
+  if (key === "Delete" && $from.parentOffset === $from.parent.content.size && index < container.childCount - 1) {
+    const after = container.child(index + 1);
+    if (!isDisplayMath(after)) return false;
+    const tr = state.tr;
+    deleteMathNode(tr, $from.after(), head);
+    view.dispatch(tr.scrollIntoView());
+    return true;
+  }
+  return false;
+}
+
 function handleKeyDown(view: EditorView, event: KeyboardEvent): boolean {
-  if (event.metaKey || event.ctrlKey || event.altKey) return false;
+  if (event.metaKey || event.ctrlKey || event.altKey || event.isComposing) return false;
   const state = view.state;
   const editing = mathKey.getState(state)?.editing ?? null;
+  if (!event.shiftKey && editing !== null && (event.key === "Enter" || event.key === "Escape")) return closeEquation(view, editing);
+  if (!event.shiftKey && (event.key === "Backspace" || event.key === "Delete") && deleteDisplayMath(view, event.key)) return true;
   const { empty, head } = state.selection;
-  if (editing !== null && (event.key === "Enter" || event.key === "Escape") && !event.shiftKey) return closeEquation(view, editing);
   if (!empty || event.shiftKey) {
     return false;
   }
@@ -205,27 +305,38 @@ export function mathPlugin() {
     state: {
       init: (_config, state) => {
         const any = hasMath(state.doc);
-        return { editing: null, any, decorations: any ? buildDecorations(state, null) : DecorationSet.empty };
+        return { editing: null, any, decorations: any ? buildDecorations(state, null) : DecorationSet.empty, swallowSpace: false };
       },
       apply(tr, prev, _old, state) {
-        if (!tr.docChanged && !tr.selectionSet && !tr.getMeta(mathKey)) return prev;
+        const meta = tr.getMeta(mathKey) as MathMeta | undefined;
+        if (!tr.docChanged && !tr.selectionSet && !meta) return prev;
+        // Armed by typing `$$` on a blank line. An id fix keeps the block empty, so the following space still gets eaten.
+        let swallowSpace = prev.swallowSpace;
+        if (meta && "swallowSpace" in meta) swallowSpace = Boolean(meta.swallowSpace);
+        else if (swallowSpace) {
+          const block = blockAt(state);
+          swallowSpace = Boolean(block && block.node.content.size === 0);
+        }
         // Documents without equations skip the work.
         const any = tr.docChanged ? hasMath(state.doc) : prev.any;
-        if (!any) return prev.any || prev.editing !== null ? { editing: null, any, decorations: DecorationSet.empty } : prev;
+        if (!any) return prev.any || prev.editing !== null || prev.swallowSpace ? { editing: null, any, decorations: DecorationSet.empty, swallowSpace: false } : prev;
         const editing = editingFor(prev.editing, tr, state);
-        return { editing, any, decorations: buildDecorations(state, editing) };
+        return { editing, any, decorations: buildDecorations(state, editing), swallowSpace };
       },
     },
     props: {
       decorations: (state) => mathKey.getState(state)?.decorations,
       handleKeyDown,
-      // Typing at the end of the equation being edited adds to its LaTeX (the mark doesn't extend on its own).
       handleTextInput(view, from, to, text) {
+        if (handleDisplayInput(view, from, to, text)) return true;
+        // The math mark doesn't extend on its own. Any keystroke inside the open equation, including one that replaces its first character, stays in the equation.
         const editing = mathKey.getState(view.state)?.editing ?? null;
-        if (editing === null) return false;
+        if (editing === null || !text) return false;
         const range = rangeAt(view.state.doc, editing);
-        if (!range || from < range.from || to > range.to || (from > range.from && to < range.to)) return false;
-        view.dispatch(view.state.tr.replaceWith(from, to, schema.text(text, [schema.mark("math")])));
+        if (!range || from < range.from || to > range.to) return false;
+        const tr = view.state.tr.replaceWith(from, to, schema.text(text, [schema.mark("math")]));
+        tr.setSelection(TextSelection.create(tr.doc, from + text.length)).setMeta(mathKey, { edit: range.from } satisfies MathMeta);
+        view.dispatch(tr);
         return true;
       },
     },
@@ -235,15 +346,96 @@ export function mathPlugin() {
 /** Whether a position is inside an equation's source, where typing substitutions shouldn't apply. */
 export function inMath(state: EditorState, pos: number) {
   const $pos = state.doc.resolve(pos);
-  return $pos.marks().some((mark) => mark.type.name === "math") || ($pos.parent.type === schema.nodes.code_block && $pos.parent.attrs.language === MATH_LANGUAGE);
+  if ($pos.marks().some((mark) => mark.type.name === "math") || isDisplayMath($pos.parent)) return true;
+  const editing = mathKey.getState(state)?.editing;
+  if (editing == null) return false;
+  const range = rangeAt(state.doc, editing);
+  return Boolean(range && pos >= range.from && pos <= range.to);
+}
+
+/**
+ * The space after `$$` on a blank line is the old shortcut, not LaTeX.
+ * A second `$` at the end of a displayed equation closes `$$...$$`.
+ */
+function handleDisplayInput(view: EditorView, from: number, to: number, text: string): boolean {
+  const { state } = view;
+  const block = blockAt(state);
+  if (mathKey.getState(state)?.swallowSpace && text === " " && from === to && block && block.node.content.size === 0) {
+    view.dispatch(state.tr.setMeta(mathKey, { swallowSpace: false } satisfies MathMeta));
+    return true;
+  }
+  if (!block || text !== "$" || from !== to || !state.selection.empty) return false;
+  const tex = block.node.textContent;
+  const offset = state.selection.$from.parentOffset;
+  if (offset !== tex.length || offset === 0 || tex[offset - 1] !== "$" || (offset >= 2 && tex[offset - 2] === "\\")) return false;
+  const tr = state.tr;
+  if (tex === "$") deleteMathNode(tr, block.pos, state.selection.head);
+  else {
+    tr.delete(from - 1, from);
+    placeCaretAfterDisplay(tr, block.pos);
+  }
+  view.dispatch(tr.scrollIntoView());
+  return true;
+}
+
+/** Turn `$$...$$` in a paragraph into a displayed equation, keeping the text on either side. */
+function displayFromDelimiters(state: EditorState, open: number, end: number, tex: string): Transaction | null {
+  const $open = state.doc.resolve(open);
+  const parent = $open.parent;
+  if (!parent.inlineContent || parent.type.spec.code || !$open.sameParent(state.doc.resolve(end))) return null;
+  if ($open.marks().some((mark) => mark.type.spec.code)) return null;
+  const paraPos = $open.before();
+  const contentStart = $open.start();
+  const before = parent.content.cut(0, open - contentStart);
+  const after = parent.content.cut(end - contentStart);
+  const math = schema.nodes.code_block!.create({ language: MATH_LANGUAGE }, tex ? schema.text(tex) : undefined);
+  const container = $open.node(-1);
+  const index = $open.index(-1);
+  const lead = before.size ? parent.type.create(parent.attrs, before) : null;
+  const trail = after.size ? parent.type.create(null, after) : null;
+  const build = (emptyLead: boolean, emptyTrail: boolean) => {
+    const nodes: PMNode[] = [];
+    if (lead) nodes.push(lead);
+    else if (emptyLead) nodes.push(parent.type.create(parent.attrs));
+    nodes.push(math);
+    if (trail) nodes.push(trail);
+    else if (emptyTrail) nodes.push(schema.nodes.paragraph.create()!);
+    return nodes;
+  };
+  // A textblock after the equation keeps the rest of the sentence out of the LaTeX.
+  const options = [build(false, true), build(false, false)];
+  if (!lead) options.unshift(build(true, true), build(true, false));
+  const nodes = options.find((option) => container.canReplace(index, index + 1, Fragment.from(option)));
+  if (!nodes) return null;
+  const tr = state.tr.replaceWith(paraPos, paraPos + parent.nodeSize, nodes);
+  const mathIndex = nodes.indexOf(math);
+  let pos = paraPos;
+  for (let i = 0; i < mathIndex; i += 1) pos += nodes[i]!.nodeSize;
+  if (mathIndex < nodes.length - 1) tr.setSelection(TextSelection.create(tr.doc, pos + math.nodeSize + 1));
+  else tr.setSelection(TextSelection.create(tr.doc, pos + 1 + math.content.size));
+  return tr.setStoredMarks([]).setMeta(mathKey, { edit: null } satisfies MathMeta);
 }
 
 /**
  * Typing `$x^2$` turns it into an equation as the closing $ is typed (not for
- * prices: the LaTeX can't start or end with a space). `$$` and a space on an
- * empty line starts a displayed equation.
+ * prices: the LaTeX can't start or end with a space). `$$` on an empty line
+ * starts a displayed equation (`$$ ` still does; the space is not LaTeX).
+ * `$$...$$` in a paragraph is a displayed equation too.
  */
 export const mathInputRules = [
+  // Only when the line is just `$$`: `$$` before a sentence must not swallow the sentence.
+  new InputRule(/^\$\$$/, (state, _match, start, end) => {
+    const $start = state.doc.resolve(start);
+    if ($start.parent.content.size !== end - start || !$start.node(-1).canReplaceWith($start.index(-1), $start.indexAfter(-1), schema.nodes.code_block!)) return null;
+    return state.tr
+      .delete(start, end)
+      .setBlockType(start, start, schema.nodes.code_block!, { language: MATH_LANGUAGE, id: $start.parent.attrs.id })
+      .setMeta(mathKey, { swallowSpace: true } satisfies MathMeta);
+  }),
+  new InputRule(/(^|[^$])\$\$([^$\n]+?)\$\$$/, (state, match, start, end) => {
+    const open = start + match[1]!.length;
+    return displayFromDelimiters(state, open, end, match[2]!.trim());
+  }),
   new InputRule(/(^|[^$\\\w])\$([^\s$](?:[^$]*[^\s$\\])?)\$$/, (state, match, start, end) => {
     const texStart = start + match[1]!.length;
     const $start = state.doc.resolve(texStart);
@@ -254,12 +446,6 @@ export const mathInputRules = [
       .setSelection(TextSelection.create(tr.doc, texStart + tex.length))
       .setStoredMarks([])
       .setMeta(mathKey, { edit: null } satisfies MathMeta);
-  }),
-  // Only on an empty line: `$$ ` before a sentence shouldn't turn the whole sentence into LaTeX.
-  new InputRule(/^\$\$\s$/, (state, _match, start, end) => {
-    const $start = state.doc.resolve(start);
-    if ($start.parent.content.size !== end - start || !$start.node(-1).canReplaceWith($start.index(-1), $start.indexAfter(-1), schema.nodes.code_block!)) return null;
-    return state.tr.delete(start, end).setBlockType(start, start, schema.nodes.code_block!, { language: MATH_LANGUAGE });
   }),
 ];
 

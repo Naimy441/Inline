@@ -1171,8 +1171,8 @@ img.ProseMirror-separator {
 .doc-content .math-src.is-editing {
   padding: 1px 3px;
   border-radius: 3px;
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
   font-family: "Roboto Mono", var(--font-mono);
   font-size: 0.88em;
 }
@@ -1268,12 +1268,14 @@ img.ProseMirror-separator {
 
 .doc-content .math-block.is-editing > pre {
   display: block;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
 }
 
 .doc-content .math-block.is-editing > .math-display {
   border-radius: 4px;
-  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
 }
 
 .doc-content .math-block > .math-display.is-empty {

@@ -645,6 +645,47 @@ test("equations typed as $…$ show typeset and open for editing when clicked", 
   expect(markdown).toContain("$$\n\\frac{a}{b}\n$$");
 });
 
+test("display equations can be cleared and deleted, and $$…$$ is a display equation", async ({ page }) => {
+  await newBlankDocument(page);
+  const doc = page.locator(".doc-content");
+  await doc.click();
+  await page.keyboard.type("$$");
+  await expect(page.locator(".math-block.is-editing")).toHaveCount(1);
+  await page.keyboard.type("abc");
+  await expect(page.locator(".math-block code")).toHaveText("abc");
+  const editing = page.locator(".math-block.is-editing > .math-display");
+  const background = await editing.evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(background === "rgba(0, 0, 0, 0)" || background === "transparent").toBe(true);
+  await page.keyboard.press("Backspace");
+  await page.keyboard.press("Backspace");
+  await page.keyboard.press("Backspace");
+  await expect(page.locator(".math-display.is-empty")).toHaveCount(1);
+  await page.keyboard.press("Backspace");
+  await expect(page.locator(".math-block")).toHaveCount(0);
+
+  await page.keyboard.type("See $$E=mc^2$$ next.");
+  await expect(page.locator(".math-block code")).toHaveText("E=mc^2");
+  await expect(doc).toContainText("See");
+  await expect(doc).toContainText("next.");
+
+  const outside = "Before\n\n$$\nE=mc^2\n$$\n\nAfter";
+  const deletedForward = await (await page.request.post("/api/documents", { data: { title: "Outside", markdown: outside } })).json();
+  await page.goto(`/d/${deletedForward.document.meta.id}`);
+  await expect(page.locator(".math-block")).toHaveCount(1);
+  await page.getByText("Before", { exact: true }).click();
+  await page.keyboard.press("End");
+  await page.keyboard.press("Delete");
+  await expect(page.locator(".math-block")).toHaveCount(0);
+
+  const deletedBackward = await (await page.request.post("/api/documents", { data: { title: "Outside", markdown: outside } })).json();
+  await page.goto(`/d/${deletedBackward.document.meta.id}`);
+  await expect(page.locator(".math-block")).toHaveCount(1);
+  await page.getByText("After", { exact: true }).click();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Backspace");
+  await expect(page.locator(".math-block")).toHaveCount(0);
+});
+
 test("picking a heading in the outline scrolls the page to it", async ({ page }) => {
   const filler = "Words that fill the page so the heading starts well below the fold of the window. ".repeat(14);
   const markdown = Array.from({ length: 6 }, (_, i) => `## Part ${i + 1}\n\n${filler}\n\n${filler}`).join("\n\n");
