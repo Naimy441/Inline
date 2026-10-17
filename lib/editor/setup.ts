@@ -38,6 +38,7 @@ import { deleteSelectedPicture } from "@/lib/editor/pictureEdit";
 import { findPlugin } from "@/lib/editor/find";
 import { spellingPlugin } from "@/lib/editor/spelling";
 import { invisiblesPlugin } from "@/lib/editor/invisibles";
+import { autolinkPlugin } from "@/lib/editor/autolink";
 import { inMath, mathInputRules, mathPlugin } from "@/lib/editor/math";
 import { paginationPlugin, type PageGeometry, type PageLayout } from "@/lib/editor/pagination";
 import { tocSyncPlugin } from "@/lib/editor/tocView";
@@ -402,6 +403,7 @@ export function editorPlugins(options: EditorPluginOptions) {
   return [
     readOnlyPlugin(options.readOnly ?? (() => false)),
     buildInputRules(options.substitutions ?? (() => true)),
+    autolinkPlugin(),
     // Before the keymaps: the browser caret is in state before Enter or an arrow command reads it.
     readSelectionPlugin(),
     // Before the keymaps: Enter and the arrows mean something else around an equation.

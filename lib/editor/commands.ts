@@ -609,15 +609,59 @@ export function linkHrefFromInput(raw: string): string | null {
   return href ? normalizeHref(href) : null;
 }
 
-export function setLink(rawHref: string | null, text?: string): Command {
+/** Clipboard text that is only a link, or null when it is ordinary text. */
+export function clipboardLink(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed || /\s/.test(trimmed)) return null;
+  return linkHrefFromInput(trimmed);
+}
+
+/**
+ * Where ⌘K should apply a link. A selection is used as-is, so the selected
+ * words stay the link text. A caret inside a link edits that whole link.
+ * A caret in plain text is an insertion point.
+ */
+export function linkEditTarget(state: EditorState): { from: number; to: number; href: string } {
+  const { from, to, empty } = state.selection;
+  if (!empty) {
+    const type = marks.link!;
+    let href = "";
+    let all = true;
+    state.doc.nodesBetween(from, to, (node) => {
+      if (!node.isText || !node.text) return;
+      const mark = type.isInSet(node.marks);
+      if (!mark) {
+        all = false;
+        return;
+      }
+      const value = mark.attrs.href as string;
+      if (!href) href = value;
+      else if (href !== value) all = false;
+    });
+    return { from, to, href: all ? href : "" };
+  }
+  const link = linkAt(state);
+  if (link) return { from: link.from, to: link.to, href: link.href };
+  return { from, to, href: "" };
+}
+
+export function setLink(rawHref: string | null, text?: string, range?: { from: number; to: number }): Command {
   const href = rawHref === null ? null : linkHrefFromInput(rawHref);
   return (state, dispatch) => {
     if (rawHref !== null && !href) return false;
     if (!dispatch) return true;
     const type = marks.link!;
-    const existing = linkAt(state);
-    let { from, to } = existing ?? state.selection;
+    let from: number;
+    let to: number;
+    if (range && range.from >= 0 && range.to <= state.doc.content.size && range.from <= range.to) {
+      from = range.from;
+      to = range.to;
+    } else {
+      const existing = linkAt(state);
+      ({ from, to } = existing ?? state.selection);
+    }
     const tr = state.tr;
+    // Text is inserted only at a caret. A selection is already the link text.
     if (text && from === to) {
       tr.insertText(text, from);
       to = from + text.length;

@@ -1,20 +1,23 @@
 "use client";
 
-import { ExternalLink, Pencil, Sparkles, Unlink } from "lucide-react";
+import { Copy, ExternalLink, Pencil, Sparkles, Unlink } from "lucide-react";
 import type { EditorState } from "prosemirror-state";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { DocumentSession } from "@/lib/client/documentSession";
-import { followLink, linkAt, setLink } from "@/lib/editor/commands";
 import { isTouch } from "@/lib/client/viewport";
+import { followLink, linkAt, linkEditTarget, setLink } from "@/lib/editor/commands";
+import { toast } from "@/components/ui/Toast";
 
 /**
  * Floating editor for the inline prompt and for links under the cursor.
- * Selecting text does not open an action bar.
+ * Selecting text does not open an action bar. A link opens one compact row.
  */
 export function SelectionBubble({
   session,
   state,
   linkEditing,
+  linkSession = 0,
+  linkPrefill = null,
   onLinkEditing,
   prompting = false,
   onPrompting,
@@ -24,8 +27,12 @@ export function SelectionBubble({
   session: DocumentSession;
   state: EditorState | null;
   linkEditing: boolean;
+  /** Bumps each time the link editor opens, so a second ⌘K anchors again. */
+  linkSession?: number;
+  /** A URL already on the clipboard when ⌘K opened the editor, if there was one. */
+  linkPrefill?: string | null;
   onLinkEditing: (open: boolean) => void;
-  /** The inline ⌘K prompt is open. */
+  /** The inline ⌘⇧K prompt is open. */
   prompting?: boolean;
   onPrompting?: (open: boolean) => void;
   /** Send the inline prompt to Claude about the selection (or the cursor). */
@@ -38,11 +45,17 @@ export function SelectionBubble({
   const [href, setHref] = useState("");
   const [text, setText] = useState("");
   const [instruction, setInstruction] = useState("");
+  const [scrollTick, setScrollTick] = useState(0);
+  const [suppressBar, setSuppressBar] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const promptInput = useRef<HTMLInputElement>(null);
   const bubble = useRef<HTMLDivElement>(null);
+  const hrefDirty = useRef(false);
+  const anchor = useRef<{ session: number; from: number; to: number; href: string } | null>(null);
 
-  // Keep the whole bubble on screen: it's centred on the selection, so nudge it in from either edge.
+  const view = session.view;
+
+  // Keep the whole bubble on screen: it's centred on its anchor, so nudge it in from either edge.
   useLayoutEffect(() => {
     const element = bubble.current;
     if (!element) return;
@@ -52,41 +65,76 @@ export function SelectionBubble({
     const shift = box.left < edge ? edge - box.left : box.right > window.innerWidth - edge ? window.innerWidth - edge - box.right : 0;
     if (shift) element.style.marginLeft = `${shift}px`;
   });
-  const view = session.view;
 
   useEffect(() => {
     const dom = view?.dom;
     if (!dom) return;
-    const down = () => setDragging(true);
+    const down = (event: MouseEvent) => {
+      // A right-click is the context menu. Hide the link bar before mouseup paints it.
+      if (event.button === 2) {
+        setSuppressBar(true);
+        onLinkEditing(false);
+      } else if (event.button === 0) setSuppressBar(false);
+      setDragging(true);
+    };
     const up = () => setDragging(false);
     const focusIn = () => setFocused(true);
     const focusOut = (event: FocusEvent) => {
       if ((event.relatedTarget as HTMLElement | null)?.closest?.(".bubble")) return;
       setFocused(false);
     };
+    // Right-click opens the context menu only. Capture runs before that menu moves the caret.
+    const onContext = () => {
+      setSuppressBar(true);
+      onLinkEditing(false);
+    };
     dom.addEventListener("mousedown", down);
     window.addEventListener("mouseup", up);
     dom.addEventListener("focusin", focusIn);
     dom.addEventListener("focusout", focusOut);
+    dom.addEventListener("contextmenu", onContext, true);
     if (document.activeElement === dom) setFocused(true);
     return () => {
       dom.removeEventListener("mousedown", down);
       window.removeEventListener("mouseup", up);
       dom.removeEventListener("focusin", focusIn);
       dom.removeEventListener("focusout", focusOut);
+      dom.removeEventListener("contextmenu", onContext, true);
+    };
+  }, [view, onLinkEditing]);
+
+  useEffect(() => {
+    const scroller = view?.dom.closest(".canvas");
+    if (!scroller) return;
+    let frame = 0;
+    const onScroll = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => setScrollTick((n) => n + 1));
+    };
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    return () => {
+      cancelAnimationFrame(frame);
+      scroller.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
     };
   }, [view]);
 
-  const link = state ? linkAt(state) : null;
+  if (!linkEditing) anchor.current = null;
+  else if (state && (!anchor.current || anchor.current.session !== linkSession)) anchor.current = { session: linkSession, ...linkEditTarget(state) };
+
+  useLayoutEffect(() => {
+    if (!linkEditing) return;
+    hrefDirty.current = false;
+    setHref(linkPrefill || anchor.current?.href || "");
+    setText("");
+    input.current?.focus();
+  }, [linkEditing, linkSession]);
 
   useEffect(() => {
-    if (!linkEditing) return;
-    setHref(link?.href ?? "");
-    setText("");
-    requestAnimationFrame(() => input.current?.focus());
-    // Only when the editor opens.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [linkEditing]);
+    if (!linkEditing || hrefDirty.current || !linkPrefill) return;
+    setHref(linkPrefill);
+  }, [linkEditing, linkPrefill]);
 
   useLayoutEffect(() => {
     if (!prompting) return;
@@ -96,33 +144,77 @@ export function SelectionBubble({
     promptInput.current?.focus();
   }, [prompting]);
 
+  useEffect(() => {
+    if (!linkEditing) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (target instanceof Node && bubble.current?.contains(target)) return;
+      onLinkEditing(false);
+    };
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      onLinkEditing(false);
+      view?.focus();
+    };
+    document.addEventListener("mousedown", onPointerDown, true);
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown, true);
+      document.removeEventListener("keydown", onKey, true);
+    };
+  }, [linkEditing, onLinkEditing, view]);
+
   if (!state || !view) return null;
-  const { from, to, empty } = state.selection;
-  const showLink = Boolean(link) && empty && focused && !dragging;
+  const barLink = linkForBar(state);
+  const showLink = Boolean(barLink) && focused && !dragging && !suppressBar && !linkEditing && !prompting;
   // A text selection stays a selection. It does not open Ask Claude, comment, or formatting buttons.
   if (!prompting && !linkEditing && !showLink) return null;
 
+  const saved = linkEditing ? anchor.current : null;
+  const place = saved ?? (showLink && barLink ? barLink : null) ?? { from: state.selection.from, to: state.selection.to };
   let coords: { left: number; top: number; bottom: number };
   try {
-    const start = view.coordsAtPos(from);
-    const end = view.coordsAtPos(to);
+    const start = view.coordsAtPos(clampPos(state, place.from));
+    const end = view.coordsAtPos(clampPos(state, place.to));
     coords = { left: (start.left + end.left) / 2, top: Math.min(start.top, end.top), bottom: Math.max(start.bottom, end.bottom) };
     if (start.top !== end.top) coords.left = start.left + 60;
   } catch {
     return null;
   }
+  void scrollTick;
   // On touch screens the system's copy/paste callout sits above the selection, so go below it.
   const above = coords.top > 120 && !isTouch();
   // The bubble is centred on `left`; the layout effect above keeps all of it on screen.
   const style = { left: coords.left, top: above ? coords.top - 8 : coords.bottom + 10 };
 
-  const applyLink = () => {
-    if (!href.trim()) {
-      session.run(setLink(null));
-    } else {
-      session.run(setLink(href, empty && !link ? text || href : undefined));
-    }
+  const closeEditor = () => {
     onLinkEditing(false);
+    view.focus();
+  };
+
+  const applyLink = () => {
+    if (!saved) return;
+    const trimmed = href.trim();
+    if (!trimmed) {
+      if (saved.from !== saved.to) session.run(setLink(null, undefined, saved));
+      closeEditor();
+      return;
+    }
+    // A selection, or an existing link, already has its text. Only a caret inserts any.
+    const inserted = saved.from === saved.to ? text.trim() || trimmed : undefined;
+    if (session.run(setLink(trimmed, inserted, saved))) closeEditor();
+  };
+
+  const onFieldKey = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      applyLink();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      closeEditor();
+    }
   };
 
   if (prompting && !hideAi) {
@@ -144,7 +236,7 @@ export function SelectionBubble({
           ref={promptInput}
           className="input input-sm"
           aria-label="Ask Claude to edit"
-          placeholder={empty ? "Ask Claude to write here…" : "Ask Claude to change the selection…"}
+          placeholder={state.selection.empty ? "Ask Claude to write here…" : "Ask Claude to change the selection…"}
           value={instruction}
           onChange={(event) => setInstruction(event.target.value)}
           onBlur={(event) => {
@@ -167,28 +259,28 @@ export function SelectionBubble({
     );
   }
 
-  if (linkEditing) {
+  if (linkEditing && saved) {
+    const inserting = saved.from === saved.to;
     return (
       <div className={`bubble bubble-link${above ? " is-above" : ""}`} ref={bubble} style={style} onMouseDown={(event) => event.stopPropagation()}>
-        {empty && !link && (
-          <input className="input input-sm" placeholder="Text" value={text} onChange={(event) => setText(event.target.value)} />
+        {inserting && (
+          <input className="input input-sm" placeholder="Text" aria-label="Link text" value={text} onChange={(event) => setText(event.target.value)} onKeyDown={onFieldKey} />
         )}
         <input
           ref={input}
           className="input input-sm"
+          aria-label="Link URL"
           placeholder="Paste or type a link"
           value={href}
-          onChange={(event) => setHref(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              applyLink();
-            } else if (event.key === "Escape") {
-              event.preventDefault();
-              onLinkEditing(false);
-              view.focus();
-            }
+          onChange={(event) => {
+            hrefDirty.current = true;
+            setHref(event.target.value);
           }}
+          onBlur={(event) => {
+            if ((event.relatedTarget as HTMLElement | null)?.closest?.(".bubble")) return;
+            onLinkEditing(false);
+          }}
+          onKeyDown={onFieldKey}
         />
         <button type="button" className="btn btn-primary btn-sm" onClick={applyLink}>
           <span className="btn-label">Apply</span>
@@ -197,24 +289,25 @@ export function SelectionBubble({
     );
   }
 
-  if (showLink && link) {
+  if (showLink && barLink) {
+    const copy = () => {
+      void navigator.clipboard.writeText(barLink.href).then(
+        () => toast("Link copied"),
+        () => toast("Couldn't copy the link", { tone: "error" }),
+      );
+    };
     return (
-      <div className={`bubble${above ? " is-above" : ""}`} ref={bubble} style={style} onMouseDown={(event) => event.preventDefault()}>
-        <a
-          className="bubble-url"
-          href={link.href}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={(event) => {
-            // In-document anchors and file links are opened by the editor. A browser will not follow file://.
-            if (!link.href.startsWith("#") && !/^file:/i.test(link.href)) return;
-            event.preventDefault();
-            session.run(followLink(link.href));
-          }}
-        >
-          <ExternalLink size={13} /> {link.href.replace(/^https?:\/\//, "").slice(0, 48)}
-        </a>
+      <div className={`bubble link-bar${above ? " is-above" : ""}`} ref={bubble} style={style} role="toolbar" aria-label="Link" onMouseDown={(event) => event.preventDefault()}>
+        <span className="bubble-url" title={barLink.href}>
+          {barLink.href}
+        </span>
         <span className="bubble-sep" />
+        <button type="button" className="bubble-btn" aria-label="Open link" onClick={() => session.run(followLink(barLink.href))}>
+          <ExternalLink size={14} />
+        </button>
+        <button type="button" className="bubble-btn" aria-label="Copy link" onClick={copy}>
+          <Copy size={14} />
+        </button>
         <button type="button" className="bubble-btn" aria-label="Edit link" onClick={() => onLinkEditing(true)}>
           <Pencil size={14} />
         </button>
@@ -225,5 +318,19 @@ export function SelectionBubble({
     );
   }
 
+  return null;
+}
+
+function clampPos(state: EditorState, pos: number) {
+  return Math.max(1, Math.min(pos, state.doc.content.size));
+}
+
+/** The link under a caret, or a selection that is exactly one link. A wider selection stays a selection. */
+function linkForBar(state: EditorState): { from: number; to: number; href: string } | null {
+  const link = linkAt(state);
+  if (!link) return null;
+  const { from, to, empty } = state.selection;
+  if (empty) return from >= link.from && to <= link.to ? link : null;
+  if (from === link.from && to === link.to) return link;
   return null;
 }

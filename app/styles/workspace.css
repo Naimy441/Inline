@@ -2091,14 +2091,29 @@
   max-width: 240px;
   padding: 0 8px;
   font-size: 13px;
+  line-height: 28px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* One row above the link: the URL, then open, copy, edit, remove. */
+.link-bar {
+  flex-wrap: nowrap;
+  gap: 1px;
+  padding: 2px;
+  max-width: min(420px, calc(100vw - 16px));
+}
+
+.link-bar .bubble-url {
+  color: var(--link);
+}
+
 .bubble-link {
+  flex-wrap: nowrap;
   gap: 6px;
-  padding: 6px;
+  padding: 4px;
+  max-width: calc(100vw - 16px);
 }
 
 .bubble-link .input {

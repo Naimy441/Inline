@@ -9,7 +9,7 @@ const GROUPS: Array<[string, Array<[string, string]>]> = [
     "Claude",
     [
       ["Ask Claude about the selection", "⌘ L"],
-      ["Edit with Claude inline", "⌘ K"],
+      ["Edit with Claude inline", "⌘ ⇧ K"],
       ["Check spelling & grammar here", "⌘ ⌥ X"],
       ["Show or hide Claude", "⌘ J"],
       ["Keep the change at the cursor", "⌘ ⇧ ⏎"],

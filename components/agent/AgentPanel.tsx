@@ -22,7 +22,7 @@ import { loadPreferences, preferences } from "@/lib/client/preferences";
 
 export type AgentPanelHandle = {
   ask: (selection: SelectionContext | null, text?: string) => void;
-  /** Send a message right away (the inline ⌘K prompt). */
+  /** Send a message right away (the inline ⌘⇧K prompt). */
   send: (selection: SelectionContext | null, text: string) => Promise<void>;
   /** The user is about to send something: start Claude Code now. */
   warm: () => void;

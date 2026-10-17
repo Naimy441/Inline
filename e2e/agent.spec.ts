@@ -184,7 +184,7 @@ test("the inline prompt sends an edit about the selection straight to Claude", a
   await page.getByRole("button", { name: "Hide Claude" }).or(page.locator(".claude-toggle")).first().click();
   await page.locator(".doc-content").click();
   await page.keyboard.press("ControlOrMeta+a");
-  await page.keyboard.press("ControlOrMeta+k");
+  await page.keyboard.press("ControlOrMeta+Shift+k");
   const prompt = page.getByLabel("Ask Claude to edit");
   await expect(prompt).toBeFocused();
   await prompt.fill('replace "Tuesday" with "Thursday"');

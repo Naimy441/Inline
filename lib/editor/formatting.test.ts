@@ -15,9 +15,11 @@ import {
   insertHorizontalRule,
   insertPageBreak,
   insertTable,
+  clipboardLink,
   followLink,
   insertText,
   linkAt,
+  linkEditTarget,
   listKind,
   markActive,
   normalizeHref,
@@ -111,6 +113,30 @@ describe("links", () => {
   it("inserts linked text when nothing is selected", () => {
     const { md } = run(stateFor("Go", 3), setLink("example.com", "here"));
     assert.equal(md, "Go[here](https://example.com)");
+  });
+
+  it("applies a link to a saved selection without inserting text", () => {
+    const selected = select(stateFor("Visit the site"), "site");
+    const range = { from: selected.selection.from, to: selected.selection.to };
+    const moved = selected.apply(selected.tr.setSelection(TextSelection.create(selected.doc, 1)));
+    const linked = run(moved, setLink("https://example.com", "INSERTED", range));
+    assert.equal(linked.md, "Visit the [site](https://example.com)");
+    assert.equal(linkEditTarget(selected).href, "");
+    assert.deepEqual(
+      ((target) => ({ from: target.from, to: target.to }))(linkEditTarget(selected)),
+      range,
+    );
+    const inside = linked.state.apply(linked.state.tr.setSelection(TextSelection.create(linked.state.doc, range.from + 1)));
+    const whole = linkEditTarget(inside);
+    assert.equal(whole.href, "https://example.com");
+    assert.ok(whole.from < whole.to);
+  });
+
+  it("treats a clipboard URL as a link and ignores ordinary text", () => {
+    assert.equal(clipboardLink(" https://example.com/a "), "https://example.com/a");
+    assert.equal(clipboardLink("www.example.com"), "https://www.example.com");
+    assert.equal(clipboardLink("hello world"), null);
+    assert.equal(clipboardLink("see https://example.com"), null);
   });
 
   it("stores a file link and reloads it from the document", () => {

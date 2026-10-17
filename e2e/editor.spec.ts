@@ -50,12 +50,101 @@ test("a web link and a file link can be inserted, opened, and survive a reload",
   await doc.locator('a[href="https://example.com/notes"]').click({ modifiers: ["Control"] });
   await doc.locator('a[href="file:///tmp/notes.pdf"]').click({ modifiers: ["Control"] });
   await doc.locator('a[href="file:///tmp/notes.pdf"]').click();
-  await page.locator("a.bubble-url").click();
+  await page.getByRole("button", { name: "Open link" }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __opened?: string[] }).__opened ?? [])).toEqual([
     "https://example.com/notes",
     "file:///tmp/notes.pdf",
     "file:///tmp/notes.pdf",
   ]);
+});
+
+test("links use a compact bar, and a typed URL becomes a link", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await newBlankDocument(page);
+  const doc = page.locator(".doc-content");
+  await doc.click();
+  await page.keyboard.type("See the notes and the file here.");
+  await expect(doc.locator("p").first()).toHaveText("See the notes and the file here.");
+
+  const selectWord = async (word: string) => {
+    await doc.locator("p").first().click();
+    const selected = await page.evaluate((wanted) => {
+      const root = document.querySelector(".doc-content");
+      if (!(root instanceof HTMLElement)) return "";
+      root.focus();
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      let node = walker.nextNode();
+      while (node) {
+        const text = node.textContent ?? "";
+        const index = text.indexOf(wanted);
+        if (index >= 0) {
+          const range = document.createRange();
+          range.setStart(node, index);
+          range.setEnd(node, index + wanted.length);
+          const selection = window.getSelection();
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+          return selection?.toString() ?? "";
+        }
+        node = walker.nextNode();
+      }
+      return "";
+    }, word);
+    expect(selected).toBe(word);
+  };
+
+  await selectWord("notes");
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(page.getByLabel("Link text")).toHaveCount(0);
+  await expect(page.getByLabel("Ask Claude to edit")).toHaveCount(0);
+  const url = page.getByLabel("Link URL");
+  await expect(url).toBeVisible();
+  const bubble = url.locator("xpath=ancestor::div[contains(@class,'bubble')]");
+  const box = await bubble.boundingBox();
+  await page.locator(".titlebar").click();
+  await expect(url).toHaveCount(0);
+  await expect(page.locator(".link-bar")).toHaveCount(0);
+  expect(box).not.toBeNull();
+
+  await selectWord("notes");
+  await page.evaluate(async () => {
+    await navigator.clipboard.writeText("https://example.com/from-clipboard");
+  });
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(url).toHaveValue("https://example.com/from-clipboard");
+  await page.keyboard.press("Enter");
+  await expect(doc.locator('a[href="https://example.com/from-clipboard"]')).toHaveText("notes");
+  await expect(url).toHaveCount(0);
+
+  await doc.locator('a[href="https://example.com/from-clipboard"]').click({ button: "right" });
+  await expect(page.locator(".menu")).toBeVisible();
+  await expect(page.locator(".link-bar")).toHaveCount(0);
+  await expect(url).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  await doc.locator('a[href="https://example.com/from-clipboard"]').click();
+  const bar = page.locator(".link-bar");
+  await expect(bar).toBeVisible();
+  await expect(bar).toContainText("https://example.com/from-clipboard");
+  await expect(bar.getByRole("button", { name: "Open link" })).toBeVisible();
+  await expect(bar.getByRole("button", { name: "Copy link" })).toBeVisible();
+  await expect(bar.getByRole("button", { name: "Edit link" })).toBeVisible();
+  await expect(bar.getByRole("button", { name: "Remove link" })).toBeVisible();
+  await expect(bar.locator("img")).toHaveCount(0);
+  const barBox = await bar.boundingBox();
+  expect(barBox && barBox.height).toBeLessThan(56);
+
+  await page.keyboard.press("End");
+  await page.keyboard.type(" https://example.com");
+  await page.keyboard.press("Space");
+  await expect(doc.locator('a[href="https://example.com"]')).toHaveText("https://example.com");
+  await page.keyboard.type("hello ");
+  await expect(doc.locator("a", { hasText: "hello" })).toHaveCount(0);
+  await page.keyboard.type("example.com ");
+  await expect(doc.locator("a", { hasText: /^example\.com$/ })).toHaveCount(0);
+  await page.keyboard.type("www.example.com");
+  await page.keyboard.press("Enter");
+  await expect(doc.locator('a[href="https://www.example.com"]')).toHaveText("www.example.com");
 });
 
 test("typing is saved and survives a reload", async ({ page }) => {
@@ -569,7 +658,9 @@ test("focus mode hides Claude", async ({ page }) => {
   await page.keyboard.press("ControlOrMeta+Alt+x");
   await expect(page.locator(".agent-panel")).toHaveCount(0);
   await expect(page.getByLabel("Ask Claude to edit")).toHaveCount(0);
-  // ⌘K is the link shortcut again while AI tools are hidden.
+  // ⌘K inserts a link. ⌘⇧K does not ask Claude while AI tools are hidden.
+  await page.keyboard.press("ControlOrMeta+Shift+k");
+  await expect(page.getByLabel("Ask Claude to edit")).toHaveCount(0);
   await page.keyboard.press("ControlOrMeta+k");
   await expect(page.getByLabel("Ask Claude to edit")).toHaveCount(0);
   const linkField = page.getByPlaceholder("Paste or type a link");
@@ -598,6 +689,11 @@ test("focus mode hides Claude", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Ask Claude" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Edit with Claude" })).toHaveCount(0);
   await page.keyboard.press("ControlOrMeta+k");
+  await expect(page.getByLabel("Ask Claude to edit")).toHaveCount(0);
+  await expect(page.getByPlaceholder("Paste or type a link")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByPlaceholder("Paste or type a link")).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+Shift+k");
   await expect(page.getByLabel("Ask Claude to edit")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByLabel("Ask Claude to edit")).toHaveCount(0);
