@@ -446,7 +446,9 @@ export function imageSelectionPlugin() {
         if (!photoBefore && !photoAfter) return false;
         const imagePos = photoBefore ? pos - before!.nodeSize : pos;
         const beside = before?.type.name === "image" || after?.type.name === "image" ? sideOfPicture(view, imagePos, event) : null;
-        if (beside && applyPictureSide(view, imagePos, beside)) return true;
+        // The empty block around a picture is not the picture. Only the right side
+        // of that block is the picture's line; the left side leaves the selection.
+        if (beside === "right" && applyPictureSide(view, imagePos, beside)) return true;
         const side = preferredSide(view, imagePos, event, photoBefore ? "after" : "before");
         const boundary = side === "after" ? imagePos + (view.state.doc.nodeAt(imagePos)?.nodeSize ?? 1) : imagePos;
         return placeCaretByPhoto(view, boundary, side);
@@ -469,7 +471,7 @@ export function imageSelectionPlugin() {
         if (!PHOTO_TYPES.has(node.type.name) || eventOnPhoto(event.target)) return false;
         if (node.type.name === "image") {
           const beside = sideOfPicture(view, nodePos, event);
-          if (beside && applyPictureSide(view, nodePos, beside)) return true;
+          if (beside === "right" && applyPictureSide(view, nodePos, beside)) return true;
         }
         const side = preferredSide(view, nodePos, event, "after");
         const boundary = side === "after" ? nodePos + node.nodeSize : nodePos;

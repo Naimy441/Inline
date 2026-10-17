@@ -160,13 +160,10 @@ test("a percent width fits the column and the picture bar is one quiet row", asy
     labels: [...element.querySelectorAll("button")].map((button) => (button.textContent ?? "").trim()),
   }));
   expect(shape.height).toBeLessThan(48);
-  expect(shape.labels).toEqual(["", "", "", ""]);
-  await expect(bar.getByRole("button", { name: "In line with text", exact: true })).toBeVisible();
-  await expect(bar.getByRole("button", { name: "Square", exact: true })).toBeVisible();
-  await expect(bar.getByRole("button", { name: "Behind text", exact: true })).toBeVisible();
-  await expect(bar.getByRole("button", { name: "In front of text", exact: true })).toBeVisible();
-  await expect(bar.getByLabel("Rotate")).toBeVisible();
-  await expect(bar.getByLabel("Crop from left")).toBeVisible();
+  expect(shape.labels).toEqual(["", ""]);
+  await expect(bar.getByRole("button")).toHaveCount(2);
+  await expect(bar.getByRole("button", { name: "Wrap text", exact: true })).toBeVisible();
+  await expect(bar.getByRole("button", { name: "Image options", exact: true })).toBeVisible();
 });
 
 test("text beside and across a wrapped image stays editable", async ({ page, request }) => {
