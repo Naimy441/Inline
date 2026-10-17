@@ -170,7 +170,7 @@ describe("links", () => {
     assert.equal(clipboardLink("hello world"), null);
     assert.equal(clipboardLink("see https://example.com"), null);
     assert.equal(clipboardReadIsQuiet("granted"), true);
-    assert.equal(clipboardReadIsQuiet("unsupported"), true);
+    assert.equal(clipboardReadIsQuiet("unsupported"), false);
     assert.equal(clipboardReadIsQuiet("prompt"), false);
     assert.equal(clipboardReadIsQuiet("denied"), false);
   });

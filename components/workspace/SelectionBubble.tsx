@@ -128,7 +128,20 @@ export function SelectionBubble({
     hrefDirty.current = false;
     setHref(linkPrefill || anchor.current?.href || "");
     setText("");
-    input.current?.focus();
+    const field = input.current;
+    if (!field) return;
+    // Chrome's Paste chip is offered when an empty editable field is focused
+    // and the clipboard has text. A field that is read-only at that moment is
+    // skipped. Unlock on the next frame, before a keystroke can land.
+    // writingsuggestions is not in this React's input types; the attribute is.
+    field.setAttribute("writingsuggestions", "false");
+    field.parentElement?.querySelector<HTMLInputElement>('[aria-label="Link text"]')?.setAttribute("writingsuggestions", "false");
+    field.readOnly = true;
+    field.focus();
+    const frame = requestAnimationFrame(() => {
+      field.readOnly = false;
+    });
+    return () => cancelAnimationFrame(frame);
   }, [linkEditing, linkSession]);
 
   useEffect(() => {
@@ -208,6 +221,9 @@ export function SelectionBubble({
   };
 
   const onFieldKey = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    // A key that arrives before the frame unlock must still type. The default
+    // action checks read-only after this handler.
+    if (event.currentTarget.readOnly) event.currentTarget.readOnly = false;
     if (event.key === "Enter" && !event.nativeEvent.isComposing) {
       event.preventDefault();
       applyLink();
@@ -264,7 +280,19 @@ export function SelectionBubble({
     return (
       <div className={`bubble bubble-link${above ? " is-above" : ""}`} ref={bubble} style={style} onMouseDown={(event) => event.stopPropagation()}>
         {inserting && (
-          <input className="input input-sm" placeholder="Text" aria-label="Link text" value={text} onChange={(event) => setText(event.target.value)} onKeyDown={onFieldKey} />
+          <input
+            className="input input-sm"
+            placeholder="Text"
+            aria-label="Link text"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            aria-autocomplete="none"
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={onFieldKey}
+          />
         )}
         <input
           ref={input}
@@ -272,7 +300,13 @@ export function SelectionBubble({
           aria-label="Link URL"
           placeholder="Paste or type a link"
           autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
           spellCheck={false}
+          aria-autocomplete="none"
+          data-1p-ignore="true"
+          data-lpignore="true"
+          data-form-type="other"
           value={href}
           onChange={(event) => {
             hrefDirty.current = true;

@@ -753,11 +753,13 @@ export function clipboardLink(raw: string): string | null {
 }
 
 /**
- * Chrome draws a Paste chip when a clipboard read still needs permission.
- * An already-allowed read is silent, and so is a browser with no such permission.
+ * Chrome draws a Paste chip (Firefox and Safari, a Paste button) when a page
+ * reads the clipboard before that read is already allowed. Only a granted
+ * permission is silent. A browser that does not report the permission still
+ * shows the chip if we call readText, so that is not a quiet read.
  */
 export function clipboardReadIsQuiet(state: PermissionState | "unsupported"): boolean {
-  return state === "granted" || state === "unsupported";
+  return state === "granted";
 }
 
 /** Clipboard text for the link field, or null when reading it would raise the Paste chip. */
