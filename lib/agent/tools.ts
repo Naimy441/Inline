@@ -125,6 +125,12 @@ function defineTool<S extends Shape>(tool: ToolDefinition<S>): ToolDefinition<S>
 const ok = (text: string): ToolResult => ({ text });
 const fail = (text: string): ToolResult => ({ text, isError: true });
 
+/** Markdown reads and rewrites flatten a Canvas. Refuse them and leave the document alone. */
+function canvasMarkupRefusal(doc: LiveDocument): string | null {
+  if (!isCanvas(doc.doc)) return null;
+  return "This is a Canvas. Read it with read_canvas and change it with patch_canvas. Markdown tools would drop its composition and design, so this call was refused and the canvas is unchanged.";
+}
+
 const documentId = z
   .string()
   .optional()
@@ -324,6 +330,7 @@ const EXTERNAL_ACTIVITY_MS = 4000;
 
 /** Measure one page range, solve the font size and line spacing, and apply them. */
 async function fitPageRange(ctx: ToolContext, doc: LiveDocument, fromPage: number, toPage: number, pages: number) {
+  if (isCanvas(doc.doc)) return fail("A Canvas is fitted through its own type and spacing. Use patch_canvas styles, or page settings, instead of squeezing the document font.");
   const span = fromPage === toPage ? `page ${fromPage}` : `pages ${fromPage}–${toPage}`;
   showActivity(ctx, doc, { chatId: ctx.author, status: "reading", label: `Fitting ${span}` });
   let measured;
@@ -485,6 +492,8 @@ export const TOOLS = [
     write: false,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
+      const canvasRefusal = canvasMarkupRefusal(doc);
+      if (canvasRefusal) return fail(canvasRefusal);
       const lines = markdownLines(serializeDoc(doc.doc));
       const offset = args.offset ?? 1;
       const limit = args.limit ?? 2000;
@@ -512,6 +521,8 @@ export const TOOLS = [
     write: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
+      const canvasRefusal = canvasMarkupRefusal(doc);
+      if (canvasRefusal) return fail(canvasRefusal);
       const scrub = scrubWritten(args.new_string);
       if (scrub.text === args.old_string && scrub.removed) {
         return ok(`Deleted ${scrub.removed} invisible character${scrub.removed === 1 ? "" : "s"} from the replacement. The remaining text matches the document, so nothing else changed.`);
@@ -545,6 +556,8 @@ export const TOOLS = [
     write: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
+      const canvasRefusal = canvasMarkupRefusal(doc);
+      if (canvasRefusal) return fail(canvasRefusal);
       const prepared = args.edits.map((edit) => ({ edit, scrub: scrubWritten(edit.new_string) }));
       const applicable = prepared.filter((item) => item.scrub.text !== item.edit.old_string);
       if (!applicable.length) {
@@ -572,6 +585,8 @@ export const TOOLS = [
     destructive: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
+      const canvasRefusal = canvasMarkupRefusal(doc);
+      if (canvasRefusal) return fail(canvasRefusal);
       const scrub = scrubWritten(args.content);
       if (!scrub.text.trim() && scrub.removed) {
         return ok(`Deleted ${scrub.removed} invisible character${scrub.removed === 1 ? "" : "s"}. No visible text was left to write, so the document was not replaced.`);
@@ -598,6 +613,8 @@ export const TOOLS = [
     write: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
+      const canvasRefusal = canvasMarkupRefusal(doc);
+      if (canvasRefusal) return fail(canvasRefusal);
       if ((args.position === "after_line" || args.position === "before_line") && !args.line) {
         return fail("line is required when position is after_line or before_line.");
       }
@@ -788,11 +805,17 @@ export const TOOLS = [
       document_id: documentId,
       page: z.number().int().min(1).describe("Page number to picture (1-based)."),
       theme: z.enum(["light", "dark"]).optional().describe("The app's light or dark appearance. Omit it to use the appearance the user is using."),
+      epoch: z.string().optional().describe("Canvas only: epoch from read_canvas or inspect_canvas. A mismatch is rejected instead of picturing a different revision."),
+      version: z.number().int().optional().describe("Canvas only: revision that epoch belongs to."),
     },
     write: false,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
       if (isCanvas(doc.doc)) {
+        if ((args.epoch == null) !== (args.version == null)) return fail("Pass both epoch and version from the canvas you inspected, or neither to picture the current revision.");
+        if (args.epoch != null && (args.epoch !== doc.epoch || args.version !== doc.version)) {
+          return fail(`This Canvas is now revision ${doc.version} (epoch ${doc.epoch}). That page reference is stale, so nothing was captured. Read the canvas again; page numbers are not content identity.`);
+        }
         const rendered = await renderCanvas(doc, { page: args.page });
         return { text: JSON.stringify(rendered.report, null, 2), images: rendered.png ? [{ data: Buffer.from(rendered.png).toString("base64"), mimeType: "image/png" }] : [] };
       }
@@ -925,6 +948,8 @@ export const TOOLS = [
     write: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
+      const canvasRefusal = canvasMarkupRefusal(doc);
+      if (canvasRefusal) return fail(canvasRefusal);
       const lines = lineRange(args.from_line, args.to_line)!;
       return commitEdit(
         ctx,
@@ -1382,6 +1407,8 @@ export const TOOLS = [
     write: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
+      const canvasRefusal = canvasMarkupRefusal(doc);
+      if (canvasRefusal) return fail(canvasRefusal);
       const serialized = serializeDoc(doc.doc);
       let removed = 0;
       const rewrites: AiSymbolHit[] = [];

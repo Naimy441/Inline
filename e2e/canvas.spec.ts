@@ -51,7 +51,7 @@ test("Canvas browser export uses its actual HTML and all pages", async ({ page, 
   expect(bytes.subarray(0, 5).toString()).toBe("%PDF-");
   expect(bytes.byteLength).toBeGreaterThan(1000);
   const shot = await request.get(`/api/documents/${id}/canvas/render?page=2`, { timeout: 90_000 });
-  expect(shot.ok()).toBeTruthy();
+  expect(shot.ok(), await shot.text()).toBeTruthy();
   expect(shot.headers()["content-type"]).toBe("image/png");
   expect(shot.headers()["x-inline-pages"]).toBe("2");
 });
@@ -62,7 +62,7 @@ test("a long paragraph stays editable as one paragraph across pages", async ({ p
   const id = document.meta.id;
   const source = await (await request.get(`/api/documents/${id}/canvas`)).json();
   const text = "Careful editing preserves the meaning of a long document. ".repeat(150);
-  const changed = await request.patch(`/api/documents/${id}/canvas`, { data: { epoch: source.epoch, version: source.version, operation: "replace", html: `<Canvas><Text id="long">${text}</Text></Canvas>`, css: "Canvas {font-family:Georgia;font-size:12pt;line-height:1.5}" } });
+  const changed = await request.patch(`/api/documents/${id}/canvas`, { data: { epoch: source.epoch, version: source.version, operation: "replace", html: `<Canvas><Text id="long">${text}</Text></Canvas>`, css: "Canvas {font-family:Georgia;font-size:12pt;line-height:1.5} p {background-color:#f4e9d6}" } });
   expect(changed.ok()).toBeTruthy();
   await page.goto(`/d/${id}`);
   const paragraph = page.locator('.doc-content [data-id="long"]');
@@ -72,7 +72,55 @@ test("a long paragraph stays editable as one paragraph across pages", async ({ p
   await paragraph.click();
   await page.keyboard.type("A human correction. ");
   await expect(paragraph).toContainText("A human correction.");
+  await expect(page.locator(".canvas-gap-mask[data-mask='desk']").first()).toBeVisible();
+  const removed = await page.evaluate(() => {
+    const root = document.querySelector('.doc-content [data-id="long"]');
+    if (!root) return "";
+    const sheets = [...document.querySelectorAll(".sheet")].map((sheet) => sheet.getBoundingClientRect());
+    const pageOf = (y: number) => sheets.findIndex((rect) => y >= rect.top - 1 && y <= rect.bottom + 1);
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let start: { node: Text; offset: number } | null = null;
+    let end: { node: Text; offset: number } | null = null;
+    let current = walker.nextNode();
+    while (current) {
+      const text = current as Text;
+      for (let index = 0; index < text.length; index += 1) {
+        const range = document.createRange();
+        range.setStart(text, index);
+        range.setEnd(text, Math.min(text.length, index + 1));
+        const rect = range.getBoundingClientRect();
+        if (!rect.width || !rect.height) continue;
+        const at = pageOf(rect.top + rect.height / 2);
+        if (at === 0 && !start) start = { node: text, offset: index };
+        if (at > 0 && start) {
+          end = { node: text, offset: Math.min(text.length, index + 12) };
+          break;
+        }
+      }
+      if (end) break;
+      current = walker.nextNode();
+    }
+    if (!start || !end) return "";
+    const selection = window.getSelection();
+    if (!selection) return "";
+    selection.removeAllRanges();
+    const range = document.createRange();
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+    selection.addRange(range);
+    return range.toString();
+  });
+  expect(removed.length).toBeGreaterThan(4);
+  // Let the typed correction close its history group so undo restores only the deletion.
+  await page.waitForTimeout(600);
+  const before = (await paragraph.textContent()) ?? "";
+  await page.keyboard.press("Backspace");
+  await expect(paragraph).toHaveCount(1);
+  await expect.poll(async () => (await paragraph.textContent())?.length ?? 0).toBeLessThan(before.length - 4);
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+z" : "Control+z");
+  await expect.poll(async () => paragraph.textContent()).toBe(before);
   await expect.poll(async () => (await (await request.get(`/api/documents/${id}/canvas`)).json()).html).toContain("A human correction.");
   await page.reload();
   await expect(page.locator('.doc-content [data-id="long"]')).toContainText("A human correction.");
+  await expect(page.locator('.doc-content [data-id="long"]')).toHaveCount(1);
 });

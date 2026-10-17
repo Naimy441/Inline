@@ -10,6 +10,21 @@
 .doc-content[data-canvas-root] [data-canvas="column"] > :last-child,
 .doc-content[data-canvas-root] [data-pagination="keep-together"] > :last-child { margin-bottom: 0; }
 .doc-content[data-canvas-root] [data-pagination="keep-together"] { break-inside: avoid; }
+/* A split paragraph's background stops at the content box: paper through the margins, the desk through the sheet gap. */
+.doc-content[data-canvas-root] .canvas-page-gap { position: relative; }
+.doc-content[data-canvas-root] .canvas-gap-mask {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+.doc-content[data-canvas-root] .canvas-gap-mask[data-mask="paper"] { background: var(--paper, #fff); }
+.doc-content[data-canvas-root] .canvas-gap-mask[data-mask="desk"] {
+  left: -3in;
+  right: -3in;
+  background: var(--canvas, #e6e8ec);
+}
 .doc-content[data-canvas-root] [data-canvas="section"]:focus-within { outline: 1px dashed color-mix(in srgb, currentColor 18%, transparent); outline-offset: 5px; }
 .canvas-design-tools { display: flex; align-items: center; gap: 8px; padding: 5px 16px; border-bottom: 1px solid var(--border); background: var(--bg); font-size: 12px; }
 .canvas-design-tools button { font: inherit; border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 5px; padding: 4px 9px; cursor: pointer; }

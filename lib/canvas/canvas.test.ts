@@ -12,6 +12,7 @@ import { validateCanvasCss, scopedCanvasCss } from "./styles";
 import { validateCanvasDocument } from "./model";
 import { canvasTransform, readCanvas } from "./operations";
 import { documentHub, type LiveDocument } from "@/lib/server/hub";
+import { runTool } from "@/lib/agent/tools";
 import { schema } from "@/lib/doc/schema";
 import { readDocumentFile } from "@/lib/server/store";
 
@@ -49,7 +50,7 @@ describe("Canvas SDK", () => {
     for (const css of ['@import "https://evil";', '.x { position:fixed }', '.x { background-color:url(https://evil) }', '.x { color:red!important }', 'body { color:red }', '.x { height:100px }', '.x { & p { color:red } }', '.x { font-family:"</style><script>" }', '.page-gap {padding:100px}']) assert.throws(() => validateCanvasCss(css), Error, css);
     const css = scopedCanvasCss('Canvas {color:red} .foo p, Columns > Column { padding: 4px }', "document-1");
     assert.ok(!css.includes('[data-canvas-root="document-1"] [data-canvas-root]'));
-    assert.ok(css.includes('[data-canvas-root="document-1"] .foo p'));
+    assert.ok(css.includes('.doc-content[data-canvas-root="document-1"] .foo p'));
   });
   test("design attributes use normal ProseMirror history", () => {
     const doc = compileCanvas('<Canvas><Text>Keep my words</Text></Canvas>', 'p {color:red}');
@@ -103,6 +104,19 @@ describe("Canvas authority", () => {
     const tr = new Transform(doc.doc).setDocAttribute("canvas", { format: 1, css: 'body {position:fixed}' });
     assert.throws(() => doc.receiveClientSteps(doc.version, tr.steps.map((s) => s.toJSON()), "forged"));
     assert.equal(doc.doc, before);
+  });
+  test("markdown tools are refused and the valid canvas stays", async () => {
+    const doc = await create();
+    const before = doc.doc.textContent;
+    const version = doc.version;
+    const result = await runTool("write_document", { document_id: doc.id, content: "# Replaced" }, { author: "claude", documentId: doc.id });
+    assert.equal(result.isError, true);
+    assert.match(result.text, /patch_canvas/);
+    assert.equal(doc.doc.textContent, before);
+    assert.equal(doc.version, version);
+    const stale = await runTool("inspect_canvas", { document_id: doc.id, epoch: "old", version: 0 }, { author: "claude", documentId: doc.id });
+    assert.equal(stale.isError, true);
+    assert.match(stale.text, /stale/);
   });
   test("saved history restores both composition and CSS", async () => {
     const doc = await create();
