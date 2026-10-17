@@ -363,8 +363,144 @@ export function currentAlign(state: EditorState): Align {
 export const setLineHeight = (lineHeight: string | null) => updateBlocks(() => ({ lineHeight }));
 export const setSpacing = (spaceBefore: number | null, spaceAfter: number | null) => updateBlocks(() => ({ spaceBefore, spaceAfter }));
 
+/** Paragraphs the spacing commands can change (they carry alignment and line height). */
+function spacingBlocks(state: EditorState) {
+  return textblocksInSelection(state).filter(({ node }) => "align" in node.attrs && "lineHeight" in node.attrs);
+}
+
 export function currentLineHeight(state: EditorState): string | null {
-  return (state.selection.$from.parent.attrs.lineHeight as string | null) ?? null;
+  const blocks = spacingBlocks(state);
+  if (!blocks.length) return (state.selection.$from.parent.attrs.lineHeight as string | null) ?? null;
+  const first = (blocks[0]!.node.attrs.lineHeight as string | null) ?? null;
+  return blocks.every(({ node }) => ((node.attrs.lineHeight as string | null) ?? null) === first) ? first : null;
+}
+
+const LINE_PRESETS = ["1", "1.15", "1.5", "2"] as const;
+
+/** A line-spacing multiple as the toolbar's preset ("1", "1.15", "1.5", "2") or a custom number. */
+export function canonLine(value: string | number | null | undefined): string | null {
+  if (value == null || value === "") return null;
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return null;
+  for (const preset of LINE_PRESETS) if (Math.abs(n - Number(preset)) < 0.011) return preset;
+  return String(Math.round(n * 100) / 100);
+}
+
+export type Tri = boolean | "mixed";
+
+/** What the line-spacing menu should check for the selection. `line` is "mixed" when the blocks disagree. */
+export type SpacingState = {
+  line: string | "mixed";
+  spaceBefore: Tri;
+  spaceAfter: Tri;
+  /** Points, when every selected paragraph has the same space; null when they don't. */
+  beforePt: number | null;
+  afterPt: number | null;
+  keepNext: Tri;
+  keepLines: Tri;
+  /** True when widow and orphan control is on (`widowControl` is not false). */
+  widows: Tri;
+  pageBreak: Tri;
+};
+
+/** How a paragraph's unset spacing is filled in: the document's, or its style's. */
+export type SpacingLook = {
+  lineSpacing: number;
+  paragraphSpacing: number;
+  /** Font line model paints `--ls`, not a style's CSS line-height, so the style's multiple is ignored. */
+  fontLines: boolean;
+  styleLine: (node: PMNode) => number | null;
+  styleBefore: (node: PMNode) => number | null;
+  styleAfter: (node: PMNode) => number | null;
+};
+
+function effectiveLine(node: PMNode, look: SpacingLook): string {
+  const attr = node.attrs.lineHeight as string | null;
+  if (attr) return canonLine(attr) ?? attr;
+  if (!look.fontLines) {
+    const styled = look.styleLine(node);
+    if (styled != null) return canonLine(styled) ?? String(styled);
+  }
+  return canonLine(look.lineSpacing) ?? String(look.lineSpacing);
+}
+
+function spaceBeforeOf(node: PMNode, look: SpacingLook): number {
+  if (node.attrs.spaceBefore != null) return Number(node.attrs.spaceBefore);
+  return look.styleBefore(node) ?? 0;
+}
+
+function spaceAfterOf(node: PMNode, look: SpacingLook): number {
+  if (node.attrs.spaceAfter != null) return Number(node.attrs.spaceAfter);
+  const styled = look.styleAfter(node);
+  if (styled != null) return styled;
+  return look.paragraphSpacing;
+}
+
+function tri(values: boolean[]): Tri {
+  if (!values.length) return false;
+  const first = values[0]!;
+  return values.every((value) => value === first) ? first : "mixed";
+}
+
+function uniformPt(values: number[]): number | null {
+  if (!values.length) return null;
+  const first = values[0]!;
+  return values.every((value) => Math.abs(value - first) < 0.05) ? first : null;
+}
+
+/** The spacing actually on the selection, including select-all (the document node itself has none). */
+export function selectionSpacing(state: EditorState, look: SpacingLook): SpacingState {
+  const blocks = spacingBlocks(state);
+  const fallback = canonLine(look.lineSpacing) ?? "1.15";
+  if (!blocks.length) {
+    return {
+      line: fallback,
+      spaceBefore: false,
+      spaceAfter: look.paragraphSpacing > 0,
+      beforePt: 0,
+      afterPt: look.paragraphSpacing,
+      keepNext: false,
+      keepLines: false,
+      widows: true,
+      pageBreak: false,
+    };
+  }
+  const lines = blocks.map(({ node }) => effectiveLine(node, look));
+  const before = blocks.map(({ node }) => spaceBeforeOf(node, look));
+  const after = blocks.map(({ node }) => spaceAfterOf(node, look));
+  return {
+    line: lines.every((value) => value === lines[0]) ? lines[0]! : "mixed",
+    spaceBefore: tri(before.map((value) => value > 0)),
+    spaceAfter: tri(after.map((value) => value > 0)),
+    beforePt: uniformPt(before),
+    afterPt: uniformPt(after),
+    keepNext: tri(blocks.map(({ node }) => node.attrs.keepNext === true)),
+    keepLines: tri(blocks.map(({ node }) => node.attrs.keepLines === true)),
+    widows: tri(blocks.map(({ node }) => node.attrs.widowControl !== false)),
+    pageBreak: tri(blocks.map(({ node }) => node.attrs.pageBreakBefore === true)),
+  };
+}
+
+export type BlockSpacingPatch = {
+  lineHeight?: string | null;
+  spaceBefore?: number | null;
+  spaceAfter?: number | null;
+  keepNext?: boolean | null;
+  keepLines?: boolean | null;
+  widowControl?: boolean | null;
+  pageBreakBefore?: boolean | null;
+};
+
+export const setBlockSpacing = (patch: BlockSpacingPatch) => updateBlocks(() => patch);
+
+/** Apply spacing to a saved range. A dialog takes focus, so the live selection may already be a caret. */
+export function setBlockSpacingOn(from: number, to: number, patch: BlockSpacingPatch): Command {
+  return (state, dispatch) => {
+    const end = Math.min(Math.max(to, from), state.doc.content.size);
+    const start = Math.max(0, Math.min(from, end));
+    const base = start === state.selection.from && end === state.selection.to ? state : state.apply(state.tr.setSelection(TextSelection.create(state.doc, start, end)));
+    return setBlockSpacing(patch)(base, dispatch);
+  };
 }
 
 function inList(state: EditorState) {

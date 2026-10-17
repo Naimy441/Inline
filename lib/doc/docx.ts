@@ -348,6 +348,10 @@ function paragraphProps(node: PMNode, options: { style?: string; numbering?: { n
   // Word wants these in a fixed order: style, numbering, borders, tabs, direction, spacing, indent, alignment, mark.
   const props: string[] = [];
   if (options.style) props.push(`<w:pStyle w:val="${options.style}"/>`);
+  if (node.attrs.keepNext === true) props.push("<w:keepNext/>");
+  if (node.attrs.keepLines === true) props.push("<w:keepLines/>");
+  if (node.attrs.pageBreakBefore === true) props.push("<w:pageBreakBefore/>");
+  if (node.attrs.widowControl === false) props.push(`<w:widowControl w:val="0"/>`);
   if (options.numbering) props.push(`<w:numPr><w:ilvl w:val="${options.numbering.level}"/><w:numId w:val="${options.numbering.numId}"/></w:numPr>`);
   if (node.attrs.borders) props.push(bordersXml(node.attrs.borders as Borders));
   const tabs = node.attrs.tabs as TabStop[] | null | undefined;

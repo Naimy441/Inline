@@ -695,6 +695,7 @@ export class DocumentSession {
         geometry: () => this.geometry(),
         tabStop: () => this.meta?.settings.tabStop ?? DEFAULT_TAB_STOP,
         fontLines: () => (this.meta ?? snapshot.meta)?.settings.lineModel === "font",
+        onGooglePaste: () => this.enableFontLines(),
         styles: () => stylesOf((this.meta ?? snapshot.meta)?.settings ?? {}),
         onPages: (layout) => {
           if (this.heldScroll) {
@@ -1261,8 +1262,11 @@ export class DocumentSession {
     const read = visible ?? (stateSel.empty ? null : { from: stateSel.from, to: stateSel.to });
     // Opening "More tools" captures the range, then Bold's press drops the
     // highlight. Keep the range when that second press finds nothing and the
-    // caret in the editor state has not moved.
-    this.heldSelection = retainHeldSelection(this.heldSelection, read, { from: stateSel.from, empty: stateSel.empty });
+    // caret in the editor state has not moved. The caret is the selection's
+    // anchor (where Shift+Home started), not the top of the range: a flush
+    // that just read the highlight would otherwise remember the wrong end.
+    const anchor = stateSel.empty ? stateSel.from : stateSel.$anchor.pos;
+    this.heldSelection = retainHeldSelection(this.heldSelection, read, { from: anchor, empty: stateSel.empty });
     if (this.selectionHoldTimer) clearTimeout(this.selectionHoldTimer);
     this.selectionHoldTimer = this.heldSelection
       ? setTimeout(() => {
@@ -1386,7 +1390,12 @@ export class DocumentSession {
     this.formattingHold = null;
     this.unbindFormattingWatch();
     const size = view.state.doc.content.size;
-    const saved = pinned && pinned.from < pinned.to && pinned.to <= size ? pinned : held && held.from < held.to && held.to <= size ? held : null;
+    // A range still on the page wins: Shift+Home can be visible before the
+    // editor state has it. Otherwise use the phrase pinned for a font or size
+    // change, then the range a toolbar press remembered.
+    const visible = view.state.selection.empty ? visibleTextSelection(view) : null;
+    const candidate = visible ?? pinned ?? held;
+    const saved = candidate && candidate.from < candidate.to && candidate.to <= size ? candidate : null;
     const painted = formatSelectionKey.getState(view.state);
     if (painted || (view.state.selection.empty && saved)) {
       let tr = view.state.tr;
@@ -1523,6 +1532,20 @@ export class DocumentSession {
     const { from, to } = view.state.selection;
     if (from === to) throw new Error(`Select the text to ${locked ? "lock" : "unlock"}.`);
     await post(`/api/documents/${this.id}/lock`, { from, to, version: getVersion(view.state), locked });
+  }
+
+  /**
+   * Pasted Google Docs HTML stores the spacing multiple (1.15) and expects a
+   * line to be that multiple of the font's own line height, not of 1em.
+   */
+  private enableFontLines() {
+    if (this.meta?.settings.lineModel === "font") return;
+    this.ui.set((ui) => {
+      if (!ui.meta || ui.meta.settings.lineModel === "font") return ui;
+      return { ...ui, meta: { ...ui.meta, settings: { ...ui.meta.settings, lineModel: "font" } } };
+    });
+    if (this.view) requestAnimationFrame(() => { if (this.view) relayout(this.view); });
+    void this.updateMeta({ settings: { lineModel: "font" } }).catch(() => undefined);
   }
 
   async updateMeta(patch: { title?: string; settings?: Record<string, unknown> }) {

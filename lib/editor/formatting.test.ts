@@ -1,15 +1,20 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { EditorState, TextSelection, type Command } from "prosemirror-state";
+import { AllSelection, EditorState, TextSelection, type Command } from "prosemirror-state";
 import { ensureBlockIds } from "../doc/ids";
 import { docToMarkdown, markdownToDoc } from "../doc/markdown";
 import { fragmentToHtml } from "../doc/html";
 import { isBlack, schema } from "../doc/schema";
+import { nodeStyleId, resolveStyle, stylesOf } from "../doc/styles";
+import type { Node as PMNode } from "prosemirror-model";
+import type { SpacingLook } from "./commands";
 import {
   blockKind,
   clearFormatting,
   currentAlign,
   currentLineHeight,
+  selectionSpacing,
+  setBlockSpacing,
   indent,
   insertFootnote,
   insertHorizontalRule,
@@ -35,6 +40,32 @@ import {
   toggleList,
   toggleTask,
 } from "./commands";
+
+function spacingLook(fontLines = false): SpacingLook {
+  const sheet = stylesOf({});
+  const cache = new Map<string, ReturnType<typeof resolveStyle>>();
+  const styleOf = (node: PMNode) => {
+    const id = nodeStyleId(node);
+    let resolved = cache.get(id);
+    if (resolved === undefined) {
+      resolved = resolveStyle(sheet, id);
+      cache.set(id, resolved);
+    }
+    return resolved;
+  };
+  return {
+    lineSpacing: 1.15,
+    paragraphSpacing: 8,
+    fontLines,
+    styleLine: (node) => styleOf(node)?.lineHeight ?? null,
+    styleBefore: (node) => styleOf(node)?.spaceBefore ?? null,
+    styleAfter: (node) => styleOf(node)?.spaceAfter ?? null,
+  };
+}
+
+function selectAll(state: EditorState) {
+  return state.apply(state.tr.setSelection(new AllSelection(state.doc)));
+}
 
 function stateFor(markdown: string, from = 1, to = from) {
   const doc = ensureBlockIds(markdownToDoc(markdown));
@@ -189,6 +220,32 @@ describe("blocks", () => {
     assert.equal(currentAlign(centered.state), "center");
     const spaced = run(centered.state, setLineHeight("2"));
     assert.equal(currentLineHeight(spaced.state), "2");
+    const look = spacingLook();
+    const all = selectAll(stateFor("One\n\nTwo"));
+    assert.equal(selectionSpacing(all, look).line, "1.15");
+    assert.equal(selectionSpacing(all, look).spaceAfter, true);
+    assert.equal(selectionSpacing(all, look).widows, true);
+    const single = run(all, setLineHeight("1"));
+    assert.equal(selectionSpacing(single.state, look).line, "1");
+    assert.equal(currentLineHeight(single.state), "1");
+    let second = -1;
+    single.state.doc.descendants((node, pos) => {
+      if (second < 0 && node.isTextblock && node.textContent === "Two") second = pos + 1;
+    });
+    const mixed = run(single.state.apply(single.state.tr.setSelection(TextSelection.create(single.state.doc, second, second + 3))), setLineHeight("2"));
+    assert.equal(selectionSpacing(selectAll(mixed.state), look).line, "mixed");
+    const flags = run(selectAll(stateFor("One")), setBlockSpacing({ keepNext: true, keepLines: true, widowControl: false, pageBreakBefore: true, spaceBefore: 10 }));
+    const flagged = selectionSpacing(flags.state, look);
+    assert.equal(flagged.keepNext, true);
+    assert.equal(flagged.keepLines, true);
+    assert.equal(flagged.widows, false);
+    assert.equal(flagged.pageBreak, true);
+    assert.equal(flagged.spaceBefore, true);
+    assert.match(fragmentToHtml(flags.state.doc), /data-keep-next="true"/);
+    assert.match(fragmentToHtml(flags.state.doc), /data-widow="false"/);
+    const heading = run(stateFor("Title", 1), setBlock("h1")).state;
+    assert.equal(selectionSpacing(heading, look).line, "1.2");
+    assert.equal(selectionSpacing(heading, { ...look, fontLines: true }).line, "1.15");
     const indented = run(stateFor("Words", 2), indent);
     assert.match(indented.md, /indent=1/);
     assert.equal(run(indented.state, outdent).md, "Words");

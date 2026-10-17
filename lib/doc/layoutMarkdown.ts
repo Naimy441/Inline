@@ -55,6 +55,10 @@ function blockTokens(node: PMNode): string[] {
   if (dir === "rtl") tokens.push("dir=rtl");
   if (fontSize != null) tokens.push(`size=${fontSize}`);
   if (lineHeight != null) tokens.push(`line=${lineHeight}`);
+  if (node.attrs.keepNext) tokens.push(".keep-next");
+  if (node.attrs.keepLines) tokens.push(".keep-lines");
+  if (node.attrs.widowControl === false) tokens.push(".widows-off");
+  if (node.attrs.pageBreakBefore) tokens.push(".break-before");
   tokens.push(...borderTokens(node.attrs.borders as Borders | null));
   const tabs = node.attrs.tabs as TabStop[] | null;
   if (tabs?.length) tokens.push(`tabs="${tabs.map((tab) => [tab.pos, tab.align, tab.leader].filter(Boolean).join(":")).join(" ")}"`);

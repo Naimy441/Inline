@@ -303,13 +303,15 @@ function readSelectionPlugin() {
 const wholeParagraphs = new WeakMap<EditorView, boolean>();
 
 /** Paste plain text that looks like Markdown as rich content, and Google Docs' HTML as Google shows it. */
-function markdownPastePlugin() {
+function markdownPastePlugin(onGooglePaste?: () => void) {
   const looksLikeMarkdown = (text: string) => /(^|\n)(#{1,6} |[-*+] |\d+\. |> |```|\|.+\|)|\[\^[A-Za-z0-9]|\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\)|<cite>/.test(text);
   return new Plugin({
     props: {
       transformPastedHTML(html, view) {
         const result = transformPastedHtml(html);
         wholeParagraphs.set(view, result.paragraphs);
+        // Google's clipboard multiple is generic. The page is spaced from the font's own line height.
+        if (html.includes("docs-internal-guid")) onGooglePaste?.();
         return result.html;
       },
       transformPasted(slice, view) {
@@ -378,6 +380,8 @@ export type EditorPluginOptions = {
   tabStop?: () => number;
   /** Laid out as Google Docs lays documents out (settings lineModel "font"): justified text is spaced as Google spaces it. */
   fontLines?: () => boolean;
+  /** HTML from Google Docs was pasted. The document should use the font line model. */
+  onGooglePaste?: () => void;
   onPages?: (layout: PageLayout) => void;
   keys?: Record<string, Command>;
   /** Named styles, read when Enter splits a paragraph, so the new one can take the style's next style. */
@@ -422,7 +426,7 @@ export function editorPlugins(options: EditorPluginOptions) {
     collab({ version: options.version, clientID: options.clientID }),
     blockIdPlugin(),
     footnoteLabelPlugin(),
-    markdownPastePlugin(),
+    markdownPastePlugin(options.onGooglePaste),
     imageClipboardPlugin(),
     reviewPlugin(options.review),
     presencePlugin(),

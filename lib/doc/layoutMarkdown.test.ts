@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { docToMarkdown, layoutAttrs, parseMarkdown } from "./markdown";
+import { serializeLayoutBlock } from "./layoutMarkdown";
 import { schema } from "./schema";
 
 const block = (markdown: string) => parseMarkdown(markdown)[0]!;
@@ -14,6 +15,16 @@ describe("layout attributes in Markdown", () => {
       { fontSize: 14.4, spaceBefore: 12, spaceAfter: 6, lineHeight: "1.2", indent: 0.5 },
     );
     assert.equal(node.textContent, "Results");
+  });
+
+  it("keeps paragraph pagination flags", () => {
+    const node = block("Stay {.keep-next .keep-lines .break-before .widows-off}");
+    assert.equal(node.attrs.keepNext, true);
+    assert.equal(node.attrs.keepLines, true);
+    assert.equal(node.attrs.pageBreakBefore, true);
+    assert.equal(node.attrs.widowControl, false);
+    assert.match(serializeLayoutBlock(node), /\.keep-next/);
+    assert.match(serializeLayoutBlock(node), /\.widows-off/);
   });
 
   it("draws boxes and borders, which neighbouring paragraphs share", () => {

@@ -34,7 +34,9 @@ export type HeldRange = { from: number; to: number; anchor: number };
  */
 export function retainHeldSelection(held: HeldRange | null, read: { from: number; to: number } | null, state: { from: number; empty: boolean }): HeldRange | null {
   if (read && read.to > read.from) return { from: read.from, to: read.to, anchor: state.from };
-  if (held && held.to > held.from && state.empty && state.from === held.anchor) return held;
+  // A press that drops the highlight leaves the caret on one end of the range.
+  // A caret anywhere else is a new insertion point.
+  if (held && held.to > held.from && state.empty && (state.from === held.anchor || state.from === held.from || state.from === held.to)) return held;
   return null;
 }
 
