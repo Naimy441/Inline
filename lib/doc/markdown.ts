@@ -176,10 +176,11 @@ function serializeImage(node: PMNode) {
   const alt = escapeLinkText(node.attrs.alt || "");
   const title = node.attrs.title ? ` "${String(node.attrs.title).replace(/"/g, '\\"')}"` : "";
   const width = pictureWidth(node.attrs.width);
+  const height = pictureWidth(node.attrs.height);
   // Center is the default, but a width written with an alignment keeps both.
   // Dropping `align=center` next to a width made a later edit look like it never happened.
   const align = node.attrs.align && (node.attrs.align !== "center" || width) ? `align=${node.attrs.align}` : "";
-  const tokens = [...(width ? [`width=${width}`] : []), align, ...pictureTokens(node)].filter(Boolean);
+  const tokens = [...(width ? [`width=${width}`] : []), ...(height ? [`height=${height}`] : []), align, ...pictureTokens(node)].filter(Boolean);
   return `![${alt}](${formatUrl(node.attrs.src || "")}${title})${tokens.length ? `{${tokens.join(" ")}}` : ""}`;
 }
 
@@ -869,6 +870,7 @@ class BlockBuilder {
         alt: image.children?.map((child) => child.content).join("") || image.content || "",
         title: image.attrGet("title") ?? "",
         width: pictureWidth(spec.values.width),
+        height: pictureWidth(spec.values.height),
         align: align && ALIGNMENTS.includes(align) ? align : "center",
         wrap: pictureWrap(spec.values.wrap),
         crop: parseCropToken(spec.values.crop),

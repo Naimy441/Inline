@@ -253,6 +253,12 @@ export function Workspace({ documentId }: { documentId: string }) {
   const geometry = geometryFor(meta);
   const pageWidth = geometry.pageWidth;
   const shownPanel: Panel = focusMode && panel === "agent" ? null : panel;
+  // The resize observer reports the canvas after paint. Measuring here, before
+  // paint, lets Fit follow a panel opening or closing in the same frame.
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    if (canvas) setCanvasWidth(canvas.clientWidth);
+  }, [shownPanel, outline, focusMode]);
   const commentsBeside = shownPanel == null && (draftComment != null || ui.comments.some((comment) => !comment.resolved));
   // Half an inch of background on each side, in whatever width the panels have left.
   // Floating comments take a column out of that width so Fit still leaves them room.
