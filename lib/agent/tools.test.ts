@@ -1006,6 +1006,21 @@ describe("review tools", () => {
     assert.equal(doc.hunks.length, 0);
   });
 
+  test("a suggestion typed after a sentence keeps its words, not an encoded space", async () => {
+    const { doc, ctx } = await setup({}, "Plain text.");
+    const end = doc.doc.content.size - 1;
+    doc.receiveClientSteps(
+      doc.version,
+      [new ReplaceStep(end, end, new Slice(Fragment.from(schema.text(" Suggested.")), 0, 0)).toJSON()],
+      "client-1",
+      { suggest: true },
+    );
+    const suggestion = await runTool("get_pending_changes", {}, ctx);
+    assert.match(suggestion.text, /\(line 1, suggested by the user\): "" → "Suggested\."/);
+    assert.doesNotMatch(suggestion.text, /&#32;/);
+    assert.match(md(doc), /Plain text\. Suggested\./);
+  });
+
   test("Claude's pending edit survives the user typing elsewhere, and still undoes cleanly", async () => {
     const { doc, ctx } = await setup();
     await runTool("edit_document", { old_string: "Findings", new_string: "Results" }, ctx);

@@ -11,7 +11,7 @@ import {
   type Mappable,
 } from "prosemirror-transform";
 import { newId } from "@/lib/doc/ids";
-import { serializeBlock } from "@/lib/doc/markdown";
+import { serializeBlock, serializeInline } from "@/lib/doc/markdown";
 
 /**
  * Pending agent changes ("hunks") awaiting the user's keep/undo decision.
@@ -306,15 +306,21 @@ export function hunkToJSON(hunk: Hunk, doc: PMNode): HunkJSON {
  * Markdown for a change, including math, pictures and other nodes that
  * `textBetween` skips. An open slice describes its inline content, so a word
  * edit stays the word and does not pick up the paragraph's heading marker.
+ *
+ * Inline fragments are not the start of a paragraph. Serializing them as a
+ * line would encode a boundary space (the space before a suggestion typed at
+ * the end of a sentence) as `&#32;`.
  */
 export function describeSlice(slice: Slice): string {
   const opened = slice.openStart > 0 || slice.openEnd > 0;
   const nodes = opened ? inlineNodes(slice.content, slice.openStart) : childNodes(slice.content);
   if (!nodes.length) return "";
-  if (nodes.every((node) => node.isInline)) {
-    return serializeBlock(nodes[0]!.type.schema.node("paragraph", null, nodes));
-  }
-  return nodes.map((node) => (node.isBlock ? serializeBlock(node) : serializeBlock(node.type.schema.node("paragraph", null, [node])))).join("\n\n");
+  if (nodes.every((node) => node.isInline)) return describeInline(nodes);
+  return nodes.map((node) => (node.isBlock ? serializeBlock(node) : describeInline([node]))).join("\n\n");
+}
+
+function describeInline(nodes: PMNode[]): string {
+  return serializeInline(nodes[0]!.type.schema.node("paragraph", null, nodes), { atLineStart: false });
 }
 
 function childNodes(content: Fragment): PMNode[] {

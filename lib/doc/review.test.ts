@@ -5,7 +5,7 @@ import { applyFormat, applyStringEdit, findText } from "./editing";
 import { ensureBlockIds } from "./ids";
 import { docToMarkdown, markdownToDoc } from "./markdown";
 import { schema } from "./schema";
-import { acceptHunks, changedRanges, describeSlice, hunkFromJSON, hunkToJSON, mapHunks, recordAgentChange, rejectHunks, type Hunk } from "./review";
+import { acceptHunks, changedRanges, describeHunk, describeSlice, hunkFromJSON, hunkToJSON, mapHunks, recordAgentChange, rejectHunks, type Hunk } from "./review";
 
 const base = () => ensureBlockIds(markdownToDoc("The quick brown fox jumps over the lazy dog.\n\nA second paragraph stays put."));
 
@@ -383,5 +383,16 @@ describe("pending change descriptions", () => {
     assert.equal(describeSlice(rule.slice(0, rule.content.size)), "---");
     const page = markdownToDoc("\\pagebreak");
     assert.equal(describeSlice(page.slice(0, page.content.size)), "\\pagebreak");
+  });
+
+  it("keeps a suggestion's boundary space as a space", () => {
+    const before = markdownToDoc("Plain text.");
+    const end = before.content.size - 1;
+    const tr = new Transform(before).insert(end, schema.text(" Suggested."));
+    const hunks = recordAgentChange(before, tr, [], "user");
+    assert.equal(hunks.length, 1);
+    const described = describeHunk(hunkToJSON(hunks[0]!, tr.doc), tr.doc);
+    assert.equal(described.inserted, " Suggested.");
+    assert.doesNotMatch(described.inserted, /&#/);
   });
 });
