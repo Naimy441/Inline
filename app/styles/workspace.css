@@ -91,7 +91,8 @@
   grid-template-columns: minmax(0, max-content);
   flex: 0 1 auto;
   align-items: center;
-  min-width: min(3.25rem, 100%);
+  /* Short titles stay clickable. A long title is sized by the sizer, not this floor. */
+  min-width: 2.75rem;
   max-width: 100%;
   margin-left: -1px;
 }
@@ -116,6 +117,13 @@
   text-overflow: ellipsis;
   min-width: 0;
   line-height: 24px;
+}
+
+/* Inputs draw a hair wider than a matching span, which would ellipsize the last letters. */
+.title-sizer::after {
+  content: "";
+  display: inline-block;
+  width: 10px;
 }
 
 .title-input {
