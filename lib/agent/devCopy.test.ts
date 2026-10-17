@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { formatChatHistory, formatPromptTurn, promptTurns, turnCopyTargets, turnForMessage } from "@/lib/agent/devCopy";
+import { formatChatHistory, formatChatLogs, formatPromptTurn, formatTurnLog, promptTurns, turnCopyTargets, turnForMessage } from "@/lib/agent/devCopy";
 import type { AssistantMessage, ChatMessage, UserMessage } from "@/lib/agent/types";
 
 function user(id: string, text: string, extra: Partial<UserMessage> = {}): UserMessage {
@@ -95,10 +95,69 @@ describe("developer copy", () => {
     assert.equal(turnForMessage(messages, "u2")?.prompt?.text, "Second question");
   });
 
+  it("copies chat logs with the document around each turn, and leaves chat history without that", () => {
+    const messages: ChatMessage[] = [
+      user("u1", "Replace Tuesday with Thursday."),
+      reply("a1", {
+        model: "claude-secret-model",
+        sessionPoint: secret,
+        parts: [
+          { type: "tool", id: "tool-1", name: "mcp__inline__edit_document", input: { old_string: "Tuesday", new_string: "Thursday" }, status: "done", result: "Edited." },
+          { type: "text", id: "x1", text: "Replaced Tuesday with Thursday." },
+        ],
+        changes: [{ documentId: "doc-1", title: "Notes", tool: "edit_document", added: 1, removed: 1, checkpoint: secret }],
+        documentLog: [
+          {
+            documentId: "doc-1",
+            title: "Notes",
+            before: "The meeting is on Tuesday.",
+            after: "The meeting is on Thursday.",
+            pending: [{ id: "h1", deleted: "Tuesday", inserted: "Thursday" }],
+          },
+        ],
+      }),
+      user("u2", "Say hello back"),
+      reply("a2", {
+        parts: [{ type: "text", id: "t2", text: "You said: Say hello back" }],
+        documentLog: [{ documentId: "doc-1", title: "Notes" }],
+      }),
+    ];
+    const history = formatChatHistory(messages);
+    assert.equal(history.includes("Before:"), false);
+    assert.equal(history.includes("Pending review:"), false);
+    assert.equal(history.includes("Document:"), false);
+    assert.equal(history.includes(secret), false);
+
+    const logs = formatChatLogs(messages);
+    assert.match(logs, /Turn 1\n\nPrompt:\nReplace Tuesday with Thursday\./);
+    assert.match(logs, /Before:\nThe meeting is on Tuesday\./);
+    assert.match(logs, /After:\nThe meeting is on Thursday\./);
+    assert.match(logs, /Pending review:\n- h1: "Tuesday" → "Thursday"/);
+    assert.match(logs, /id: doc-1\ntitle: Notes/);
+    assert.match(logs, /Turn 2\n\nPrompt:\nSay hello back/);
+    assert.equal(logs.includes(secret), false);
+    assert.equal(logs.includes("claude-secret-model"), false);
+
+    const first = formatTurnLog(turnForMessage(messages, "a1")!);
+    assert.match(first, /Before:\nThe meeting is on Tuesday\./);
+    assert.equal(first.includes("Say hello back"), false);
+    assert.equal(first.includes("Turn "), false);
+
+    const second = formatTurnLog(turnForMessage(messages, "u2")!);
+    assert.match(second, /Prompt:\nSay hello back/);
+    assert.match(second, /id: doc-1/);
+    assert.match(second, /Changes:\n\(none\)/);
+    assert.match(second, /Pending review:\n\(none\)/);
+    assert.equal(second.includes("Replace Tuesday"), false);
+    assert.equal(second.includes("Before:"), false);
+  });
+
   it("offers copy on a prompt that has no reply yet, and leaves empty sections marked", () => {
     const messages: ChatMessage[] = [user("u1", "Hello")];
     assert.deepEqual([...turnCopyTargets(messages)], ["u1"]);
     assert.match(formatPromptTurn(promptTurns(messages)[0]!), /Prompt:\nHello\n\nThoughts:\n\(none\)\n\nTool calls:\n\(none\)\n\nResponse:\n\(none\)/);
+    assert.match(formatTurnLog(promptTurns(messages)[0]!), /Document:\n\(none\)/);
     assert.equal(formatChatHistory([]), "(none)");
+    assert.equal(formatChatLogs([]), "(none)");
   });
 });

@@ -5,6 +5,7 @@ import { createInlineSdkServer, mcpToolName } from "@/lib/agent/mcp";
 import { contextFromReport } from "@/lib/agent/contextUsage";
 import { systemPrompt } from "@/lib/agent/prompt";
 import { PAGE_LAYOUT_PLUGIN_DIR, PAGE_LAYOUT_SKILL } from "@/lib/agent/skills";
+import { documentTurnLog } from "@/lib/agent/documentLog";
 import { documentListing, type ToolContext } from "@/lib/agent/tools";
 import type {
   AgentStatus,
@@ -18,6 +19,7 @@ import type {
   ChatSummary,
   ContextUsage,
   DocumentChange,
+  DocumentTurnLog,
   Effort,
   ModelOption,
   PlanUsage,
@@ -34,11 +36,12 @@ import type {
   LinkedDocument,
 } from "@/lib/agent/types";
 import { DEFAULT_MAX_TURNS } from "@/lib/agent/types";
-import { documentHub, type LiveDocument } from "@/lib/server/hub";
+import { documentHub, loadDoc, type LiveDocument } from "@/lib/server/hub";
+import { readDocumentVersion } from "@/lib/server/repo";
 import { folderPathName, listFolders } from "@/lib/server/folders";
 import { library } from "@/lib/server/library";
 import { findText, textblockLines } from "@/lib/doc/editing";
-import { serializeDoc } from "@/lib/doc/markdown";
+import { docToMarkdown, serializeDoc } from "@/lib/doc/markdown";
 import { chatFilePath, deleteChatFile, FileSummaryCache, findUpload, listChatIds, readChatFile, workspaceDir, writeChatFile } from "@/lib/server/store";
 import { isUserSuggestion } from "@/lib/doc/review";
 import { log } from "@/lib/server/log";
@@ -1111,8 +1114,58 @@ class ChatRuntime {
   private finishTurn(status: AssistantMessage["status"], error?: string) {
     const message = this.current;
     if (!message) return;
-    if (status === "error") log("warn", "a Claude turn ended with an error", { chatId: this.state.id, error: error ?? message.error });
+    // Drop the turn before the snapshot is read, so a second finish can't start, but keep
+    // `running` set until the document state is on the reply the panel receives.
     this.current = null;
+    void this.completeTurn(message, status, error);
+  }
+
+  /** Markdown before and after this turn, for the documents it could change. Not shown in the chat. */
+  private async captureTurnDocuments(message: AssistantMessage): Promise<DocumentTurnLog[] | undefined> {
+    const ids: string[] = [];
+    const add = (id: string | null | undefined) => {
+      if (id && !ids.includes(id)) ids.push(id);
+    };
+    add(this.state.documentId);
+    for (const change of message.changes ?? []) add(change.documentId);
+    for (const id of this.wroteThisTurn.keys()) add(id);
+    if (!ids.length) return undefined;
+    const changed = new Set<string>([...this.wroteThisTurn.keys(), ...(message.changes ?? []).map((change) => change.documentId)]);
+    const logs: DocumentTurnLog[] = [];
+    for (const id of ids) {
+      try {
+        const live = await documentHub().get(id);
+        if (!live || live.meta.trashedAt) continue;
+        const after = docToMarkdown(live.doc);
+        let before: string | null = null;
+        if (changed.has(id)) {
+          const checkpoint = this.wroteThisTurn.get(id) ?? message.changes?.find((change) => change.documentId === id)?.checkpoint;
+          if (!checkpoint) before = "";
+          else {
+            const stored = await readDocumentVersion(id, checkpoint);
+            before = stored ? docToMarkdown(loadDoc(stored.doc)) : null;
+          }
+        }
+        const pending = live
+          .hunksJSON()
+          .filter((hunk) => hunk.turn === message.id)
+          .map((hunk) => ({ id: hunk.id, deleted: hunk.deletedText, inserted: hunk.insertedText ?? "" }));
+        logs.push(documentTurnLog({ documentId: id, title: live.meta.title, before, after, changed: changed.has(id), pending }));
+      } catch (error) {
+        log("warn", "couldn't record document state for the chat log", { chatId: this.state.id, documentId: id, error: errorText(error) });
+      }
+    }
+    return logs.length ? logs : undefined;
+  }
+
+  private async completeTurn(message: AssistantMessage, status: AssistantMessage["status"], error?: string) {
+    try {
+      const documents = await this.captureTurnDocuments(message);
+      if (documents?.length) message.documentLog = documents;
+    } catch (err) {
+      log("warn", "couldn't record document state for the chat log", { chatId: this.state.id, error: errorText(err) });
+    }
+    if (status === "error") log("warn", "a Claude turn ended with an error", { chatId: this.state.id, error: error ?? message.error });
     this.limitStop = null;
     message.status = status;
     if (error) message.error = error;
