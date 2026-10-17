@@ -102,6 +102,27 @@ export type DocumentChange = {
   checkpoint?: string;
 };
 
+/** A review hunk still pending when the turn ended. Text only: enough to see the edit, not the document model. */
+export type DocumentPendingHunk = {
+  id: string;
+  deleted: string;
+  inserted: string;
+};
+
+/**
+ * The document as this turn left it, for Copy chat logs. The chat does not render this.
+ * A short edit keeps the markdown from before and after; a long one keeps a diff instead.
+ */
+export type DocumentTurnLog = {
+  documentId: string;
+  title: string;
+  before?: string;
+  after?: string;
+  /** Set when before and after together are too large to keep, or the earlier text could not be read. */
+  diff?: string;
+  pending?: DocumentPendingHunk[];
+};
+
 export type TurnUsage = {
   inputTokens: number;
   outputTokens: number;
@@ -122,6 +143,11 @@ export type AssistantMessage = {
   error?: string;
   usage?: TurnUsage;
   changes?: DocumentChange[];
+  /**
+   * Documents this turn could see, and what it did to them. Recorded so a later
+   * Copy chat logs can replay the edit. Not shown in the chat.
+   */
+  documentLog?: DocumentTurnLog[];
   /** Last Claude Code transcript entry of this turn, where "Restore to before" rewinds the session to. */
   sessionPoint?: string;
 };

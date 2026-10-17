@@ -348,12 +348,14 @@ test("copy prompt and copy response are separate", async ({ page, request, conte
 
 test("developer options copy one turn or the whole chat, and hide those actions when off", async ({ page, request }) => {
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
-  await openWithClaude(page, request, "The meeting is on Tuesday.");
+  const documentId = await openWithClaude(page, request, "The meeting is on Tuesday.");
   await ask(page, 'replace "Tuesday" with "Thursday"');
   await expect(lastReply(page)).toContainText("Replaced Tuesday with Thursday.");
   await expect(lastReply(page).locator(".change-card")).toContainText("Edited");
   await expect(page.getByRole("button", { name: "Copy turn" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Copy chat history" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Copy chat log", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Copy chat logs", exact: true })).toHaveCount(0);
 
   await page.locator(".menubar-item", { hasText: "Help" }).click();
   const devOptions = page.getByRole("menuitemcheckbox", { name: /Developer options/ });
@@ -362,6 +364,11 @@ test("developer options copy one turn or the whole chat, and hide those actions 
 
   await expect(page.getByRole("button", { name: "Copy turn" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Copy chat history" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Copy chat logs", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Copy chat log", exact: true })).toBeVisible();
+  const labels = await page.locator(".panel-actions").getByRole("button").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label")));
+  expect(labels.indexOf("Copy chat logs")).toBe(labels.indexOf("Copy chat history") + 1);
+
   await page.getByRole("button", { name: "Copy turn" }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("Replaced Tuesday with Thursday.");
   const turn = await page.evaluate(() => navigator.clipboard.readText());
@@ -371,6 +378,7 @@ test("developer options copy one turn or the whole chat, and hide those actions 
   expect(turn).toContain("edit_document");
   expect(turn).toContain("Tool calls:");
   expect(turn).not.toContain("Turn 2");
+  expect(turn).not.toContain("\nDocument:\n");
 
   await ask(page, "Say hello back");
   await expect(lastReply(page)).toContainText("You said: Say hello back");
@@ -382,11 +390,48 @@ test("developer options copy one turn or the whole chat, and hide those actions 
   expect(history).toContain("Turn 2");
   expect(history).toContain("Prompt:\nSay hello back");
   expect(history).toContain("Response:\nYou said: Say hello back");
+  expect(history).not.toContain("\nDocument:\n");
+
+  await page.getByRole("button", { name: "Copy chat log", exact: true }).first().click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("Before:");
+  const firstLog = await page.evaluate(() => navigator.clipboard.readText());
+  expect(firstLog).toContain('Prompt:\nreplace "Tuesday" with "Thursday"');
+  expect(firstLog).toContain(`id: ${documentId}`);
+  expect(firstLog).toContain("title: Agent test");
+  expect(firstLog).toContain("Before:\nThe meeting is on Tuesday.");
+  expect(firstLog).toContain("After:\nThe meeting is on Thursday.");
+  expect(firstLog).toMatch(/Pending review:\n- /);
+  expect(firstLog).not.toContain("Say hello back");
+  expect(firstLog).not.toContain("Turn 2");
+
+  await page.getByRole("button", { name: "Copy chat logs", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("Turn 2");
+  const logs = await page.evaluate(() => navigator.clipboard.readText());
+  expect(logs).toContain("Turn 1");
+  expect(logs).toContain("Before:\nThe meeting is on Tuesday.");
+  expect(logs).toContain("After:\nThe meeting is on Thursday.");
+  expect(logs).toContain("Turn 2");
+  expect(logs).toContain("Prompt:\nSay hello back");
+  expect(logs).toContain(`id: ${documentId}`);
+
+  await page.getByRole("button", { name: "Copy chat log", exact: true }).nth(1).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("Say hello back");
+  const secondLog = await page.evaluate(() => navigator.clipboard.readText());
+  expect(secondLog).toContain("Prompt:\nSay hello back");
+  expect(secondLog).toContain(`id: ${documentId}`);
+  expect(secondLog).toContain("Changes:\n(none)");
+  expect(secondLog).not.toContain('replace "Tuesday" with "Thursday"');
+  expect(secondLog).not.toContain("Before:");
+  expect(secondLog).not.toContain("Turn 1");
+  await expect(page.locator(".agent-panel")).not.toContainText("Pending review:");
 
   await page.locator(".menubar-item", { hasText: "Help" }).click();
   await page.getByRole("menuitemcheckbox", { name: /Developer options/ }).click();
   await expect(page.getByRole("button", { name: "Copy turn" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Copy chat history" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Copy chat log", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Copy chat logs", exact: true })).toHaveCount(0);
+  await expect(page.locator(".agent-panel")).not.toContainText("Pending review:");
 });
 
 test("the conversation survives a reload", async ({ page, request }) => {

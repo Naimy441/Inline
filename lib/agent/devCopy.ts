@@ -4,7 +4,7 @@
  * credentials, environment variables, or anything else the transcript doesn't.
  */
 
-import type { AssistantMessage, AssistantPart, ChatMessage, ToolPart, UserMessage } from "@/lib/agent/types";
+import type { AssistantMessage, AssistantPart, ChatMessage, DocumentTurnLog, ToolPart, UserMessage } from "@/lib/agent/types";
 import { shortToolName } from "@/lib/agent/types";
 
 export type PromptTurn = {
@@ -101,4 +101,45 @@ export function formatChatHistory(messages: ChatMessage[]) {
   const turns = promptTurns(messages);
   if (!turns.length) return "(none)";
   return turns.map((turn, index) => `Turn ${index + 1}\n\n${formatPromptTurn(turn)}`).join("\n\n---\n\n");
+}
+
+function turnDocuments(replies: AssistantMessage[]): DocumentTurnLog[] {
+  const byId = new Map<string, DocumentTurnLog>();
+  for (const reply of replies) {
+    for (const log of reply.documentLog ?? []) byId.set(log.documentId, log);
+  }
+  return [...byId.values()];
+}
+
+function formatPending(log: DocumentTurnLog) {
+  if (!log.pending?.length) return "(none)";
+  return log.pending.map((hunk) => `- ${hunk.id}: "${hunk.deleted}" → "${hunk.inserted}"`).join("\n");
+}
+
+function formatOneDocument(log: DocumentTurnLog) {
+  const lines = [`id: ${log.documentId}`, `title: ${log.title.trim() || "Untitled"}`];
+  if (log.diff) lines.push("Diff:", log.diff.trim() || "(none)");
+  else if (log.before !== undefined || log.after !== undefined) {
+    if (log.before !== undefined) lines.push("Before:", log.before.trim() ? log.before : "(empty)");
+    if (log.after !== undefined) lines.push("After:", log.after.trim() ? log.after : "(empty)");
+  } else lines.push("Changes:", "(none)");
+  lines.push("Pending review:", formatPending(log));
+  return lines.join("\n");
+}
+
+function formatDocuments(replies: AssistantMessage[]) {
+  const logs = turnDocuments(replies);
+  return logs.length ? logs.map(formatOneDocument).join("\n\n") : "(none)";
+}
+
+/** One turn plus the document state recorded for it. */
+export function formatTurnLog(turn: PromptTurn) {
+  return [formatPromptTurn(turn), block("Document", formatDocuments(turn.replies))].join("\n\n");
+}
+
+/** Every turn, including what each one did to the document. */
+export function formatChatLogs(messages: ChatMessage[]) {
+  const turns = promptTurns(messages);
+  if (!turns.length) return "(none)";
+  return turns.map((turn, index) => `Turn ${index + 1}\n\n${formatTurnLog(turn)}`).join("\n\n---\n\n");
 }

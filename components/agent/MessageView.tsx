@@ -22,18 +22,25 @@ function formatTokens(count: number) {
   return count >= 1000 ? `${(count / 1000).toFixed(count >= 10_000 ? 0 : 1)}k` : String(count);
 }
 
-function CopyTurn({ show, messageId, onCopyTurn }: { show: boolean; messageId: string; onCopyTurn?: (messageId: string) => void }) {
-  if (!show || !onCopyTurn) return null;
+function CopyTurn({ show, messageId, onCopyTurn, onCopyLog }: { show: boolean; messageId: string; onCopyTurn?: (messageId: string) => void; onCopyLog?: (messageId: string) => void }) {
+  if (!show || (!onCopyTurn && !onCopyLog)) return null;
   return (
     <div className="dev-copy-row">
-      <button type="button" className="link-btn dev-copy" onClick={() => onCopyTurn(messageId)}>
-        Copy turn
-      </button>
+      {onCopyTurn && (
+        <button type="button" className="link-btn dev-copy" onClick={() => onCopyTurn(messageId)}>
+          Copy turn
+        </button>
+      )}
+      {onCopyLog && (
+        <button type="button" className="link-btn dev-copy" onClick={() => onCopyLog(messageId)}>
+          Copy chat log
+        </button>
+      )}
     </div>
   );
 }
 
-export const UserBubble = memo(function UserBubble({ message, showCopy, onCopyTurn }: { message: UserMessage; showCopy?: boolean; onCopyTurn?: (messageId: string) => void }) {
+export const UserBubble = memo(function UserBubble({ message, showCopy, onCopyTurn, onCopyLog }: { message: UserMessage; showCopy?: boolean; onCopyTurn?: (messageId: string) => void; onCopyLog?: (messageId: string) => void }) {
   return (
     <div className="msg msg-user">
       {(message.selection?.text.trim() || Boolean(message.attachments?.length) || Boolean(message.links?.length)) && (
@@ -64,7 +71,7 @@ export const UserBubble = memo(function UserBubble({ message, showCopy, onCopyTu
           <CopyTextButton label="Copy prompt" text={message.text} />
         </div>
       )}
-      <CopyTurn show={Boolean(showCopy)} messageId={message.id} onCopyTurn={onCopyTurn} />
+      <CopyTurn show={Boolean(showCopy)} messageId={message.id} onCopyTurn={onCopyTurn} onCopyLog={onCopyLog} />
     </div>
   );
 });
@@ -121,6 +128,7 @@ export const AssistantView = memo(function AssistantView({
   latestThinking,
   showCopy,
   onCopyTurn,
+  onCopyLog,
   documentCounts,
 }: {
   message: AssistantMessage;
@@ -130,6 +138,8 @@ export const AssistantView = memo(function AssistantView({
   /** Copy this prompt turn. Shown only for the last message of a turn, and only when developer options are on. */
   showCopy?: boolean;
   onCopyTurn?: (messageId: string) => void;
+  /** Copy this turn's chat log, including the document state. Developer options only. */
+  onCopyLog?: (messageId: string) => void;
   /** The open document, which "Restore to before" applies to. */
   documentId?: string;
   /** Put the open document back to the version saved before this reply's edits. */
@@ -240,7 +250,7 @@ export const AssistantView = memo(function AssistantView({
           <CopyTextButton label="Copy response" text={reply} />
         </div>
       )}
-      {!streaming && <CopyTurn show={Boolean(showCopy)} messageId={message.id} onCopyTurn={onCopyTurn} />}
+      {!streaming && <CopyTurn show={Boolean(showCopy)} messageId={message.id} onCopyTurn={onCopyTurn} onCopyLog={onCopyLog} />}
     </div>
   );
 });
@@ -294,6 +304,7 @@ export function MessageList({
   documentId,
   onRestore,
   onCopyTurn,
+  onCopyLog,
   documentCounts,
 }: {
   messages: ChatMessage[];
@@ -305,11 +316,13 @@ export function MessageList({
   onRestore?: (versionId: string, messageId: string) => void;
   /** When set (developer options), the last message of each turn can copy that turn. */
   onCopyTurn?: (messageId: string) => void;
+  /** When set (developer options), the last message of each turn can copy that turn's chat log. */
+  onCopyLog?: (messageId: string) => void;
   /** Shown on the latest finished reply's usage line. */
   documentCounts?: ReactNode;
 }) {
   const byTurn = useStableGroups(hunks);
-  const copyAt = useMemo(() => (onCopyTurn ? turnCopyTargets(messages) : null), [onCopyTurn, messages]);
+  const copyAt = useMemo(() => (onCopyTurn || onCopyLog ? turnCopyTargets(messages) : null), [onCopyTurn, onCopyLog, messages]);
   const last = messages[messages.length - 1];
   const latestThinking = last?.role === "assistant" ? last.parts.findLast((part) => part.type === "thinking")?.id : undefined;
   const countsOn = documentCounts ? latestUsageMessage(messages) : undefined;
@@ -317,7 +330,7 @@ export function MessageList({
     <>
       {messages.map((message, index) =>
         message.role === "user" ? (
-          <UserBubble key={message.id} message={message} showCopy={copyAt?.has(message.id)} onCopyTurn={onCopyTurn} />
+          <UserBubble key={message.id} message={message} showCopy={copyAt?.has(message.id)} onCopyTurn={onCopyTurn} onCopyLog={onCopyLog} />
         ) : (
           <AssistantView
             key={message.id}
@@ -331,6 +344,7 @@ export function MessageList({
             latestThinking={index === messages.length - 1 ? latestThinking : undefined}
             showCopy={copyAt?.has(message.id)}
             onCopyTurn={onCopyTurn}
+            onCopyLog={onCopyLog}
             documentCounts={message.id === countsOn ? documentCounts : undefined}
           />
         ),

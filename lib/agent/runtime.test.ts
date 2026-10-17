@@ -309,6 +309,33 @@ describe("editing through MCP", () => {
     assert.equal((await doc.versions()).length, 0, "a checkpoint is not a saved version");
   });
 
+  it("records the document before and after an edit, and skips the text when a later turn changes nothing", async () => {
+    useModel(async (turn, claude) => {
+      if (turn.text === "Make the dog sleepy") await claude.call("edit_document", { old_string: "lazy dog", new_string: "sleepy dog" });
+      claude.say("ok");
+    });
+    const { doc, chat } = await newChat();
+    const reply = await turn(chat, "Make the dog sleepy");
+    const log = reply.documentLog?.find((item) => item.documentId === doc.id);
+    assert.ok(log, "the reply remembers the document");
+    assert.equal(log.title, "Field notes");
+    assert.match(log.before ?? "", /lazy dog/);
+    assert.doesNotMatch(log.before ?? "", /sleepy dog/);
+    assert.match(log.after ?? "", /sleepy dog/);
+    assert.equal(log.diff, undefined);
+    assert.ok(log.pending?.length, "pending review hunks are kept with the turn");
+    assert.match(log.pending!.map((hunk) => hunk.deleted).join("\n"), /lazy/);
+    assert.match(log.pending!.map((hunk) => hunk.inserted).join("\n"), /sleepy/);
+
+    const second = await turn(chat, "Thanks");
+    const again = second.documentLog?.find((item) => item.documentId === doc.id);
+    assert.ok(again);
+    assert.equal(again.before, undefined);
+    assert.equal(again.after, undefined);
+    assert.equal(again.diff, undefined);
+    assert.equal(again.pending, undefined, "an earlier turn's hunks stay on that turn");
+  });
+
   it("refuses edits in Ask mode and marks the tool call failed", async () => {
     useModel(async (_turn, claude) => {
       const result = await claude.call("write_document", { content: "Everything replaced." });

@@ -142,6 +142,7 @@ button.msg-meta-count:hover {
 
 .dev-copy-row {
   display: flex;
+  gap: 12px;
 }
 
 .msg-user .dev-copy-row {

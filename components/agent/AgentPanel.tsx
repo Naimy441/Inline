@@ -1,10 +1,10 @@
 "use client";
 
-import { Check, CircleDashed, Copy, FolderTree, History, Loader2, MessageSquarePlus, Plus, RefreshCw, Terminal, X } from "lucide-react";
+import { Check, CircleDashed, Copy, FolderTree, History, Loader2, MessageSquarePlus, Plus, RefreshCw, ScrollText, Terminal, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { shortToolName, type Attachment, type ChatMessage, type DocumentMention, type ChatSettings, type LinkedDocument, type SelectionContext, type Todo } from "@/lib/agent/types";
-import { formatChatHistory, formatPromptTurn, turnForMessage } from "@/lib/agent/devCopy";
+import { formatChatHistory, formatChatLogs, formatPromptTurn, formatTurnLog, turnForMessage } from "@/lib/agent/devCopy";
 import { ActivityLine, isWaiting } from "@/components/agent/Activity";
 import { refreshAgentStatus, useAgentStatus } from "@/lib/client/agentStatus";
 import { acquireChat, ChatSession, newChatId, peekChat, releaseChat, rememberChat, rememberedChat, warmChat, type ChatUiState } from "@/lib/client/chatSession";
@@ -304,10 +304,22 @@ export const AgentPanel = forwardRef<
     if (!turn) return;
     void writeClipboard(formatPromptTurn(turn), "Copied this turn.");
   }, []);
+  const copyTurnLog = useCallback((messageId: string) => {
+    const messages = sessionRef.current?.ui.get().chat?.messages;
+    if (!messages) return;
+    const turn = turnForMessage(messages, messageId);
+    if (!turn) return;
+    void writeClipboard(formatTurnLog(turn), "Copied this turn's log.");
+  }, []);
   const copyHistory = useCallback(() => {
     const messages = sessionRef.current?.ui.get().chat?.messages;
     if (!messages?.length) return;
     void writeClipboard(formatChatHistory(messages), "Copied the chat history.");
+  }, []);
+  const copyLogs = useCallback(() => {
+    const messages = sessionRef.current?.ui.get().chat?.messages;
+    if (!messages?.length) return;
+    void writeClipboard(formatChatLogs(messages), "Copied the chat logs.");
   }, []);
 
   const [rewinding, setRewinding] = useState<{ versionId: string; messageId: string } | null>(null);
@@ -338,9 +350,14 @@ export const AgentPanel = forwardRef<
         </div>
         <div className="panel-actions">
           {devOptions && chat && chat.messages.length > 0 && (
-            <IconButton label="Copy chat history" size="sm" onClick={copyHistory}>
-              <Copy size={15} />
-            </IconButton>
+            <>
+              <IconButton label="Copy chat history" size="sm" onClick={copyHistory}>
+                <Copy size={15} />
+              </IconButton>
+              <IconButton label="Copy chat logs" size="sm" onClick={copyLogs}>
+                <ScrollText size={15} />
+              </IconButton>
+            </>
           )}
           <IconButton ref={historyButton} label="Chat history" size="sm" active={historyOpen} onClick={() => setHistoryOpen((value) => !value)}>
             <History size={15} />
@@ -391,7 +408,7 @@ export const AgentPanel = forwardRef<
           <Onboarding state={status.state} message={"message" in status ? status.message : ""} />
         ) : chat?.messages.length ? (
           <div className="messages">
-            <MessageList messages={chat.messages} hunks={hunks} onRetry={retry} onReview={review} documentId={documentId ?? undefined} onRestore={(versionId, messageId) => setRewinding({ versionId, messageId })} onCopyTurn={devOptions ? copyTurn : undefined} documentCounts={documentCounts} />
+            <MessageList messages={chat.messages} hunks={hunks} onRetry={retry} onReview={review} documentId={documentId ?? undefined} onRestore={(versionId, messageId) => setRewinding({ versionId, messageId })} onCopyTurn={devOptions ? copyTurn : undefined} onCopyLog={devOptions ? copyTurnLog : undefined} documentCounts={documentCounts} />
             {chat.running && isWaiting(chat.status, lastAssistant(chat.messages)) && <ActivityLine status={chat.status} message={lastAssistant(chat.messages)} since={lastSent(chat.messages)} />}
           </div>
         ) : chatId && !chat && !ui.error ? (
