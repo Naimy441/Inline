@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { JSDOM } from "jsdom";
-import { EditorState } from "prosemirror-state";
+import { EditorState, TextSelection } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 
 import { schema } from "@/lib/doc/schema";
-import { keepVisibleSelection, retainHeldSelection } from "./domSync";
+import { keepVisibleSelection, rangeTouchingCaret, retainHeldSelection, syncDomSelection } from "./domSync";
 
 describe("retainHeldSelection", () => {
   it("keeps a range the next toolbar press can no longer see, until the caret moves", () => {
@@ -14,6 +14,17 @@ describe("retainHeldSelection", () => {
     assert.equal(retainHeldSelection(held, null, { from: 12, empty: true }), held);
     assert.equal(retainHeldSelection(held, null, { from: 1, empty: true }), held);
     assert.equal(retainHeldSelection(held, null, { from: 4, empty: true }), null);
+  });
+});
+
+describe("rangeTouchingCaret", () => {
+  it("keeps a phrase when the caret is on either end", () => {
+    const range = { from: 1, to: 12 };
+    assert.equal(rangeTouchingCaret(range, 1), range);
+    assert.equal(rangeTouchingCaret(range, 12), range);
+    assert.equal(rangeTouchingCaret(range, 4), null);
+    assert.equal(rangeTouchingCaret(null, 1), null);
+    assert.equal(rangeTouchingCaret({ from: 3, to: 3 }, 3), null);
   });
 });
 
@@ -72,6 +83,32 @@ describe("keepVisibleSelection", () => {
       assert.equal(tr.selection.empty, false);
       assert.equal(tr.selection.from, 1);
       assert.equal(tr.selection.to, 1 + text.length);
+    } finally {
+      destroy();
+    }
+  });
+
+  it("adopts a range the page shows so a later flush cannot paint the caret", () => {
+    const text = "Hello world";
+    const { view, node, destroy } = mount(text);
+    try {
+      assert.equal(view.state.selection.empty, true);
+      dom.window.document.getSelection = () =>
+        ({
+          anchorNode: node,
+          anchorOffset: 0,
+          focusNode: node,
+          focusOffset: text.length,
+        }) as unknown as Selection;
+      syncDomSelection(view);
+      assert.equal(view.state.selection.empty, false);
+      assert.equal(view.state.selection.from, 1);
+      assert.equal(view.state.selection.to, 1 + text.length);
+      // A selection the editor already has (a picture, cells, or a shorter phrase) stays.
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1, 3)));
+      syncDomSelection(view);
+      assert.equal(view.state.selection.from, 1);
+      assert.equal(view.state.selection.to, 3);
     } finally {
       destroy();
     }

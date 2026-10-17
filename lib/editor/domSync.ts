@@ -10,8 +10,32 @@ import type { EditorView } from "prosemirror-view";
  */
 type DomObserver = { flush(): void; forceFlush(): void; flushingSoon: number };
 
-/** Read a browser caret move (Ctrl/⌘+End, then Enter) into the editor state before a command runs. */
+let adoptingSelection = false;
+
+/**
+ * Read a browser selection into the editor state before a command or a layout
+ * pass runs. The pass's own flush paints whatever the state currently says, so
+ * a range the browser has and the state does not must be adopted first — a
+ * flush that cannot read it would put the old caret back and the highlight
+ * would be gone before Bold runs.
+ */
 export function syncDomSelection(view: EditorView) {
+  if (!adoptingSelection) {
+    const visible = visibleTextSelection(view);
+    // A cell or picture selection is already what the next command should use.
+    // Only a caret is behind the page: Shift+End can be on screen before the
+    // editor has recorded it, and a flush would paint that caret back.
+    if (visible && view.state.selection.empty && !visible.eq(view.state.selection)) {
+      adoptingSelection = true;
+      try {
+        view.dispatch(view.state.tr.setSelection(visible).setMeta("addToHistory", false));
+      } catch {
+        // A dispatch during another update can throw; the caller reads the range itself.
+      } finally {
+        adoptingSelection = false;
+      }
+    }
+  }
   const observer = (view as unknown as { domObserver?: DomObserver }).domObserver;
   if (!view.hasFocus() || !observer) return;
   try {
@@ -37,6 +61,17 @@ export function retainHeldSelection(held: HeldRange | null, read: { from: number
   // A press that drops the highlight leaves the caret on one end of the range.
   // A caret anywhere else is a new insertion point.
   if (held && held.to > held.from && state.empty && (state.from === held.anchor || state.from === held.from || state.from === held.to)) return held;
+  return null;
+}
+
+/**
+ * A phrase the page showed, when the caret is still on one end of it.
+ * Shift+Home / Shift+End leave the editor caret there if the range never
+ * landed in state, and a toolbar press can drop the highlight onto that end.
+ */
+export function rangeTouchingCaret(range: { from: number; to: number } | null, caret: number): { from: number; to: number } | null {
+  if (!range || range.to <= range.from) return null;
+  if (caret === range.from || caret === range.to) return range;
   return null;
 }
 
