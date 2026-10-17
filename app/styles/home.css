@@ -311,6 +311,7 @@
 }
 
 .doc-card-time {
+  flex: none;
   overflow: hidden;
   text-overflow: ellipsis;
 }

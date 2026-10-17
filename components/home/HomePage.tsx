@@ -668,7 +668,7 @@ export function HomePage() {
         <FolderCard key={folder.id} folder={folder} summary={summaries.get(folder.id)} actions={folderActions} selection={selection} />
       ))}
       {shownDocs.map((doc) => (
-        <DocumentCard key={doc.id} doc={doc} trashed={view === "trash"} folders={folders} showLocation={showLocation} actions={documentActions} selection={selection} />
+        <DocumentCard key={doc.id} doc={doc} trashed={view === "trash"} folders={folders} showLocation={showLocation} stableLocation={searching} actions={documentActions} selection={selection} />
       ))}
     </div>
   );
@@ -919,7 +919,7 @@ export function HomePage() {
               <h3 className="home-subhead">Documents</h3>
               <div className="doc-grid">
                 {shownDocs.map((doc) => (
-                  <DocumentCard key={doc.id} doc={doc} trashed={view === "trash"} folders={folders} showLocation={showLocation} actions={documentActions} selection={selection} />
+                  <DocumentCard key={doc.id} doc={doc} trashed={view === "trash"} folders={folders} showLocation={showLocation} stableLocation={searching} actions={documentActions} selection={selection} />
                 ))}
               </div>
             </>
