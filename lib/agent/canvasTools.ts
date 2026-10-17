@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition, ToolContext } from "./tools";
+import { EditError } from "@/lib/doc/editing";
 import { documentHub } from "@/lib/server/hub";
 import { compileCanvas } from "@/lib/canvas/compiler";
 import { canvasTransform, readCanvas, type CanvasPatch } from "@/lib/canvas/operations";
@@ -65,10 +66,14 @@ export const canvasTools = [
   }),
   define({
     name: "inspect_canvas", title: "Inspect canvas layout", write: false,
-    description: "Measure the actual paginated HTML in a browser. Returns page count, content IDs, layout issues and the exact revision/profile. Use screenshot_page for visual composition. Page numbers are valid only for the returned revision.",
-    shape: { document_id },
+    description: "Measure the actual paginated HTML in a browser. Returns page count, content IDs, fonts, assets, layout issues and the exact revision/profile. Use screenshot_page for visual composition. Page numbers are valid only for the returned revision. Pass epoch and version to reject a stale page reference instead of measuring a newer revision.",
+    shape: { document_id, epoch: z.string().optional(), version: z.number().int().optional() },
     async handler(args, ctx) {
       const doc = await resolve(ctx, args.document_id);
+      if ((args.epoch == null) !== (args.version == null)) throw new EditError("Pass both epoch and version, or neither.");
+      if (args.epoch != null && (args.epoch !== doc.epoch || args.version !== doc.version)) {
+        throw new EditError(`This Canvas is now revision ${doc.version} (epoch ${doc.epoch}). That page reference is stale. Read the canvas again; page numbers are not content identity.`);
+      }
       readCanvas(doc);
       const result = await renderCanvas(doc);
       return { text: JSON.stringify(result.report, null, 2) };

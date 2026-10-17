@@ -34,7 +34,8 @@ export function validateCanvasCss(css: string): string {
 /** Prefix every rule, including selectors targeting the Canvas itself. */
 export function scopedCanvasCss(css: string, id: string): string {
   const root = postcss.parse(validateCanvasCss(css));
-  const scope = `[data-canvas-root="${id.replace(/[^a-zA-Z0-9_-]/g, "")}"]`;
+  // `.doc-content` keeps authored rules ahead of the ordinary heading stylesheet.
+  const scope = `.doc-content[data-canvas-root="${id.replace(/[^a-zA-Z0-9_-]/g, "")}"]`;
   root.walkRules((rule) => {
     rule.selectors = rule.selectors.map((selector) => {
       let converted = selector.replace(/(^|[\s>])(Canvas|Section|Stack|Columns|Column|Figure|Text|RichText|Table)(?=[.\s>]|$)/g, (_match, prefix, tag) => prefix + TAGS[tag]);

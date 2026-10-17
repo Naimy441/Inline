@@ -37,9 +37,22 @@ export async function renderCanvas(doc: LiveDocument, options: { page?: number; 
     }
     if (options.page) {
       if (options.page < 1 || options.page > report.pages) throw new EditError(`Canvas has ${report.pages} pages. Choose a page from 1 to ${report.pages}.`);
-      // Capture the sheet's rectangle including the editable DOM painted over it.
-      const clip = await page.locator(".sheet").nth(options.page - 1).boundingBox();
+      // Capture the sheet's rectangle, including the editable DOM painted over it.
+      // A later page starts below a short viewport, so grow the viewport until the sheet fits.
+      const sheet = page.locator(".sheet").nth(options.page - 1);
+      await sheet.evaluate((element) => element.scrollIntoView({ block: "start", inline: "start" }));
+      let clip = await sheet.boundingBox();
       if (!clip) throw new EditError("Canvas page is unavailable.");
+      const viewport = page.viewportSize() ?? { width: 1280, height: 1000 };
+      if (clip.x < 0 || clip.y < 0 || clip.x + clip.width > viewport.width - 1 || clip.y + clip.height > viewport.height - 1) {
+        await page.setViewportSize({
+          width: Math.max(viewport.width, Math.ceil(clip.x + clip.width + 4)),
+          height: Math.max(viewport.height, Math.ceil(Math.max(0, clip.y) + clip.height + 4)),
+        });
+        await sheet.evaluate((element) => element.scrollIntoView({ block: "start", inline: "start" }));
+        clip = await sheet.boundingBox();
+      }
+      if (!clip || clip.width < 2 || clip.height < 2 || clip.x < 0 || clip.y < 0) throw new EditError("Canvas page is outside the capture area.");
       return { report: metadata, png: await page.screenshot({ type: "png", clip, animations: "disabled" }), pdf: undefined };
     }
     return { report: metadata, png: undefined, pdf: undefined };

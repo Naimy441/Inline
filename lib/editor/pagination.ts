@@ -28,7 +28,7 @@ export type PageGeometry = {
 
 /** A break inside a table is a row, so the spacer stays in the table. `headerHTML` is the header repeated on the next page. */
 type RowGap = { columns: number; headerHeight: number; headerHTML: string };
-type Break = { pos: number; height: number; inline: boolean; rowGap?: RowGap };
+type Break = { pos: number; height: number; inline: boolean; rowGap?: RowGap; covers?: GapCover[] };
 
 /**
  * How far (px) a line may end past the bottom margin and stay on its page.
@@ -57,6 +57,54 @@ export function preferredBreak(overflow: number, lineCount: number, fitsPage: bo
   return overflow;
 }
 
+/** A band of a page spacer that should hide a painted background: paper in the margins, the desk in the sheet gap. */
+export type GapCover = { top: number; height: number; kind: "paper" | "desk" };
+
+/**
+ * Parts of a spacer that are outside a sheet's content box.
+ * `origin` and `height` are in the same content coordinates pagination uses
+ * (the editor's top, already shifted by earlier spacers).
+ */
+export function pageGapCovers(
+  origin: number,
+  height: number,
+  geometry: { pageHeight: number; marginTop: number; marginBottom: number; gap: number },
+): GapCover[] {
+  const { pageHeight, marginTop, marginBottom, gap } = geometry;
+  const pitch = pageHeight + gap;
+  const contentHeight = pageHeight - marginTop - marginBottom;
+  const end = origin + height;
+  const covers: GapCover[] = [];
+  const add = (start: number, stop: number, kind: GapCover["kind"]) => {
+    const from = Math.max(origin, start);
+    const to = Math.min(end, stop);
+    if (to - from > 0.5) covers.push({ top: from - origin, height: to - from, kind });
+  };
+  if (pitch <= 0) return covers;
+  const first = Math.max(0, Math.floor(origin / pitch) - 1);
+  const last = Math.ceil(end / pitch) + 1;
+  for (let page = first; page <= last; page += 1) {
+    const contentEnd = page * pitch + contentHeight;
+    const gapStart = contentEnd + marginBottom;
+    const nextContent = (page + 1) * pitch;
+    add(contentEnd, gapStart, "paper");
+    if (gap > 0) add(gapStart, gapStart + gap, "desk");
+    add(gapStart + gap, nextContent, "paper");
+  }
+  return covers;
+}
+
+/**
+ * A canvas heading moves to the next page when it and the content it introduces
+ * would be split. `follow` is the slice that must stay with the heading
+ * (the next short block, or the first line of a long paragraph).
+ */
+export function canvasHeadingShouldMove(remaining: number, headingHeight: number, follow: number, contentHeight: number): boolean {
+  if (follow <= 0 || headingHeight <= 0) return false;
+  if (headingHeight + follow > contentHeight + FIT_SLACK) return false;
+  return headingHeight + follow > remaining + FIT_SLACK;
+}
+
 /** What a layout pass found: the page count, where each page after the first starts, and how full the last page is (0-1). */
 export type PageLayout = {
   pages: number;
@@ -74,13 +122,26 @@ type Unit =
   | { top: number; bottom: number; kind: "box"; pos: number; forceBreakAfter?: boolean }
   | { top: number; bottom: number; kind: "row"; pos: number; tablePos: number; rowIndex: number; headerRows: number; headerHeight: number; headerHTML: string; columns: number };
 
-function spacer(height: number, inline: boolean) {
+function spacer(height: number, inline: boolean, covers?: GapCover[]) {
   const el = document.createElement(inline ? "span" : "div");
   el.className = "page-gap";
   el.contentEditable = "false";
   el.style.height = `${height}px`;
   el.setAttribute("data-height", String(height));
   el.setAttribute("aria-hidden", "true");
+  // Cover the margin and the sheet gap so a split paragraph's background stops at the content box.
+  if (covers?.length) {
+    el.classList.add("canvas-page-gap");
+    el.style.position = "relative";
+    for (const cover of covers) {
+      const band = document.createElement("span");
+      band.className = "canvas-gap-mask";
+      band.dataset.mask = cover.kind;
+      band.style.top = `${cover.top}px`;
+      band.style.height = `${cover.height}px`;
+      el.append(band);
+    }
+  }
   return el;
 }
 
@@ -88,9 +149,9 @@ function decorate(doc: PMNode, breaks: Break[]) {
   return DecorationSet.create(
     doc,
     breaks.map((item) =>
-      Decoration.widget(item.pos, () => (item.rowGap ? tableGap(item) : spacer(item.height, item.inline)), {
+      Decoration.widget(item.pos, () => (item.rowGap ? tableGap(item) : spacer(item.height, item.inline, item.covers)), {
         side: -1,
-        key: `gap-${item.pos}-${Math.round(item.height)}-${item.rowGap ? hashText(item.rowGap.headerHTML) : 0}`,
+        key: `gap-${item.pos}-${Math.round(item.height)}-${item.rowGap ? hashText(item.rowGap.headerHTML) : 0}-${item.covers?.length ?? 0}`,
         ignoreSelection: true,
         marks: [],
       }),
@@ -367,6 +428,23 @@ function blockSpans(units: Unit[]): Array<BlockSpan | null> {
   return info;
 }
 
+/** How much of the next unit a canvas heading must keep with itself. */
+function headingFollowSlice(units: Unit[], span: BlockSpan, contentHeight: number): number {
+  const after = span.start + span.count;
+  if (after >= units.length) return 0;
+  const next = units[after]!;
+  const gap = Math.max(0, span.nextGap);
+  if (next.kind === "line") {
+    const first = Math.max(0, next.bottom - next.top);
+    const whole = span.nextHeight > 0 ? span.nextHeight : first;
+    if (span.height + gap + whole <= contentHeight + FIT_SLACK) return gap + whole;
+    return gap + first;
+  }
+  const height = Math.max(0, next.bottom - next.top);
+  if (height > 0 && span.height + height <= contentHeight + FIT_SLACK) return height;
+  return 0;
+}
+
 function measure(view: EditorView, geometry: PageGeometry, keepCache = true): { breaks: Break[]; pages: number; lastPageFill: number } | null {
   const root = view.dom as HTMLElement;
   if (!root.isConnected || !root.offsetWidth) return null;
@@ -446,6 +524,7 @@ function measure(view: EditorView, geometry: PageGeometry, keepCache = true): { 
 
   const contentHeight = geometry.pageHeight - geometry.marginTop - geometry.marginBottom;
   const pitch = geometry.pageHeight + geometry.gap;
+  const canvas = Boolean(view.state.doc.attrs.canvas);
   const breaks: Break[] = [];
   const spans = blockSpans(units);
   let page = 0;
@@ -482,6 +561,9 @@ function measure(view: EditorView, geometry: PageGeometry, keepCache = true): { 
       } else if (span.keepNext && span.nextHeight > 0) {
         const pair = span.height + span.nextGap + span.nextHeight;
         if (pair > remaining && pair <= contentHeight + FIT_SLACK) must = true;
+      } else if (canvas && (units[span.start] as LineUnit).block.type.name === "heading") {
+        const follow = headingFollowSlice(units, span, contentHeight);
+        if (canvasHeadingShouldMove(remaining - FIT_SLACK, span.height, follow, contentHeight)) must = true;
       }
     }
     const overflows = bottom > pageEnd + FIT_SLACK && !firstOnPage && !pageBreak;
@@ -525,8 +607,9 @@ function measure(view: EditorView, geometry: PageGeometry, keepCache = true): { 
           inline = false;
         }
         const rowGap = unit.kind === "row" && unit.rowIndex > 0 ? { columns: unit.columns, headerHeight: repeat ? unit.headerHeight : 0, headerHTML: repeat ? unit.headerHTML : "" } : undefined;
+        const covers = canvas && !rowGap ? pageGapCovers(top, height, geometry) : undefined;
         if (pos != null) {
-          breaks.push({ pos, height, inline, ...(rowGap ? { rowGap } : {}) });
+          breaks.push({ pos, height, inline, ...(rowGap ? { rowGap } : {}), ...(covers?.length ? { covers } : {}) });
           shift += height;
         }
       }

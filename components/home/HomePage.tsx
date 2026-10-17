@@ -2,7 +2,7 @@
 
 import { Download, FilePlus2, FolderSync, FileText, FileUp, FolderInput, FolderOpen, FolderPlus, FolderUp, LayoutGrid, List, Moon, Plus, Search, Sparkles, Sun, Trash2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from "react";
 import { api, del, patch, post } from "@/lib/client/api";
 import { docxFilesInFolder, filesDroppedOnHome } from "@/lib/client/homeImport";
 import { dismissLegacyDocuments, hasLegacyDocuments, htmlToDocJSON, importLegacyDocuments } from "@/lib/client/legacyImport";
@@ -780,17 +780,21 @@ export function HomePage() {
             />
           </div>
           <div className="template-row">
-            <button type="button" className="template-card" onClick={() => void createCanvas()} disabled={creating !== null}>
-              <span className="template-thumb is-canvas" aria-hidden><span>CANVAS</span><strong>Designed<br />to be edited.</strong></span>
-              <span className="template-title">{creating === "canvas" ? "Creating…" : "Canvas"}</span>
-              <span className="template-desc">Design editable pages with Claude</span>
-            </button>
-            {templates.map((template) => (
-              <button key={template.id} type="button" className="template-card" onClick={() => void create(template)} disabled={creating !== null}>
-                <TemplateThumb template={template} />
-                <span className="template-title">{creating === template.id ? "Creating…" : template.title}</span>
-                <span className="template-desc">{template.description}</span>
-              </button>
+            {templates.map((template, index) => (
+              <Fragment key={template.id}>
+                <button type="button" className="template-card" onClick={() => void create(template)} disabled={creating !== null}>
+                  <TemplateThumb template={template} />
+                  <span className="template-title">{creating === template.id ? "Creating…" : template.title}</span>
+                  <span className="template-desc">{template.description}</span>
+                </button>
+                {index === 0 && (
+                  <button type="button" className="template-card" onClick={() => void createCanvas()} disabled={creating !== null}>
+                    <span className="template-thumb is-canvas" aria-hidden><span>CANVAS</span><strong>Designed<br />to be edited.</strong></span>
+                    <span className="template-title">{creating === "canvas" ? "Creating…" : "Canvas"}</span>
+                    <span className="template-desc">Design editable pages with Claude</span>
+                  </button>
+                )}
+              </Fragment>
             ))}
           </div>
         </section>

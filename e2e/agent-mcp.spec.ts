@@ -66,11 +66,11 @@ class Mcp {
 /** Tool names and hints straight from lib/agent/tools.ts, so the test can't drift from the registry. */
 function toolsFromSource() {
   // tools.ts, the PDF tools it lists (lib/agent/pdfTools.ts), and the job tools (lib/agent/jobs.ts).
-  const source = ["tools.ts", "pdfTools.ts", "jobs.ts"].map((file) => readFileSync(path.join(__dirname, "..", "lib", "agent", file), "utf8")).join("\n");
-  const blocks = source.split("defineTool({").slice(1);
+  const source = ["tools.ts", "canvasTools.ts", "pdfTools.ts", "jobs.ts"].map((file) => readFileSync(path.join(__dirname, "..", "lib", "agent", file), "utf8")).join("\n");
+  const blocks = source.split(/define(?:Tool)?\(/).slice(1);
   return blocks.map((block) => {
     const name = /name:\s*"([a-z_]+)"/.exec(block)?.[1];
-    const write = /\n\s*write:\s*(true|false)/.exec(block)?.[1];
+    const write = /(?:^|[,\n])\s*write:\s*(true|false)/.exec(block)?.[1];
     if (!name || !write) throw new Error(`Could not parse a tool definition: ${block.slice(0, 120)}`);
     return { name, write: write === "true", destructive: /\n\s*destructive:\s*true/.test(block) };
   });

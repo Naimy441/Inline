@@ -373,8 +373,9 @@ export class DocumentSession {
     return geometry;
   }
 
-  /** Switch between pages and reflowed text (phones). */
+  /** Switch between pages and reflowed text (phones). Canvases stay paginated. */
   setFlow(flow: boolean) {
+    if (flow && this.view?.state.doc.attrs.canvas) return;
     if (this.ui.get().flow === flow) return;
     this.ui.set((ui) => ({ ...ui, flow }));
     if (this.view) relayout(this.view);
@@ -405,12 +406,17 @@ export class DocumentSession {
     const stack = view.dom.closest<HTMLElement>(".page-stack")!;
     const sheets = [...stack.querySelectorAll<HTMLElement>(".sheet")];
     const blocks: Array<{ id: string; page: number; toPage: number }> = [];
+    const fonts = new Set<string>();
+    fonts.add(getComputedStyle(view.dom).fontFamily);
+    const assets: Array<{ src: string; alt: string }> = [];
+    const pageAt = (y: number) => Math.max(0, sheets.findIndex((sheet) => { const r = sheet.getBoundingClientRect(); return y >= r.top - 1 && y <= r.bottom + 1; }));
     for (const el of view.dom.querySelectorAll<HTMLElement>("[data-id]")) {
       const box = el.getBoundingClientRect();
-      const pageAt = (y: number) => Math.max(0, sheets.findIndex((sheet) => { const r = sheet.getBoundingClientRect(); return y >= r.top - 1 && y <= r.bottom + 1; }));
+      fonts.add(getComputedStyle(el).fontFamily);
       blocks.push({ id: el.dataset.id!, page: pageAt(box.top + Math.min(1, box.height)) + 1, toPage: pageAt(box.bottom - 1) + 1 });
     }
-    return { epoch: this.epoch, version: getVersion(view.state), pages: pageCount(view.state), pageSetup: this.meta?.settings.pageSetup, blocks, issues: inspectCanvasDom(view.dom as HTMLElement, geometry.pageHeight - geometry.marginTop - geometry.marginBottom) };
+    for (const img of view.dom.querySelectorAll("img")) assets.push({ src: img.getAttribute("src") || "", alt: img.getAttribute("alt") || "" });
+    return { epoch: this.epoch, version: getVersion(view.state), pages: pageCount(view.state), pageSetup: this.meta?.settings.pageSetup, fonts: [...fonts], assets, blocks, issues: inspectCanvasDom(view.dom as HTMLElement, geometry.pageHeight - geometry.marginTop - geometry.marginBottom) };
   }
 
   async prepareCanvasPrint() {

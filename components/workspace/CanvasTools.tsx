@@ -88,7 +88,7 @@ export function CanvasTools({ session }: { session: DocumentSession }) {
     </div>
     {issues && <div className="canvas-layout-notice" role="status">{issues.length ? issues.map((issue, i) => <div key={`${issue.id}-${i}`}>{issue.id}: {issue.message}</div>) : "Layout checked: no overflow or unsupported page decorations found."}</div>}
     <Dialog open={!!source} onClose={() => !busy && setSource(null)} title="Canvas design" description="Edit the stylesheet without changing any words. Ask Claude for a new composition or visual direction." width={720} footer={<><Button onClick={() => setSource(null)} disabled={busy}>Cancel</Button><Button variant="primary" loading={busy} onClick={() => void apply()}>Apply design</Button></>}>
-      <div className="canvas-source-fields"><label>Stylesheet<textarea value={css} onChange={(e) => setCss(e.target.value)} spellCheck={false} /></label><details><summary>Current composition (read only)</summary><textarea value={source?.html || ""} readOnly spellCheck={false} aria-label="Current Canvas composition" /></details>{error && <div className="canvas-design-error" role="alert">{error}</div>}</div>
+      <div className="canvas-source-fields"><label htmlFor="canvas-stylesheet">Stylesheet</label><textarea id="canvas-stylesheet" value={css} onChange={(e) => setCss(e.target.value)} spellCheck={false} /><details><summary>Current composition (read only)</summary><textarea value={source?.html || ""} readOnly spellCheck={false} aria-label="Current Canvas composition" /></details>{error && <div className="canvas-design-error" role="alert">{error}</div>}</div>
     </Dialog>
   </>;
 }
