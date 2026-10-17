@@ -133,6 +133,20 @@ test("links use a compact bar, and a typed URL becomes a link", async ({ page, c
   await expect(bar.locator("img")).toHaveCount(0);
   const barBox = await bar.boundingBox();
   expect(barBox && barBox.height).toBeLessThan(56);
+  await page.evaluate(() => {
+    const opened: string[] = [];
+    (window as unknown as { __opened: string[] }).__opened = opened;
+    window.open = ((url?: string | URL) => {
+      opened.push(String(url ?? ""));
+      return null;
+    }) as typeof window.open;
+  });
+  await bar.locator(".bubble-url").click();
+  await bar.getByRole("button", { name: "Open link" }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __opened?: string[] }).__opened ?? [])).toEqual([
+    "https://example.com/from-clipboard",
+    "https://example.com/from-clipboard",
+  ]);
 
   await page.keyboard.press("End");
   await page.keyboard.type(" https://example.com");
@@ -145,6 +159,35 @@ test("links use a compact bar, and a typed URL becomes a link", async ({ page, c
   await page.keyboard.type("www.example.com");
   await page.keyboard.press("Enter");
   await expect(doc.locator('a[href="https://www.example.com"]')).toHaveText("www.example.com");
+});
+
+test("Ctrl+K prefills a granted clipboard URL and does not ask when it is not granted", async ({ page, context }) => {
+  await page.addInitScript(() => {
+    const clipboard = navigator.clipboard;
+    const readText = clipboard.readText.bind(clipboard);
+    clipboard.readText = () => {
+      const mark = window as unknown as { __clipboardReads?: number };
+      mark.__clipboardReads = (mark.__clipboardReads ?? 0) + 1;
+      return readText();
+    };
+  });
+  await newBlankDocument(page);
+  const doc = page.locator(".doc-content");
+  await doc.click();
+  await page.keyboard.type("Notes");
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(page.getByLabel("Link URL")).toBeVisible();
+  await page.waitForTimeout(400);
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __clipboardReads?: number }).__clipboardReads ?? 0)).toBe(0);
+  await expect(page.getByRole("button", { name: "Paste", exact: true })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.evaluate(async () => {
+    await navigator.clipboard.writeText("https://example.com/quiet");
+  });
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(page.getByLabel("Link URL")).toHaveValue("https://example.com/quiet");
 });
 
 test("typing is saved and survives a reload", async ({ page }) => {
