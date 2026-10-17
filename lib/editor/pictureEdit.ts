@@ -1,6 +1,6 @@
-import { GapCursor } from "prosemirror-gapcursor";
-import type { Node as PMNode } from "prosemirror-model";
-import { NodeSelection, Selection, type EditorState, type Transaction } from "prosemirror-state";
+import type { Node as PMNode, ResolvedPos } from "prosemirror-model";
+import { NodeSelection, Selection, type EditorState, type SelectionBookmark, type Transaction } from "prosemirror-state";
+import type { Mappable } from "prosemirror-transform";
 import { pictureRotate, pictureWidth, pictureWrap, type PictureWrap } from "@/lib/doc/picture";
 import { schema } from "@/lib/doc/schema";
 
@@ -340,9 +340,57 @@ export function deleteSelectedPicture(state: EditorState, dispatch?: (tr: Transa
   return true;
 }
 
-/** A gap cursor at `pos`, when one is allowed there. */
-export function gapAt(doc: PMNode, pos: number) {
-  const $pos = doc.resolve(pos);
-  const valid = (GapCursor as unknown as { valid($pos: ReturnType<PMNode["resolve"]>): boolean }).valid($pos);
-  return valid ? new GapCursor($pos) : null;
+/**
+ * The caret on a picture's own line. A gap cursor is not allowed beside a
+ * paragraph, so this selection stands in for the bottom corner of the picture.
+ */
+export class PictureLineSelection extends Selection {
+  /** Which corner the caret draws at. */
+  readonly side: "before" | "after";
+
+  constructor($pos: ResolvedPos) {
+    super($pos, $pos);
+    this.side = imageGap($pos.doc, $pos.pos)?.side ?? "before";
+  }
+
+  map(doc: PMNode, mapping: Mappable): Selection {
+    const result = mapping.mapResult(this.head);
+    const pos = Math.max(0, Math.min(result.pos, doc.content.size));
+    const $pos = doc.resolve(pos);
+    if (result.deleted || !imageGap(doc, pos)) return Selection.near($pos);
+    return new PictureLineSelection($pos);
+  }
+
+  eq(other: Selection) {
+    return other instanceof PictureLineSelection && other.head === this.head;
+  }
+
+  getBookmark(): SelectionBookmark {
+    return new PictureLineBookmark(this.head);
+  }
+
+  toJSON() {
+    return { type: "pictureline", pos: this.head };
+  }
+}
+
+(PictureLineSelection.prototype as Selection & { visible: boolean }).visible = false;
+
+class PictureLineBookmark implements SelectionBookmark {
+  constructor(private pos: number) {}
+
+  map(mapping: Mappable) {
+    return new PictureLineBookmark(mapping.map(this.pos));
+  }
+
+  resolve(doc: PMNode) {
+    const pos = Math.max(0, Math.min(this.pos, doc.content.size));
+    return imageGap(doc, pos) ? new PictureLineSelection(doc.resolve(pos)) : Selection.near(doc.resolve(pos));
+  }
+}
+
+/** The picture-line caret at `pos`, when that position is a corner of a block picture. */
+export function pictureLineAt(doc: PMNode, pos: number) {
+  if (!imageGap(doc, pos)) return null;
+  return new PictureLineSelection(doc.resolve(pos));
 }

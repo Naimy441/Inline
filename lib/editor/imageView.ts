@@ -5,11 +5,12 @@ import type { EditorView, NodeView } from "prosemirror-view";
 import { croppedFrame, cropToken, cssPx, pictureCrop, pictureRotate, pictureWidth, pictureWrap } from "@/lib/doc/picture";
 import {
   HANDLES,
-  gapAt,
+  PictureLineSelection,
   gapBesidePicture,
   localPointerDelta,
   movePicture,
   pictureArrowMotion,
+  pictureLineAt,
   resizedBox,
   type HandleName,
   type PictureSelection,
@@ -47,6 +48,9 @@ export class ImageView implements NodeView {
     this.dom = document.createElement("figure");
     this.img = document.createElement("img");
     this.img.draggable = false;
+    // The node is draggable for ProseMirror, which starts a native drag and
+    // ends the pointer stream. Moving a picture uses the pointer, so cancel that.
+    this.dom.addEventListener("dragstart", (event) => event.preventDefault());
     // A crop needs the natural size to place the window. An uncropped picture
     // already has its width, and rendering again would wipe a drag in progress.
     this.img.addEventListener("load", () => {
@@ -414,6 +418,8 @@ export function imageSelectionPlugin() {
           if (!(selected instanceof NodeSelection) || selected.from !== found.inside) {
             view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, found.inside)).setMeta("pointer", true));
           }
+          // preventDefault keeps the browser from moving focus, so Backspace would miss the picture.
+          view.focus();
           if (view.editable) trackPictureDrag(view, event, found.inside);
           return true;
         },
@@ -446,7 +452,7 @@ export function imageSelectionPlugin() {
         return placeCaretByPhoto(view, boundary, side);
       },
       handleTextInput(view, from, to, text) {
-        if (!(view.state.selection instanceof GapCursor) || from !== to) return false;
+        if (!(view.state.selection instanceof GapCursor || view.state.selection instanceof PictureLineSelection) || from !== to) return false;
         const $pos = view.state.doc.resolve(from);
         const beside = ($pos.nodeBefore && PHOTO_TYPES.has($pos.nodeBefore.type.name)) || ($pos.nodeAfter && PHOTO_TYPES.has($pos.nodeAfter.type.name));
         if (!beside) return false;
@@ -498,7 +504,7 @@ export function imageSelectionPlugin() {
           editorView.dispatch(editorView.state.tr.setSelection(NodeSelection.create(editorView.state.doc, hit.pos)).scrollIntoView().setMeta("pointer", true));
         } else {
           const node = editorView.state.doc.nodeAt(hit.pos);
-          const gap = node ? gapAt(editorView.state.doc, hit.pos + node.nodeSize) : null;
+          const gap = node ? pictureLineAt(editorView.state.doc, hit.pos + node.nodeSize) : null;
           if (gap) editorView.dispatch(editorView.state.tr.setSelection(gap).scrollIntoView().setMeta("pointer", true));
         }
         editorView.focus();
@@ -511,7 +517,7 @@ export function imageSelectionPlugin() {
       const placeLine = () => {
         if (editorView.isDestroyed) return;
         const sel = editorView.state.selection;
-        const gap = sel instanceof GapCursor ? gapBesidePicture(editorView.state.doc, sel.from) : null;
+        const gap = sel instanceof PictureLineSelection || sel instanceof GapCursor ? gapBesidePicture(editorView.state.doc, sel.from) : null;
         const dom = gap ? editorView.nodeDOM(gap.imagePos) : null;
         const frame = dom instanceof HTMLElement ? (dom.querySelector(".image-frame") ?? dom) : null;
         if (!gap || !editorView.hasFocus() || !(frame instanceof HTMLElement)) {
@@ -567,7 +573,7 @@ function applyPictureSide(view: EditorView, imagePos: number, side: "left" | "ri
     return true;
   }
   const node = view.state.doc.nodeAt(imagePos);
-  const gap = node ? gapAt(view.state.doc, imagePos + node.nodeSize) : null;
+  const gap = node ? pictureLineAt(view.state.doc, imagePos + node.nodeSize) : null;
   if (!gap) return false;
   view.dispatch(view.state.tr.setSelection(gap).scrollIntoView().setMeta("pointer", true));
   return true;
@@ -596,7 +602,7 @@ function pictureInMargin(view: EditorView, event: MouseEvent): { pos: number; si
 
 function describeSelection(state: EditorState): PictureSelection | null {
   const selection = state.selection;
-  if (selection instanceof GapCursor) return { type: "gap", pos: selection.from };
+  if (selection instanceof PictureLineSelection || selection instanceof GapCursor) return { type: "gap", pos: selection.from };
   if (selection instanceof NodeSelection) return { type: "node", pos: selection.from, name: selection.node.type.name };
   if (selection instanceof TextSelection) return { type: "text", head: selection.head, empty: selection.empty };
   return null;
@@ -610,6 +616,9 @@ function besidePictureEdge(view: EditorView, dir: "up" | "down"): boolean {
   const toward = dir === "down" ? $head.after() : $head.before();
   const node = dir === "down" ? view.state.doc.nodeAt(toward) : view.state.doc.resolve(toward).nodeBefore;
   if (node?.type.name !== "image") return false;
+  // The last line above the picture, or the first line below it, even when paragraph
+  // spacing leaves a gap taller than one line. A line still inside the paragraph is not an edge.
+  if (view.endOfTextblock(dir)) return true;
   const imagePos = dir === "down" ? toward : toward - node.nodeSize;
   let coords: { top: number; bottom: number };
   try {
@@ -636,7 +645,7 @@ function arrowAroundPicture(view: EditorView, event: KeyboardEvent) {
   const motion = pictureArrowMotion(view.state.doc, described, dir, atEdge);
   if (!motion) return false;
   if (motion.kind === "gap") {
-    const gap = gapAt(view.state.doc, motion.pos);
+    const gap = pictureLineAt(view.state.doc, motion.pos);
     if (!gap) return false;
     view.dispatch(view.state.tr.setSelection(gap).scrollIntoView());
     return true;
@@ -694,9 +703,9 @@ function trackPictureDrag(view: EditorView, event: MouseEvent, from: number) {
     }
   };
   const finish = () => {
-    window.removeEventListener("pointermove", move);
-    window.removeEventListener("pointerup", up);
-    window.removeEventListener("pointercancel", up);
+    window.removeEventListener("pointermove", move, true);
+    window.removeEventListener("pointerup", up, true);
+    window.removeEventListener("pointercancel", up, true);
     caret.hidden = true;
     if (view.isDestroyed) return;
     view.dom.querySelectorAll(".is-dragging").forEach((el) => el.classList.remove("is-dragging"));
@@ -705,7 +714,7 @@ function trackPictureDrag(view: EditorView, event: MouseEvent, from: number) {
     if (tr) view.dispatch(tr.scrollIntoView());
   };
   const up = () => finish();
-  window.addEventListener("pointermove", move);
-  window.addEventListener("pointerup", up);
-  window.addEventListener("pointercancel", up);
+  window.addEventListener("pointermove", move, true);
+  window.addEventListener("pointerup", up, true);
+  window.addEventListener("pointercancel", up, true);
 }

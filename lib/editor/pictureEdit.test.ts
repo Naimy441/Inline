@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { EditorState, NodeSelection, TextSelection } from "prosemirror-state";
 
 import { schema } from "@/lib/doc/schema";
-import { gapBesidePicture, localPointerDelta, movePicture, pictureArrowMotion, picturePlacement, placePicture, resizedBox } from "@/lib/editor/pictureEdit";
+import { gapBesidePicture, localPointerDelta, movePicture, pictureArrowMotion, pictureLineAt, picturePlacement, placePicture, resizedBox } from "@/lib/editor/pictureEdit";
 
 function docWith(imageAt: "start" | "middle" | "end" = "middle") {
   const image = schema.nodes.image.create({ src: "/photo.png", alt: "photo", width: "200px" });
@@ -149,6 +149,15 @@ describe("arrow keys around a picture", () => {
     assert.equal(gapBesidePicture(doc, at)?.side, "before");
     const after = at + doc.nodeAt(at)!.nodeSize;
     assert.equal(gapBesidePicture(doc, after)?.side, "after");
+  });
+
+  it("stands on the picture's line between two paragraphs", () => {
+    const doc = docWith("middle");
+    const at = imagePos(EditorState.create({ doc }));
+    const line = pictureLineAt(doc, at);
+    assert.equal(line?.side, "before");
+    assert.equal(pictureLineAt(doc, at + doc.nodeAt(at)!.nodeSize)?.side, "after");
+    assert.equal(pictureLineAt(doc, 1), null);
   });
 
   it("does not skip a line that is still above the picture", () => {

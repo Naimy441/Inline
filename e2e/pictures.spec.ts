@@ -80,9 +80,8 @@ test("square wrap, behind, in front, crop and rotate survive a reload", async ({
       range.selectNodeContents(paragraph);
       const line = [...range.getClientRects()].find((rect) => rect.height > 2 && rect.width > 2);
       const box = frame.getBoundingClientRect();
-      const turned = figure.querySelector(".image-turn") as HTMLElement;
-      const visual = getComputedStyle(turned).transform !== "none" ? turned : img;
-      const visualBox = visual.getBoundingClientRect();
+      const visualBox = img.getBoundingClientRect();
+      const transform = getComputedStyle(frame).transform !== "none" ? getComputedStyle(frame).transform : getComputedStyle(img).transform;
       // The center stays on the picture after a turn. A corner of the layout box does not.
       const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
       return {
@@ -98,7 +97,7 @@ test("square wrap, behind, in front, crop and rotate survive a reload", async ({
         imgWidth: img.offsetWidth,
         frameWidth: frame.offsetWidth,
         imgShift: Number.parseFloat(img.style.marginLeft) || 0,
-        visual: { width: visualBox.width, height: visualBox.height, transform: getComputedStyle(visual).transform },
+        visual: { width: visualBox.width, height: visualBox.height, transform },
       };
     });
 
@@ -125,7 +124,7 @@ test("square wrap, behind, in front, crop and rotate survive a reload", async ({
   await bar.getByRole("button", { name: "Image options" }).click();
   const options = page.getByRole("dialog", { name: "Image options" });
   await expect(options.getByText("Size & rotation")).toBeVisible();
-  await options.getByLabel("Angle").fill("90");
+  await options.getByRole("textbox", { name: "Angle", exact: true }).fill("90");
   await expect.poll(async () => (await layout()).rotate).toBe("90");
   const turned = await layout();
   expect(turned.visual.height).toBeGreaterThan(turned.visual.width);
