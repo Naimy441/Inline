@@ -182,13 +182,23 @@ const ToolbarView = memo(function ToolbarView({
   const [moreOpen, setMoreOpen] = useState(false);
   const closeMore = useCallback(() => setMoreOpen(false), []);
   // Pointerdown can blur the document before mousedown's preventDefault runs,
-  // and before the click reads the selection. Remember the range first. A font
-  // size field is left alone so typing there still moves the caret.
+  // and before the click reads the selection. Remember the range first. The
+  // font menu and the size field have to take focus; hold that phrase until
+  // the change is applied instead of letting it collapse to a caret.
   const rememberSelection = (event: PointerEvent) => {
     if (event.button !== 0) return;
     const target = event.target;
-    if (target instanceof Element && target.closest("input, textarea, select")) return;
+    if (!(target instanceof Element)) return;
+    if (target.closest(".tb-font, .font-picker, .tb-size")) {
+      session.holdFormattingSelection();
+      return;
+    }
+    if (target.closest("input, textarea, select")) return;
     session.holdDomSelection();
+  };
+  const keepFormattingPointer = (event: PointerEvent) => {
+    if (event.button !== 0) return;
+    session.holdFormattingSelection();
   };
 
   const alignIcon = { left: <AlignLeft size={16} />, center: <AlignCenter size={16} />, right: <AlignRight size={16} />, justify: <AlignJustify size={16} /> }[align];
@@ -241,6 +251,8 @@ const ToolbarView = memo(function ToolbarView({
           className="tb-select tb-font"
           label="Font"
           value={family ?? meta?.settings.fontFamily ?? FONT_FAMILIES[0].value}
+          onPointerDown={keepFormattingPointer}
+          onDismiss={() => session.releaseFormattingSelection(true)}
           onPick={(value) => run(setMark(schema.marks.font_family!, value === meta?.settings.fontFamily ? null : { family: value }))}
         >
           <span className="tb-select-text">{fontLabel(family, meta?.settings.fontFamily ?? "Arial")}</span> <ChevronDown size={13} />
@@ -250,7 +262,7 @@ const ToolbarView = memo(function ToolbarView({
         <IconButton label="Decrease font size" size="sm" disabled={disabled} onClick={() => setSize(size - 1)}>
           <Minus size={14} />
         </IconButton>
-        <FontSizeInput value={size} onCommit={setSize} />
+        <FontSizeInput value={size} onCommit={setSize} onCancel={() => session.releaseFormattingSelection(true)} />
         <IconButton label="Increase font size" size="sm" disabled={disabled} onClick={() => setSize(size + 1)}>
           <Plus size={14} />
         </IconButton>
@@ -428,8 +440,9 @@ function Group({ children, edit = true, className }: { children: ReactNode; edit
   return <div className={`tb-group${edit ? " tb-edit" : ""}${className ? ` ${className}` : ""}`}>{children}</div>;
 }
 
-function FontSizeInput({ value, onCommit }: { value: number; onCommit: (value: number) => void }) {
+function FontSizeInput({ value, onCommit, onCancel }: { value: number; onCommit: (value: number) => void; onCancel: () => void }) {
   const [draft, setDraft] = useState<string | null>(null);
+  const cancel = useRef(false);
   return (
     <input
       className="tb-size"
@@ -437,13 +450,22 @@ function FontSizeInput({ value, onCommit }: { value: number; onCommit: (value: n
       autoComplete="off"
       value={draft ?? String(value)}
       onFocus={(event) => {
+        cancel.current = false;
         setDraft(String(value));
         event.target.select();
       }}
       onChange={(event) => setDraft(event.target.value.replace(/[^\d.]/g, ""))}
       onBlur={() => {
-        if (draft && Number(draft) > 0 && Number(draft) !== value) onCommit(Number(draft));
+        if (cancel.current) {
+          cancel.current = false;
+          setDraft(null);
+          onCancel();
+          return;
+        }
+        const next = draft;
         setDraft(null);
+        if (next && Number(next) > 0 && Number(next) !== value) onCommit(Number(next));
+        else onCancel();
       }}
       onKeyDown={(event) => {
         if (event.key === "Enter") {
@@ -452,6 +474,7 @@ function FontSizeInput({ value, onCommit }: { value: number; onCommit: (value: n
         }
         if (event.key === "Escape") {
           event.preventDefault();
+          cancel.current = true;
           setDraft(null);
           (event.target as HTMLInputElement).blur();
         }

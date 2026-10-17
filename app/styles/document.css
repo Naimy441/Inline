@@ -61,6 +61,12 @@
   background: var(--selection);
 }
 
+/* The font menu and the size field take focus, so the browser drops its
+   selection. This is the same phrase, kept painted until the change applies. */
+.doc-content .format-selection {
+  background: var(--selection);
+}
+
 /* Hunspell misspellings. One small dotted line, including the browser's own
    mark when it draws one, so a misspelling is never a large wave plus a
    second row of dots. */
