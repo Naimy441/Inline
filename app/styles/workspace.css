@@ -75,20 +75,96 @@
   min-width: 0;
 }
 
-.title-input {
+/* Document title, then the open tab's name when there is more than one tab. */
+.title-line {
+  display: flex;
+  align-items: center;
+  gap: 2px;
   flex: 0 1 auto;
   min-width: 0;
   max-width: 100%;
-  height: 26px;
-  padding: 0 6px;
+}
+
+/* The hidden sizer is the field's width. The input fills that cell and can shrink with the bar. */
+.title-fit {
+  display: inline-grid;
+  grid-template-columns: minmax(0, max-content);
+  flex: 0 1 auto;
+  align-items: center;
+  /* Short titles stay clickable. A long title is sized by the sizer, not this floor. */
+  min-width: 2.75rem;
+  max-width: 100%;
   margin-left: -1px;
+}
+
+.title-sizer,
+.title-input {
+  grid-area: 1 / 1;
+  box-sizing: border-box;
+  height: 26px;
+  padding: 0 10px 0 8px;
   border: 1px solid transparent;
   border-radius: 5px;
-  background: transparent;
   font-size: 15px;
   font-weight: 500;
   letter-spacing: -0.005em;
+}
+
+.title-sizer {
+  visibility: hidden;
+  pointer-events: none;
+  white-space: pre;
+  overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
+  line-height: 24px;
+}
+
+/* The mirror text is a pseudo-element, so a selection in the document cannot start in it. */
+.title-sizer::before {
+  content: attr(data-value);
+}
+
+/* Inputs draw a hair wider than a matching span, which would ellipsize the last letters. */
+.title-sizer::after {
+  content: "";
+  display: inline-block;
+  width: 10px;
+}
+
+.title-input {
+  width: 0;
+  min-width: 100%;
+  max-width: 100%;
+  background: transparent;
+  text-overflow: ellipsis;
+}
+
+.title-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(18rem, 42vw);
+  height: 26px;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  line-height: 1;
+}
+
+.title-tab-sep {
+  flex: none;
+  color: var(--muted);
+}
+
+.title-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .title-input:hover {
@@ -906,22 +982,6 @@
 
 .tab-list li.drop-after > .tab-row {
   box-shadow: 0 2px 0 var(--accent);
-}
-
-.status-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  max-width: 200px;
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-}
-
-.status-tab span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .tab-outline {
@@ -2256,12 +2316,22 @@ button.status-item:hover {
 
 .titlebar.is-compact .title-stack {
   flex: 1;
+  min-width: 0;
 }
 
-.titlebar.is-compact .title-input {
-  width: 100%;
+.titlebar.is-compact .title-line {
+  max-width: 100%;
+}
+
+.titlebar.is-compact .title-sizer,
+.titlebar.is-compact .title-input,
+.titlebar.is-compact .title-tab {
   height: 30px;
   font-size: 16px;
+}
+
+.titlebar.is-compact .title-sizer {
+  line-height: 28px;
 }
 
 .titlebar.is-compact .titlebar-actions {

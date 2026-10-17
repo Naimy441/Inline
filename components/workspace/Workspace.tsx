@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, CloudOff, Download, History, ListTree, Loader2, MessageSquare, Moon, MoreHorizontal, PanelRight, Sparkles, Sun } from "lucide-react";
+import { Check, ChevronRight, CloudOff, Download, History, ListTree, Loader2, MessageSquare, Moon, MoreHorizontal, PanelRight, Sparkles, Sun } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
@@ -109,7 +109,9 @@ export function Workspace({ documentId }: { documentId: string }) {
   // Below this width, or when they don't fit beside the title, the menu bar and labelled buttons fold into a "More" menu.
   const titlebarRef = useRef<HTMLElement>(null);
   const narrow = useMediaQuery(COMPACT_QUERY);
-  const crowded = useCrowdedTitlebar(titlebarRef, narrow);
+  const tabs = useTabs(documentId);
+  const openTab = tabs && tabs.length > 1 ? tabs.find((tab) => tab.id === documentId) : undefined;
+  const crowded = useCrowdedTitlebar(titlebarRef, narrow, openTab?.title ?? "");
   const compact = narrow || crowded;
   useVisualViewportVars();
   const [outline, setOutline] = useState(false);
@@ -695,7 +697,6 @@ export function Workspace({ documentId }: { documentId: string }) {
   };
 
   const [exporting, setExporting] = useState<{ format: "docx" | "md" | "html" | "txt"; scope: "all" | "tab" } | null>(null);
-  const tabs = useTabs(documentId);
   const download = useCallback(
     async (format: "docx" | "pdf" | "md" | "html" | "txt", changes?: "with" | "without", scope: "all" | "tab" = "all") => {
       // A document with tabs downloads all of them, in order, unless asked for the open tab only.
@@ -985,7 +986,10 @@ export function Workspace({ documentId }: { documentId: string }) {
           <InlineLogo />
         </button>
         <div className="title-stack">
-          <TitleInput meta={meta} session={session} onRename={(title) => void session.updateMeta({ title })} />
+          <div className="title-line">
+            <TitleInput meta={meta} session={session} onRename={(title) => void session.updateMeta({ title })} />
+            {openTab && <TabHeading title={openTab.title} />}
+          </div>
           <MenuBar session={session} actions={actions} zoom={effectiveZoom} hunks={ui.hunks.length} />
         </div>
         <div className="titlebar-status">
@@ -1153,7 +1157,6 @@ export function Workspace({ documentId }: { documentId: string }) {
         </main>
         <footer className="status-corner">
           {!chatOpen && <DocCounts session={session} pages={ui.pages} fallbackWords={meta?.wordCount ?? 0} onWords={() => setCounting(true)} />}
-          <TabStatus documentId={documentId} open={outline} onToggle={toggleOutline} />
           {ui.hunks.length > 0 && <span className="status-item is-accent">{ui.hunks.length} pending</span>}
           {ui.mode !== "editing" && (
             <button type="button" className={`status-item status-mode is-${ui.mode}`} onClick={() => void session.setMode("editing")} data-tip="Back to editing">
@@ -1313,33 +1316,47 @@ function TitleInput({ meta, session, onRename }: { meta: DocumentMeta | null; se
     if (draft == null && shown) document.title = `${shown} · Inline`;
   }, [draft, shown]);
   return (
-    <input
-      className="title-input"
-      aria-label="Document title"
-      autoComplete="off"
-      value={value}
-      size={Math.max(8, Math.min(60, value.length + 1))}
-      onFocus={(event) => {
-        setDraft(shown);
-        event.target.select();
-      }}
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={() => {
-        const next = draft?.trim() ? cleanTitle(draft) : "";
-        if (next && next !== shown) {
-          setPinned(next);
-          onRename(next);
-        }
-        setDraft(null);
-      }}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") (event.target as HTMLInputElement).blur();
-        if (event.key === "Escape") {
+    <span className="title-fit">
+      {/* Sizes the field to the text. The input paints over it and can shrink when the bar is tight. */}
+      <span className="title-sizer" data-value={value || "\u00a0"} aria-hidden="true" />
+      <input
+        className="title-input"
+        aria-label="Document title"
+        autoComplete="off"
+        value={value}
+        onFocus={(event) => {
+          setDraft(shown);
+          event.target.select();
+        }}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => {
+          const next = draft?.trim() ? cleanTitle(draft) : "";
+          if (next && next !== shown) {
+            setPinned(next);
+            onRename(next);
+          }
           setDraft(null);
-          requestAnimationFrame(() => (event.target as HTMLInputElement).blur());
-        }
-      }}
-    />
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") (event.target as HTMLInputElement).blur();
+          if (event.key === "Escape") {
+            setDraft(null);
+            requestAnimationFrame(() => (event.target as HTMLInputElement).blur());
+          }
+        }}
+      />
+    </span>
+  );
+}
+
+/** The open tab's name, beside the document title, when the document has more than one tab. */
+function TabHeading({ title }: { title: string }) {
+  return (
+    <span className="title-tab">
+      <ChevronRight size={15} className="title-tab-sep" aria-hidden="true" />
+      <span className="sr-only">Tab </span>
+      <span className="title-tab-name">{title}</span>
+    </span>
   );
 }
 
@@ -1383,7 +1400,7 @@ const UNFOLD_SLACK = 24;
  * Whether the title bar's full layout (title, menus, buttons) is wider than the bar. The full
  * layout's width is measured while it's shown and remembered while the compact one is.
  */
-function useCrowdedTitlebar(ref: RefObject<HTMLElement | null>, narrow: boolean) {
+function useCrowdedTitlebar(ref: RefObject<HTMLElement | null>, narrow: boolean, tabTitle: string) {
   const [crowded, setCrowded] = useState(false);
   const fullWidth = useRef(0);
   useLayoutEffect(() => {
@@ -1396,11 +1413,18 @@ function useCrowdedTitlebar(ref: RefObject<HTMLElement | null>, narrow: boolean)
       const sync = status?.firstElementChild as HTMLElement | null | undefined;
       const actions = bar.querySelector<HTMLElement>(".titlebar-actions");
       if (!crowded && stack && menubar && status && sync && actions) {
-        // The title and the status's spare room give way; the menus and buttons can't.
+        // The title shrinks to its text (and no narrower than MIN_TITLE_WIDTH). The tab name stays.
         const padRight = Number.parseFloat(getComputedStyle(bar).paddingRight) || 0;
         const used = actions.getBoundingClientRect().right + padRight - bar.getBoundingClientRect().left;
         const stackGap = Number.parseFloat(getComputedStyle(stack).columnGap) || 0;
-        fullWidth.current = used - stack.offsetWidth + MIN_TITLE_WIDTH + stackGap + menubar.offsetWidth - (status.clientWidth - sync.offsetWidth);
+        const titleLine = stack.querySelector<HTMLElement>(".title-line");
+        const lineGap = titleLine ? Number.parseFloat(getComputedStyle(titleLine).columnGap) || 0 : 0;
+        const sizer = stack.querySelector<HTMLElement>(".title-sizer");
+        const tab = stack.querySelector<HTMLElement>(".title-tab");
+        const natural = (el: HTMLElement) => el.scrollWidth + el.offsetWidth - el.clientWidth;
+        const reservedTitle = Math.min(MIN_TITLE_WIDTH, sizer ? natural(sizer) : MIN_TITLE_WIDTH);
+        const tabWidth = tab ? lineGap + natural(tab) : 0;
+        fullWidth.current = used - stack.offsetWidth + reservedTitle + tabWidth + stackGap + menubar.offsetWidth - (status.clientWidth - sync.offsetWidth);
       }
       const width = bar.clientWidth;
       const next = crowded ? width < fullWidth.current + UNFOLD_SLACK : width < fullWidth.current;
@@ -1409,8 +1433,10 @@ function useCrowdedTitlebar(ref: RefObject<HTMLElement | null>, narrow: boolean)
     check();
     const observer = new ResizeObserver(check);
     observer.observe(bar);
+    const stack = bar.querySelector<HTMLElement>(".title-stack");
+    if (stack) observer.observe(stack);
     return () => observer.disconnect();
-  }, [ref, narrow, crowded]);
+  }, [ref, narrow, crowded, tabTitle]);
   return crowded && !narrow;
 }
 
@@ -1492,15 +1518,3 @@ function WordCountTable({ session }: { session: DocumentSession }) {
 }
 
 
-/** The open tab's name, when the document has more than one tab. */
-function TabStatus({ documentId, open, onToggle }: { documentId: string; open: boolean; onToggle: () => void }) {
-  const tabs = useTabs(documentId);
-  const current = tabs && tabs.length > 1 ? tabs.find((tab) => tab.id === documentId) : null;
-  if (!current) return null;
-  return (
-    <button type="button" className={`status-item status-tab${open ? " is-active" : ""}`} onClick={onToggle} aria-pressed={open} data-tip={`${open ? "Hide" : "Show"} tabs & outline`}>
-      <ListTree size={12} />
-      <span>{current.title}</span>
-    </button>
-  );
-}
