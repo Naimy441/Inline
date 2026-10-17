@@ -90,9 +90,9 @@ describe("parseMarkdown", () => {
     const found = image ?? (para!.type.name === "image" ? para! : null);
     assert.ok(found, "image parsed");
     assert.equal((found as PMNode).attrs.alt, "A cat");
-    assert.equal((found as PMNode).attrs.width, "320px");
+    assert.equal((found as PMNode).attrs.width, "320");
     assert.equal((found as PMNode).attrs.align, "center");
-    assert.equal(docToMarkdown(markdownToDoc("![A cat](https://example.com/cat.png){width=320 align=center}")), "![A cat](https://example.com/cat.png){width=320px align=center}");
+    assert.equal(docToMarkdown(markdownToDoc("![A cat](https://example.com/cat.png){width=320 align=center}")), "![A cat](https://example.com/cat.png){width=320 align=center}");
   });
 
   it("keeps a percent width and center alignment together", () => {
@@ -101,7 +101,7 @@ describe("parseMarkdown", () => {
     assert.equal(image.attrs.width, "70%");
     assert.equal(image.attrs.align, "center");
     assert.equal(docToMarkdown(markdownToDoc(markdown)), markdown);
-    assert.equal(docToMarkdown(markdownToDoc("![Plot](/api/uploads/a.png){width=480 align=center}")), "![Plot](/api/uploads/a.png){width=480px align=center}");
+    assert.equal(docToMarkdown(markdownToDoc("![Plot](/api/uploads/a.png){width=480 align=center}")), "![Plot](/api/uploads/a.png){width=480 align=center}");
   });
 
   it("keeps wrap, crop and rotation on a picture, and a picture in the line", () => {

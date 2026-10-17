@@ -349,7 +349,9 @@ function atomsOf(block: PMNode): Atom[] {
     if (child.isText) {
       for (const ch of child.text ?? "") atoms.push({ key: ch, marks: child.marks });
     } else {
-      atoms.push({ key: `\u0000${child.type.name}`, marks: child.marks, node: child });
+      // Src and alt are part of the token so one picture is not treated as any other picture.
+      const picture = child.type.name === "inline_image" || child.type.name === "image" ? `\u0000${child.attrs.src ?? ""}\u0000${child.attrs.alt ?? ""}` : "";
+      atoms.push({ key: `\u0000${child.type.name}${picture}`, marks: child.marks, node: child });
     }
   });
   return atoms;
@@ -412,22 +414,75 @@ export function mergeInline(old: PMNode, next: PMNode): Fragment {
       out.push({ key: atom.key, node: atom.node, marks });
     }
   }
-  return buildFragment(out);
+  return buildFragment(stripEmptyMath(out));
+}
+
+/** A `$...$` span that is only spaces is not an equation and must not stay behind. */
+function stripEmptyMath(atoms: Atom[]): Atom[] {
+  const out: Atom[] = [];
+  let i = 0;
+  while (i < atoms.length) {
+    if (!markNamed(atoms[i]!, "math")) {
+      out.push(atoms[i]!);
+      i += 1;
+      continue;
+    }
+    let j = i + 1;
+    while (j < atoms.length && markNamed(atoms[j]!, "math")) j += 1;
+    const run = atoms.slice(i, j);
+    const blank = run.every((atom) => !atom.node && !atom.key.trim());
+    if (!blank) out.push(...run);
+    else {
+      for (const atom of run) out.push({ ...atom, marks: atom.marks.filter((mark) => mark.type.name !== "math") });
+    }
+    i = j;
+  }
+  return out;
 }
 
 const WORD_CHAR = /[\p{L}\p{N}_'’]/u;
 
-/** Group atoms into words, whitespace runs and single symbols: [start, end) atom ranges. */
+function markNamed(atom: Atom, name: string) {
+  return atom.marks.some((mark) => mark.type.name === name);
+}
+
+function linkHref(atom: Atom): string | null {
+  const link = atom.marks.find((mark) => mark.type.name === "link");
+  return link ? String(link.attrs.href ?? "") : null;
+}
+
+/**
+ * Group atoms into words, whitespace runs and single symbols.
+ * A whole `$...$` span is one token, and so is a whole link or picture:
+ * splitting them into characters lets the diff move the delimiters onto nearby words.
+ */
 function tokenize(atoms: Atom[]): Array<[number, number]> {
   const tokens: Array<[number, number]> = [];
   let i = 0;
   while (i < atoms.length) {
-    const key = atoms[i]!.key;
+    const atom = atoms[i]!;
+    if (!atom.node && markNamed(atom, "math")) {
+      let j = i + 1;
+      while (j < atoms.length && !atoms[j]!.node && markNamed(atoms[j]!, "math")) j += 1;
+      tokens.push([i, j]);
+      i = j;
+      continue;
+    }
+    const href = !atom.node ? linkHref(atom) : null;
+    if (href != null) {
+      let j = i + 1;
+      while (j < atoms.length && !atoms[j]!.node && !markNamed(atoms[j]!, "math") && linkHref(atoms[j]!) === href) j += 1;
+      tokens.push([i, j]);
+      i = j;
+      continue;
+    }
+    // A picture (and any other atom node) is already one token.
+    const key = atom.key;
     let j = i + 1;
-    if (key.length === 1 && WORD_CHAR.test(key)) {
-      while (j < atoms.length && atoms[j]!.key.length === 1 && WORD_CHAR.test(atoms[j]!.key)) j += 1;
-    } else if (key.length === 1 && /\s/.test(key)) {
-      while (j < atoms.length && atoms[j]!.key.length === 1 && /\s/.test(atoms[j]!.key)) j += 1;
+    if (!atom.node && key.length === 1 && WORD_CHAR.test(key)) {
+      while (j < atoms.length && !atoms[j]!.node && atoms[j]!.key.length === 1 && WORD_CHAR.test(atoms[j]!.key) && !markNamed(atoms[j]!, "math") && linkHref(atoms[j]!) == null) j += 1;
+    } else if (!atom.node && key.length === 1 && /\s/.test(key)) {
+      while (j < atoms.length && !atoms[j]!.node && atoms[j]!.key.length === 1 && /\s/.test(atoms[j]!.key) && !markNamed(atoms[j]!, "math") && linkHref(atoms[j]!) == null) j += 1;
     }
     tokens.push([i, j]);
     i = j;
@@ -435,11 +490,20 @@ function tokenize(atoms: Atom[]): Array<[number, number]> {
   return tokens;
 }
 
+function tokenKey(atoms: Atom[], [start, end]: [number, number]) {
+  const slice = atoms.slice(start, end);
+  const text = slice.map((atom) => atom.key).join("");
+  if (slice.length && slice.every((atom) => markNamed(atom, "math"))) return `\u0001math:${text}`;
+  const href = slice.length ? linkHref(slice[0]!) : null;
+  if (href != null && slice.every((atom) => linkHref(atom) === href)) return `\u0001link:${href}:${text}`;
+  return text;
+}
+
 /** Word-level diff expressed in atom indices, so replaced words map to replacing words cleanly. */
 function wordDiff(a: Atom[], b: Atom[]) {
   const ta = tokenize(a);
   const tb = tokenize(b);
-  const key = (atoms: Atom[], [s, e]: [number, number]) => atoms.slice(s, e).map((atom) => atom.key).join("");
+  const key = (atoms: Atom[], range: [number, number]) => tokenKey(atoms, range);
   const ops = diffSequences(
     ta.map((token) => key(a, token)),
     tb.map((token) => key(b, token)),

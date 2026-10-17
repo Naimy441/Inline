@@ -3,7 +3,7 @@ type Token = ReturnType<InstanceType<typeof MarkdownIt>["parse"]>[number];
 import markPlugin from "markdown-it-mark";
 import { Fragment, type Mark, type Node as PMNode } from "prosemirror-model";
 import { ALIGNMENTS, MARKDOWN_MARKS, MATH_LANGUAGE, MAX_INDENT, cssSizeToPt, footnoteLabel, safeHref, schema, type Align, type BorderLine, type Borders, type TabStop } from "@/lib/doc/schema";
-import { cropToken, parseCropToken, pictureCrop, pictureRotate, pictureWidth, pictureWrap } from "@/lib/doc/picture";
+import { cropToken, parseCropToken, pictureCrop, pictureRotate, pictureWidthToken, pictureWrap } from "@/lib/doc/picture";
 import { TOC_TITLE, tocMarkdown, tocMarkdownMatch, tocTitleNode, withSyncedTocs } from "@/lib/doc/toc";
 
 /**
@@ -175,8 +175,8 @@ function pictureTokens(node: PMNode) {
 function serializeImage(node: PMNode) {
   const alt = escapeLinkText(node.attrs.alt || "");
   const title = node.attrs.title ? ` "${String(node.attrs.title).replace(/"/g, '\\"')}"` : "";
-  const width = pictureWidth(node.attrs.width);
-  const height = pictureWidth(node.attrs.height);
+  const width = pictureWidthToken(node.attrs.width);
+  const height = pictureWidthToken(node.attrs.height);
   // Center is the default, but a width written with an alignment keeps both.
   // Dropping `align=center` next to a width made a later edit look like it never happened.
   const align = node.attrs.align && (node.attrs.align !== "center" || width) ? `align=${node.attrs.align}` : "";
@@ -464,8 +464,10 @@ export function serializeInline(node: PMNode, options: InlineOptions): string {
     }
 
     if (codeMark?.type.name === "math") {
-      // LaTeX goes between dollar signs as it is (a literal dollar sign in LaTeX is already \$).
-      out += `$${text}$`;
+      // A math mark that holds only spaces is not an equation. Leaving `$ $`
+      // behind makes the next edit refuse to match the Markdown.
+      // Real LaTeX goes between dollar signs as it is (a literal dollar sign in LaTeX is already \$).
+      out += text.trim() ? `$${text}$` : text;
     } else if (codeMark) {
       const fence = "`".repeat(longestRun(text, "`") + 1);
       const pad = text.startsWith("`") || text.endsWith("`") ? " " : "";
@@ -869,8 +871,8 @@ class BlockBuilder {
         src: image.attrGet("src") ?? "",
         alt: image.children?.map((child) => child.content).join("") || image.content || "",
         title: image.attrGet("title") ?? "",
-        width: pictureWidth(spec.values.width),
-        height: pictureWidth(spec.values.height),
+        width: pictureWidthToken(spec.values.width),
+        height: pictureWidthToken(spec.values.height),
         align: align && ALIGNMENTS.includes(align) ? align : "center",
         wrap: pictureWrap(spec.values.wrap),
         crop: parseCropToken(spec.values.crop),

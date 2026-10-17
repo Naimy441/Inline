@@ -515,6 +515,15 @@ describe("write_document", () => {
     const result = await runTool("write_document", { content: SAMPLE }, ctx);
     assert.equal(result.isError, true);
     assert.match(result.text, /no change/);
+    assert.match(result.text, /same as the document/);
+  });
+
+  test("an edit that parses to the same document says why", async () => {
+    const { ctx } = await setup({}, "**bold**");
+    const result = await runTool("edit_document", { old_string: "**bold**", new_string: "<strong>bold</strong>" }, ctx);
+    assert.equal(result.isError, true, result.text);
+    assert.match(result.text, /parsed to the same document/);
+    assert.match(result.text, /Line 1 differs/);
   });
 
   test("can't remove a locked passage", async () => {
@@ -1000,6 +1009,21 @@ describe("review tools", () => {
     assert.equal(doc.hunks.length, 0);
   });
 
+  test("a suggestion typed after a sentence keeps its words, not an encoded space", async () => {
+    const { doc, ctx } = await setup({}, "Plain text.");
+    const end = doc.doc.content.size - 1;
+    doc.receiveClientSteps(
+      doc.version,
+      [new ReplaceStep(end, end, new Slice(Fragment.from(schema.text(" Suggested.")), 0, 0)).toJSON()],
+      "client-1",
+      { suggest: true },
+    );
+    const suggestion = await runTool("get_pending_changes", {}, ctx);
+    assert.match(suggestion.text, /\(line 1, suggested by the user\): "" → "Suggested\."/);
+    assert.doesNotMatch(suggestion.text, /&#32;/);
+    assert.match(md(doc), /Plain text\. Suggested\./);
+  });
+
   test("Claude's pending edit survives the user typing elsewhere, and still undoes cleanly", async () => {
     const { doc, ctx } = await setup();
     await runTool("edit_document", { old_string: "Findings", new_string: "Results" }, ctx);
@@ -1008,6 +1032,23 @@ describe("review tools", () => {
     await runTool("revert_changes", { all: true }, ctx);
     assert.match(md(doc), /Note: The quick/);
     assert.match(md(doc), /## Findings/);
+  });
+
+  test("pending changes include equations, pictures and other nodes", async () => {
+    const { ctx } = await setup({}, "Call $z = x + iy$ that point.");
+    const edited = await runTool("edit_document", { old_string: "Call $z = x + iy$ that point.", new_string: "Call $w = u + iv$ that point." }, ctx);
+    assert.equal(edited.isError, undefined, edited.text);
+    const math = await runTool("get_pending_changes", {}, ctx);
+    assert.match(math.text, /\$z = x \+ iy\$/);
+    assert.match(math.text, /\$w = u \+ iv\$/);
+    const { ctx: pictures } = await setup({}, "Start.");
+    await runTool("insert_content", { content: "![Chart](/a.png){width=340}\n\n---\n\n\\pagebreak", position: "end" }, pictures);
+    const pending = await runTool("get_pending_changes", {}, pictures);
+    assert.match(pending.text, /!\[Chart\]/);
+    assert.match(pending.text, /width=340/);
+    assert.doesNotMatch(pending.text, /340px/);
+    assert.match(pending.text, /---/);
+    assert.match(pending.text, /\\pagebreak/);
   });
 });
 
@@ -1214,6 +1255,34 @@ describe("count_words", () => {
   });
 });
 
+describe("math edits", () => {
+  test("rewrites words beside an inline equation without corrupting it", async () => {
+    const { doc, ctx } = await setup({}, "Call $z = x + iy$ that point.\n\nThis generalizes $x + y$ the sum x + y.");
+    const first = await runTool("edit_document", { old_string: "Call $z = x + iy$ that point.", new_string: "Call z that $z = x + iy$ that point." }, ctx);
+    assert.equal(first.isError, undefined, first.text);
+    const second = await runTool("edit_document", { old_string: "This generalizes $x + y$ the sum x + y.", new_string: "This x + y generalizes $x + y$ the sum." }, ctx);
+    assert.equal(second.isError, undefined, second.text);
+    assert.equal(md(doc), "Call z that $z = x + iy$ that point.\n\nThis x + y generalizes $x + y$ the sum.");
+    assert.doesNotMatch(`${first.text}\n${second.text}`, /differs|stuck to a word|empty inline math/);
+  });
+
+  test("warns on empty inline math and a dollar sign stuck to a word", async () => {
+    const { ctx } = await setup({}, "This generalizes the sum.");
+    const result = await runTool("edit_document", { old_string: "This generalizes the sum.", new_string: "This generalizes$ $the sum." }, ctx);
+    assert.equal(result.isError, undefined, result.text);
+    assert.match(result.text, /empty inline math/);
+    assert.match(result.text, /stuck to a word/);
+  });
+
+  test("stores an image width in the unit that was written", async () => {
+    const { doc, ctx } = await setup({}, "Caption.");
+    const result = await runTool("insert_content", { content: "![Chart](/a.png){width=340}", position: "start" }, ctx);
+    assert.equal(result.isError, undefined, result.text);
+    assert.match(md(doc), /\{width=340 /);
+    assert.doesNotMatch(md(doc), /width=340px/);
+  });
+});
+
 describe("get_page_count", () => {
   test("estimates from the word count when no editor has measured the text", async () => {
     const { ctx } = await setup({}, Array.from({ length: 40 }, () => "word ".repeat(50).trim()).join("\n\n"));
@@ -1273,6 +1342,14 @@ describe("get_page_count", () => {
     } finally {
       stop();
     }
+  });
+
+  test("reports each image's height and the space left on its page", async () => {
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAADCAYAAAC56t6BAAAAEUlEQVR42mNk+M9QzwAEjDAGAKw3BP5PFSRuAAAAAElFTkSuQmCC";
+    const { ctx } = await setup({}, `![Chart](data:image/png;base64,${png}){width=200}`);
+    const result = await runTool("get_page_count", {}, ctx);
+    assert.equal(result.isError, undefined, result.text);
+    assert.match(result.text, /Image "Chart" \(line 1, page 1\) is 300px tall \(200 wide\); 564px is left on that page\./);
   });
 });
 
@@ -1578,6 +1655,17 @@ describe("document folder", () => {
     assert.doesNotMatch(ran.text, /stdout:\n\(empty\)/);
     assert.doesNotMatch(ran.text, /stderr:\n\(empty\)/);
     assert.doesNotMatch(ran.text, /^exit 1$/);
+    assert.doesNotMatch(ran.text, /environment: PATH=/);
+  });
+
+  test("gives matplotlib a writable cache and does not print PATH", async () => {
+    const { ctx } = await setup();
+    const ran = await runTool("run_command", { command: "python3 -c 'import os; print(os.environ[\"MPLCONFIGDIR\"]); print(os.environ[\"XDG_CACHE_HOME\"])'" }, ctx);
+    assert.equal(ran.isError, undefined, ran.text);
+    assert.match(ran.text, /\.tmp\/matplotlib/);
+    assert.match(ran.text, /\.tmp\/cache/);
+    assert.match(ran.text, /python3 is \//);
+    assert.doesNotMatch(ran.text, /environment: PATH=/);
   });
 
   test("a command that prints nothing still reports empty stdout and stderr", async () => {

@@ -1,5 +1,7 @@
+import type { Node as PMNode } from "prosemirror-model";
 import { blockLines, docWordCount, textblockLines } from "@/lib/doc/editing";
 import { serializeDoc } from "@/lib/doc/markdown";
+import { croppedFrame, cssPx, pictureCrop } from "@/lib/doc/picture";
 import { layoutKey, pageSize, type DocumentSettings } from "@/lib/doc/settings";
 import type { ClientLayout, LiveDocument } from "@/lib/server/hub";
 
@@ -119,4 +121,99 @@ export function describePageStarts(doc: LiveDocument, starts: number[]) {
     const block = blocks.find((item) => pos >= item.block.pos && pos < item.block.pos + item.block.node.nodeSize);
     return block ? `Page ${page} starts on line ${block.startLine} (${block.block.node.type.name.replace(/_/g, " ")})` : `Page ${page} starts near the end of the document`;
   });
+}
+
+const PX_PER_IN = 96;
+
+export type ImageNaturalSize = { width: number; height: number };
+
+/**
+ * Each picture's height and the room left on its page. Height comes from the
+ * height attribute, or from the file's aspect ratio fitted to the width.
+ * Page breaks follow a measured layout when one was reported; otherwise the
+ * height is estimated from the page size and the text above the picture.
+ */
+export function describeImages(doc: PMNode, settings: DocumentSettings, natural: ReadonlyMap<string, ImageNaturalSize>, starts?: readonly number[]): string[] {
+  const paper = pageSize(settings.pageSetup);
+  const margins = settings.pageSetup.margins;
+  const contentWidth = Math.max(1, (paper.width - margins.left - margins.right) * PX_PER_IN);
+  const contentHeight = Math.max(1, (paper.height - margins.top - margins.bottom) * PX_PER_IN);
+  const fontPx = ((settings.fontSize || 11) * PX_PER_IN) / 72;
+  const lineHeight = fontPx * (settings.lineSpacing || 1.15);
+  const gap = ((settings.paragraphSpacing || 0) * PX_PER_IN) / 72;
+  const lines = blockLines(serializeDoc(doc));
+  const measured = Boolean(starts?.length);
+  const pageStarts = starts ?? [];
+  const linesOut: string[] = [];
+  let y = 0;
+  let page = 1;
+  let startCursor = 0;
+
+  const picturesIn = (node: PMNode) => {
+    const found: PMNode[] = [];
+    if (node.type.name === "image" || node.type.name === "inline_image") found.push(node);
+    else node.descendants((child) => {
+      if (child.type.name === "image" || child.type.name === "inline_image") found.push(child);
+    });
+    return found;
+  };
+
+  doc.forEach((node, pos) => {
+    while (startCursor < pageStarts.length && pos >= pageStarts[startCursor]!) {
+      page += 1;
+      y = 0;
+      startCursor += 1;
+    }
+    if (!measured && y >= contentHeight) {
+      page += Math.floor(y / contentHeight);
+      y %= contentHeight;
+    }
+    if (node.type.name === "page_break") {
+      page += 1;
+      y = 0;
+      return;
+    }
+    const entry = lines.find((item) => item.block.pos === pos);
+    const line = entry?.startLine ?? 1;
+    const pictures = picturesIn(node);
+    for (const picture of pictures) linesOut.push(imageLine(picture, line, page, y, contentWidth, contentHeight, natural));
+    if (node.type.name === "image") {
+      const height = imageMetrics(node, contentWidth, natural).height;
+      y += height ?? lineHeight;
+      return;
+    }
+    const text = node.textContent || " ";
+    const charsPerLine = Math.max(10, contentWidth / (fontPx * 0.5));
+    const textLines = Math.max(1, Math.ceil(text.length / charsPerLine));
+    y += textLines * lineHeight + gap;
+  });
+  return linesOut;
+}
+
+function imageMetrics(node: PMNode, contentWidth: number, natural: ReadonlyMap<string, ImageNaturalSize>) {
+  const widthToken = node.attrs.width != null && String(node.attrs.width) !== "" ? String(node.attrs.width) : null;
+  const heightToken = node.attrs.height != null && String(node.attrs.height) !== "" ? String(node.attrs.height) : null;
+  const file = natural.get(String(node.attrs.src ?? ""));
+  const displayWidth = cssPx(widthToken, contentWidth, file?.width ?? 0);
+  let height: number | null = null;
+  if (heightToken && !heightToken.endsWith("%")) {
+    const parsed = Number.parseFloat(heightToken);
+    if (parsed > 0) height = parsed;
+  }
+  if (height == null && file && file.width > 0 && file.height > 0) {
+    height = croppedFrame(displayWidth, file.width, file.height, pictureCrop(node.attrs.crop)).frameHeight;
+  }
+  const wide = widthToken ?? `${Math.round(displayWidth)}px`;
+  return { height, wide };
+}
+
+function imageLine(node: PMNode, line: number, page: number, y: number, contentWidth: number, contentHeight: number, natural: ReadonlyMap<string, ImageNaturalSize>) {
+  const alt = String(node.attrs.alt || "image");
+  const { height, wide } = imageMetrics(node, contentWidth, natural);
+  const where = `Image "${alt}" (line ${line}, page ${page})`;
+  if (height == null) return `${where} has no known height (${wide} wide).`;
+  const tall = Math.round(height);
+  const space = Math.round(contentHeight - y - height);
+  if (space < 0) return `${where} is ${tall}px tall (${wide} wide); 0px is left on that page and it runs ${Math.abs(space)}px past the bottom.`;
+  return `${where} is ${tall}px tall (${wide} wide); ${space}px is left on that page.`;
 }
