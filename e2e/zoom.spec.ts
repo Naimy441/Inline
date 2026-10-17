@@ -296,10 +296,10 @@ test("Fit leaves half an inch on each side and refits when a panel opens", async
   });
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   const light = await edge();
-  expect(light).toBe("rgb(196, 199, 197)");
+  expect(light).toBe("rgb(225, 227, 226)");
   await page.getByRole("button", { name: "Dark theme", exact: true }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   const dark = await edge();
   expect(dark).not.toBe(light);
-  expect(dark).not.toBe("rgb(196, 199, 197)");
+  expect(dark).toBe("rgb(85, 84, 79)");
 });
