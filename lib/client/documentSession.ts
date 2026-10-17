@@ -695,6 +695,7 @@ export class DocumentSession {
         geometry: () => this.geometry(),
         tabStop: () => this.meta?.settings.tabStop ?? DEFAULT_TAB_STOP,
         fontLines: () => (this.meta ?? snapshot.meta)?.settings.lineModel === "font",
+        onGooglePaste: () => this.enableFontLines(),
         styles: () => stylesOf((this.meta ?? snapshot.meta)?.settings ?? {}),
         onPages: (layout) => {
           if (this.heldScroll) {
@@ -1523,6 +1524,20 @@ export class DocumentSession {
     const { from, to } = view.state.selection;
     if (from === to) throw new Error(`Select the text to ${locked ? "lock" : "unlock"}.`);
     await post(`/api/documents/${this.id}/lock`, { from, to, version: getVersion(view.state), locked });
+  }
+
+  /**
+   * Pasted Google Docs HTML stores the spacing multiple (1.15) and expects a
+   * line to be that multiple of the font's own line height, not of 1em.
+   */
+  private enableFontLines() {
+    if (this.meta?.settings.lineModel === "font") return;
+    this.ui.set((ui) => {
+      if (!ui.meta || ui.meta.settings.lineModel === "font") return ui;
+      return { ...ui, meta: { ...ui.meta, settings: { ...ui.meta.settings, lineModel: "font" } } };
+    });
+    if (this.view) requestAnimationFrame(() => { if (this.view) relayout(this.view); });
+    void this.updateMeta({ settings: { lineModel: "font" } }).catch(() => undefined);
   }
 
   async updateMeta(patch: { title?: string; settings?: Record<string, unknown> }) {

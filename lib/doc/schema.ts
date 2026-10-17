@@ -110,6 +110,17 @@ const blockAttrs = {
   lineHeight: { default: null as string | null },
   spaceBefore: { default: null as number | null },
   spaceAfter: { default: null as number | null },
+  /** Keep this paragraph on the same page as the next one. */
+  keepNext: { default: null as boolean | null },
+  /** Don't split this paragraph across pages when it fits on one page. */
+  keepLines: { default: null as boolean | null },
+  /**
+   * Widow and orphan control. Null leaves it on, which is how Google Docs
+   * starts a document ("Prevent single lines"). False turns it off.
+   */
+  widowControl: { default: null as boolean | null },
+  /** Start this paragraph on a new page. */
+  pageBreakBefore: { default: null as boolean | null },
   /** First-line indent in inches; negative is a hanging indent (works cited, bibliographies). */
   textIndent: { default: null as number | null },
   /** Right indent in inches, in from the far margin. */
@@ -295,6 +306,11 @@ function blockDomAttrs(node: PMNode, extra: Record<string, string> = {}) {
   if (node.attrs.tabs) attrs["data-tabs"] = JSON.stringify(node.attrs.tabs);
   if (node.attrs.borders) attrs["data-borders"] = JSON.stringify(node.attrs.borders);
   if (node.attrs.lineBreaks) attrs["data-line-breaks"] = String(node.attrs.lineBreaks);
+  if (node.attrs.keepNext) attrs["data-keep-next"] = "true";
+  if (node.attrs.keepLines) attrs["data-keep-lines"] = "true";
+  if (node.attrs.widowControl === false) attrs["data-widow"] = "false";
+  else if (node.attrs.widowControl === true) attrs["data-widow"] = "true";
+  if (node.attrs.pageBreakBefore) attrs["data-page-break-before"] = "true";
   if (node.attrs.indent && !Number.isInteger(Number(node.attrs.indent))) attrs["data-indent"] = String(node.attrs.indent);
   if (node.attrs.textIndent) attrs["data-text-indent"] = String(node.attrs.textIndent);
   if (node.attrs.rightIndent) attrs["data-right-indent"] = String(node.attrs.rightIndent);
@@ -374,6 +390,10 @@ function parseBlockAttrs(dom: HTMLElement) {
     lineHeight: style?.lineHeight && /^[\d.]+$/.test(style.lineHeight) ? style.lineHeight : null,
     spaceBefore: parseSpace(style?.marginTop),
     spaceAfter: parseSpace(style?.marginBottom),
+    keepNext: dom.getAttribute("data-keep-next") === "true" ? true : null,
+    keepLines: dom.getAttribute("data-keep-lines") === "true" ? true : null,
+    widowControl: dom.getAttribute("data-widow") === "false" ? false : dom.getAttribute("data-widow") === "true" ? true : null,
+    pageBreakBefore: dom.getAttribute("data-page-break-before") === "true" ? true : null,
     textIndent: readSignedInches(dom.getAttribute("data-text-indent"), 3) ?? parseTextIndent(style?.textIndent || ""),
     rightIndent: storedRight != null && storedRight > 0 ? storedRight : parseLengthInches(rtl ? style?.marginLeft : style?.marginRight, 12),
     dir: rtl ? ("rtl" as const) : null,

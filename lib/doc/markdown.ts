@@ -1078,6 +1078,7 @@ function hexColor(value: string | undefined) {
  *   size=14            the paragraph's text size in points
  *   before=12 after=6  space above and below, in points
  *   line=1.2           line height, a multiple of the size
+ *   .keep-next .keep-lines .break-before .widows-off   paragraph pagination
  *   left=36            left indent in points
  *   .box               a box around it (neighbours with the same box share it), or
  *   border=bottom      some sides: border="top bottom", with border-width=0.5 (pt),
@@ -1096,6 +1097,10 @@ export function layoutAttrs(spec: { classes: string[]; values: Record<string, st
   if (after !== null) attrs.spaceAfter = Math.round(after * 10) / 10;
   const line = numberIn(values.line, 0.5, 5);
   if (line !== null) attrs.lineHeight = String(Math.round(line * 1000) / 1000);
+  if (spec.classes.includes("keep-next")) attrs.keepNext = true;
+  if (spec.classes.includes("keep-lines")) attrs.keepLines = true;
+  if (spec.classes.includes("widows-off")) attrs.widowControl = false;
+  if (spec.classes.includes("break-before")) attrs.pageBreakBefore = true;
   const left = numberIn(values.left, 0, 576);
   if (left !== null) attrs.indent = Math.min(MAX_INDENT, Math.round((left / 36) * 1000) / 1000);
   const all = spec.classes.includes("box") || values.border === "box" || values.border === "all";

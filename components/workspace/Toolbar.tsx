@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { redo, redoDepth, undo, undoDepth } from "prosemirror-history";
 import type { EditorState } from "prosemirror-state";
+import type { Node as PMNode } from "prosemirror-model";
 import { memo, useCallback, useLayoutEffect, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
 import type { DocumentSession, EditorMode } from "@/lib/client/documentSession";
 import { EDITOR_MODES, modeMenuItems } from "@/components/workspace/modes";
@@ -37,27 +38,32 @@ import { MATH_LANGUAGE, schema, type Align } from "@/lib/doc/schema";
 import {
   applyStyle,
   blockKind,
+  canonLine,
   clearFormatting,
   currentAlign,
-  currentLineHeight,
   currentStyleId,
   indent,
   listKind,
   markActive,
   markAttr,
   outdent,
+  selectionSpacing,
   setAlign,
+  setBlockSpacing,
   setLineHeight,
   setMark,
   toggle,
   toggleList,
   type BlockKind,
+  type SpacingState,
+  type Tri,
 } from "@/lib/editor/commands";
-import { findStyle, resolveStyle, stylePreview, stylesOf } from "@/lib/doc/styles";
+import { findStyle, nodeStyleId, resolveStyle, stylePreview, stylesOf } from "@/lib/doc/styles";
 import { IconButton } from "@/components/ui/Button";
 import { MenuButton, type MenuItem } from "@/components/ui/Menu";
 import { Popover } from "@/components/ui/Popover";
 import { FontPicker } from "@/components/workspace/FontPicker";
+import { SpacingDialog } from "@/components/workspace/SpacingDialog";
 
 const ZOOMS = [0.5, 0.75, 0.9, 1, 1.25, 1.5, 2];
 
@@ -88,7 +94,15 @@ type Format = {
   family: string | null;
   color: string | null;
   highlight: string | null;
-  lineHeight: ReturnType<typeof currentLineHeight>;
+  line: SpacingState["line"];
+  spaceBefore: Tri;
+  spaceAfter: Tri;
+  beforePt: number | null;
+  afterPt: number | null;
+  keepNext: Tri;
+  keepLines: Tri;
+  widows: Tri;
+  pageBreak: Tri;
   bold: boolean;
   italic: boolean;
   underline: boolean;
@@ -98,8 +112,40 @@ type Format = {
   equation: boolean;
 };
 
-function formatOf(state: EditorState | null): Format {
+function formatOf(state: EditorState | null, meta: DocumentMeta | null): Format {
   const active = (name: keyof typeof schema.marks) => (state ? markActive(state, schema.marks[name]!) : false);
+  const settings = meta?.settings;
+  const sheet = stylesOf(settings ?? {});
+  const cache = new Map<string, ReturnType<typeof resolveStyle>>();
+  const styleOf = (node: PMNode) => {
+    const id = nodeStyleId(node);
+    let resolved = cache.get(id);
+    if (resolved === undefined) {
+      resolved = resolveStyle(sheet, id);
+      cache.set(id, resolved);
+    }
+    return resolved;
+  };
+  const spacing = state
+    ? selectionSpacing(state, {
+        lineSpacing: settings?.lineSpacing ?? 1.15,
+        paragraphSpacing: settings?.paragraphSpacing ?? 8,
+        fontLines: settings?.lineModel === "font",
+        styleLine: (node) => styleOf(node)?.lineHeight ?? null,
+        styleBefore: (node) => styleOf(node)?.spaceBefore ?? null,
+        styleAfter: (node) => styleOf(node)?.spaceAfter ?? null,
+      })
+    : {
+        line: canonLine(settings?.lineSpacing ?? 1.15) ?? "1.15",
+        spaceBefore: false as Tri,
+        spaceAfter: (settings?.paragraphSpacing ?? 8) > 0,
+        beforePt: 0,
+        afterPt: settings?.paragraphSpacing ?? 8,
+        keepNext: false as Tri,
+        keepLines: false as Tri,
+        widows: true as Tri,
+        pageBreak: false as Tri,
+      };
   return {
     ready: Boolean(state),
     canUndo: Boolean(state && undoDepth(state)),
@@ -114,7 +160,15 @@ function formatOf(state: EditorState | null): Format {
     family: state ? markAttr(state, schema.marks.font_family!, "family") : null,
     color: state ? markAttr(state, schema.marks.text_color!, "color") : null,
     highlight: state ? markAttr(state, schema.marks.highlight!, "color") : null,
-    lineHeight: state ? currentLineHeight(state) : null,
+    line: spacing.line,
+    spaceBefore: spacing.spaceBefore,
+    spaceAfter: spacing.spaceAfter,
+    beforePt: spacing.beforePt,
+    afterPt: spacing.afterPt,
+    keepNext: spacing.keepNext,
+    keepLines: spacing.keepLines,
+    widows: spacing.widows,
+    pageBreak: spacing.pageBreak,
     bold: active("bold"),
     italic: active("italic"),
     underline: active("underline"),
@@ -142,11 +196,11 @@ type ToolbarProps = {
   mode: EditorMode;
 };
 
-export function Toolbar({ state, ...props }: ToolbarProps & { state: EditorState | null }) {
-  const next = formatOf(state);
+export function Toolbar({ state, meta, ...props }: ToolbarProps & { state: EditorState | null }) {
+  const next = formatOf(state, meta);
   const last = useRef(next);
   if (!sameFormat(last.current, next)) last.current = next;
-  return <ToolbarView format={last.current} {...props} />;
+  return <ToolbarView format={last.current} meta={meta} {...props} />;
 }
 
 const ToolbarView = memo(function ToolbarView({
@@ -166,7 +220,15 @@ const ToolbarView = memo(function ToolbarView({
   const run = session.run.bind(session);
   const viewing = mode === "viewing";
   const disabled = !format.ready || viewing;
-  const { align, list, family, lineHeight } = format;
+  const { align, list, family } = format;
+  const [customOpen, setCustomOpen] = useState(false);
+  const customRange = useRef<{ from: number; to: number } | null>(null);
+  const openCustom = () => {
+    const view = session.view;
+    customRange.current = view ? { from: view.state.selection.from, to: view.state.selection.to } : null;
+    setCustomOpen(true);
+  };
+  const toggleOn = (on: Tri) => on !== true;
   const sheet = stylesOf(meta?.settings ?? {});
   const documentFont = meta?.settings.fontFamily ?? FONT_FAMILIES[0].value;
   const styleName = format.styleId ? (findStyle(sheet, format.styleId)?.name ?? "Normal text") : null;
@@ -324,19 +386,26 @@ const ToolbarView = memo(function ToolbarView({
           <ChevronDown size={11} />
         </MenuButton>
         <MenuButton
-          className="tb-select tb-spacing"
+          className="icon-btn icon-btn-md tb-menu-icon"
           label="Line spacing"
           items={[
-            { label: "Document default", checked: !lineHeight, onSelect: () => run(setLineHeight(null)) },
+            { label: "Single", checked: format.line === "1", onSelect: () => run(setLineHeight("1")) },
+            { label: "1.15", checked: format.line === "1.15", onSelect: () => run(setLineHeight("1.15")) },
+            { label: "1.5", checked: format.line === "1.5", onSelect: () => run(setLineHeight("1.5")) },
+            { label: "Double", checked: format.line === "2", onSelect: () => run(setLineHeight("2")) },
             { kind: "separator" },
-            ...["1", "1.15", "1.5", "2"].map<MenuItem>((value) => ({
-              label: value === "1" ? "Single" : value === "2" ? "Double" : value,
-              checked: lineHeight === value,
-              onSelect: () => run(setLineHeight(value)),
-            })),
+            { label: "Add space before paragraph", checked: format.spaceBefore === true, onSelect: () => run(setBlockSpacing({ spaceBefore: format.spaceBefore === true ? 0 : 10 })) },
+            { label: "Add space after paragraph", checked: format.spaceAfter === true, onSelect: () => run(setBlockSpacing({ spaceAfter: format.spaceAfter === true ? 0 : 10 })) },
+            { kind: "separator" },
+            { label: "Custom spacing", onSelect: openCustom },
+            { kind: "separator" },
+            { label: "Keep with next", checked: format.keepNext === true, onSelect: () => run(setBlockSpacing({ keepNext: toggleOn(format.keepNext) })) },
+            { label: "Keep lines together", checked: format.keepLines === true, onSelect: () => run(setBlockSpacing({ keepLines: toggleOn(format.keepLines) })) },
+            { label: "Prevent single lines", checked: format.widows === true, onSelect: () => run(setBlockSpacing({ widowControl: format.widows === true ? false : true })) },
+            { label: "Add page break before", checked: format.pageBreak === true, onSelect: () => run(setBlockSpacing({ pageBreakBefore: toggleOn(format.pageBreak) })) },
           ]}
         >
-          <span className="tb-select-text">{lineHeight ?? meta?.settings.lineSpacing ?? 1.15}</span> <ChevronDown size={13} />
+          <LineSpacingIcon />
         </MenuButton>
       </Group>,
       <Group key="lists">
@@ -381,9 +450,19 @@ const ToolbarView = memo(function ToolbarView({
       <Popover open={moreOpen && fit < groups.length} onClose={closeMore} anchor={moreRef} placement="bottom-end" role="toolbar" className={`tb-overflow${viewing ? " is-viewing" : ""}`} onPointerDown={rememberSelection} onMouseDown={keepEditorSelection}>
         {groups.slice(fit)}
       </Popover>
+      <SpacingDialog open={customOpen} session={session} range={customRange.current} line={format.line === "mixed" ? String(meta?.settings.lineSpacing ?? 1.15) : format.line} before={format.beforePt} after={format.afterPt} onClose={() => setCustomOpen(false)} />
     </div>
   );
 });
+
+function LineSpacingIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <path d="M3.2 2.15v13.7M3.2 2.15 1.35 4.15M3.2 2.15l1.85 2M3.2 15.85 1.35 13.85M3.2 15.85l1.85-2" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M7.15 5h9.2M7.15 9h9.2M7.15 13h9.2" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 const TOOLBAR_GROUPS = 9;
 /** Room kept for the "More tools" button when some groups don't fit. */

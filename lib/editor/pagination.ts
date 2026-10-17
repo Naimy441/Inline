@@ -38,6 +38,25 @@ type Break = { pos: number; height: number; inline: boolean; rowGap?: RowGap };
  */
 const FIT_SLACK = 2;
 
+/**
+ * Which line of a paragraph a page should break before.
+ * `overflow` is the first line (0-based) that does not fit in the room left.
+ * Returns 0 to move the whole paragraph when it fits on one page and a split
+ * would leave a single line, or when its lines are kept together.
+ */
+export function preferredBreak(overflow: number, lineCount: number, fitsPage: boolean, widows: boolean, keepLines: boolean): number {
+  if (overflow <= 0) return 0;
+  if (keepLines && fitsPage) return 0;
+  if (!widows) return overflow;
+  const stay = overflow;
+  const go = lineCount - overflow;
+  if (fitsPage && (stay < 2 || go < 2)) return 0;
+  // A paragraph taller than a page still keeps its last two lines together.
+  if (go === 1 && overflow >= 1) return overflow - 1;
+  if (stay < 2) return 0;
+  return overflow;
+}
+
 /** What a layout pass found: the page count, where each page after the first starts, and how full the last page is (0-1). */
 export type PageLayout = {
   pages: number;
@@ -293,6 +312,61 @@ function escapeHtml(text: string) {
   return text.replace(/[&<>]/g, (char) => (char === "&" ? "&amp;" : char === "<" ? "&lt;" : "&gt;"));
 }
 
+type LineUnit = Extract<Unit, { kind: "line" }>;
+
+type BlockSpan = {
+  start: number;
+  count: number;
+  height: number;
+  nextGap: number;
+  nextHeight: number;
+  keepLines: boolean;
+  keepNext: boolean;
+  widows: boolean;
+  pageBreakBefore: boolean;
+};
+
+function flowFlags(node: PMNode) {
+  const attrs = node.attrs as Record<string, unknown>;
+  return {
+    keepLines: attrs.keepLines === true,
+    keepNext: attrs.keepNext === true,
+    widows: attrs.widowControl !== false,
+    pageBreakBefore: attrs.pageBreakBefore === true,
+  };
+}
+
+/** One entry per measured unit: a paragraph's lines share a span; everything else is null. */
+function blockSpans(units: Unit[]): Array<BlockSpan | null> {
+  const info: Array<BlockSpan | null> = units.map(() => null);
+  const spans: BlockSpan[] = [];
+  let index = 0;
+  while (index < units.length) {
+    const unit = units[index]!;
+    if (unit.kind !== "line") {
+      index += 1;
+      continue;
+    }
+    let end = index + 1;
+    while (end < units.length && units[end]!.kind === "line" && (units[end] as LineUnit).blockPos === unit.blockPos) end += 1;
+    const last = units[end - 1] as LineUnit;
+    const span: BlockSpan = { start: index, count: end - index, height: last.bottom - unit.top, nextGap: 0, nextHeight: 0, ...flowFlags(unit.block) };
+    spans.push(span);
+    for (let cursor = index; cursor < end; cursor += 1) info[cursor] = span;
+    index = end;
+  }
+  for (let spanIndex = 0; spanIndex < spans.length - 1; spanIndex += 1) {
+    const span = spans[spanIndex]!;
+    const next = spans[spanIndex + 1]!;
+    if (next.start !== span.start + span.count) continue;
+    const last = units[span.start + span.count - 1] as LineUnit;
+    const nextFirst = units[next.start] as LineUnit;
+    span.nextGap = Math.max(0, nextFirst.top - last.bottom);
+    span.nextHeight = next.height;
+  }
+  return info;
+}
+
 function measure(view: EditorView, geometry: PageGeometry, keepCache = true): { breaks: Break[]; pages: number; lastPageFill: number } | null {
   const root = view.dom as HTMLElement;
   if (!root.isConnected || !root.offsetWidth) return null;
@@ -368,27 +442,70 @@ function measure(view: EditorView, geometry: PageGeometry, keepCache = true): { 
   const contentHeight = geometry.pageHeight - geometry.marginTop - geometry.marginBottom;
   const pitch = geometry.pageHeight + geometry.gap;
   const breaks: Break[] = [];
+  const spans = blockSpans(units);
   let page = 0;
   let shift = 0;
   let forceNext = false;
   let firstOnPage = true;
   let lastBottom = 0;
+  // A widow can move the break to an earlier line. Remember the layout before each unit so that move can be replayed.
+  const saved: Array<{ page: number; shift: number; forceNext: boolean; firstOnPage: boolean; lastBottom: number; breaks: number }> = [];
+  const forced = new Set<number>();
+  let forceAt = -1;
 
-  for (const unit of units) {
+  for (let index = 0; index < units.length; index += 1) {
+    saved[index] = { page, shift, forceNext, firstOnPage, lastBottom, breaks: breaks.length };
+    const unit = units[index]!;
     const top = unit.top + shift;
     const bottom = unit.bottom + shift;
-    const pageStart = page * pitch;
-    const pageEnd = pageStart + contentHeight;
+    const pageEnd = page * pitch + contentHeight;
     // A page break fits wherever it falls: pushed onto the next page by the content before it, it would
     // break again there and leave that page blank.
     const pageBreak = unit.kind === "box" && unit.forceBreakAfter;
-    if (forceNext || (bottom > pageEnd + FIT_SLACK && !firstOnPage && !pageBreak)) {
+    const span = unit.kind === "line" ? spans[index] : null;
+    const lineIndex = span ? index - span.start : 0;
+    let must = index === forceAt;
+    if (index === forceAt) forceAt = -1;
+    let keepSpace = false;
+    if (!must && span && lineIndex === 0 && !firstOnPage && !pageBreak) {
+      const remaining = pageEnd + FIT_SLACK - top;
+      if (span.pageBreakBefore) {
+        must = true;
+        keepSpace = true;
+      } else if (span.keepLines && span.height > remaining && span.height <= contentHeight + FIT_SLACK) {
+        must = true;
+      } else if (span.keepNext && span.nextHeight > 0) {
+        const pair = span.height + span.nextGap + span.nextHeight;
+        if (pair > remaining && pair <= contentHeight + FIT_SLACK) must = true;
+      }
+    }
+    const overflows = bottom > pageEnd + FIT_SLACK && !firstOnPage && !pageBreak;
+    if (!must && overflows && span && lineIndex > 0 && !forced.has(index)) {
+      const fitsPage = span.height <= contentHeight + FIT_SLACK;
+      const want = preferredBreak(lineIndex, span.count, fitsPage, span.widows, span.keepLines);
+      const at = span.start + want;
+      const checkpoint = saved[at];
+      if (want < lineIndex && checkpoint && !checkpoint.firstOnPage && !forced.has(at)) {
+        page = checkpoint.page;
+        shift = checkpoint.shift;
+        forceNext = checkpoint.forceNext;
+        firstOnPage = checkpoint.firstOnPage;
+        lastBottom = checkpoint.lastBottom;
+        breaks.length = checkpoint.breaks;
+        forced.add(at);
+        forceAt = at;
+        index = at - 1;
+        continue;
+      }
+    }
+    // Breaking before a unit that is already at the top of a page would leave that page blank.
+    if ((forceNext || must || overflows) && !(firstOnPage && !forceNext)) {
       // Start this unit at the top of the next page that it reaches.
       let target = page + 1;
       while (!forceNext && top > target * pitch + contentHeight) target += 1;
       // After a page break, a block keeps the space it asks for above it (as Word does after a manual break);
       // after a page simply filling up, it starts at the top.
-      const above = forceNext && unit.kind === "line" && Number(unit.block.attrs.spaceBefore) > 0 ? (Number(unit.block.attrs.spaceBefore) * 96) / 72 : 0;
+      const above = (forceNext || keepSpace) && unit.kind === "line" && Number(unit.block.attrs.spaceBefore) > 0 ? (Number(unit.block.attrs.spaceBefore) * 96) / 72 : 0;
       // A header row is drawn again at the top of the next page, and the row that didn't fit starts under it.
       const repeat = unit.kind === "row" && unit.rowIndex > 0 && unit.headerRows > 0 && unit.rowIndex >= unit.headerRows && unit.headerHeight > 0 && unit.headerHeight < contentHeight * 0.6;
       const extra = repeat ? unit.headerHeight : 0;
