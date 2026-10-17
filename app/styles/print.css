@@ -89,6 +89,13 @@
   .doc-content .page-break::before {
     display: none;
   }
+
+  /* Spelling squiggles are editor chrome. A real underline on the text still prints. */
+  .doc-content .spelling-error,
+  .doc-content::spelling-error,
+  .doc-content ::spelling-error {
+    text-decoration: none;
+  }
 }
 
 /* The same clean view while a PDF is drawn from the pages (DocumentSession.exportPdf). */
@@ -110,4 +117,10 @@
   box-shadow: none !important;
   border: 0 !important;
   color: inherit !important;
+}
+
+.page-stack.is-clean .doc-content .spelling-error,
+.page-stack.is-clean .doc-content::spelling-error,
+.page-stack.is-clean .doc-content ::spelling-error {
+  text-decoration: none;
 }

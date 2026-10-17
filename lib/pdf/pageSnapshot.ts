@@ -77,6 +77,8 @@ export type SnapshotLayout = {
   skip: string;
   /** Tints that are editor state (review, comments, find), not document formatting. */
   noBackground: string;
+  /** Text decoration that is editor chrome (spelling), not a format on the text. */
+  noDecoration: string;
 };
 
 export const EDITOR_LAYOUT: SnapshotLayout = {
@@ -104,6 +106,8 @@ export const EDITOR_LAYOUT: SnapshotLayout = {
     "template",
   ].join(","),
   noBackground: [".sheet", ".page-content", ".doc-content", ".review-insert", ".review-format", ".comment-hl", ".find-match", ".agent-range", ".np-space", ".math-render", ".math-block", ".math-src"].join(","),
+  // The dotted red spelling line (document.css .spelling-error). The underline format is a separate <u>.
+  noDecoration: ".spelling-error",
 };
 
 type Placed = { page: number; x: number; y: number; width: number; height: number };
@@ -341,8 +345,12 @@ export function snapshotPages(
     paintBox(el, style);
 
     const lines = style.textDecorationLine || "";
+    // Spelling marks use text-decoration, so a computed underline here is the
+    // squiggle, not a line the user applied. An ancestor's underline (a <u>,
+    // a link) still carries through, and a descendant's does too.
+    const spelling = el.matches(layout.noDecoration);
     const next: Inherited = {
-      underline: decoration.underline || lines.includes("underline"),
+      underline: decoration.underline || (!spelling && lines.includes("underline")),
       strike: decoration.strike || lines.includes("line-through"),
     };
 
