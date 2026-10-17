@@ -528,7 +528,7 @@ function pictureDom(crop: unknown, rotate: unknown) {
 }
 
 const nodes: Record<string, NodeSpec> = {
-  doc: { content: "block+" },
+  doc: { content: "block+", attrs: { canvas: { default: null } } },
 
   paragraph: {
     content: "inline*",
@@ -1234,6 +1234,52 @@ const marks: Record<string, MarkSpec> = {
     spanning: false,
     toDOM: (): DOMOutputSpec => ["span", { "data-agent": "", spellcheck: "false" }, 0],
   },
+};
+
+// Canvas containers keep the same editable descendants as ordinary documents.
+for (const [kind, content] of Object.entries({ section: "block+", stack: "block+", richtext: "block+", columns: "canvas_column{2,3}", column: "block+", figure: "image paragraph?" })) {
+  nodes[`canvas_${kind}`] = {
+    content,
+    ...(kind === "column" ? {} : { group: "block" }),
+    defining: true,
+    isolating: kind === "column",
+    attrs: { id: { default: null }, canvasClass: { default: null }, pagination: { default: kind === "columns" || kind === "figure" ? "keep-together" : "flow" }, ratio: { default: null } },
+    parseDOM: [{ tag: `[data-canvas="${kind}"]`, getAttrs: (dom) => { const el = dom as HTMLElement; return { id: el.dataset.id || null, canvasClass: el.dataset.canvasClass || null, pagination: el.dataset.pagination || "flow", ratio: el.dataset.ratio || null }; } }],
+    toDOM: (node): DOMOutputSpec => ["div", {
+      "data-canvas": kind,
+      "data-pagination": node.attrs.pagination,
+      ...(node.attrs.id ? { "data-id": node.attrs.id } : {}),
+      ...(kind === "columns" ? { style: `--canvas-columns:${(node.attrs.ratio || "1:1").split(":").map((n: string) => `${Number(n) || 1}fr`).join(" ")}` } : {}),
+    }, 0],
+  };
+}
+// Preserve authored classes through editing and clipboard operations. These are
+// inert without a validated, scoped Canvas stylesheet.
+for (const [name, spec] of Object.entries(nodes)) {
+  if (name === "doc" || name === "text" || name === "hard_break") continue;
+  spec.attrs = { ...spec.attrs, canvasClass: { default: null } };
+  const toDOM = spec.toDOM;
+  if (toDOM) spec.toDOM = (node) => {
+    const output = toDOM(node);
+    if (!Array.isArray(output)) return output;
+    const [tag, ...rest] = output;
+    const hasAttrs = rest[0] && typeof rest[0] === "object" && !Array.isArray(rest[0]);
+    const attrs = hasAttrs ? rest[0] as Record<string, unknown> : {};
+    return [tag, { ...attrs, ...(node.attrs.canvasClass ? { class: [attrs.class, node.attrs.canvasClass].filter(Boolean).join(" "), "data-canvas-class": node.attrs.canvasClass } : {}) }, ...(hasAttrs ? rest.slice(1) : rest)] as DOMOutputSpec;
+  };
+  spec.parseDOM = spec.parseDOM?.map((rule) => {
+    if (!("tag" in rule)) return rule;
+    const getAttrs = rule.getAttrs;
+    return { ...rule, getAttrs: (dom: HTMLElement) => {
+      const base = getAttrs ? getAttrs(dom) : rule.attrs || {};
+      return base === false ? false : { ...base, canvasClass: dom.getAttribute("data-canvas-class") || null };
+    } };
+  });
+}
+marks.canvas_span = {
+  attrs: { class: { default: "" } },
+  parseDOM: [{ tag: "span[data-canvas-class]", getAttrs: (dom) => ({ class: (dom as HTMLElement).dataset.canvasClass || "" }) }],
+  toDOM: (mark): DOMOutputSpec => ["span", { class: mark.attrs.class, "data-canvas-class": mark.attrs.class }, 0],
 };
 
 export const schema = new Schema({ nodes, marks });

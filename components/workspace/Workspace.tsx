@@ -33,6 +33,7 @@ import { acquireChat, releaseChat, rememberChat, rememberedChat } from "@/lib/cl
 import { addTab, rememberedRoot, takeScroll, useTabs } from "@/lib/client/tabs";
 import { documentMenus, MenuBar, type MenuActions } from "@/components/workspace/MenuBar";
 import { OutlinePanel } from "@/components/workspace/OutlinePanel";
+import { CanvasTools } from "@/components/workspace/CanvasTools";
 import { PageCanvas } from "@/components/workspace/PageCanvas";
 import { PageSetupDialog } from "@/components/workspace/PageSetupDialog";
 import { ReviewBar } from "@/components/workspace/ReviewBar";
@@ -1116,6 +1117,7 @@ export function Workspace({ documentId }: { documentId: string }) {
             void insertImageFile(file);
           }}
         >
+          <CanvasTools session={session} />
           {find && <WithEditorState session={session}>{(state) => <FindBar session={session} state={state} replace={find.replace} onClose={() => setFind(null)} />}</WithEditorState>}
           <div className="canvas-notices">
             <OfflineNotice offline={ui.status === "ready" && (ui.connection === "reconnecting" || ui.sync === "error")} />

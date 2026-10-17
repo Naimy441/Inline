@@ -1,3 +1,5 @@
+import { compileCanvas } from "@/lib/canvas/compiler";
+import { CANVAS_EXAMPLES } from "@/lib/canvas/examples";
 import { z } from "zod";
 import { HttpError, json, readJson, route } from "@/lib/server/http";
 import { folderExists } from "@/lib/server/folders";
@@ -10,6 +12,7 @@ export const GET = route(async (request) => {
 
 const CreateBody = z.object({
   title: z.string().max(300).optional(),
+  canvas: z.enum(["editorial", "research", "guide"]).optional(),
   markdown: z.string().max(5_000_000).optional(),
   doc: z.unknown().optional(),
   settings: z.unknown().optional(),
@@ -26,6 +29,7 @@ export const DELETE = route(async (request) => {
 export const POST = route(async (request) => {
   const body = await readJson(request, CreateBody);
   if (body.folderId && !(await folderExists(body.folderId))) throw new HttpError(404, "That folder was not found.");
-  const doc = await documentHub().create(body);
+  const example = body.canvas ? CANVAS_EXAMPLES[body.canvas] : null;
+  const doc = await documentHub().create(example ? { ...body, title: body.title || example.title, doc: compileCanvas(example.html, example.css).toJSON() } : body);
   return json({ document: doc.snapshot() }, { status: 201 });
 });

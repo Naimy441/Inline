@@ -516,6 +516,11 @@ export class InlineTableView extends TableView {
 }
 
 function syncTableDom(table: HTMLTableElement, node: PMNode) {
+  for (const name of (table.dataset.canvasClass || "").split(/\s+/).filter(Boolean)) table.classList.remove(name);
+  if (node.attrs.canvasClass) {
+    table.dataset.canvasClass = node.attrs.canvasClass;
+    for (const name of node.attrs.canvasClass.split(/\s+/)) table.classList.add(name);
+  } else table.removeAttribute("data-canvas-class");
   if (node.attrs.id) table.setAttribute("data-id", String(node.attrs.id));
   else table.removeAttribute("data-id");
   if (node.attrs.borders) table.setAttribute("data-borders", JSON.stringify(node.attrs.borders));

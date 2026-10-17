@@ -1,12 +1,13 @@
+import { CANVAS_GUIDE } from "@/lib/canvas/examples";
 /**
  * Instructions for Claude when it works in Inline. The document format guide
  * is shared by the in-app agent (system prompt) and external MCP clients
  * (server instructions), so both see the same contract.
  */
 
-export const DOCUMENT_FORMAT_GUIDE = `## How Inline documents work
+export const DOCUMENT_FORMAT_GUIDE = `${CANVAS_GUIDE}\n\n## How Inline documents work
 
-Every document is presented to you as a Markdown file. read_document returns it with line numbers in the same format as \`cat -n\` (the number and a tab are not part of the text). Edit it the way you would edit a file:
+Ordinary documents are presented to you as a Markdown file. Canvases use read_canvas and patch_canvas instead: never flatten their design through write_document. read_document returns it with line numbers in the same format as \`cat -n\` (the number and a tab are not part of the text). Edit it the way you would edit a file:
 
 - edit_document replaces an exact string with another. old_string must match the document text exactly and be unique, so include enough surrounding words. Never include line-number prefixes in old_string or new_string.
 - multi_edit_document applies several replacements atomically (all or nothing), in order.

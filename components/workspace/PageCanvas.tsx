@@ -102,7 +102,7 @@ export const PageCanvas = memo(function PageCanvas({
       }
     : undefined;
   const lineModel = `${settings?.lineModel === "font" ? " font-lines" : ""}${meta?.pdfImport ? " from-pdf" : ""}`;
-  const sheetCss = settings ? styleSheetCss(settings) : "";
+  const sheetCss = settings && meta?.kind !== "canvas" ? styleSheetCss(settings) : "";
   // Zoom scales the laid-out pages rather than laying them out again (CSS zoom would): text
   // shaped at another size wraps differently, so the page count would change with the window.
   const scale = printing || flow ? 1 : zoom;
@@ -117,7 +117,7 @@ export const PageCanvas = memo(function PageCanvas({
     <div className={`page-stack-wrap${flow ? " is-flow" : ""}`}>
       <div className="page-stack-frame" style={flow ? undefined : { width: geometry.pageWidth * scale, height: totalHeight * scale }}>
         <div
-          className="page-stack"
+          className={`page-stack${meta?.kind === "canvas" ? " is-canvas-document" : ""}`}
           style={{
             width: flow ? undefined : geometry.pageWidth,
             height: flow ? undefined : totalHeight,

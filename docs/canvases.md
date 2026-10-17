@@ -1,0 +1,37 @@
+# Canvases
+
+Canvases are paginated, directly editable HTML/CSS compositions. Create one from the Canvas card on the home screen, then ask Claude to design it. Text editing uses the existing ProseMirror editor, collaboration, comments, locks, and history. There is no Canvas flow mode.
+
+## Authoring contract
+
+`get_canvas_guide` returns the SDK and three complete examples. `read_canvas` returns the current live composition, stylesheet, epoch, and revision, including manual edits. Claude authors declarative markup rather than executable React. The importer translates it into the shared document schema. The live document is authoritative; the authoring markup is derived on read.
+
+Components: Canvas, Section, Stack, RichText, Text, Columns, Column, Figure, Table, and PageBreak. Basic semantic paragraphs, headings, lists, emphasis, links, table rows/cells, and managed images are supported. `Columns` contains two or three `Column` children and an optional ratio such as `2:1`. `Figure` contains a managed image and optional paragraph caption.
+
+CSS supports component/tag/class selectors and descendant/child relationships, typography, literal colors, spacing, borders, widths, and gaps. Layout comes from SDK primitives. At-rules, network resources, scripts, inline styles, arbitrary positioning, clipping, heights, nested CSS, and editor-reserved classes are rejected. CSS is parsed with PostCSS and scoped to one editor root. HTML is parsed with parse5 and imported into checked schema nodes.
+
+Flowing sections are transparent, without padding or borders. Decorate their text blocks or set `pagination="keep-together"`. Columns and figures stay together. Painted columns inside an indivisible comparison can have backgrounds and padding. A component taller than a page must be split; independent newspaper columns, arbitrary cross-page grids, and page-master templates are outside SDK v1.
+
+## Revisions and changes
+
+Canvas design lives in the document root's versioned `canvas` attribute, alongside its content tree. Existing documents default that attribute to null. Canvas metadata carries `kind: "canvas"` for library/workspace identification. Content and CSS therefore save, synchronize, checkpoint, and restore together.
+
+`patch_canvas` accepts the epoch and revision from `read_canvas`. Operations are `styles`, `replace`, `replace_component`, `insert_after`, `remove`, and `move_after`. Component operations preserve untouched nodes and formatting. Stale patches and changes to locked content are rejected. A component replacement supplies one replacement block wrapped in Canvas; its root inherits the target's stable ID.
+
+The Edit design dialog changes CSS through local editor transactions, so normal undo works. Claude changes use the existing per-turn checkpoints/rewind workflow. Save a named version through the existing history controls when appropriate.
+
+## Rendering and export
+
+Canvas rendering keeps one editable DOM and uses the existing measured pagination engine. Flowing content continues across sheets; indivisible components are measured as boxes. Inline's ordinary named paragraph stylesheet is omitted for Canvas pages so it does not override the authored design. Explicit direct text formatting remains available.
+
+`inspect_canvas` returns real browser measurements, component/page mappings, layout diagnostics, and revision/profile metadata. `screenshot_page` captures the rendered page rectangle directly in Chromium for Canvases. `/api/documents/:id/canvas/render?page=1` exposes PNG capture; optional epoch/version parameters reject stale capture requests.
+
+The PDF action uses `/api/documents/:id/canvas/pdf`, which prints the same paginated HTML using Chromium, retaining selectable text and supported CSS. Required missing images, stalled font loading, stale snapshots, and known layout issues produce errors. Browser Print / Save PDF remains available. Match paper size and disable browser-added headers/margins when printing manually.
+
+Server capture/export needs Playwright and a Chromium installation, using the existing `CHROMIUM_PATH` setting when provided. The render route mounts an offline document session, preventing an inspection window from joining collaboration. Each render verifies its snapshot's epoch/revision and reports a layout fingerprint. Canvas paper uses the light publication palette independently of app theme.
+
+## Verification
+
+`lib/canvas/canvas.test.ts` covers import/export round trips, supported contracts, CSS isolation, stale patches, locks, focused changes, undo, authority validation, persistence, and restoring content with design. `e2e/canvas.spec.ts` covers actual editing, CSS precedence, design undo, reopening, stale changes, spanning paragraphs, direct browser capture, and HTML-based PDF export.
+
+Use a supported Node runtime for the existing dependency set (Node 24 for the PDF/sandbox suite). The browser suite uses the repository's normal Playwright configuration; `CHROMIUM_PATH` can point at an installed Chrome.

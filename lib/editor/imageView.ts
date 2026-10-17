@@ -96,6 +96,12 @@ export class ImageView implements NodeView {
     const crop = pictureCrop(attrs.crop);
     const rotate = pictureRotate(attrs.rotate);
     // Toggle only our own classes: decorations (review highlights, selection) add theirs to the same element.
+    const previousClasses = (this.dom.dataset.canvasClass || "").split(/\s+/).filter(Boolean);
+    for (const name of previousClasses) this.dom.classList.remove(name);
+    if (attrs.canvasClass) {
+      for (const name of attrs.canvasClass.split(/\s+/)) this.dom.classList.add(name);
+      this.dom.dataset.canvasClass = attrs.canvasClass;
+    } else delete this.dom.dataset.canvasClass;
     this.dom.classList.add("doc-image");
     for (const align of ["left", "center", "right", "justify"]) this.dom.classList.toggle(`align-${align}`, attrs.align === align);
     for (const kind of ["square", "behind", "front"] as const) this.dom.classList.toggle(`wrap-${kind}`, wrap === kind);

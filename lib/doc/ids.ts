@@ -32,7 +32,7 @@ export function blockIdFixes(doc: PMNode): Transform | null {
       seen.add(id);
     }
     // Ids are only needed on blocks the agent and UI address: top level, plus list/quote children.
-    return node.type.name === "blockquote" || node.type.name === "doc";
+    return Boolean(doc.attrs.canvas) || node.type.name === "blockquote" || node.type.name === "doc" || node.type.name.startsWith("canvas_");
   });
   if (!fixes.length) return null;
   const tr = new Transform(doc);

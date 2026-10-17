@@ -242,7 +242,7 @@ function sameBreaks(a: Break[], b: Break[]) {
 }
 
 const TEXTBLOCKS = new Set(["paragraph", "heading", "title", "subtitle", "code_block", "toc_title"]);
-const CONTAINERS = new Set(["bullet_list", "ordered_list", "list_item", "blockquote", "toc"]);
+const CONTAINERS = new Set(["bullet_list", "ordered_list", "list_item", "blockquote", "toc", "canvas_section", "canvas_stack", "canvas_richtext", "canvas_column"]);
 
 /**
  * A textblock's lines relative to its own top, kept per node. Reading line
@@ -393,6 +393,11 @@ function measure(view: EditorView, geometry: PageGeometry, keepCache = true): { 
   const collect = (node: PMNode, pos: number) => {
     const dom = view.nodeDOM(pos) as HTMLElement | null;
     if (!dom || !(dom instanceof HTMLElement)) return;
+    if (node.type.name.startsWith("canvas_") && node.attrs.pagination === "keep-together") {
+      const rect = dom.getBoundingClientRect();
+      units.push({ kind: "box", top: natural(toLocal(rect.top)), bottom: natural(toLocal(rect.bottom)), pos });
+      return;
+    }
     if (TEXTBLOCKS.has(node.type.name)) {
       const box = dom.getBoundingClientRect();
       const blockTop = natural(toLocal(box.top));

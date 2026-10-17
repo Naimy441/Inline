@@ -1,5 +1,7 @@
 "use client";
 
+import { inspectCanvasDom } from "@/lib/canvas/editor";
+
 import { getVersion, receiveTransaction, sendableSteps } from "prosemirror-collab";
 import { Node as PMNode } from "prosemirror-model";
 import { EditorState, TextSelection, type Command, type Transaction } from "prosemirror-state";
@@ -384,24 +386,48 @@ export class DocumentSession {
    * restore the normal layout.
    */
   async print() {
+    if (!this.view || this.ui.get().printing) return;
+    const restore = await this.prepareCanvasPrint();
+    try { window.print(); } finally { restore(); }
+  }
+
+  /** Settle the same HTML layout used for editing, capture, and native print. */
+  async prepareCanvasRender() {
     const view = this.view;
-    if (!view || this.ui.get().printing) return;
+    if (!view) throw new Error("The document isn't open yet.");
+    await Promise.race([document.fonts.ready, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Fonts did not finish loading. Try again when the fonts are available.")), 10000))]);
+    await imagesLoaded(view.dom);
+    const failed = [...view.dom.querySelectorAll("img")].find((img) => !img.complete || !img.naturalWidth);
+    if (failed) throw new Error(`An image could not be loaded: ${failed.getAttribute("alt") || failed.getAttribute("src")}.`);
+    relayout(view);
+    await settleLayout(() => pageCount(view.state));
+    const geometry = this.geometry();
+    const stack = view.dom.closest<HTMLElement>(".page-stack")!;
+    const sheets = [...stack.querySelectorAll<HTMLElement>(".sheet")];
+    const blocks: Array<{ id: string; page: number; toPage: number }> = [];
+    for (const el of view.dom.querySelectorAll<HTMLElement>("[data-id]")) {
+      const box = el.getBoundingClientRect();
+      const pageAt = (y: number) => Math.max(0, sheets.findIndex((sheet) => { const r = sheet.getBoundingClientRect(); return y >= r.top - 1 && y <= r.bottom + 1; }));
+      blocks.push({ id: el.dataset.id!, page: pageAt(box.top + Math.min(1, box.height)) + 1, toPage: pageAt(box.bottom - 1) + 1 });
+    }
+    return { epoch: this.epoch, version: getVersion(view.state), pages: pageCount(view.state), pageSetup: this.meta?.settings.pageSetup, blocks, issues: inspectCanvasDom(view.dom as HTMLElement, geometry.pageHeight - geometry.marginTop - geometry.marginBottom) };
+  }
+
+  async prepareCanvasPrint() {
+    const view = this.view;
+    if (!view) throw new Error("The document isn't open yet.");
     const geometry = geometryFor(this.meta);
     const style = document.createElement("style");
     style.textContent = `@page { size: ${geometry.pageWidth / 96}in ${geometry.pageHeight / 96}in; margin: 0; }`;
     document.head.append(style);
     this.ui.set((ui) => ({ ...ui, printing: true }));
-    // Reflowed (phone) layouts switch to pages first; let React draw them.
-    if (this.ui.get().flow) await nextFrames(2);
-    relayout(view);
-    await settleLayout(() => pageCount(view.state));
+    const restore = () => { style.remove(); this.ui.set((ui) => ({ ...ui, printing: false })); if (this.view) relayout(this.view); };
     try {
-      window.print();
-    } finally {
-      style.remove();
-      this.ui.set((ui) => ({ ...ui, printing: false }));
-      if (this.view) relayout(this.view);
-    }
+      await nextFrames(2);
+      if (view.state.doc.attrs.canvas) await this.prepareCanvasRender();
+      else { relayout(view); await settleLayout(() => pageCount(view.state)); }
+      return restore;
+    } catch (error) { restore(); throw error; }
   }
 
   /**
@@ -410,6 +436,15 @@ export class DocumentSession {
    * tabs to this one's pages.
    */
   async exportPdf(addTabs?: (own: PdfDocumentModel) => Promise<PdfDocumentModel>) {
+    if (this.view?.state.doc.attrs.canvas) {
+      await this.whenSaved();
+      const response = await fetch(`/api/documents/${this.id}/canvas/pdf`);
+      if (!response.ok) { const body = await response.json(); throw new Error(body.error || "Canvas PDF export failed."); }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a"); link.href = url; link.download = `${this.meta?.title || "Canvas"}.pdf`; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      return;
+    }
     const own = await this.pdfModel();
     const model = addTabs ? await addTabs(own) : own;
     const { buildPdf } = await import("@/lib/pdf/pdfWriter");
@@ -494,6 +529,12 @@ export class DocumentSession {
    * many pages that layout produced; `png` is null when `index` is past the end.
    */
   async picturePage(index: number, scale = 1.5, appearance: PageAppearance = "light"): Promise<{ pages: number; png: Blob | null }> {
+    if (this.view?.state.doc.attrs.canvas) {
+      await this.whenSaved();
+      const response = await fetch(`/api/documents/${this.id}/canvas/render?page=${index + 1}&epoch=${this.epoch}&version=${getVersion(this.view.state)}`);
+      if (!response.ok) { const body = await response.json(); throw new Error(body.error || "Canvas page capture failed."); }
+      return { pages: Number(response.headers.get("X-Inline-Pages")), png: await response.blob() };
+    }
     const model = await this.pdfModel();
     const pages = model.pages.length;
     if (index < 0 || index >= pages) return { pages, png: null };

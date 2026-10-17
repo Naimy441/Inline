@@ -40,11 +40,13 @@ export function HeadlessPages({ documentId, appearance }: { documentId: string; 
 
   useEffect(() => {
     const root = document.documentElement;
-    const pictureWindow = window as unknown as { __inlinePagePicture?: Picture };
+    const pictureWindow = window as unknown as { __inlinePagePicture?: Picture; __inlineCanvasInspect?: () => Promise<unknown>; __inlineCanvasPrint?: () => Promise<unknown> };
     let cancel = false;
     const disarm = () => {
       cancel = true;
       delete pictureWindow.__inlinePagePicture;
+      delete pictureWindow.__inlineCanvasInspect;
+      delete pictureWindow.__inlineCanvasPrint;
       delete root.dataset.renderStatus;
       delete root.dataset.renderError;
     };
@@ -75,6 +77,8 @@ export function HeadlessPages({ documentId, appearance }: { documentId: string; 
           return { pages: 0, png: null, error: error instanceof Error ? error.message : "Couldn't picture the page." };
         }
       };
+      pictureWindow.__inlineCanvasInspect = () => session.prepareCanvasRender();
+      pictureWindow.__inlineCanvasPrint = () => session.prepareCanvasPrint().then(() => true);
       root.dataset.renderStatus = "ready";
     };
     // Web fonts can stall fonts.ready when the network is blocked. Layout uses

@@ -1,3 +1,6 @@
+import { canvasTools } from "@/lib/agent/canvasTools";
+import { isCanvas } from "@/lib/canvas/compiler";
+import { renderCanvas } from "@/lib/server/canvasRender";
 import type { Node as PMNode } from "prosemirror-model";
 import { Transform } from "prosemirror-transform";
 import { z } from "zod";
@@ -391,6 +394,7 @@ async function changeDraft(doc: LiveDocument, build: (current: PMNode) => Transf
 // ---------------------------------------------------------------------------
 
 export const TOOLS = [
+  ...canvasTools,
   defineTool({
     name: "read_document",
     title: "Read document",
@@ -705,6 +709,10 @@ export const TOOLS = [
     write: false,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
+      if (isCanvas(doc.doc)) {
+        const rendered = await renderCanvas(doc, { page: args.page });
+        return { text: JSON.stringify(rendered.report, null, 2), images: rendered.png ? [{ data: Buffer.from(rendered.png).toString("base64"), mimeType: "image/png" }] : [] };
+      }
       const count = pageCountNow(doc);
       const visible = count.showing ?? count.pages;
       if (count.measured && args.page > visible) {

@@ -101,6 +101,8 @@ export type DocumentSettings = {
 export const DEFAULT_MATH_SIZE = 1.1;
 
 export type DocumentMeta = {
+  /** Designed, paginated HTML/CSS composition; ordinary documents omit this. */
+  kind?: "canvas";
   id: string;
   title: string;
   createdAt: number;

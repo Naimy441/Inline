@@ -1,3 +1,4 @@
+import { canvasDesignPlugin } from "@/lib/canvas/editor";
 import { collab } from "prosemirror-collab";
 import { baseKeymap, chainCommands, exitCode, joinDown, joinUp, selectParentNode } from "prosemirror-commands";
 import { dropCursor } from "prosemirror-dropcursor";
@@ -444,6 +445,7 @@ export function editorPlugins(options: EditorPluginOptions) {
     // Lines kept from a PDF are spaced once tabs are sized, and before pages are broken.
     lineFitPlugin(),
     tocSyncPlugin(),
+    canvasDesignPlugin(),
     paginationPlugin(options.geometry, options.onPages),
   ];
 }

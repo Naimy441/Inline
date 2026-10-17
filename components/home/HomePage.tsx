@@ -227,6 +227,14 @@ export function HomePage() {
     router.push(`/d/${id}`);
   };
 
+  const createCanvas = async () => {
+    setCreating("canvas");
+    try {
+      const { document } = await post<{ document: Snapshot }>("/api/documents", { canvas: "editorial", title: "Untitled canvas", folderId: targetFolder });
+      router.push(`/d/${document.meta.id}?ask=${encodeURIComponent("Help me design this canvas. Ask what I would like to create, then compose it with the Canvas SDK.")}`);
+    } catch (error) { toast(error instanceof Error ? error.message : "Couldn't create the canvas.", { tone: "error" }); setCreating(null); }
+  };
+
   const create = async (template: DocumentTemplate) => {
     setCreating(template.id);
     try {
@@ -772,6 +780,11 @@ export function HomePage() {
             />
           </div>
           <div className="template-row">
+            <button type="button" className="template-card" onClick={() => void createCanvas()} disabled={creating !== null}>
+              <span className="template-thumb is-canvas" aria-hidden><span>CANVAS</span><strong>Designed<br />to be edited.</strong></span>
+              <span className="template-title">{creating === "canvas" ? "Creating…" : "Canvas"}</span>
+              <span className="template-desc">Design editable pages with Claude</span>
+            </button>
             {templates.map((template) => (
               <button key={template.id} type="button" className="template-card" onClick={() => void create(template)} disabled={creating !== null}>
                 <TemplateThumb template={template} />

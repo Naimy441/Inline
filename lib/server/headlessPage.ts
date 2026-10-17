@@ -31,7 +31,7 @@ export function setClosedDocumentRenderer(documentId: string, next: ClosedRender
 
 let browserPromise: Promise<Browser> | null = null;
 
-async function layoutBrowser() {
+export async function layoutBrowser() {
   if (!browserPromise) {
     browserPromise = (async () => {
       let chromium: typeof import("playwright").chromium;

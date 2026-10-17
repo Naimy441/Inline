@@ -1,3 +1,4 @@
+import { validateCanvasDocument } from "@/lib/canvas/model";
 import { Node as PMNode } from "prosemirror-model";
 import { Step, Transform } from "prosemirror-transform";
 import { docPlainText, docWordCount, followedDocumentTitle, rangeMarkTexts, wordCount } from "@/lib/doc/editing";
@@ -160,6 +161,8 @@ export class LiveDocument {
   constructor(file: StoredDocumentFile) {
     this.meta = file.meta;
     this.doc = loadDoc(file.doc);
+    validateCanvasDocument(this.doc);
+    if (this.doc.attrs.canvas) this.meta = { ...this.meta, kind: "canvas" };
     this.comments = Array.isArray(file.comments) ? file.comments : [];
     this.hunks = (file.hunks ?? []).flatMap((json) => {
       try {
@@ -272,6 +275,7 @@ export class LiveDocument {
 
   private commit(tr: Transform, origin: ChangeOrigin, hunks: Hunk[]) {
     if (!tr.steps.length) return;
+    validateCanvasDocument(tr.doc);
     const clientID = origin.kind === "client" ? origin.clientID : origin.kind === "agent" ? `agent:${origin.author}` : `system:${origin.label}`;
     // Clients map pending changes through the steps themselves, so the list is only sent when that wouldn't give the same result.
     const hunksChanged = !onlyMapped(tr.before, this.hunks, tr, hunks);
@@ -566,6 +570,7 @@ export class LiveDocument {
     const restored = loadDoc(version.doc);
     const tr = new Transform(this.doc);
     tr.replaceWith(0, this.doc.content.size, restored.content);
+    if (this.doc.attrs.canvas || restored.attrs.canvas) tr.setDocAttribute("canvas", restored.attrs.canvas);
     const hunks = (version.hunks ?? []).flatMap((json) => {
       try {
         const hunk = hunkFromJSON(json, schema);
@@ -607,6 +612,7 @@ export class LiveDocument {
     const restored = loadDoc(draft.doc);
     const tr = new Transform(this.doc);
     tr.replaceWith(0, this.doc.content.size, restored.content);
+    if (this.doc.attrs.canvas || restored.attrs.canvas) tr.setDocAttribute("canvas", restored.attrs.canvas);
     if (!this.applyTransform(tr, { kind: "system", label: "keep-draft" }, { hunks: [] })) {
       if (this.hunks.length) {
         this.hunks = [];
@@ -796,6 +802,7 @@ class DocumentHub {
       settings: normalizeSettings(input.settings ?? DEFAULT_SETTINGS),
       wordCount: wordCount(text),
       preview: text.replace(/\s+/g, " ").trim().slice(0, 240),
+      ...(doc.attrs.canvas ? { kind: "canvas" as const } : {}),
       ...(input.parentId ? { parentId: input.parentId } : {}),
       ...(input.tabTitle ? { tabTitle: cleanTabTitle(input.tabTitle) } : {}),
       ...(input.folderId && !input.parentId ? { folderId: input.folderId } : {}),
