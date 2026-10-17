@@ -113,12 +113,16 @@
 .title-sizer {
   visibility: hidden;
   pointer-events: none;
-  user-select: none;
   white-space: pre;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
   line-height: 24px;
+}
+
+/* The mirror text is a pseudo-element, so a selection in the document cannot start in it. */
+.title-sizer::before {
+  content: attr(data-value);
 }
 
 /* Inputs draw a hair wider than a matching span, which would ellipsize the last letters. */

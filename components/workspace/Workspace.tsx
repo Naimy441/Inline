@@ -1318,9 +1318,7 @@ function TitleInput({ meta, session, onRename }: { meta: DocumentMeta | null; se
   return (
     <span className="title-fit">
       {/* Sizes the field to the text. The input paints over it and can shrink when the bar is tight. */}
-      <span className="title-sizer" aria-hidden="true">
-        {value || "\u00a0"}
-      </span>
+      <span className="title-sizer" data-value={value || "\u00a0"} aria-hidden="true" />
       <input
         className="title-input"
         aria-label="Document title"
