@@ -39,7 +39,7 @@ import { ReviewBar } from "@/components/workspace/ReviewBar";
 import { EDITOR_MODES, modeMenuItems } from "@/components/workspace/modes";
 import { COMPACT_QUERY, isCompact, useMediaQuery, useVisualViewportVars } from "@/lib/client/viewport";
 import { DEFAULT_PREFERENCES, loadPreferences, preferences, setPreference } from "@/lib/client/preferences";
-import { anchorAt, clampZoom, horizontalPan, pinchBox, pinchTransform, scrollForAnchor, stepPinch, touchDistance, viewCenter, zoomFromPinch, zoomFromWheel, type PinchFrame, type ZoomAnchor } from "@/lib/client/zoom";
+import { anchorAt, clampAboveLock, clampZoom, commentFitReserve, fitScale, pinchBox, pinchTransform, placeOnAxis, scrollForAnchor, stepPinch, touchDistance, touchMidpoint, zoomFromPinch, zoomFromWheel, type PinchFrame, type ZoomAnchor } from "@/lib/client/zoom";
 import { PictureBar } from "@/components/workspace/PictureBar";
 import { SelectionBubble } from "@/components/workspace/SelectionBubble";
 import { ShortcutsDialog } from "@/components/workspace/ShortcutsDialog";
@@ -89,6 +89,8 @@ export function Workspace({ documentId }: { documentId: string }) {
   const [panel, setPanelState] = useState<Panel>("agent");
   const [panelWidth, setPanelWidth] = useState(420);
   const [zoom, setZoomState] = useState<Zoom>("fit");
+  /** Scale above the toolbar lock while a pinch or ctrl+scroll is zoomed in. Null on the lock. */
+  const [lift, setLift] = useState<number | null>(null);
   const [canvasWidth, setCanvasWidth] = useState(0);
   const canvasRef = useRef<HTMLElement>(null);
   /** Screen point to hold still across the next zoom commit. */
@@ -100,7 +102,10 @@ export function Workspace({ documentId }: { documentId: string }) {
   /** A pinch is painting its own transform; renders must not snap it back to the committed scale. */
   const gestureActive = useRef(false);
   const livePinch = useRef<(PinchFrame & { stack: HTMLElement }) | null>(null);
+  const pinchOrigin = useRef({ x: 0, y: 0 });
   const pinchSettle = useRef(0);
+  /** Returning to the lock scrolls back to the top of the centered page. A resize while already there does not. */
+  const centerScroll = useRef(false);
   // Below this width, or when they don't fit beside the title, the menu bar and labelled buttons fold into a "More" menu.
   const titlebarRef = useRef<HTMLElement>(null);
   const narrow = useMediaQuery(COMPACT_QUERY);
@@ -166,7 +171,7 @@ export function Workspace({ documentId }: { documentId: string }) {
     [],
   );
 
-  // "Fit" zoom shrinks pages that are wider than the canvas (narrow windows, tablets, an open panel).
+  // "Fit" tracks the canvas. Opening or closing a panel changes that width, so the lock moves with it.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || typeof ResizeObserver === "undefined") return;
@@ -247,46 +252,65 @@ export function Workspace({ documentId }: { documentId: string }) {
   const canvasPad = canvasWidth && canvasWidth < 900 ? 16 : 40;
   const geometry = geometryFor(meta);
   const pageWidth = geometry.pageWidth;
-  const fitZoom = canvasWidth ? Math.max(0.25, Math.min(1, Math.floor(((canvasWidth - canvasPad * 2) / pageWidth) * 100) / 100)) : 1;
-  const effectiveZoom = zoom === "fit" ? fitZoom : zoom;
+  const shownPanel: Panel = focusMode && panel === "agent" ? null : panel;
+  const commentsBeside = shownPanel == null && (draftComment != null || ui.comments.some((comment) => !comment.resolved));
+  // Half an inch of background on each side, in whatever width the panels have left.
+  // Floating comments take a column out of that width so Fit still leaves them room.
+  const baseFit = fitScale(canvasWidth, pageWidth);
+  const lifted = zoom === "fit" && lift != null && lift > baseFit + 0.0005;
+  const commentReserve = zoom === "fit" && !lifted && commentsBeside ? commentFitReserve(canvasWidth, pageWidth) : 0;
+  const fitZoom = commentReserve > 0 ? fitScale(Math.max(0, canvasWidth - commentReserve), pageWidth) : baseFit;
+  const lockZoom = zoom === "fit" ? fitZoom : zoom;
+  const raised = lift != null && lift > lockZoom + 0.0005 ? lift : null;
+  const effectiveZoom = raised ?? lockZoom;
   committedZoom.current = effectiveZoom;
   if (!gestureActive.current) zoomNow.current = effectiveZoom;
+  const floorRef = useRef(lockZoom);
+  floorRef.current = lockZoom;
 
-  const setZoom = (value: Zoom, visual?: { left: number; top: number; width: number; height: number }) => {
-    const canvas = canvasRef.current;
-    // A menu zoom during a pinch drops the preview. The pinch passes `visual` and commits itself.
-    if (!visual && gestureActive.current && livePinch.current) {
-      const stack = livePinch.current.stack;
-      gestureActive.current = false;
-      livePinch.current = null;
-      if (pinchSettle.current) {
-        clearTimeout(pinchSettle.current);
-        pinchSettle.current = 0;
-      }
+  const dropGesture = () => {
+    const live = livePinch.current;
+    gestureActive.current = false;
+    livePinch.current = null;
+    if (pinchSettle.current) {
+      clearTimeout(pinchSettle.current);
+      pinchSettle.current = 0;
+    }
+    return live;
+  };
+
+  // The toolbar sets the lock and returns to the centered layout at that zoom.
+  const setZoom = (value: Zoom) => {
+    const live = dropGesture();
+    if (live) {
       zoomNow.current = committedZoom.current;
-      stack.style.transform = committedZoom.current === 1 ? "" : `scale(${committedZoom.current})`;
+      live.stack.style.transform = committedZoom.current === 1 ? "" : `scale(${committedZoom.current})`;
     }
-    const frame = canvas?.querySelector(".page-stack-frame");
-    const numeric = value === "fit" ? fitZoom : clampZoom(value);
-    // A burst of wheel events can land before React renders the previous one.
-    const from = zoomNow.current;
-    if (canvas && (visual || frame instanceof HTMLElement) && Math.abs(numeric - from) > 0.0005) {
-      const box = visual ?? (frame as HTMLElement).getBoundingClientRect();
-      // Toolbar, pinch, and ctrl+scroll share this. The pointer is not the anchor.
-      const point = viewCenter(canvas.getBoundingClientRect());
-      zoomAnchor.current = anchorAt(box, point.x, point.y);
-      zoomNow.current = numeric;
-    } else {
-      zoomAnchor.current = null;
-    }
-    const stored: Zoom = value === "fit" ? "fit" : numeric;
+    zoomAnchor.current = null;
+    centerScroll.current = true;
+    setLift(null);
+    const stored: Zoom = value === "fit" ? "fit" : clampZoom(value);
     setZoomState(stored);
     store(ZOOM_KEY, String(stored));
   };
 
-  // After the scaled frame is in the DOM, keep the middle of the view on the same
-  // point of the page. The page is centered only by layout, when it is narrower
-  // than the view. A wider page does not snap back to center.
+  // A pinch above the lock keeps the pointer still. Reaching the lock clears it.
+  const raiseZoom = (value: number, visual: { left: number; top: number; width: number; height: number }, origin: { x: number; y: number }) => {
+    zoomAnchor.current = anchorAt(visual, origin.x, origin.y);
+    setLift(value);
+  };
+  const releaseToLock = () => {
+    zoomAnchor.current = null;
+    centerScroll.current = true;
+    setLift(null);
+  };
+  const raiseRef = useRef(raiseZoom);
+  const releaseRef = useRef(releaseToLock);
+  raiseRef.current = raiseZoom;
+  releaseRef.current = releaseToLock;
+
+  // After the scaled frame is in the DOM, hold the pointer still while zoomed past
+  // the lock. On the lock, clear that and return to the centered layout.
   // PageCanvas calls this in its own layout effect, which runs before comments measure.
   const zoomCommit = useRef<(() => void) | null>(null);
   zoomCommit.current = () => {
@@ -299,12 +323,13 @@ export function Workspace({ documentId }: { documentId: string }) {
     const anchor = zoomAnchor.current;
     const canvas = canvasRef.current;
     zoomNow.current = effectiveZoom;
-    if (!anchor || !canvas) return;
     zoomAnchor.current = null;
+    if (!canvas) return;
     const frame = canvas.querySelector(".page-stack-frame");
     const wrap = canvas.querySelector(".page-stack-wrap");
     if (!(frame instanceof HTMLElement) || !(wrap instanceof HTMLElement)) return;
     if (wrap.classList.contains("is-flow")) {
+      if (!anchor) return;
       const next = scrollForAnchor(canvas, frame.getBoundingClientRect(), anchor);
       canvas.scrollLeft = next.scrollLeft;
       canvas.scrollTop = next.scrollTop;
@@ -312,22 +337,45 @@ export function Workspace({ documentId }: { documentId: string }) {
     }
     const pad = Number.parseFloat(canvas.style.getPropertyValue("--canvas-pad")) || 40;
     const padRight = pad + (canvas.classList.contains("with-comments") ? 296 : 0);
-    const pan = horizontalPan({
-      canvasWidth: canvas.clientWidth,
-      pageWidth: frame.offsetWidth,
-      padLeft: pad,
-      padRight,
-      pageLeft: anchor.clientX - canvas.getBoundingClientRect().left - canvas.clientLeft - anchor.fx * frame.offsetWidth,
-    });
-    wrap.style.paddingLeft = Math.abs(pan.padLeft - pad) < 0.5 ? "" : `${pan.padLeft}px`;
-    wrap.style.paddingRight = Math.abs(pan.padRight - padRight) < 0.5 ? "" : `${pan.padRight}px`;
+    const padTop = 28;
+    const padBottom = 120;
+    if (!raised || !anchor) {
+      wrap.classList.remove("is-anchored");
+      wrap.style.paddingLeft = "";
+      wrap.style.paddingRight = "";
+      wrap.style.paddingTop = "";
+      wrap.style.paddingBottom = "";
+      const pan = placeOnAxis({
+        canvas: canvas.clientWidth,
+        page: frame.offsetWidth,
+        padStart: pad,
+        padEnd: padRight,
+        pageStart: (canvas.clientWidth - frame.offsetWidth) / 2,
+        center: true,
+      });
+      if (Math.abs(pan.padStart - pad) >= 0.5) wrap.style.paddingLeft = `${pan.padStart}px`;
+      if (Math.abs(pan.padEnd - padRight) >= 0.5) wrap.style.paddingRight = `${pan.padEnd}px`;
+      void wrap.offsetWidth;
+      canvas.scrollLeft = pan.scroll;
+      if (centerScroll.current) canvas.scrollTop = 0;
+      centerScroll.current = false;
+      return;
+    }
+    const box = canvas.getBoundingClientRect();
+    const pageLeft = anchor.clientX - box.left - canvas.clientLeft - anchor.fx * frame.offsetWidth;
+    const pageTop = anchor.clientY - box.top - canvas.clientTop - anchor.fy * frame.offsetHeight;
+    const x = placeOnAxis({ canvas: canvas.clientWidth, page: frame.offsetWidth, padStart: pad, padEnd: padRight, pageStart: pageLeft, center: false });
+    const y = placeOnAxis({ canvas: canvas.clientHeight, page: frame.offsetHeight, padStart: padTop, padEnd: padBottom, pageStart: pageTop, center: false });
+    wrap.classList.add("is-anchored");
+    wrap.style.paddingLeft = `${x.padStart}px`;
+    wrap.style.paddingRight = `${x.padEnd}px`;
+    wrap.style.paddingTop = `${y.padStart}px`;
+    wrap.style.paddingBottom = `${y.padEnd}px`;
     // Padding changes the scroll size. Read it before assigning, or the new offset is clamped to the old range.
     void wrap.offsetWidth;
-    canvas.scrollLeft = pan.scrollLeft;
-    canvas.scrollTop = scrollForAnchor(canvas, frame.getBoundingClientRect(), anchor).scrollTop;
+    canvas.scrollLeft = x.scroll;
+    canvas.scrollTop = y.scroll;
   };
-  const setZoomRef = useRef(setZoom);
-  setZoomRef.current = setZoom;
 
   // Pinch and ctrl+wheel zoom the page. A plain wheel keeps scrolling it.
   // The scale is written on the page stack inside the event. Waiting for React
@@ -337,8 +385,6 @@ export function Workspace({ documentId }: { documentId: string }) {
     if (!canvas) return;
     let pinch: { distance: number; zoom: number } | null = null;
     let gestureZoom = 0;
-
-    const centerOfView = () => viewCenter(canvas.getBoundingClientRect());
 
     const paint = (frame: PinchFrame & { stack: HTMLElement }) => {
       frame.stack.style.transformOrigin = "0 0";
@@ -373,10 +419,17 @@ export function Workspace({ documentId }: { documentId: string }) {
       }
       const frame = livePinch.current;
       if (!frame) return;
-      const value = frame.scale;
+      const value = clampAboveLock(frame.scale, floorRef.current);
       const visual = pinchBox(frame);
+      const origin = pinchOrigin.current;
       livePinch.current = null;
       gestureActive.current = false;
+      if (value <= floorRef.current + 0.0005) {
+        frame.stack.style.transform = floorRef.current === 1 ? "" : `scale(${floorRef.current})`;
+        zoomNow.current = floorRef.current;
+        flushSync(() => releaseRef.current());
+        return;
+      }
       if (Math.abs(value - committedZoom.current) < 0.0005) {
         frame.stack.style.transform = committedZoom.current === 1 ? "" : `scale(${committedZoom.current})`;
         zoomNow.current = committedZoom.current;
@@ -385,7 +438,7 @@ export function Workspace({ documentId }: { documentId: string }) {
       // Measure the anchor against the preview, then let React catch the scroll size up
       // before paint, so the page doesn't jump when the live translate is dropped.
       zoomNow.current = committedZoom.current;
-      flushSync(() => setZoomRef.current(value, visual));
+      flushSync(() => raiseRef.current(value, visual, origin));
     };
 
     const settle = () => {
@@ -393,15 +446,29 @@ export function Workspace({ documentId }: { documentId: string }) {
       pinchSettle.current = window.setTimeout(commit, 80);
     };
 
-    const apply = (next: number) => {
-      const value = clampZoom(next);
+    const apply = (next: number, origin: { x: number; y: number }) => {
+      const value = clampAboveLock(next, floorRef.current);
       if (Math.abs(value - zoomNow.current) < 0.0005) return;
-      const frame = begin();
-      if (!frame) {
-        setZoomRef.current(value);
+      pinchOrigin.current = origin;
+      if (value <= floorRef.current + 0.0005) {
+        const frame = livePinch.current;
+        livePinch.current = null;
+        gestureActive.current = false;
+        if (pinchSettle.current) {
+          clearTimeout(pinchSettle.current);
+          pinchSettle.current = 0;
+        }
+        if (frame) frame.stack.style.transform = floorRef.current === 1 ? "" : `scale(${floorRef.current})`;
+        zoomNow.current = floorRef.current;
+        flushSync(() => releaseRef.current());
         return;
       }
-      const stepped = stepPinch(frame, centerOfView(), value);
+      const frame = begin();
+      if (!frame) {
+        flushSync(() => raiseRef.current(value, { left: origin.x, top: origin.y, width: 0, height: 0 }, origin));
+        return;
+      }
+      const stepped = stepPinch(frame, origin, value);
       frame.tx = stepped.tx;
       frame.ty = stepped.ty;
       frame.scale = stepped.scale;
@@ -414,7 +481,7 @@ export function Workspace({ documentId }: { documentId: string }) {
       if (!event.ctrlKey || event.altKey || gestureZoom || pinch) return;
       if (!event.cancelable) return;
       event.preventDefault();
-      apply(zoomFromWheel(zoomNow.current, event.deltaY, event.deltaMode));
+      apply(zoomFromWheel(zoomNow.current, event.deltaY, event.deltaMode), { x: event.clientX, y: event.clientY });
       settle();
     };
 
@@ -423,11 +490,15 @@ export function Workspace({ documentId }: { documentId: string }) {
       gestureZoom = zoomNow.current;
     };
     const onGestureChange = (event: Event) => {
-      const gesture = event as Event & { scale?: number };
+      const gesture = event as Event & { scale?: number; clientX?: number; clientY?: number };
       event.preventDefault();
       // A finger pinch is handled from the touch points; Safari also emits gesture events for it.
       if (pinch || !gestureZoom || !gesture.scale) return;
-      apply(zoomFromPinch(gestureZoom, 1, gesture.scale));
+      const box = canvas.getBoundingClientRect();
+      apply(zoomFromPinch(gestureZoom, 1, gesture.scale), {
+        x: gesture.clientX ?? box.left + box.width / 2,
+        y: gesture.clientY ?? box.top + box.height / 2,
+      });
       settle();
     };
     const onGestureEnd = () => {
@@ -443,7 +514,8 @@ export function Workspace({ documentId }: { documentId: string }) {
     const onTouchMove = (event: TouchEvent) => {
       if (!pinch || event.touches.length !== 2) return;
       if (event.cancelable) event.preventDefault();
-      apply(zoomFromPinch(pinch.zoom, pinch.distance, touchDistance(Array.from(event.touches))));
+      const fingers = Array.from(event.touches);
+      apply(zoomFromPinch(pinch.zoom, pinch.distance, touchDistance(fingers)), touchMidpoint(fingers));
       settle();
     };
     const onTouchEnd = (event: TouchEvent) => {
@@ -554,15 +626,24 @@ export function Workspace({ documentId }: { documentId: string }) {
     const { from, to } = session.view.state.selection;
     // With no side panel open and room beside the page, the comment is written in the margin next to its text.
     const sidePanel = focusRef.current && panel === "agent" ? null : panel;
+    const canvas = canvasRef.current;
+    // Fit can shrink to make the column. The page is still full width on this frame, so the live rect would say no.
+    const beside =
+      sidePanel === null &&
+      (marginFits(canvas) ||
+        (zoom === "fit" &&
+          !(lift != null && lift > fitScale(canvas?.clientWidth ?? 0, pageWidth) + 0.0005) &&
+          canvas != null &&
+          commentFitReserve(canvas.clientWidth, pageWidth) > 0));
     // Paint the field before this shortcut returns. The next key is already waiting,
     // and it has to land in the comment, not replace the selected text.
     flushSync(() => {
-      if (sidePanel !== null || !marginFits(canvasRef.current)) setPanel("comments");
+      if (!beside) setPanel("comments");
       setDraftComment({ from, to });
     });
     document.querySelector<HTMLTextAreaElement>(".comment-card.is-draft .comment-input")?.focus({ preventScroll: true });
     session.setCommentDraft({ from, to });
-  }, [session, setPanel, panel]);
+  }, [session, setPanel, panel, zoom, lift, pageWidth]);
   const endDraft = useCallback(() => {
     setDraftComment(null);
     session.setCommentDraft(null);
@@ -725,7 +806,7 @@ export function Workspace({ documentId }: { documentId: string }) {
     comment: startComment,
     image: () => imageInput.current?.click(),
     zoom: setZoom,
-    zoomFit: zoom === "fit",
+    zoomFit: zoom === "fit" && raised == null,
     toggleTheme,
     dark,
     toggleOutline,
@@ -820,7 +901,6 @@ export function Workspace({ documentId }: { documentId: string }) {
     return pageLeft + geometry.marginRight * effectiveZoom;
   })();
   const working = Boolean(ui.activity && ui.activity.status !== "idle");
-  const shownPanel: Panel = focusMode && panel === "agent" ? null : panel;
   const chatOpen = shownPanel === "agent";
 
   /** Show a chat in the Claude panel (the one converting an imported PDF). */
@@ -944,7 +1024,8 @@ export function Workspace({ documentId }: { documentId: string }) {
         state={state}
         meta={meta}
         zoom={effectiveZoom}
-        zoomFit={zoom === "fit"}
+        zoomFit={zoom === "fit" && raised == null}
+        zoomRaised={raised != null}
         onZoom={setZoom}
         onLink={() => setLinkEditing(true)}
         onComment={startComment}
@@ -976,7 +1057,7 @@ export function Workspace({ documentId }: { documentId: string }) {
         <div className="canvas-frame" style={{ ["--text-inset-right" as string]: `${textInsetRight}px` }}>
         <main
           ref={canvasRef}
-          className={`canvas${(versionShown && shownPanel === "history") || draftPreview ? " is-previewing" : ""}${!shownPanel && (draftComment || ui.comments.some((comment) => !comment.resolved)) && marginFits(canvasRef.current) ? " with-comments" : ""}`}
+          className={`canvas${(versionShown && shownPanel === "history") || draftPreview ? " is-previewing" : ""}${commentsBeside && (commentReserve > 0 || marginFits(canvasRef.current)) ? " with-comments" : ""}`}
           style={{ ["--canvas-pad" as string]: `${canvasPad}px` }}
           onDragOver={(event) => {
             if (event.dataTransfer.types.includes("Files")) event.preventDefault();

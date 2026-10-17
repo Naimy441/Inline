@@ -4,10 +4,10 @@ import type { EditorState } from "prosemirror-state";
 import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 import type { DocumentSession } from "@/lib/client/documentSession";
 import type { DocComment } from "@/lib/doc/settings";
+import { COMMENT_ROOM } from "@/lib/client/zoom";
 import { commentDraft, commentRanges } from "@/lib/editor/comments";
 import { CommentCard, NewComment } from "@/components/workspace/CommentsPanel";
 
-const CARD_WIDTH = 272;
 const GAP = 24;
 const SPACING = 8;
 
@@ -15,7 +15,7 @@ const SPACING = 8;
 export function marginFits(canvas: HTMLElement | null) {
   const page = canvas?.querySelector(".page-stack");
   if (!canvas || !page) return false;
-  return canvas.clientWidth - page.getBoundingClientRect().width >= CARD_WIDTH + GAP + 2 * 40;
+  return canvas.clientWidth - page.getBoundingClientRect().width >= COMMENT_ROOM;
 }
 
 type Item = { id: string; anchor: number };

@@ -5,14 +5,17 @@ async function placement(page: Page, selector: string) {
   return page.locator(selector).first().evaluate((el) => {
     const sheet = el.closest(".sheet");
     const zone = el.closest(".sheet-header, .sheet-footer");
-    if (!sheet || !(zone instanceof HTMLElement)) return null;
+    if (!(sheet instanceof HTMLElement) || !(zone instanceof HTMLElement)) return null;
     const range = document.createRange();
     range.selectNodeContents(el);
     const box = range.getBoundingClientRect();
     const zoneStyle = getComputedStyle(zone);
+    const sheetStyle = getComputedStyle(sheet);
     const sheetBox = sheet.getBoundingClientRect();
-    const left = sheetBox.left + parseFloat(zoneStyle.paddingLeft);
-    const right = sheetBox.right - parseFloat(zoneStyle.paddingRight);
+    // Fit scales the page, so padding and the edge border are CSS pixels until multiplied by that scale.
+    const scale = sheet.offsetWidth > 0 ? sheetBox.width / sheet.offsetWidth : 1;
+    const left = sheetBox.left + (parseFloat(sheetStyle.borderLeftWidth) + parseFloat(zoneStyle.paddingLeft)) * scale;
+    const right = sheetBox.right - (parseFloat(sheetStyle.borderRightWidth) + parseFloat(zoneStyle.paddingRight)) * scale;
     return { textLeft: box.left - left, textRight: right - box.right, textMid: (box.left + box.right) / 2, mid: (left + right) / 2 };
   });
 }

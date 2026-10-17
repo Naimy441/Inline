@@ -1,16 +1,58 @@
 /**
  * Document zoom. The page is scaled with a CSS transform (so text doesn't
- * reflow); these helpers keep that scale inside the menu's range and keep the
- * middle of the view on the same point of the page. The pointer is not an anchor.
+ * reflow). The toolbar zoom is a lock: pinch and ctrl+scroll can go further in
+ * toward the pointer, and zooming out stops on the lock. Landing on the lock
+ * centers the page again.
  */
 
 export const MIN_ZOOM = 0.5;
 export const MAX_ZOOM = 2;
+/** Half an inch, at 96 CSS pixels per inch. Fit leaves this much canvas on each side. */
+export const FIT_MARGIN = 48;
 
-export function clampZoom(value: number) {
+function clampRange(value: number, min: number, max: number) {
   if (!Number.isFinite(value)) return 1;
   const rounded = Math.round(value * 1000) / 1000;
-  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, rounded));
+  return Math.min(max, Math.max(min, rounded));
+}
+
+/** A toolbar percentage: the menu's 50%–200% range. */
+export function clampZoom(value: number) {
+  return clampRange(value, MIN_ZOOM, MAX_ZOOM);
+}
+
+/**
+ * Pinch and ctrl+scroll may not go below `lock` or above the menu's top.
+ * `lock` can sit under 50% when Fit is sizing a narrow window.
+ */
+export function clampAboveLock(value: number, lock: number) {
+  const floor = Number.isFinite(lock) ? lock : MIN_ZOOM;
+  return clampRange(value, floor, MAX_ZOOM);
+}
+
+/**
+ * Scale that puts the page edge to edge in `availableWidth`, with half an inch
+ * of background on each side. Wider windows grow past 100%; narrow ones shrink
+ * below the menu's 50% floor so the page still fits.
+ */
+export function fitScale(availableWidth: number, pageWidth: number) {
+  if (!(availableWidth > 0) || !(pageWidth > 0)) return 1;
+  return clampRange((availableWidth - FIT_MARGIN * 2) / pageWidth, 0.1, MAX_ZOOM);
+}
+
+/** Width the floating comment column takes, matching `.canvas.with-comments`. */
+export const COMMENT_COLUMN = 296;
+/** Spare canvas width `marginFits` requires before comments float beside the page. */
+export const COMMENT_ROOM = 376;
+
+/**
+ * Width Fit should give up so a fitted page still leaves a comment column.
+ * Zero when the canvas is too narrow for that column even after shrinking.
+ */
+export function commentFitReserve(canvasWidth: number, pageWidth: number) {
+  if (!(canvasWidth > 0) || !(pageWidth > 0)) return 0;
+  const visual = fitScale(Math.max(0, canvasWidth - COMMENT_COLUMN), pageWidth) * pageWidth;
+  return canvasWidth - visual >= COMMENT_ROOM ? COMMENT_COLUMN : 0;
 }
 
 /**
@@ -28,7 +70,8 @@ const PINCH_SPREAD = 1.2;
 export function zoomFromWheel(current: number, deltaY: number, deltaMode = 0) {
   const lines = deltaMode === 1 ? deltaY : deltaMode === 2 ? deltaY * 12 : deltaY / 32;
   const pixels = Math.max(-800, Math.min(800, lines * 32));
-  return clampZoom(current * Math.exp(-pixels * (Math.log(2) / WHEEL_PINCH_PIXELS)));
+  // The lock, not this helper, decides how far a pinch may zoom out.
+  return clampRange(current * Math.exp(-pixels * (Math.log(2) / WHEEL_PINCH_PIXELS)), 0.05, MAX_ZOOM);
 }
 
 /**
@@ -37,9 +80,9 @@ export function zoomFromWheel(current: number, deltaY: number, deltaMode = 0) {
  * instead of matching the fingers one-to-one.
  */
 export function zoomFromPinch(startZoom: number, startDistance: number, distance: number) {
-  if (!(startDistance > 0) || !(distance > 0)) return clampZoom(startZoom);
+  if (!(startDistance > 0) || !(distance > 0)) return clampRange(startZoom, 0.05, MAX_ZOOM);
   const gain = Math.log(2) / Math.log(PINCH_SPREAD);
-  return clampZoom(startZoom * (distance / startDistance) ** gain);
+  return clampRange(startZoom * (distance / startDistance) ** gain, 0.05, MAX_ZOOM);
 }
 
 /**
@@ -105,39 +148,43 @@ export function anchorAt(frame: { left: number; top: number; width: number; heig
 }
 
 /**
- * Horizontal placement after a zoom.
- * A page narrower than the view is centered by layout and not scrolled sideways.
- * A wider page keeps `pageLeft` — the place that holds the middle of the view
- * still — and does not snap back to center. Side gutters grow when that spot
- * would otherwise fall outside the scroll range, so both edges can still be scrolled into view.
+ * Where one edge of the page sits after a zoom, and how far the canvas scrolls.
+ * `pageStart` is that edge relative to the viewport.
+ * With `center`, a page that fits stays in the centered layout (base gutters, no
+ * scroll) and a wider page is centered. Without it, the page stays at
+ * `pageStart`. Gutters grow when that spot would be clamped, and they never
+ * shrink below the background padding, so scrolling still reaches the page and
+ * the background on both ends.
  */
-export function horizontalPan(input: {
-  canvasWidth: number;
-  pageWidth: number;
-  padLeft: number;
-  padRight: number;
-  /** Where the page's left edge should sit, relative to the canvas. */
-  pageLeft: number;
-}): { padLeft: number; padRight: number; scrollLeft: number } {
-  const { canvasWidth, pageWidth } = input;
-  const padLeft = Math.max(0, input.padLeft);
-  const padRight = Math.max(0, input.padRight);
-  if (!(canvasWidth > 0) || !(pageWidth > 0)) return { padLeft, padRight, scrollLeft: 0 };
-  // Both sides of the page are on screen.
-  if (pageWidth <= canvasWidth + 0.5) {
-    if (pageWidth + padLeft + padRight <= canvasWidth + 0.5) return { padLeft, padRight, scrollLeft: 0 };
-    const gap = (canvasWidth - pageWidth) / 2;
-    return { padLeft: gap, padRight: gap, scrollLeft: 0 };
+export function placeOnAxis(input: {
+  canvas: number;
+  page: number;
+  padStart: number;
+  padEnd: number;
+  pageStart: number;
+  center: boolean;
+}): { padStart: number; padEnd: number; scroll: number } {
+  const padStart = Math.max(0, input.padStart);
+  const padEnd = Math.max(0, input.padEnd);
+  const { canvas, page } = input;
+  if (!(canvas > 0) || !(page > 0)) return { padStart, padEnd, scroll: 0 };
+  let pageStart = input.pageStart;
+  if (input.center) {
+    if (page + padStart + padEnd <= canvas + 0.5) return { padStart, padEnd, scroll: 0 };
+    if (page <= canvas + 0.5) {
+      const gap = (canvas - page) / 2;
+      return { padStart: gap, padEnd: gap, scroll: 0 };
+    }
+    pageStart = (canvas - page) / 2;
   }
-  const minLeft = canvasWidth - padRight - pageWidth;
-  const maxLeft = padLeft;
-  let pageLeft = input.pageLeft;
-  if (!Number.isFinite(pageLeft)) pageLeft = (canvasWidth - pageWidth) / 2;
-  let left = padLeft;
-  let right = padRight;
-  if (pageLeft > maxLeft) left = pageLeft;
-  else if (pageLeft < minLeft) right = canvasWidth - pageWidth - pageLeft;
-  return { padLeft: left, padRight: right, scrollLeft: Math.max(0, left - pageLeft) };
+  const minStart = canvas - padEnd - page;
+  const maxStart = padStart;
+  if (!Number.isFinite(pageStart)) pageStart = (canvas - page) / 2;
+  let start = padStart;
+  let end = padEnd;
+  if (pageStart > maxStart) start = pageStart;
+  else if (pageStart < minStart) end = Math.max(0, canvas - page - pageStart);
+  return { padStart: start, padEnd: end, scroll: Math.max(0, start - pageStart) };
 }
 
 /**
@@ -154,11 +201,6 @@ export function scrollForAnchor(
     scrollLeft: scroll.scrollLeft + (frame.left + anchor.fx * frame.width - anchor.clientX),
     scrollTop: scroll.scrollTop + (frame.top + anchor.fy * frame.height - anchor.clientY),
   };
-}
-
-/** The middle of the canvas. Toolbar, pinch, and ctrl+scroll all scale around this. */
-export function viewCenter(box: { left: number; top: number; width: number; height: number }) {
-  return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
 }
 
 export function touchDistance(points: Array<{ clientX: number; clientY: number }>) {

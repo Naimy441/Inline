@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { anchorAt, clampZoom, horizontalPan, pinchBox, pinchTransform, scrollForAnchor, stepPinch, touchDistance, touchMidpoint, viewCenter, zoomFromPinch, zoomFromWheel, type PinchFrame } from "./zoom";
+import { anchorAt, clampAboveLock, clampZoom, commentFitReserve, fitScale, FIT_MARGIN, pinchBox, pinchTransform, placeOnAxis, scrollForAnchor, stepPinch, touchDistance, touchMidpoint, zoomFromPinch, zoomFromWheel, type PinchFrame } from "./zoom";
 
 describe("document zoom", () => {
   it("stays inside the same range as the zoom menu", () => {
@@ -15,7 +15,8 @@ describe("document zoom", () => {
     const zoomOut = zoomFromWheel(1, 80, 0);
     assert.ok(zoomIn > 1.3 && zoomIn < 1.7, `zoom in ${zoomIn}`);
     assert.ok(zoomOut < 0.75 && zoomOut > 0.55, `zoom out ${zoomOut}`);
-    assert.equal(zoomFromWheel(1, 10_000, 0), 0.5);
+    // Extreme wheels hit the absolute ends. The toolbar lock raises the floor later.
+    assert.equal(zoomFromWheel(1, 10_000, 0), 0.05);
     assert.equal(zoomFromWheel(1, -10_000, 0), 2);
     // A line-mode notch is a real step, not a fraction of a percent.
     assert.ok(zoomFromWheel(1, 3, 1) < 0.75);
@@ -34,7 +35,7 @@ describe("document zoom", () => {
 
   it("follows the ratio of two finger distances", () => {
     assert.ok(zoomFromPinch(1, 100, 150) > zoomFromPinch(1, 100, 110));
-    assert.equal(zoomFromPinch(1, 100, 20), 0.5);
+    assert.equal(zoomFromPinch(1, 100, 20), 0.05);
     assert.equal(zoomFromPinch(1.25, 0, 40), 1.25);
   });
 
@@ -51,66 +52,81 @@ describe("document zoom", () => {
     assert.ok(next.scrollLeft > 0, "centering a wider page scrolls sideways");
   });
 
-  it("centers a manual zoom only when both sides of the page fit", () => {
-    // The page fits: the finger spot is ignored and the gutters stay put, so margin can center it.
-    assert.deepEqual(horizontalPan({ canvasWidth: 1440, pageWidth: 816, padLeft: 40, padRight: 40, pageLeft: 108 }), {
-      padLeft: 40,
-      padRight: 40,
-      scrollLeft: 0,
-    });
-    // The page itself fits, but the usual gutters would push a side off. Shrink them and stay centered.
-    const snug = horizontalPan({ canvasWidth: 1440, pageWidth: 1400, padLeft: 40, padRight: 40, pageLeft: 0 });
-    assert.ok(Math.abs(snug.padLeft - 20) < 0.01 && Math.abs(snug.padRight - 20) < 0.01);
-    assert.equal(snug.scrollLeft, 0);
-
-    // Wider than the view, and the finger wants the page further right than the gutter allows.
-    // Growing the left side keeps that spot; scrolling still reaches both edges.
-    const wide = horizontalPan({ canvasWidth: 1440, pageWidth: 1632, padLeft: 40, padRight: 40, pageLeft: 108 });
-    assert.equal(wide.padLeft, 108);
-    assert.equal(wide.padRight, 40);
-    assert.equal(wide.scrollLeft, 0);
-    const content = wide.padLeft + 1632 + wide.padRight;
-    const max = content - 1440;
-    assert.ok(Math.abs(wide.padLeft - wide.scrollLeft - 108) < 0.01, "the finger spot is where it was");
-    assert.ok(wide.padLeft - 40 >= 0 && wide.padLeft - 40 <= max + 0.01, "the left edge can scroll up to the gutter");
-    assert.ok(Math.abs(wide.padLeft - (1440 - 40 - 1632) - max) < 0.01, "the right edge is the far end of the scroll");
-
-    // Toolbar zoom asks for the center. That spot is already in range, so the gutters stay.
-    const centered = (1440 - 1632) / 2;
-    const toolbar = horizontalPan({ canvasWidth: 1440, pageWidth: 1632, padLeft: 40, padRight: 40, pageLeft: centered });
-    assert.equal(toolbar.padLeft, 40);
-    assert.equal(toolbar.padRight, 40);
-    assert.ok(Math.abs(toolbar.padLeft - toolbar.scrollLeft - centered) < 0.01);
-
-    // Zooming back out until the sides fit returns to the centered layout.
-    assert.deepEqual(horizontalPan({ canvasWidth: 1440, pageWidth: 816, padLeft: 40, padRight: 40, pageLeft: 200 }), {
-      padLeft: 40,
-      padRight: 40,
-      scrollLeft: 0,
-    });
+  it("stops a pinch at the lock and still caps it at 200%", () => {
+    assert.equal(clampAboveLock(0.4, 1), 1);
+    assert.equal(clampAboveLock(1.5, 1), 1.5);
+    assert.equal(clampAboveLock(3, 1), 2);
+    assert.equal(clampAboveLock(0.2, 0.36), 0.36);
   });
 
-  it("scales around the middle of the view, so a page scrolled aside does not jump back to center", () => {
-    assert.deepEqual(viewCenter({ left: 100, top: 80, width: 800, height: 600 }), { x: 500, y: 380 });
-    const canvasWidth = 1000;
-    const pageWidth = 1632;
-    const mid = viewCenter({ left: 0, top: 0, width: canvasWidth, height: 800 }).x;
-    // Flushed to the left edge at 150%, then zoomed to 200% around the view's middle.
-    const fromWidth = 1224;
-    const nextLeft = mid - ((mid - 40) / fromWidth) * pageWidth;
-    const centered = (canvasWidth - pageWidth) / 2;
-    assert.ok(Math.abs(nextLeft - centered) > 100, `kept ${nextLeft}, centered would be ${centered}`);
-    const pan = horizontalPan({ canvasWidth, pageWidth, padLeft: 40, padRight: 40, pageLeft: nextLeft });
-    assert.ok(Math.abs(pan.padLeft - pan.scrollLeft - nextLeft) < 0.5);
-    const content = pan.padLeft + pageWidth + pan.padRight;
-    const max = content - canvasWidth;
-    assert.ok(pan.padLeft - 40 >= -0.01 && pan.padLeft - 40 <= max + 0.01, "the left edge is still in the scroll range");
-    // Zooming back out until the page fits returns to the centered layout.
-    assert.deepEqual(horizontalPan({ canvasWidth, pageWidth: 800, padLeft: 40, padRight: 40, pageLeft: nextLeft }), {
-      padLeft: 40,
-      padRight: 40,
-      scrollLeft: 0,
+  it("fits the page with half an inch of background on each side", () => {
+    assert.equal(FIT_MARGIN, 48);
+    const wide = fitScale(1000, 816);
+    assert.ok(Math.abs(816 * wide - (1000 - 96)) < 1, `wide page ${816 * wide}`);
+    assert.ok(wide > 1, "a wide window grows past 100%");
+    const narrow = fitScale(700, 816);
+    assert.ok(narrow < 1);
+    assert.ok(Math.abs(816 * narrow - (700 - 96)) < 1, `narrow page ${816 * narrow}`);
+    assert.equal(fitScale(4000, 816), 2);
+  });
+
+  it("reserves a comment column when Fit would otherwise fill the canvas", () => {
+    const canvas = 1200;
+    const page = 816;
+    assert.equal(commentFitReserve(canvas, page), 296);
+    const visual = fitScale(canvas - 296, page) * page;
+    assert.ok(canvas - visual >= 376, `spare ${canvas - visual}`);
+    // The page plus the comment padding still fits, so the cards keep the right side.
+    const placed = placeOnAxis({ canvas, page: visual, padStart: 40, padEnd: 40 + 296, pageStart: 0, center: true });
+    assert.equal(placed.scroll, 0);
+    assert.equal(placed.padEnd, 40 + 296);
+    assert.equal(commentFitReserve(400, page), 0);
+  });
+
+  it("centers on the lock and keeps a zoomed-in page where the pointer put it", () => {
+    // The page fits: the pointer spot is ignored and the gutters stay put, so margin can center it.
+    assert.deepEqual(placeOnAxis({ canvas: 1440, page: 816, padStart: 40, padEnd: 40, pageStart: 108, center: true }), {
+      padStart: 40,
+      padEnd: 40,
+      scroll: 0,
     });
+    // The page itself fits, but the usual gutters would push a side off. Shrink them and stay centered.
+    const snug = placeOnAxis({ canvas: 1440, page: 1400, padStart: 40, padEnd: 40, pageStart: 0, center: true });
+    assert.ok(Math.abs(snug.padStart - 20) < 0.01 && Math.abs(snug.padEnd - 20) < 0.01);
+    assert.equal(snug.scroll, 0);
+
+    // Past the lock. The pointer wants the page further right than the gutter allows.
+    // Growing that side keeps the spot, and scrolling still reaches both edges and the background.
+    const wide = placeOnAxis({ canvas: 1440, page: 1632, padStart: 40, padEnd: 40, pageStart: 108, center: false });
+    assert.equal(wide.padStart, 108);
+    assert.equal(wide.padEnd, 40);
+    assert.equal(wide.scroll, 0);
+    const content = wide.padStart + 1632 + wide.padEnd;
+    const max = content - 1440;
+    assert.ok(Math.abs(wide.padStart - wide.scroll - 108) < 0.01, "the pointer spot is where it was");
+    assert.ok(wide.padStart - 40 >= 0 && wide.padStart - 40 <= max + 0.01, "the left background can scroll into view");
+    assert.equal(wide.padEnd, 40, "the right background stays in the scroll range");
+
+    // Landing on the lock centers a wider page. The gutters stay, so both backgrounds remain.
+    const centered = (1440 - 1632) / 2;
+    const toolbar = placeOnAxis({ canvas: 1440, page: 1632, padStart: 40, padEnd: 40, pageStart: 0, center: true });
+    assert.equal(toolbar.padStart, 40);
+    assert.equal(toolbar.padEnd, 40);
+    assert.ok(Math.abs(toolbar.padStart - toolbar.scroll - centered) < 0.01);
+
+    // Back on the lock, a page that fits returns to the centered layout.
+    assert.deepEqual(placeOnAxis({ canvas: 1440, page: 816, padStart: 40, padEnd: 40, pageStart: 200, center: true }), {
+      padStart: 40,
+      padEnd: 40,
+      scroll: 0,
+    });
+
+    // Past the lock, a page that still fits does not snap back to center.
+    const aside = placeOnAxis({ canvas: 1000, page: 800, padStart: 40, padEnd: 40, pageStart: 20, center: false });
+    const visual = aside.padStart - aside.scroll;
+    assert.ok(Math.abs(visual - 20) < 0.5, `stayed at ${visual}`);
+    const centeredNarrow = (1000 - 800) / 2;
+    assert.ok(Math.abs(visual - centeredNarrow) > 40);
   });
 
   it("keeps the finger point fixed across pinch steps without measuring layout", () => {
