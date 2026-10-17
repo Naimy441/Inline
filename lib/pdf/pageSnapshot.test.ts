@@ -203,6 +203,35 @@ describe("snapshotPages", () => {
     assert.equal(link?.kind === "link" && link.uri, "file:///tmp/notes.pdf");
   });
 
+  it("omits a misspelled word's underline from the PDF and keeps one the user applied", () => {
+    const html = `
+      <div class="page-stack">
+        <div class="sheet" data-box="0 0 408 528"></div>
+        <div class="page-content doc-content" data-box="48 48 312 400">
+          <p data-box="48 48 360 16">
+            <span class="spelling-error" style="text-decoration-line: underline" data-box="48 48 55 16">mispelled</span>
+            <u style="text-decoration-line: underline" data-box="120 48 80 16">underlined</u>
+            <u style="text-decoration-line: underline" data-box="220 48 40 16"><span class="spelling-error" style="text-decoration-line: underline" data-box="220 48 40 16">both</span></u>
+          </p>
+        </div>
+      </div>`;
+    const dom = new JSDOM(html);
+    const model = snapshotPages(dom.window.document.querySelector<HTMLElement>(".page-stack")!, "Notes", fakeMeasurer());
+    const items = model.pages[0]!.items;
+    const miss = find(items, "mispelled")!;
+    const under = find(items, "underlined")!;
+    const both = find(items, "both")!;
+    const ruled = (word: PdfText) => items.some((item) => item.kind === "line" && item.x1 === word.x && item.y1 === item.y2 && item.y1 > word.y);
+    assert.equal(ruled(miss), false);
+    assert.equal(ruled(under), true);
+    assert.equal(ruled(both), true);
+    const pdf = Buffer.from(buildPdf(model)).toString("latin1");
+    const lineAt = (x: number) => new RegExp(` w ${x} [\\d.]+ m [\\d.]+ [\\d.]+ l S`);
+    assert.doesNotMatch(pdf, lineAt(miss.x));
+    assert.match(pdf, lineAt(under.x));
+    assert.match(pdf, lineAt(both.x));
+  });
+
   it("draws underlines, link targets, table borders and images", () => {
     const items = snapshot().pages[0].items;
     const under = find(items, "under")!;
