@@ -112,6 +112,8 @@
 
 .title-sizer {
   visibility: hidden;
+  pointer-events: none;
+  user-select: none;
   white-space: pre;
   overflow: hidden;
   text-overflow: ellipsis;
