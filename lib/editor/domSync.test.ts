@@ -12,6 +12,7 @@ describe("retainHeldSelection", () => {
     const held = retainHeldSelection(null, { from: 1, to: 12 }, { from: 12, empty: true });
     assert.deepEqual(held, { from: 1, to: 12, anchor: 12 });
     assert.equal(retainHeldSelection(held, null, { from: 12, empty: true }), held);
+    assert.equal(retainHeldSelection(held, null, { from: 1, empty: true }), held);
     assert.equal(retainHeldSelection(held, null, { from: 4, empty: true }), null);
   });
 });
