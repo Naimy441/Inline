@@ -323,6 +323,55 @@ button.crumb:hover {
   flex: none;
 }
 
+/* Search: the icon and the time crossfade into the folder name, then back. */
+.doc-card-swap {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  min-width: 0;
+  min-height: 17px;
+}
+
+.doc-card-swap + .doc-card-menu {
+  margin-left: 0;
+}
+
+.doc-card-swap-rest,
+.doc-card-swap-name {
+  transition: opacity 0.18s var(--ease), transform 0.18s var(--ease);
+}
+
+.doc-card-swap-rest {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.doc-card-swap-name {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 17px;
+  opacity: 0;
+  transform: translateY(3px);
+  pointer-events: none;
+}
+
+.doc-card:hover .doc-card-swap-rest {
+  opacity: 0;
+  transform: translateY(-3px);
+  pointer-events: none;
+}
+
+.doc-card:hover .doc-card-swap-name {
+  opacity: 1;
+  transform: none;
+}
+
 /* --- list layout ----------------------------------------------------------- */
 
 .doc-list {
