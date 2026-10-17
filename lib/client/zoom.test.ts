@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { anchorAt, clampAboveLock, clampZoom, fitScale, FIT_MARGIN, pinchBox, pinchTransform, placeOnAxis, scrollForAnchor, stepPinch, touchDistance, touchMidpoint, zoomFromPinch, zoomFromWheel, type PinchFrame } from "./zoom";
+import { anchorAt, clampAboveLock, clampZoom, commentFitReserve, fitScale, FIT_MARGIN, pinchBox, pinchTransform, placeOnAxis, scrollForAnchor, stepPinch, touchDistance, touchMidpoint, zoomFromPinch, zoomFromWheel, type PinchFrame } from "./zoom";
 
 describe("document zoom", () => {
   it("stays inside the same range as the zoom menu", () => {
@@ -68,6 +68,19 @@ describe("document zoom", () => {
     assert.ok(narrow < 1);
     assert.ok(Math.abs(816 * narrow - (700 - 96)) < 1, `narrow page ${816 * narrow}`);
     assert.equal(fitScale(4000, 816), 2);
+  });
+
+  it("reserves a comment column when Fit would otherwise fill the canvas", () => {
+    const canvas = 1200;
+    const page = 816;
+    assert.equal(commentFitReserve(canvas, page), 296);
+    const visual = fitScale(canvas - 296, page) * page;
+    assert.ok(canvas - visual >= 376, `spare ${canvas - visual}`);
+    // The page plus the comment padding still fits, so the cards keep the right side.
+    const placed = placeOnAxis({ canvas, page: visual, padStart: 40, padEnd: 40 + 296, pageStart: 0, center: true });
+    assert.equal(placed.scroll, 0);
+    assert.equal(placed.padEnd, 40 + 296);
+    assert.equal(commentFitReserve(400, page), 0);
   });
 
   it("centers on the lock and keeps a zoomed-in page where the pointer put it", () => {

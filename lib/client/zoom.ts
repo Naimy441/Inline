@@ -40,6 +40,21 @@ export function fitScale(availableWidth: number, pageWidth: number) {
   return clampRange((availableWidth - FIT_MARGIN * 2) / pageWidth, 0.1, MAX_ZOOM);
 }
 
+/** Width the floating comment column takes, matching `.canvas.with-comments`. */
+export const COMMENT_COLUMN = 296;
+/** Spare canvas width `marginFits` requires before comments float beside the page. */
+export const COMMENT_ROOM = 376;
+
+/**
+ * Width Fit should give up so a fitted page still leaves a comment column.
+ * Zero when the canvas is too narrow for that column even after shrinking.
+ */
+export function commentFitReserve(canvasWidth: number, pageWidth: number) {
+  if (!(canvasWidth > 0) || !(pageWidth > 0)) return 0;
+  const visual = fitScale(Math.max(0, canvasWidth - COMMENT_COLUMN), pageWidth) * pageWidth;
+  return canvasWidth - visual >= COMMENT_ROOM ? COMMENT_COLUMN : 0;
+}
+
 /**
  * Wheel pixels in one deliberate trackpad pinch. That gesture, and a two-finger
  * spread of `PINCH_SPREAD`, each cross from 100% to an end of the 50%–200% range.

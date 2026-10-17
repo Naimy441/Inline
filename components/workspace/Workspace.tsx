@@ -39,7 +39,7 @@ import { ReviewBar } from "@/components/workspace/ReviewBar";
 import { EDITOR_MODES, modeMenuItems } from "@/components/workspace/modes";
 import { COMPACT_QUERY, isCompact, useMediaQuery, useVisualViewportVars } from "@/lib/client/viewport";
 import { DEFAULT_PREFERENCES, loadPreferences, preferences, setPreference } from "@/lib/client/preferences";
-import { anchorAt, clampAboveLock, clampZoom, fitScale, pinchBox, pinchTransform, placeOnAxis, scrollForAnchor, stepPinch, touchDistance, touchMidpoint, zoomFromPinch, zoomFromWheel, type PinchFrame, type ZoomAnchor } from "@/lib/client/zoom";
+import { anchorAt, clampAboveLock, clampZoom, commentFitReserve, fitScale, pinchBox, pinchTransform, placeOnAxis, scrollForAnchor, stepPinch, touchDistance, touchMidpoint, zoomFromPinch, zoomFromWheel, type PinchFrame, type ZoomAnchor } from "@/lib/client/zoom";
 import { PictureBar } from "@/components/workspace/PictureBar";
 import { SelectionBubble } from "@/components/workspace/SelectionBubble";
 import { ShortcutsDialog } from "@/components/workspace/ShortcutsDialog";
@@ -252,8 +252,14 @@ export function Workspace({ documentId }: { documentId: string }) {
   const canvasPad = canvasWidth && canvasWidth < 900 ? 16 : 40;
   const geometry = geometryFor(meta);
   const pageWidth = geometry.pageWidth;
+  const shownPanel: Panel = focusMode && panel === "agent" ? null : panel;
+  const commentsBeside = shownPanel == null && (draftComment != null || ui.comments.some((comment) => !comment.resolved));
   // Half an inch of background on each side, in whatever width the panels have left.
-  const fitZoom = fitScale(canvasWidth, pageWidth);
+  // Floating comments take a column out of that width so Fit still leaves them room.
+  const baseFit = fitScale(canvasWidth, pageWidth);
+  const lifted = zoom === "fit" && lift != null && lift > baseFit + 0.0005;
+  const commentReserve = zoom === "fit" && !lifted && commentsBeside ? commentFitReserve(canvasWidth, pageWidth) : 0;
+  const fitZoom = commentReserve > 0 ? fitScale(Math.max(0, canvasWidth - commentReserve), pageWidth) : baseFit;
   const lockZoom = zoom === "fit" ? fitZoom : zoom;
   const raised = lift != null && lift > lockZoom + 0.0005 ? lift : null;
   const effectiveZoom = raised ?? lockZoom;
@@ -620,15 +626,24 @@ export function Workspace({ documentId }: { documentId: string }) {
     const { from, to } = session.view.state.selection;
     // With no side panel open and room beside the page, the comment is written in the margin next to its text.
     const sidePanel = focusRef.current && panel === "agent" ? null : panel;
+    const canvas = canvasRef.current;
+    // Fit can shrink to make the column. The page is still full width on this frame, so the live rect would say no.
+    const beside =
+      sidePanel === null &&
+      (marginFits(canvas) ||
+        (zoom === "fit" &&
+          !(lift != null && lift > fitScale(canvas?.clientWidth ?? 0, pageWidth) + 0.0005) &&
+          canvas != null &&
+          commentFitReserve(canvas.clientWidth, pageWidth) > 0));
     // Paint the field before this shortcut returns. The next key is already waiting,
     // and it has to land in the comment, not replace the selected text.
     flushSync(() => {
-      if (sidePanel !== null || !marginFits(canvasRef.current)) setPanel("comments");
+      if (!beside) setPanel("comments");
       setDraftComment({ from, to });
     });
     document.querySelector<HTMLTextAreaElement>(".comment-card.is-draft .comment-input")?.focus({ preventScroll: true });
     session.setCommentDraft({ from, to });
-  }, [session, setPanel, panel]);
+  }, [session, setPanel, panel, zoom, lift, pageWidth]);
   const endDraft = useCallback(() => {
     setDraftComment(null);
     session.setCommentDraft(null);
@@ -886,7 +901,6 @@ export function Workspace({ documentId }: { documentId: string }) {
     return pageLeft + geometry.marginRight * effectiveZoom;
   })();
   const working = Boolean(ui.activity && ui.activity.status !== "idle");
-  const shownPanel: Panel = focusMode && panel === "agent" ? null : panel;
   const chatOpen = shownPanel === "agent";
 
   /** Show a chat in the Claude panel (the one converting an imported PDF). */
@@ -1043,7 +1057,7 @@ export function Workspace({ documentId }: { documentId: string }) {
         <div className="canvas-frame" style={{ ["--text-inset-right" as string]: `${textInsetRight}px` }}>
         <main
           ref={canvasRef}
-          className={`canvas${(versionShown && shownPanel === "history") || draftPreview ? " is-previewing" : ""}${!shownPanel && (draftComment || ui.comments.some((comment) => !comment.resolved)) && marginFits(canvasRef.current) ? " with-comments" : ""}`}
+          className={`canvas${(versionShown && shownPanel === "history") || draftPreview ? " is-previewing" : ""}${commentsBeside && (commentReserve > 0 || marginFits(canvasRef.current)) ? " with-comments" : ""}`}
           style={{ ["--canvas-pad" as string]: `${canvasPad}px` }}
           onDragOver={(event) => {
             if (event.dataTransfer.types.includes("Files")) event.preventDefault();
