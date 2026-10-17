@@ -2247,11 +2247,6 @@ button.status-item:hover {
   color: var(--text);
 }
 
-.status-item.is-accent {
-  color: var(--success);
-  font-weight: 500;
-}
-
 .status-item.is-active {
   color: var(--accent-text);
 }

@@ -1157,7 +1157,6 @@ export function Workspace({ documentId }: { documentId: string }) {
         </main>
         <footer className="status-corner">
           {!chatOpen && <DocCounts session={session} pages={ui.pages} fallbackWords={meta?.wordCount ?? 0} onWords={() => setCounting(true)} />}
-          {ui.hunks.length > 0 && <span className="status-item is-accent">{ui.hunks.length} pending</span>}
           {ui.mode !== "editing" && (
             <button type="button" className={`status-item status-mode is-${ui.mode}`} onClick={() => void session.setMode("editing")} data-tip="Back to editing">
               {EDITOR_MODES[ui.mode].icon(13)} {EDITOR_MODES[ui.mode].label}
