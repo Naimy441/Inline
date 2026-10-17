@@ -279,7 +279,7 @@ function pageIndex(pos: number, starts: readonly number[]) {
 
 export type SessionCallbacks = {
   onCommand?: (command: ClientCommand) => void;
-  onKeyCommand?: (name: "link" | "find" | "replace" | "comment" | "askClaude") => boolean;
+  onKeyCommand?: (name: "link" | "find" | "replace" | "comment" | "askClaude" | "askClaudeInline") => boolean;
   /** A read-only copy laid out off screen (exporting another tab): no live connection. */
   offline?: boolean;
 };
@@ -720,11 +720,13 @@ export class DocumentSession {
     // A shortcut pressed right after Shift+End can arrive before the browser's
     // selectionchange, so read the DOM selection first or the command sees an
     // empty range.
-    const delegate = (name: "link" | "find" | "replace" | "comment" | "askClaude"): Command => () => {
+    const delegate = (name: "link" | "find" | "replace" | "comment" | "askClaude" | "askClaudeInline"): Command => () => {
       if (this.view) syncDomSelection(this.view);
       return this.callbacks.onKeyCommand?.(name) ?? false;
     };
     return {
+      // Bound with Shift so it wins over Mod-k. The keymap retries a shifted key without Shift when nothing matches.
+      "Mod-Shift-k": delegate("askClaudeInline"),
       "Mod-k": delegate("link"),
       "Mod-h": delegate("replace"),
       "Mod-Alt-m": delegate("comment"),

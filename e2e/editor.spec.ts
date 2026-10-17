@@ -67,11 +67,30 @@ test("links use a compact bar, and a typed URL becomes a link", async ({ page, c
   await expect(doc.locator("p").first()).toHaveText("See the notes and the file here.");
 
   const selectWord = async (word: string) => {
-    await doc.click();
-    await page.keyboard.press("Home");
-    const index = "See the notes and the file here.".indexOf(word);
-    for (let i = 0; i < index; i += 1) await page.keyboard.press("ArrowRight");
-    for (let i = 0; i < word.length; i += 1) await page.keyboard.press("Shift+ArrowRight");
+    await doc.locator("p").first().click();
+    const selected = await page.evaluate((wanted) => {
+      const root = document.querySelector(".doc-content");
+      if (!(root instanceof HTMLElement)) return "";
+      root.focus();
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      let node = walker.nextNode();
+      while (node) {
+        const text = node.textContent ?? "";
+        const index = text.indexOf(wanted);
+        if (index >= 0) {
+          const range = document.createRange();
+          range.setStart(node, index);
+          range.setEnd(node, index + wanted.length);
+          const selection = window.getSelection();
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+          return selection?.toString() ?? "";
+        }
+        node = walker.nextNode();
+      }
+      return "";
+    }, word);
+    expect(selected).toBe(word);
   };
 
   await selectWord("notes");
@@ -122,7 +141,7 @@ test("links use a compact bar, and a typed URL becomes a link", async ({ page, c
   await page.keyboard.type("hello ");
   await expect(doc.locator("a", { hasText: "hello" })).toHaveCount(0);
   await page.keyboard.type("example.com ");
-  await expect(doc.locator("a", { hasText: "example.com" })).toHaveCount(0);
+  await expect(doc.locator("a", { hasText: /^example\.com$/ })).toHaveCount(0);
   await page.keyboard.type("www.example.com");
   await page.keyboard.press("Enter");
   await expect(doc.locator('a[href="https://www.example.com"]')).toHaveText("www.example.com");

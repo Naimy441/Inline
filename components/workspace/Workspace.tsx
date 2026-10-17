@@ -195,7 +195,7 @@ export function Workspace({ documentId }: { documentId: string }) {
   }, []);
 
   const commandHandler = useRef<(command: ClientCommand) => void>(() => undefined);
-  const keyHandler = useRef<(name: "link" | "find" | "replace" | "comment" | "askClaude") => boolean>(() => false);
+  const keyHandler = useRef<(name: "link" | "find" | "replace" | "comment" | "askClaude" | "askClaudeInline") => boolean>(() => false);
 
   const session = useMemo(
     () =>
@@ -601,6 +601,10 @@ export function Workspace({ documentId }: { documentId: string }) {
     else if (name === "link") openLinkEditor(true);
     else if (name === "comment") startComment();
     else if (name === "askClaude" && !focusRef.current) askClaude();
+    else if (name === "askClaudeInline" && !focusRef.current && session.ui.get().mode !== "viewing") {
+      setLinkEditing(false);
+      setPrompting(true);
+    }
     return true;
   };
 
