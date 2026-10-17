@@ -11,7 +11,7 @@ import { DocumentSession, geometryFor, type ClientCommand, type DocumentUiState,
 import { useTheme } from "@/lib/client/theme";
 import { useShortcut } from "@/lib/client/platform";
 import { docPlainText, docWordCount, followedDocumentTitle, wordCount } from "@/lib/doc/editing";
-import { cleanTitle, DEFAULT_TAB_STOP, type DocComment, type DocumentMeta } from "@/lib/doc/settings";
+import { cleanTitle, type DocComment, type DocumentMeta } from "@/lib/doc/settings";
 import { insertImage, insertText } from "@/lib/editor/commands";
 import { AgentPanel, type AgentPanelHandle } from "@/components/agent/AgentPanel";
 import { Spark } from "@/components/agent/Activity";
@@ -34,7 +34,6 @@ import { addTab, rememberedRoot, takeScroll, useTabs } from "@/lib/client/tabs";
 import { documentMenus, MenuBar, type MenuActions } from "@/components/workspace/MenuBar";
 import { OutlinePanel } from "@/components/workspace/OutlinePanel";
 import { PageCanvas } from "@/components/workspace/PageCanvas";
-import { Ruler } from "@/components/workspace/Ruler";
 import { PageSetupDialog } from "@/components/workspace/PageSetupDialog";
 import { ReviewBar } from "@/components/workspace/ReviewBar";
 import { EDITOR_MODES, modeMenuItems } from "@/components/workspace/modes";
@@ -776,8 +775,6 @@ export function Workspace({ documentId }: { documentId: string }) {
     setMode: (mode) => void session.setMode(mode),
     showInvisibles: prefs.showInvisibles,
     toggleInvisibles: () => session.setShowInvisibles(!prefs.showInvisibles),
-    showRuler: prefs.showRuler,
-    toggleRuler: () => setPreference("showRuler", !prefs.showRuler),
     spellcheck: prefs.spellcheck,
     toggleSpellcheck: () => session.setSpellcheck(!prefs.spellcheck),
     substitutions: prefs.substitutions,
@@ -976,8 +973,7 @@ export function Workspace({ documentId }: { documentId: string }) {
             <WithEditorState session={session}>{(state) => <OutlinePanel session={session} state={state} meta={meta} readOnly={ui.mode === "viewing"} onClose={toggleOutline} />}</WithEditorState>
           </>
         )}
-        <div className={`canvas-frame${prefs.showRuler && !((versionShown && shownPanel === "history") || draftPreview) ? " has-ruler" : ""}`} style={{ ["--text-inset-right" as string]: `${textInsetRight}px` }}>
-        {prefs.showRuler && !((versionShown && shownPanel === "history") || draftPreview) && <Ruler session={session} canvasRef={canvasRef} geometry={geometry} zoom={effectiveZoom} tabStop={meta?.settings.tabStop ?? DEFAULT_TAB_STOP} />}
+        <div className="canvas-frame" style={{ ["--text-inset-right" as string]: `${textInsetRight}px` }}>
         <main
           ref={canvasRef}
           className={`canvas${(versionShown && shownPanel === "history") || draftPreview ? " is-previewing" : ""}${!shownPanel && (draftComment || ui.comments.some((comment) => !comment.resolved)) && marginFits(canvasRef.current) ? " with-comments" : ""}`}

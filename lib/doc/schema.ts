@@ -81,7 +81,7 @@ export type ListNumbering = (typeof LIST_NUMBERINGS)[number];
 export function defaultListNumbering(depth: number): ListNumbering {
   return depth === 0 ? "decimal" : depth === 1 ? "lower-alpha" : "lower-roman";
 }
-/** Left indent, in half-inch steps. High enough that the ruler can cross a landscape page. */
+/** Left indent, in half-inch steps. High enough to cross a landscape page. */
 export const MAX_INDENT = 24;
 
 /** A tab stop: `pos` in points from the left margin. */

@@ -270,13 +270,6 @@ select.input {
   background: var(--border);
 }
 
-.form-help {
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.form-help code,
 .onboarding code {
   font-family: var(--font-mono);
   font-size: 0.9em;

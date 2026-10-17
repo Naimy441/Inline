@@ -224,9 +224,6 @@ export function PageSetupDialog({
               </label>
             </>
           )}
-          <p className="form-help span-2">
-            Use <code>{"{page}"}</code>, <code>{"{pages}"}</code>, <code>{"{title}"}</code> and <code>{"{date}"}</code> in headers and footers.
-          </p>
         </div>
       )}
     </Dialog>

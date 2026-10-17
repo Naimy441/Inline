@@ -12,25 +12,31 @@ export type Preferences = {
   dictionary: string[];
   /** Help → Developer options: copy prompts, thoughts, tool calls and replies. */
   devOptions: boolean;
-  /** View → Show ruler. Off until the reader turns it on. */
-  showRuler: boolean;
 };
 
 const KEY = "inline-preferences";
-const DEFAULTS: Preferences = { substitutions: true, showInvisibles: false, spellcheck: true, dictionary: [], devOptions: false, showRuler: false };
+const DEFAULTS: Preferences = { substitutions: true, showInvisibles: false, spellcheck: true, dictionary: [], devOptions: false };
 
 function load(): Preferences {
   if (typeof window === "undefined") return DEFAULTS;
   try {
-    const raw = JSON.parse(window.localStorage.getItem(KEY) ?? "{}") as Partial<Preferences>;
-    return {
+    const raw = JSON.parse(window.localStorage.getItem(KEY) ?? "{}") as Partial<Preferences> & { showRuler?: unknown };
+    const next: Preferences = {
       substitutions: typeof raw.substitutions === "boolean" ? raw.substitutions : DEFAULTS.substitutions,
       showInvisibles: typeof raw.showInvisibles === "boolean" ? raw.showInvisibles : DEFAULTS.showInvisibles,
       spellcheck: typeof raw.spellcheck === "boolean" ? raw.spellcheck : DEFAULTS.spellcheck,
       dictionary: Array.isArray(raw.dictionary) ? raw.dictionary.filter((word): word is string => typeof word === "string").slice(0, 5000) : DEFAULTS.dictionary,
       devOptions: raw.devOptions === true,
-      showRuler: raw.showRuler === true,
     };
+    // Drop the removed ruler toggle so an old stored choice cannot come back.
+    if ("showRuler" in raw) {
+      try {
+        window.localStorage.setItem(KEY, JSON.stringify(next));
+      } catch {
+        // Private browsing: the leftover choice is ignored.
+      }
+    }
+    return next;
   } catch {
     return DEFAULTS;
   }

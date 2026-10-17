@@ -80,9 +80,6 @@ export type MenuActions = {
   setMode: (mode: EditorMode) => void;
   showInvisibles: boolean;
   toggleInvisibles: () => void;
-  /** View → Show ruler. Off until the reader turns it on. */
-  showRuler: boolean;
-  toggleRuler: () => void;
   /** Red spelling underlines in the document. */
   spellcheck: boolean;
   toggleSpellcheck: () => void;
@@ -226,7 +223,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       { label: "Find", shortcut: `⌘F`, onSelect: () => actions.find(false) },
       { label: "Find and replace", shortcut: `⌘H`, onSelect: () => actions.find(true) },
       { kind: "separator" },
-      { label: "Keep all pending changes", hint: actions.focusMode ? "Pending edits and suggestions" : "Claude's edits and suggestions", disabled: !hunks, onSelect: () => void session.review("accept", "all") },
+      { label: "Keep all pending changes", disabled: !hunks, onSelect: () => void session.review("accept", "all") },
       { label: "Undo all pending changes", disabled: !hunks, onSelect: () => void session.review("reject", "all") },
       { label: "Next change", shortcut: "⌥]", disabled: !hunks, onSelect: () => session.gotoChange(1) },
     ],
@@ -236,16 +233,15 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       { label: "Zoom in", onSelect: () => actions.zoom(Math.min(2, Math.round((zoom + 0.1) * 10) / 10)) },
       { label: "Zoom out", onSelect: () => actions.zoom(Math.max(0.5, Math.round((zoom - 0.1) * 10) / 10)) },
       { label: "Actual size", checked: !actions.zoomFit && zoom === 1, onSelect: () => actions.zoom(1) },
-      { label: "Fit to window", hint: "Shrink pages that don't fit", checked: actions.zoomFit, onSelect: actions.fitWidth },
+      { label: "Fit to window", checked: actions.zoomFit, onSelect: actions.fitWidth },
       { kind: "separator" },
       { label: "Tabs & outline", onSelect: actions.toggleOutline },
       { kind: "separator" },
       ...(actions.focusMode ? [] : [{ label: "Claude panel", shortcut: `⌘J`, onSelect: actions.toggleAgent }]),
-      { label: "Focus mode", hint: "Hide AI tools while you write", checked: actions.focusMode, onSelect: actions.toggleFocusMode },
-      { label: "Show ruler", checked: actions.showRuler, onSelect: actions.toggleRuler },
+      { label: "Focus mode", checked: actions.focusMode, onSelect: actions.toggleFocusMode },
       { label: "Show non-printing characters", shortcut: `⌘⇧P`, checked: actions.showInvisibles, onSelect: actions.toggleInvisibles },
       { label: "Show spelling underlines", checked: actions.spellcheck, onSelect: actions.toggleSpellcheck },
-      ...(actions.pdfAnnotations === null ? [] : [{ label: "Show PDF annotations", hint: "As they were on the original pages", checked: actions.pdfAnnotations, onSelect: actions.togglePdfAnnotations }]),
+      ...(actions.pdfAnnotations === null ? [] : [{ label: "Show PDF annotations", checked: actions.pdfAnnotations, onSelect: actions.togglePdfAnnotations }]),
       { label: "Dark theme", checked: actions.dark, onSelect: actions.toggleTheme },
       { label: "Full screen", onSelect: actions.fullScreen },
     ],
@@ -279,8 +275,8 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       {
         label: "Equation",
         submenu: [
-          { label: "Inline equation", hint: "Type $…$", onSelect: () => !run(insertEquation(false)) && actions.notice("Put the cursor in a paragraph to add an equation.") },
-          { label: "Display equation", hint: "Type $$ and a space", onSelect: () => !run(insertEquation(true)) && actions.notice("Put the cursor in a paragraph to add an equation.") },
+          { label: "Inline equation", onSelect: () => !run(insertEquation(false)) && actions.notice("Put the cursor in a paragraph to add an equation.") },
+          { label: "Display equation", onSelect: () => !run(insertEquation(true)) && actions.notice("Put the cursor in a paragraph to add an equation.") },
         ],
       },
       { label: "Special characters…", onSelect: actions.specialCharacters },
@@ -391,14 +387,14 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
                 ),
             },
             { label: "Check for AI-sounding writing", onSelect: () => actions.ask("Run analyze_writing on the document and point out any passages that sound generic or AI-written. Suggest fixes but don't edit yet.") },
-            ...(actions.convertPdf ? [{ label: "Convert PDF pages with Claude", hint: "Rebuild the pages that are still pictures", onSelect: actions.convertPdf }] : []),
+            ...(actions.convertPdf ? [{ label: "Convert PDF pages with Claude", onSelect: actions.convertPdf }] : []),
           ] as MenuItem[])),
     ],
     Help: [
       { label: "Keyboard shortcuts", shortcut: `⌘/`, onSelect: actions.shortcuts },
-      ...(actions.focusMode ? [] : [{ label: "Connect Claude Code…", hint: "Copy the command to use Inline from your terminal", onSelect: actions.connectClaudeCode }]),
+      ...(actions.focusMode ? [] : [{ label: "Connect Claude Code…", onSelect: actions.connectClaudeCode }]),
       { kind: "separator" },
-      { label: "Developer options", hint: "Copy a turn or the whole chat for debugging", checked: actions.devOptions, onSelect: actions.toggleDevOptions },
+      { label: "Developer options", checked: actions.devOptions, onSelect: actions.toggleDevOptions },
     ],
   };
   return menus;
