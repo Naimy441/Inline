@@ -2102,7 +2102,17 @@
 }
 
 .link-bar .bubble-url {
+  border: 0;
+  background: transparent;
   color: var(--link);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.link-bar .bubble-url:hover {
+  text-decoration: underline;
 }
 
 .bubble-link {

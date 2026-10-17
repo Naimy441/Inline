@@ -13,7 +13,7 @@ import { stylesOf } from "@/lib/doc/styles";
 import { setTabs } from "@/lib/client/tabs";
 import { api, ApiError, del, patch, post, Store, uploadFile } from "@/lib/client/api";
 import { setCommentState } from "@/lib/editor/comments";
-import { keepVisibleSelection, retainHeldSelection, syncDomSelection, visibleTextSelection, type HeldRange } from "@/lib/editor/domSync";
+import { keepVisibleSelection, rangeTouchingCaret, retainHeldSelection, syncDomSelection, visibleTextSelection, type HeldRange } from "@/lib/editor/domSync";
 import { formatSelectionKey, retainFormattingRange, setFormatSelection, type FormatRange } from "@/lib/editor/formatSelection";
 import type { PdfDocumentModel, PdfImage } from "@/lib/pdf/pdfWriter";
 import { APPEARANCE_PAPER, screenshotPage, type PageAppearance } from "@/lib/pdf/screenAppearance";
@@ -324,6 +324,14 @@ export class DocumentSession {
   private heldSelection: HeldRange | null = null;
   private selectionHoldTimer: ReturnType<typeof setTimeout> | null = null;
   /**
+   * The last non-empty range the page showed. A layout flush can paint the old
+   * caret before selectionchange lands, and a phone tap can drop the highlight
+   * before the toolbar reads it. Bold still applies while the caret sits on
+   * either end of this range.
+   */
+  private pendingSelection: { from: number; to: number } | null = null;
+  private seenRangeBound = false;
+  /**
    * The phrase to format while the font menu or the size field is open. Unlike
    * `heldSelection`, it is not dropped when a later press sees a caret: that
    * press is the font row or the size field taking focus.
@@ -607,6 +615,7 @@ export class DocumentSession {
       const mode = this.storedMode();
       this.suggesting = mode === "suggesting";
       this.ui.set((ui) => ({ ...ui, mode }));
+      this.bindSeenRange();
       this.view = new EditorView(mount, {
         editable: () => !this.callbacks.offline && this.ui.get().mode !== "viewing",
         state: this.createState(document),
@@ -676,6 +685,8 @@ export class DocumentSession {
     this.gestureTimer = null;
     this.selectionHoldTimer = null;
     this.formattingHold = null;
+    this.pendingSelection = null;
+    this.unbindSeenRange();
     this.unbindFormattingWatch();
     this.releaseHold(false);
     this.unbindScrollPin();
@@ -759,6 +770,18 @@ export class DocumentSession {
       const from = tr.mapping.map(this.formattingHold.from, 1);
       const to = tr.mapping.map(this.formattingHold.to, -1);
       this.formattingHold = from < to ? { from, to } : null;
+    }
+    if (this.pendingSelection) {
+      // Typing moves on from the phrase. A remote edit keeps it, mapped.
+      if (tr.docChanged && tr.getMeta("addToHistory") !== false) this.pendingSelection = null;
+      else if (tr.docChanged) {
+        const from = tr.mapping.map(this.pendingSelection.from, 1);
+        const to = tr.mapping.map(this.pendingSelection.to, -1);
+        this.pendingSelection = from < to ? { from, to } : null;
+      }
+      // The reader collapsed a range the editor already had (an arrow key). A caret the
+      // browser showed and the state never recorded is not this — that one stays pending.
+      if (this.pendingSelection && !view.state.selection.empty && tr.selectionSet && tr.selection.empty) this.pendingSelection = null;
     }
     // Focusing the font search or the size field collapses the DOM selection
     // after the editor has already blurred. Put the phrase back. While the
@@ -1240,6 +1263,38 @@ export class DocumentSession {
     }
   }
 
+  private bindSeenRange() {
+    if (this.seenRangeBound || typeof document === "undefined") return;
+    this.seenRangeBound = true;
+    // Capture runs before a test (or anything else) can stop the bubble listener ProseMirror uses.
+    document.addEventListener("selectionchange", this.onSeenSelection, true);
+    document.addEventListener("pointerdown", this.onDocumentPointerDown, true);
+  }
+
+  private unbindSeenRange() {
+    if (!this.seenRangeBound || typeof document === "undefined") return;
+    this.seenRangeBound = false;
+    document.removeEventListener("selectionchange", this.onSeenSelection, true);
+    document.removeEventListener("pointerdown", this.onDocumentPointerDown, true);
+  }
+
+  /** Remember a range the page is showing, even when the editor state still has a caret. */
+  private onSeenSelection = () => {
+    const view = this.view;
+    if (!view || this.destroyed) return;
+    const visible = visibleTextSelection(view);
+    if (!visible) return;
+    this.pendingSelection = { from: visible.from, to: visible.to };
+  };
+
+  /** A press in the page starts a new selection. The phrase from before that press is finished. */
+  private onDocumentPointerDown = (event: PointerEvent) => {
+    const view = this.view;
+    if (!view || this.destroyed) return;
+    const target = event.target;
+    if (target instanceof Node && view.dom.contains(target)) this.pendingSelection = null;
+  };
+
   /**
    * Read a selection the browser has made but not reported yet. Toolbar buttons
    * call this on pointerdown, before a touch can move focus and drop the range.
@@ -1256,8 +1311,11 @@ export class DocumentSession {
   holdDomSelection() {
     const view = this.view;
     if (!view) return;
+    // Read before the flush. A flush that cannot map the range paints the caret and the highlight is gone.
+    const before = visibleTextSelection(view);
+    if (before) this.pendingSelection = { from: before.from, to: before.to };
     syncDomSelection(view);
-    const visible = visibleTextSelection(view);
+    const visible = visibleTextSelection(view) ?? before;
     const stateSel = view.state.selection;
     const read = visible ?? (stateSel.empty ? null : { from: stateSel.from, to: stateSel.to });
     // Opening "More tools" captures the range, then Bold's press drops the
@@ -1394,13 +1452,17 @@ export class DocumentSession {
     // editor state has it. Otherwise use the phrase pinned for a font or size
     // change, then the range a toolbar press remembered.
     const visible = view.state.selection.empty ? visibleTextSelection(view) : null;
-    const candidate = visible ?? pinned ?? held;
+    // The highlight can already be gone (a layout flush, or a tap on More tools). The caret
+    // is still on one end of the phrase the page was showing.
+    const touching = view.state.selection.empty ? rangeTouchingCaret(this.pendingSelection, view.state.selection.from) : null;
+    const candidate = visible ?? pinned ?? held ?? touching;
     const saved = candidate && candidate.from < candidate.to && candidate.to <= size ? candidate : null;
     const painted = formatSelectionKey.getState(view.state);
     if (painted || (view.state.selection.empty && saved)) {
       let tr = view.state.tr;
       if (painted) tr = setFormatSelection(tr, null);
-      if (view.state.selection.empty && saved) tr = tr.setSelection(TextSelection.create(view.state.doc, saved.from, saved.to));
+      // Not an undo step: Undo itself is a toolbar command and must undo the edit, not this restore.
+      if (view.state.selection.empty && saved) tr = tr.setSelection(TextSelection.create(view.state.doc, saved.from, saved.to)).setMeta("addToHistory", false);
       this.dispatch(tr);
     }
     const result = command(view.state, (tr) => this.dispatch(tr), view);

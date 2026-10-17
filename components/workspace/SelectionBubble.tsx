@@ -271,6 +271,8 @@ export function SelectionBubble({
           className="input input-sm"
           aria-label="Link URL"
           placeholder="Paste or type a link"
+          autoComplete="off"
+          spellCheck={false}
           value={href}
           onChange={(event) => {
             hrefDirty.current = true;
@@ -298,9 +300,9 @@ export function SelectionBubble({
     };
     return (
       <div className={`bubble link-bar${above ? " is-above" : ""}`} ref={bubble} style={style} role="toolbar" aria-label="Link" onMouseDown={(event) => event.preventDefault()}>
-        <span className="bubble-url" title={barLink.href}>
+        <button type="button" className="bubble-url" title={barLink.href} onClick={() => session.run(followLink(barLink.href))}>
           {barLink.href}
-        </span>
+        </button>
         <span className="bubble-sep" />
         <button type="button" className="bubble-btn" aria-label="Open link" onClick={() => session.run(followLink(barLink.href))}>
           <ExternalLink size={14} />

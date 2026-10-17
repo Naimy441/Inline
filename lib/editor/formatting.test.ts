@@ -21,6 +21,7 @@ import {
   insertPageBreak,
   insertTable,
   clipboardLink,
+  clipboardReadIsQuiet,
   followLink,
   insertText,
   linkAt,
@@ -168,6 +169,10 @@ describe("links", () => {
     assert.equal(clipboardLink("www.example.com"), "https://www.example.com");
     assert.equal(clipboardLink("hello world"), null);
     assert.equal(clipboardLink("see https://example.com"), null);
+    assert.equal(clipboardReadIsQuiet("granted"), true);
+    assert.equal(clipboardReadIsQuiet("unsupported"), true);
+    assert.equal(clipboardReadIsQuiet("prompt"), false);
+    assert.equal(clipboardReadIsQuiet("denied"), false);
   });
 
   it("stores a file link and reloads it from the document", () => {

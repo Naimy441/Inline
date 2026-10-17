@@ -12,7 +12,7 @@ import { useTheme } from "@/lib/client/theme";
 import { useShortcut } from "@/lib/client/platform";
 import { docPlainText, docWordCount, followedDocumentTitle, wordCount } from "@/lib/doc/editing";
 import { cleanTitle, type DocComment, type DocumentMeta } from "@/lib/doc/settings";
-import { clipboardLink, insertImage, insertText } from "@/lib/editor/commands";
+import { clipboardLink, insertImage, insertText, silentClipboardText } from "@/lib/editor/commands";
 import { AgentPanel, type AgentPanelHandle } from "@/components/agent/AgentPanel";
 import { Spark } from "@/components/agent/Activity";
 import { PanelResizer } from "@/components/ui/PanelResizer";
@@ -119,17 +119,16 @@ export function Workspace({ documentId }: { documentId: string }) {
   const [linkPrefill, setLinkPrefill] = useState<string | null>(null);
   const linkGeneration = useRef(0);
   const [prompting, setPrompting] = useState(false);
-  // ⌘K owns links. A URL already on the clipboard is read in this gesture so the field can prefill it.
+  // ⌘K owns links. A URL already on the clipboard is read only when that read stays silent.
   const openLinkEditor = useCallback((readClipboard: boolean) => {
     const generation = ++linkGeneration.current;
     setLinkPrefill(null);
     setLinkSession((n) => n + 1);
     setLinkEditing(true);
-    if (!readClipboard || !navigator.clipboard?.readText) return;
-    void navigator.clipboard
-      .readText()
+    if (!readClipboard) return;
+    void silentClipboardText()
       .then((raw) => {
-        if (linkGeneration.current !== generation) return;
+        if (raw == null || linkGeneration.current !== generation) return;
         if (clipboardLink(raw)) setLinkPrefill(raw.trim());
       })
       .catch(() => undefined);

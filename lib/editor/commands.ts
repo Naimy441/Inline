@@ -753,6 +753,32 @@ export function clipboardLink(raw: string): string | null {
 }
 
 /**
+ * Chrome draws a Paste chip when a clipboard read still needs permission.
+ * An already-allowed read is silent, and so is a browser with no such permission.
+ */
+export function clipboardReadIsQuiet(state: PermissionState | "unsupported"): boolean {
+  return state === "granted" || state === "unsupported";
+}
+
+/** Clipboard text for the link field, or null when reading it would raise the Paste chip. */
+export async function silentClipboardText(): Promise<string | null> {
+  if (typeof navigator === "undefined" || !navigator.clipboard?.readText) return null;
+  let state: PermissionState | "unsupported" = "unsupported";
+  try {
+    const status = await navigator.permissions?.query({ name: "clipboard-read" as PermissionName });
+    if (status) state = status.state;
+  } catch {
+    state = "unsupported";
+  }
+  if (!clipboardReadIsQuiet(state)) return null;
+  try {
+    return await navigator.clipboard.readText();
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Where ⌘K should apply a link. A selection is used as-is, so the selected
  * words stay the link text. A caret inside a link edits that whole link.
  * A caret in plain text is an insertion point.
