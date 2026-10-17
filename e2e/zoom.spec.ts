@@ -290,16 +290,17 @@ test("Fit leaves half an inch on each side and refits when a panel opens", async
   expect(Math.abs(refit.width - open.width)).toBeLessThan(8);
   expect(Math.abs(refit.left - 48)).toBeLessThan(12);
 
-  const edge = () => page.locator(".sheet").first().evaluate((element) => getComputedStyle(element).borderTopColor);
+  const edge = () =>
+    page.locator(".sheet").first().evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { width: style.borderTopWidth, style: style.borderTopStyle, outline: style.outlineStyle };
+    });
   await page.locator("html").evaluate((html) => {
     html.dataset.theme = "light";
   });
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  const light = await edge();
-  expect(light).toBe("rgb(225, 227, 226)");
+  expect(await edge()).toEqual({ width: "0px", style: "none", outline: "none" });
   await page.getByRole("button", { name: "Dark theme", exact: true }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  const dark = await edge();
-  expect(dark).not.toBe(light);
-  expect(dark).toBe("rgb(85, 84, 79)");
+  expect(await edge()).toEqual({ width: "0px", style: "none", outline: "none" });
 });
