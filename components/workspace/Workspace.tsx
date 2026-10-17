@@ -12,7 +12,7 @@ import { useTheme } from "@/lib/client/theme";
 import { useShortcut } from "@/lib/client/platform";
 import { docPlainText, docWordCount, followedDocumentTitle, wordCount } from "@/lib/doc/editing";
 import { cleanTitle, type DocComment, type DocumentMeta } from "@/lib/doc/settings";
-import { insertImage, insertText } from "@/lib/editor/commands";
+import { clipboardLink, insertImage, insertText } from "@/lib/editor/commands";
 import { AgentPanel, type AgentPanelHandle } from "@/components/agent/AgentPanel";
 import { Spark } from "@/components/agent/Activity";
 import { PanelResizer } from "@/components/ui/PanelResizer";
@@ -110,7 +110,25 @@ export function Workspace({ documentId }: { documentId: string }) {
   const [outline, setOutline] = useState(false);
   const [find, setFind] = useState<{ replace: boolean } | null>(null);
   const [linkEditing, setLinkEditing] = useState(false);
+  const [linkSession, setLinkSession] = useState(0);
+  const [linkPrefill, setLinkPrefill] = useState<string | null>(null);
+  const linkGeneration = useRef(0);
   const [prompting, setPrompting] = useState(false);
+  // ⌘K owns links. A URL already on the clipboard is read in this gesture so the field can prefill it.
+  const openLinkEditor = useCallback((readClipboard: boolean) => {
+    const generation = ++linkGeneration.current;
+    setLinkPrefill(null);
+    setLinkSession((n) => n + 1);
+    setLinkEditing(true);
+    if (!readClipboard || !navigator.clipboard?.readText) return;
+    void navigator.clipboard
+      .readText()
+      .then((raw) => {
+        if (linkGeneration.current !== generation) return;
+        if (clipboardLink(raw)) setLinkPrefill(raw.trim());
+      })
+      .catch(() => undefined);
+  }, []);
   /** The text a new comment is being written about. */
   const [draftComment, setDraftComment] = useState<{ from: number; to: number } | null>(null);
   /** A saved version shown in place of the document, from version history. */
@@ -124,7 +142,7 @@ export function Workspace({ documentId }: { documentId: string }) {
   const [focusMode, setFocusMode] = useState(false);
   const focusRef = useRef(false);
   focusRef.current = focusMode;
-  // The inline ⌘K prompt is open: start Claude Code while the user types.
+  // The inline ⌘⇧K prompt is open: start Claude Code while the user types.
   useEffect(() => {
     if (prompting && !focusMode) agentRef.current?.warm();
   }, [prompting, focusMode]);
@@ -509,7 +527,7 @@ export function Workspace({ documentId }: { documentId: string }) {
     [session, setPanel],
   );
 
-  /** The inline ⌘K prompt: sends straight to Claude about the selection, or the cursor when nothing is selected. */
+  /** The inline ⌘⇧K prompt: sends straight to Claude about the selection, or the cursor when nothing is selected. */
   const inlineAsk = useCallback(
     (text: string, only?: SelectionContext) => {
       if (focusRef.current) return;
@@ -580,7 +598,7 @@ export function Workspace({ documentId }: { documentId: string }) {
 
   keyHandler.current = (name) => {
     if (name === "find" || name === "replace") setFind({ replace: name === "replace" });
-    else if (name === "link") setLinkEditing(true);
+    else if (name === "link") openLinkEditor(true);
     else if (name === "comment") startComment();
     else if (name === "askClaude" && !focusRef.current) askClaude();
     return true;
@@ -647,7 +665,8 @@ export function Workspace({ documentId }: { documentId: string }) {
         session.setShowInvisibles(!preferences.get().showInvisibles);
         return;
       }
-      if (key === "k" && !event.shiftKey && !event.altKey && session.view?.hasFocus() && session.ui.get().mode !== "viewing") {
+      // Links own ⌘K. Edit with Claude inline — the selection sent from the document — is ⌘⇧K.
+      if (key === "k" && event.shiftKey && !event.altKey && session.view?.hasFocus() && session.ui.get().mode !== "viewing") {
         if (focusRef.current) return;
         event.preventDefault();
         setPrompting(true);
@@ -721,7 +740,7 @@ export function Workspace({ documentId }: { documentId: string }) {
       router.push("/");
     },
     find: (replace) => setFind({ replace }),
-    link: () => setLinkEditing(true),
+    link: () => openLinkEditor(true),
     comment: startComment,
     image: () => imageInput.current?.click(),
     zoom: setZoom,
@@ -946,7 +965,7 @@ export function Workspace({ documentId }: { documentId: string }) {
         zoom={effectiveZoom}
         zoomFit={zoom === "fit"}
         onZoom={setZoom}
-        onLink={() => setLinkEditing(true)}
+        onLink={() => openLinkEditor(true)}
         onComment={startComment}
         onImage={() => imageInput.current?.click()}
         onEditStyle={(styleId) => setStyleEditor({ id: styleId })}
@@ -1039,7 +1058,7 @@ export function Workspace({ documentId }: { documentId: string }) {
             </WithEditorState>
           )}
           <ReviewBar session={session} hunks={ui.hunks} hideClaude={focusMode} />
-          <WithEditorState session={session}>{(state) => <SelectionBubble session={session} state={state} linkEditing={linkEditing} onLinkEditing={setLinkEditing} prompting={prompting && !focusMode} onPrompting={setPrompting} onInlineAsk={inlineAsk} hideAi={focusMode} />}</WithEditorState>
+          <WithEditorState session={session}>{(state) => <SelectionBubble session={session} state={state} linkEditing={linkEditing} linkSession={linkSession} linkPrefill={linkPrefill} onLinkEditing={(open) => (open ? openLinkEditor(false) : setLinkEditing(false))} prompting={prompting && !focusMode} onPrompting={setPrompting} onInlineAsk={inlineAsk} hideAi={focusMode} />}</WithEditorState>
           <WithEditorState session={session}>{(state) => <PictureBar session={session} state={state} />}</WithEditorState>
         </main>
         <footer className="status-corner">
@@ -1141,7 +1160,7 @@ export function Workspace({ documentId }: { documentId: string }) {
           session.run(insertText(char));
         }}
       />
-      <ContextMenu session={session} hideClaude={focusMode} readOnly={ui.mode === "viewing"} onAsk={askClaude} onComment={startComment} onLink={() => setLinkEditing(true)} />
+      <ContextMenu session={session} hideClaude={focusMode} readOnly={ui.mode === "viewing"} onAsk={askClaude} onComment={startComment} onLink={() => openLinkEditor(true)} />
       <WordCountDialog open={counting} onClose={() => setCounting(false)} session={session} />
       <Toaster />
       <ConfirmHost />
