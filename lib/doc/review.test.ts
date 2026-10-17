@@ -5,7 +5,7 @@ import { applyFormat, applyStringEdit, findText } from "./editing";
 import { ensureBlockIds } from "./ids";
 import { docToMarkdown, markdownToDoc } from "./markdown";
 import { schema } from "./schema";
-import { acceptHunks, changedRanges, hunkFromJSON, hunkToJSON, mapHunks, recordAgentChange, rejectHunks, type Hunk } from "./review";
+import { acceptHunks, changedRanges, describeSlice, hunkFromJSON, hunkToJSON, mapHunks, recordAgentChange, rejectHunks, type Hunk } from "./review";
 
 const base = () => ensureBlockIds(markdownToDoc("The quick brown fox jumps over the lazy dog.\n\nA second paragraph stays put."));
 
@@ -353,4 +353,35 @@ describe("review hunks: multi-change steps", () => {
       assert.equal(docToMarkdown(tr.doc), docToMarkdown(start));
     },
   );
+});
+
+describe("pending change descriptions", () => {
+  function range(doc: ReturnType<typeof markdownToDoc>, text: string) {
+    let from = -1;
+    doc.descendants((node, pos) => {
+      if (from >= 0) return false;
+      if (node.isText && node.text?.includes(text)) from = pos + node.text.indexOf(text);
+      return true;
+    });
+    return from;
+  }
+
+  it("describes a word as that word", () => {
+    const doc = markdownToDoc("The lazy dog.");
+    const from = range(doc, "lazy");
+    assert.equal(describeSlice(doc.slice(from, from + 4)), "lazy");
+  });
+
+  it("includes an equation, a picture, a rule and a page break", () => {
+    const math = markdownToDoc("Call $z = x + iy$ that point.");
+    const from = range(math, "z = x + iy");
+    assert.equal(describeSlice(math.slice(from, from + "z = x + iy".length)), "$z = x + iy$");
+    const image = markdownToDoc("![Chart](/a.png){width=340}");
+    assert.match(describeSlice(image.slice(0, image.content.size)), /!\[Chart\]\(\/a\.png\)\{width=340/);
+    assert.doesNotMatch(describeSlice(image.slice(0, image.content.size)), /340px/);
+    const rule = markdownToDoc("---");
+    assert.equal(describeSlice(rule.slice(0, rule.content.size)), "---");
+    const page = markdownToDoc("\\pagebreak");
+    assert.equal(describeSlice(page.slice(0, page.content.size)), "\\pagebreak");
+  });
 });

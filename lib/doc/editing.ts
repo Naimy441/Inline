@@ -257,6 +257,145 @@ function smartenQuotes(text: string) {
 }
 
 /**
+ * The Markdown an exact-string edit asked to store, before parsing.
+ * Matches are replaced the same way `applyStringEdit` replaces them.
+ */
+export function substitutedMarkdown(markdown: string, edits: readonly StringEdit[]): string {
+  let text = markdown;
+  for (const edit of edits) {
+    const matches = locate(text, edit.old_string);
+    if (!matches.length) continue;
+    const chosen = edit.replace_all ? matches : matches.slice(0, 1);
+    let out = "";
+    let cursor = 0;
+    for (const match of chosen) {
+      out += text.slice(cursor, match.start);
+      const original = text.slice(match.start, match.end);
+      out += match.normalized && /[‘’“”]/.test(original) ? smartenQuotes(edit.new_string) : edit.new_string;
+      cursor = match.end;
+    }
+    out += text.slice(cursor);
+    text = out;
+  }
+  return text;
+}
+
+function clipLine(line: string) {
+  const shown = line.length > 180 ? `${line.slice(0, 180)}…` : line;
+  return shown.replace(/"/g, '\\"');
+}
+
+/** The first line where `sent` and `stored` disagree. */
+export function markdownDrift(sent: string, stored: string): string {
+  if (sent === stored) return "";
+  const sentLines = sent.split("\n");
+  const storedLines = stored.split("\n");
+  const count = Math.max(sentLines.length, storedLines.length);
+  for (let i = 0; i < count; i += 1) {
+    const left = sentLines[i] ?? "";
+    const right = storedLines[i] ?? "";
+    if (left !== right) return `Line ${i + 1} differs. Sent: "${clipLine(left)}" Stored: "${clipLine(right)}"`;
+  }
+  return "";
+}
+
+/** Hide code, escaped dollars and real equations so a stray `$` can be seen. */
+function maskProtectedMath(markdown: string): string {
+  const chars = [...markdown];
+  const blank = (from: number, to: number) => {
+    for (let i = from; i < to && i < chars.length; i += 1) if (chars[i] !== "\n") chars[i] = " ";
+  };
+  const validInline = (start: number) => {
+    if (markdown[start] !== "$" || markdown[start + 1] === "$") return start;
+    const first = markdown[start + 1];
+    if (!first || /\s/.test(first)) return start;
+    let pos = start + 1;
+    while (pos < markdown.length) {
+      const ch = markdown[pos];
+      if (ch === "\\") pos += 2;
+      else if (ch === "$") break;
+      else if (ch === "\n") return start;
+      else pos += 1;
+    }
+    if (pos >= markdown.length || markdown[pos] !== "$") return start;
+    const content = markdown.slice(start + 1, pos);
+    if (!content || /\s$/.test(content) || /\d/.test(markdown[pos + 1] ?? "")) return start;
+    return pos + 1;
+  };
+  let i = 0;
+  let fence: string | null = null;
+  while (i < markdown.length) {
+    if (fence) {
+      if ((i === 0 || markdown[i - 1] === "\n") && markdown.startsWith(fence, i)) {
+        blank(i, i + fence.length);
+        i += fence.length;
+        fence = null;
+        continue;
+      }
+      if (chars[i] !== "\n") chars[i] = " ";
+      i += 1;
+      continue;
+    }
+    if ((i === 0 || markdown[i - 1] === "\n") && (markdown[i] === "`" || markdown[i] === "~") && markdown[i + 1] === markdown[i] && markdown[i + 2] === markdown[i]) {
+      let end = i;
+      const marker = markdown[i]!;
+      while (markdown[end] === marker) end += 1;
+      fence = markdown.slice(i, end);
+      blank(i, end);
+      while (end < markdown.length && markdown[end] !== "\n") end += 1;
+      blank(i, end);
+      i = end;
+      continue;
+    }
+    if (markdown.startsWith("\\$", i)) {
+      blank(i, i + 2);
+      i += 2;
+      continue;
+    }
+    if (markdown[i] === "`") {
+      let end = i;
+      while (markdown[end] === "`") end += 1;
+      const tick = markdown.slice(i, end);
+      const closer = markdown.indexOf(tick, end);
+      const stop = closer < 0 ? markdown.length : closer + tick.length;
+      blank(i, stop);
+      i = stop;
+      continue;
+    }
+    if (markdown.startsWith("$$", i)) {
+      const close = markdown.indexOf("$$", i + 2);
+      const stop = close < 0 ? i + 2 : close + 2;
+      blank(i, stop);
+      i = stop;
+      continue;
+    }
+    if (markdown[i] === "$") {
+      const span = validInline(i);
+      if (span > i) {
+        blank(i, span);
+        i = span;
+        continue;
+      }
+    }
+    i += 1;
+  }
+  return chars.join("");
+}
+
+/** Empty `$ $` and a `$` glued to a word, which `read_document` cannot round-trip as math. */
+export function mathWarnings(markdown: string): string[] {
+  const warnings: string[] = [];
+  maskProtectedMath(markdown)
+    .split("\n")
+    .forEach((line, index) => {
+      const lineNo = index + 1;
+      if (/\$\s+\$/.test(line)) warnings.push(`Line ${lineNo} has empty inline math ($ $).`);
+      if (/(?<=[\p{L}\p{N}])\$|\$(?=[\p{L}])/u.test(line)) warnings.push(`Line ${lineNo} has a dollar sign stuck to a word.`);
+    });
+  return warnings;
+}
+
+/**
  * Apply one exact-string edit to the Markdown view of `tr.doc`. The smallest
  * run of whole blocks containing each match is re-parsed and merged back.
  */

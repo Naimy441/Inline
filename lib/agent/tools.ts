@@ -17,13 +17,18 @@ import {
   numberLines,
   searchLines,
   textblockLines,
+  mathWarnings,
+  markdownDrift,
+  substitutedMarkdown,
   textblockRanges,
   wordCount,
   writeDocument,
   type FormatSpec,
+  type StringEdit,
 } from "@/lib/doc/editing";
-import { BLOCK_SEPARATOR, markdownToDoc, serializeDoc } from "@/lib/doc/markdown";
-import { changedRanges, isUserSuggestion } from "@/lib/doc/review";
+import { imageSize } from "@/lib/doc/docx";
+import { BLOCK_SEPARATOR, markdownToDoc, parseMarkdown, serializeBlocks, serializeDoc } from "@/lib/doc/markdown";
+import { changedRanges, describeHunk, isUserSuggestion } from "@/lib/doc/review";
 import { FONT_FAMILIES, googleFontValue, PAPER_SIZES, type DocumentSettings, type PaperSize } from "@/lib/doc/settings";
 import { findGoogleFont, keepGoogleFont } from "@/lib/server/googleFonts";
 import { documentHub, loadDoc, type LiveDocument } from "@/lib/server/hub";
@@ -46,7 +51,8 @@ import { findMisspellings, speller, type Misspelling } from "@/lib/server/spellc
 import { normalizeWord } from "@/lib/doc/words";
 import { cleanAiTellText, findAiSymbols, formatCleanSummary, formatWriteCheck, mergeSymbolHits, stripInvisible, type AiSymbolHit } from "@/lib/writing/aiTells";
 import { detectAiTropes } from "@/lib/writing/tropes";
-import { describePageRange, describePageStarts, pageCount, pageCountNow } from "@/lib/agent/pages";
+import { describeImages, describePageRange, describePageStarts, pageCount, pageCountNow } from "@/lib/agent/pages";
+import { loadImage } from "@/lib/server/images";
 import { applyFit, solveFit } from "@/lib/doc/pageFit";
 import { FitUnavailableError, requestFitMeasurement } from "@/lib/server/fitMeasure";
 import { savedAppearance } from "@/lib/server/appearance";
@@ -152,6 +158,27 @@ function inches(value: number) {
   return `${Number(value.toFixed(2))}"`;
 }
 
+/** Pixel size of each picture whose file can be read. A missing file leaves the height unknown. */
+async function imageNaturals(doc: PMNode) {
+  const srcs = new Set<string>();
+  doc.descendants((node) => {
+    if ((node.type.name === "image" || node.type.name === "inline_image") && node.attrs.src) srcs.add(String(node.attrs.src));
+  });
+  const sizes = new Map<string, { width: number; height: number }>();
+  await Promise.all(
+    [...srcs].map(async (src) => {
+      try {
+        const loaded = await loadImage(src);
+        const size = loaded ? imageSize(loaded.data) : null;
+        if (size) sizes.set(src, size);
+      } catch {
+        // The page count still reports the picture, without a height.
+      }
+    }),
+  );
+  return sizes;
+}
+
 /**
  * A whole document as read_document returns it, or null when it is too long to
  * hand over unasked. The in-app chat sends this with a message so Claude can
@@ -205,14 +232,61 @@ function countWords(before: PMNode, tr: Transform) {
   return { added, removed };
 }
 
+type EditNotes = {
+  /** Markdown the edit meant to store, from the document it was applied to. */
+  intended?: (before: PMNode) => string;
+  /** A fragment that was inserted, checked against the way it parses. */
+  fragment?: string;
+};
+
+function fragmentNotes(fragment: string): string[] {
+  const parsed = serializeBlocks(parseMarkdown(fragment));
+  const notes: string[] = [];
+  if (parsed !== fragment) {
+    const drift = markdownDrift(fragment, parsed);
+    if (drift) notes.push(`The stored document differs from what was sent. ${drift}`);
+  }
+  return notes;
+}
+
+/** Drift between the text that was sent and the Markdown now stored, plus broken math. */
+function editNotes(stored: string, intended?: string, fragment?: string): string[] {
+  const notes: string[] = [];
+  if (intended != null && intended !== stored) {
+    const drift = markdownDrift(intended, stored);
+    if (drift) notes.push(`The stored document differs from what was sent. ${drift}`);
+  }
+  if (fragment != null) notes.push(...fragmentNotes(fragment));
+  const seen = new Set<string>();
+  const sources = [stored, intended, fragment].filter((item): item is string => Boolean(item));
+  if (fragment) sources.push(serializeBlocks(parseMarkdown(fragment)));
+  for (const source of sources) {
+    for (const warning of mathWarnings(source)) {
+      if (seen.has(warning)) continue;
+      seen.add(warning);
+      notes.push(warning);
+    }
+  }
+  return notes;
+}
+
+function noChangeText(stored: string, intended?: string): string {
+  const same = intended == null || intended === stored;
+  const lead = same
+    ? "The edit produced no change because the replacement is the same as the document."
+    : "The edit produced no change. The replacement parsed to the same document.";
+  return [lead, ...editNotes(stored, same ? undefined : intended)].join("\n");
+}
+
 /** Apply an agent transform to the live document and describe the result. */
-async function commitEdit(ctx: ToolContext, doc: LiveDocument, tool: string, build: (current: PMNode) => Transform, describe: string): Promise<ToolResult> {
+async function commitEdit(ctx: ToolContext, doc: LiveDocument, tool: string, build: (current: PMNode) => Transform, describe: string, notes?: EditNotes): Promise<ToolResult> {
   if (ctx.readOnly) return fail("You are in Ask mode, so documents can't be changed. Describe the change instead, or ask the user to switch to Agent mode.");
   await ctx.beforeWrite?.(doc);
   // Build and apply synchronously so no other change can interleave.
   const before = doc.doc;
   const tr = build(before);
-  if (!tr.docChanged) return fail("The edit produced no change to the document.");
+  const intended = notes?.intended?.(before);
+  if (!tr.docChanged) return fail(noChangeText(serializeDoc(before).markdown, intended));
   doc.applyTransform(tr, { kind: "agent", author: ctx.author, tool, turn: ctx.turn });
   // After the transform: the range is in the new document, so it must carry the new version
   // (the editor only draws a range recorded at the version it's showing).
@@ -220,8 +294,9 @@ async function commitEdit(ctx: ToolContext, doc: LiveDocument, tool: string, bui
   const { added, removed } = countWords(before, tr);
   ctx.onChange?.({ documentId: doc.id, title: doc.meta.title, tool, added, removed });
   const snippet = changedSnippet(before, tr);
+  const extra = editNotes(serializeDoc(tr.doc).markdown, intended, notes?.fragment);
   return ok(
-    `${describe} in "${doc.meta.title}". The change is live in the editor and marked for the user's review.${snippet ? `\nEdited lines:\n${snippet}` : ""}`,
+    `${describe} in "${doc.meta.title}". The change is live in the editor and marked for the user's review.${snippet ? `\nEdited lines:\n${snippet}` : ""}${extra.length ? `\n${extra.join("\n")}` : ""}`,
   );
 }
 
@@ -380,12 +455,13 @@ function blockHasLock(node: PMNode) {
 async function changeDraft(doc: LiveDocument, build: (current: PMNode) => Transform) {
   const existing = await readDraft(doc.id);
   const node = existing ? loadDoc(existing.doc) : doc.doc;
+  const before = serializeDoc(node).markdown;
   const tr = build(node);
-  if (!tr.docChanged) return { changed: false as const, words: docWordCount(node) };
+  if (!tr.docChanged) return { changed: false as const, words: docWordCount(node), before, after: before };
   const file = await writeDraft(doc.id, tr.doc.toJSON());
   const words = docWordCount(tr.doc);
   doc.setDraft({ updatedAt: file.updatedAt, words });
-  return { changed: true as const, words };
+  return { changed: true as const, words, before, after: serializeDoc(tr.doc).markdown };
 }
 
 // ---------------------------------------------------------------------------
@@ -436,7 +512,10 @@ export const TOOLS = [
       if (scrub.text === args.old_string && scrub.removed) {
         return ok(`Deleted ${scrub.removed} invisible character${scrub.removed === 1 ? "" : "s"} from the replacement. The remaining text matches the document, so nothing else changed.`);
       }
-      const result = await commitEdit(ctx, doc, "edit_document", (current) => applyStringEdits(current, [{ ...args, new_string: scrub.text }]), args.replace_all ? "Replaced all occurrences" : "Edited");
+      const edit: StringEdit = { old_string: args.old_string, new_string: scrub.text, replace_all: args.replace_all };
+      const result = await commitEdit(ctx, doc, "edit_document", (current) => applyStringEdits(current, [edit]), args.replace_all ? "Replaced all occurrences" : "Edited", {
+        intended: (before) => substitutedMarkdown(serializeDoc(before).markdown, [edit]),
+      });
       return withWriteCheck(result, [scrub]);
     },
   }),
@@ -469,7 +548,9 @@ export const TOOLS = [
         if (removed) return ok(`Deleted ${removed} invisible character${removed === 1 ? "" : "s"} from the edits. The remaining text matches the document, so nothing else changed.`);
       }
       const edits = (applicable.length ? applicable : prepared).map((item) => ({ ...item.edit, new_string: item.scrub.text }));
-      const result = await commitEdit(ctx, doc, "multi_edit_document", (current) => applyStringEdits(current, edits), `Applied ${edits.length} edit${edits.length === 1 ? "" : "s"}`);
+      const result = await commitEdit(ctx, doc, "multi_edit_document", (current) => applyStringEdits(current, edits), `Applied ${edits.length} edit${edits.length === 1 ? "" : "s"}`, {
+        intended: (before) => substitutedMarkdown(serializeDoc(before).markdown, edits),
+      });
       return withWriteCheck(result, prepared.map((item) => item.scrub));
     },
   }),
@@ -494,7 +575,7 @@ export const TOOLS = [
       if (scrub.text === serializeDoc(doc.doc).markdown && scrub.removed) {
         return ok(`Deleted ${scrub.removed} invisible character${scrub.removed === 1 ? "" : "s"} from the replacement. The document already matches, so nothing else changed.`);
       }
-      const result = await commitEdit(ctx, doc, "write_document", (current) => writeDocument(current, scrub.text), "Rewrote the document");
+      const result = await commitEdit(ctx, doc, "write_document", (current) => writeDocument(current, scrub.text), "Rewrote the document", { intended: () => scrub.text });
       return withWriteCheck(result, [scrub]);
     },
   }),
@@ -526,7 +607,7 @@ export const TOOLS = [
       if (!scrub.text.trim() && scrub.removed) {
         return ok(`Deleted ${scrub.removed} invisible character${scrub.removed === 1 ? "" : "s"}. Nothing visible was left to insert.`);
       }
-      const result = await commitEdit(ctx, doc, "insert_content", (current) => insertMarkdown(current, scrub.text, position), "Inserted content");
+      const result = await commitEdit(ctx, doc, "insert_content", (current) => insertMarkdown(current, scrub.text, position), "Inserted content", { fragment: scrub.text });
       return withWriteCheck(result, [scrub]);
     },
   }),
@@ -687,6 +768,8 @@ export const TOOLS = [
       }
       lines.push(`${words.toLocaleString()} words; about ${count.wordsPerPage.toLocaleString()} words fit on a full page of paragraphs with this formatting. Headings, lists, tables, images and page breaks change that.`);
       if (args.from_page != null || args.to_page != null) lines.push(describePageRange(count, args.from_page ?? 1, args.to_page ?? count.pages));
+      const pictures = describeImages(doc.doc, settings, await imageNaturals(doc.doc), count.starts);
+      if (pictures.length) lines.push(...pictures);
       return ok(lines.join("\n"));
     },
   }),
@@ -1002,7 +1085,8 @@ export const TOOLS = [
       const rows = doc.hunksJSON().map((hunk) => {
         const entry = entries.find((item) => item.pos + item.node.nodeSize > hunk.from);
         const author = isUserSuggestion(hunk) ? "suggested by the user" : "by Claude";
-        return `- ${hunk.id} (line ${entry?.startLine ?? "?"}, ${author}): "${clip(hunk.deletedText)}" → "${clip(hunk.insertedText ?? "")}"`;
+        const described = describeHunk(hunk, doc.doc);
+        return `- ${hunk.id} (line ${entry?.startLine ?? "?"}, ${author}): "${clip(described.deleted)}" → "${clip(described.inserted)}"`;
       });
       return ok(`${doc.hunks.length} pending change${doc.hunks.length === 1 ? "" : "s"} in "${doc.meta.title}":\n${rows.join("\n")}`);
     },
@@ -1792,9 +1876,12 @@ export const TOOLS = [
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
       const scrub = scrubWritten(args.new_string);
-      const result = await changeDraft(doc, (current) => applyStringEdits(current, [{ ...args, new_string: scrub.text }]));
-      if (!result.changed) return fail("The edit produced no change.");
-      return withWriteCheck(ok(`Prepared a revision of "${doc.meta.title}" (${result.words} words). The document is unchanged until the user keeps it.`), [scrub]);
+      const edit: StringEdit = { old_string: args.old_string, new_string: scrub.text, replace_all: args.replace_all };
+      const result = await changeDraft(doc, (current) => applyStringEdits(current, [edit]));
+      const intended = substitutedMarkdown(result.before, [edit]);
+      if (!result.changed) return fail(noChangeText(result.after, intended));
+      const extra = editNotes(result.after, intended);
+      return withWriteCheck(ok(`Prepared a revision of "${doc.meta.title}" (${result.words} words). The document is unchanged until the user keeps it.${extra.length ? `\n${extra.join("\n")}` : ""}`), [scrub]);
     },
   }),
 
@@ -1809,8 +1896,9 @@ export const TOOLS = [
       const doc = await resolveDocument(ctx, args.document_id);
       const scrub = scrubWritten(args.content);
       const result = await changeDraft(doc, (current) => writeDocument(current, scrub.text));
-      if (!result.changed) return fail("The revision matches the document, so there is nothing to keep.");
-      return withWriteCheck(ok(`Prepared a revision of "${doc.meta.title}" (${result.words} words). The document is unchanged until the user keeps it.`), [scrub]);
+      const extra = editNotes(result.after, scrub.text);
+      if (!result.changed) return fail(["The revision matches the document, so there is nothing to keep.", ...extra].join("\n"));
+      return withWriteCheck(ok(`Prepared a revision of "${doc.meta.title}" (${result.words} words). The document is unchanged until the user keeps it.${extra.length ? `\n${extra.join("\n")}` : ""}`), [scrub]);
     },
   }),
 

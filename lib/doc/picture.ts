@@ -114,10 +114,10 @@ export function croppedFrame(displayWidth: number, naturalWidth: number, natural
 }
 
 /**
- * A picture's width as CSS. A bare number is pixels (`480` and `480px` are the
- * same). A percent is a share of the text width (`70%`).
+ * The width token stored in the document and written back to Markdown.
+ * `340` stays `340`, `340px` stays `340px`, and `70%` stays `70%`.
  */
-export function pictureWidth(value: unknown): string | null {
+export function pictureWidthToken(value: unknown): string | null {
   if (value == null || value === "") return null;
   if (typeof value !== "string" && typeof value !== "number") return null;
   const raw = String(value).trim();
@@ -126,11 +126,26 @@ export function pictureWidth(value: unknown): string | null {
     const percent = Number.parseFloat(raw);
     return percent > 0 ? `${percent}%` : null;
   }
-  if (/^\d+(\.\d+)?px$/i.test(raw) || /^\d+(\.\d+)?$/.test(raw)) {
+  if (/^\d+(\.\d+)?px$/i.test(raw)) {
     const px = Number.parseFloat(raw);
     return px > 0 ? `${px}px` : null;
   }
+  if (/^\d+(\.\d+)?$/.test(raw)) {
+    const px = Number.parseFloat(raw);
+    return px > 0 ? String(px) : null;
+  }
   return raw;
+}
+
+/**
+ * A picture's width as CSS. A bare number is pixels (`480` and `480px` are the
+ * same). A percent is a share of the text width (`70%`).
+ */
+export function pictureWidth(value: unknown): string | null {
+  const token = pictureWidthToken(value);
+  if (token == null) return null;
+  if (/^\d+(\.\d+)?$/.test(token)) return `${token}px`;
+  return token;
 }
 
 /** A width attribute (`220px`, `50%`, `220`) in CSS pixels, never wider than the text. */

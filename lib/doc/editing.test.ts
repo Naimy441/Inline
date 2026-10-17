@@ -15,6 +15,7 @@ import {
   findText,
   insertMarkdown,
   LockedContentError,
+  mathWarnings,
   numberLines,
   searchLines,
   writeDocument,
@@ -208,6 +209,36 @@ describe("applyStringEdit", () => {
     ]);
   });
 
+  it("rewrites words beside an inline equation without splitting the equation", () => {
+    const source = doc("Call $z = x + iy$ that point.");
+    const result = edit(source, "Call $z = x + iy$ that point.", "Call z that $z = x + iy$ that point.").doc;
+    assert.equal(docToMarkdown(result), "Call z that $z = x + iy$ that point.");
+  });
+
+  it("rewrites words around a formula that is also written as plain text", () => {
+    const source = doc("This generalizes $x + y$ the sum x + y.");
+    const result = edit(source, "This generalizes $x + y$ the sum x + y.", "This x + y generalizes $x + y$ the sum.").doc;
+    assert.equal(docToMarkdown(result), "This x + y generalizes $x + y$ the sum.");
+  });
+
+  it("still replaces an equation when the equation itself changes", () => {
+    const source = doc("Energy is $E = mc^2$ today.");
+    const result = edit(source, "$E = mc^2$", "$E = mc^2 + 1$").doc;
+    assert.equal(docToMarkdown(result), "Energy is $E = mc^2 + 1$ today.");
+  });
+
+  it("replaces an inline picture instead of keeping the previous one", () => {
+    const source = doc("See ![old](/a.png) here.");
+    const result = edit(source, "![old](/a.png)", "![new](/b.png)").doc;
+    assert.equal(docToMarkdown(result), "See ![new](/b.png) here.");
+  });
+
+  it("keeps a link whole when the words beside it change", () => {
+    const source = doc("Read [the notes](https://example.com/a) today.");
+    const result = edit(source, "today", "tomorrow").doc;
+    assert.equal(docToMarkdown(result), "Read [the notes](https://example.com/a) tomorrow.");
+  });
+
   it("applies multi-edits atomically", () => {
     const source = doc("a b c");
     assert.throws(() => applyStringEdits(source, [{ old_string: "a", new_string: "x" }, { old_string: "zzz", new_string: "y" }]), /Edit 2 of 2/);
@@ -270,6 +301,37 @@ describe("whole-document operations", () => {
     const tr = new Transform(doc("One\n\nTwo"));
     applyBlockStyle(tr, { from: 1, to: 3 }, { type: "heading", level: 2, align: "center" });
     assert.equal(docToMarkdown(tr.doc), "## One {align=center}\n\n## Two {align=center}");
+  });
+});
+
+describe("math markdown round trip", () => {
+  for (const markdown of ["Call $z = x + iy$ that point.", "This generalizes $x + y$ the sum."]) {
+    it(`reads back as the same document: ${markdown}`, () => {
+      const once = docToMarkdown(markdownToDoc(markdown));
+      assert.equal(once, markdown);
+      assert.equal(docToMarkdown(markdownToDoc(once)), once);
+    });
+  }
+
+  it("does not leave a whitespace-only equation behind", () => {
+    const math = schema.mark("math");
+    const paragraph = schema.node("paragraph", null, [schema.text("A"), schema.text(" ", [math]), schema.text("B")]);
+    const source = schema.node("doc", null, [paragraph]);
+    const markdown = docToMarkdown(source);
+    assert.equal(markdown, "A B");
+    assert.equal(mathWarnings(markdown).length, 0);
+    const again = markdownToDoc(markdown);
+    again.descendants((node) => {
+      assert.equal(node.marks.some((mark) => mark.type.name === "math"), false);
+    });
+    assert.equal(docToMarkdown(again), markdown);
+  });
+
+  it("warns when a dollar sign is stuck to a word or the equation is empty", () => {
+    const warnings = mathWarnings("This generalizes$ $the sum.");
+    assert.ok(warnings.some((warning) => /empty inline math/.test(warning)));
+    assert.ok(warnings.some((warning) => /stuck to a word/.test(warning)));
+    assert.equal(mathWarnings("Call $z = x + iy$ that point.").length, 0);
   });
 });
 

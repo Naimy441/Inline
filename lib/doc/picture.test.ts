@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { croppedFrame, cropToSrcRect, cssPx, parseCropToken, pictureCrop, pictureRotate, pictureWidth, rotateFromWord, rotateToWord, srcRectToCrop } from "./picture";
+import { croppedFrame, cropToSrcRect, cssPx, parseCropToken, pictureCrop, pictureRotate, pictureWidth, pictureWidthToken, rotateFromWord, rotateToWord, srcRectToCrop } from "./picture";
 
 describe("picture crop and rotation", () => {
   it("reads a crop as the percent hidden on each edge", () => {
@@ -25,6 +25,13 @@ describe("picture crop and rotation", () => {
     assert.equal(pictureWidth("480px"), "480px");
     assert.equal(pictureWidth("70%"), "70%");
     assert.equal(pictureWidth(""), null);
+  });
+
+  it("keeps the unit the caller wrote when the width is stored", () => {
+    assert.equal(pictureWidthToken("480"), "480");
+    assert.equal(pictureWidthToken("480px"), "480px");
+    assert.equal(pictureWidthToken("70%"), "70%");
+    assert.equal(pictureWidthToken(""), null);
   });
 
   it("fits a pixel width to the text column", () => {

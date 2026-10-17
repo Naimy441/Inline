@@ -1,7 +1,7 @@
 import { Schema, type DOMOutputSpec, type Mark, type Node as PMNode, type NodeSpec, type MarkSpec } from "prosemirror-model";
 import { tableNodes } from "prosemirror-tables";
 import { lineVars } from "@/lib/doc/fontMetrics";
-import { cropToken, parseCropToken, pictureCrop, pictureRotate, pictureWrap, type PictureCrop, type PictureWrap } from "@/lib/doc/picture";
+import { cropToken, parseCropToken, pictureCrop, pictureRotate, pictureWidth, pictureWrap, type PictureCrop, type PictureWrap } from "@/lib/doc/picture";
 import { nodeStyleId, safeStyleId } from "@/lib/doc/styles";
 
 /**
@@ -778,7 +778,9 @@ const nodes: Record<string, NodeSpec> = {
     toDOM: (node): DOMOutputSpec => {
       const wrap = pictureWrap(node.attrs.wrap);
       const picture = pictureDom(node.attrs.crop, node.attrs.rotate);
-      const style = [node.attrs.width ? `width: ${node.attrs.width}` : "", node.attrs.height ? `height: ${node.attrs.height}` : "", picture.style].filter(Boolean).join("; ");
+      const width = pictureWidth(node.attrs.width);
+      const height = pictureWidth(node.attrs.height);
+      const style = [width ? `width: ${width}` : "", height ? `height: ${height}` : "", picture.style].filter(Boolean).join("; ");
       return [
         "figure",
         {

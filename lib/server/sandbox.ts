@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { accessSync, constants } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { SandboxManager, type SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 
@@ -36,6 +37,18 @@ export function commandEnvironment() {
   return { PATH, HOME: process.env.HOME ?? "", python3 };
 }
 
+/**
+ * Matplotlib and fontconfig write a cache on import. The sandbox can only
+ * write inside the document folder, and `.tmp` is hidden from the file list.
+ */
+async function commandCacheEnv(folder: string) {
+  const cache = path.join(folder, ".tmp", "cache");
+  const mpl = path.join(folder, ".tmp", "matplotlib");
+  await mkdir(cache, { recursive: true });
+  await mkdir(mpl, { recursive: true });
+  return { XDG_CACHE_HOME: cache, MPLCONFIGDIR: mpl };
+}
+
 /** Text Claude should see for a command: the exit reason, both streams, and where it ran. */
 export function formatCommandReport(command: string, result: SandboxResult) {
   const reason = !result.started
@@ -55,7 +68,7 @@ export function formatCommandReport(command: string, result: SandboxResult) {
     `command: ${command}`,
     "working directory: the document folder",
     `sandbox: Claude Code (${result.backend})`,
-    `environment: PATH=${env.PATH} HOME=${env.HOME || "(unset)"}; python3 is ${env.python3}`,
+    `environment: HOME=${env.HOME || "(unset)"}; python3 is ${env.python3}`,
     "stdout:",
     result.stdout.replace(/\s+$/, "") || "(empty)",
     "stderr:",
@@ -77,7 +90,8 @@ export async function runInFolder(folder: string, command: string, timeoutMs: nu
   try {
     await ensureSandbox();
     const wrapped = await SandboxManager.wrapWithSandboxArgv(command, undefined, folderConfig(root), signal, root);
-    const captured = await capture(wrapped.argv[0]!, wrapped.argv.slice(1), timeoutMs, { cwd: root, env: wrapped.env, signal });
+    const cache = await commandCacheEnv(root);
+    const captured = await capture(wrapped.argv[0]!, wrapped.argv.slice(1), timeoutMs, { cwd: root, env: { ...wrapped.env, ...cache }, signal });
     const stderr = SandboxManager.annotateStderrWithSandboxFailures(command, captured.stderr);
     return { ...captured, stderr, started: true, backend: BACKEND };
   } catch (error) {
