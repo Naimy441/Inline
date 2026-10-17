@@ -132,6 +132,8 @@ type ToolbarProps = {
   meta: DocumentMeta | null;
   zoom: number;
   zoomFit: boolean;
+  /** Pinch or ctrl+scroll is above the toolbar lock, so no menu item is the current zoom. */
+  zoomRaised: boolean;
   onZoom: (zoom: number | "fit") => void;
   onLink: () => void;
   onComment: () => void;
@@ -153,6 +155,7 @@ const ToolbarView = memo(function ToolbarView({
   meta,
   zoom,
   zoomFit,
+  zoomRaised,
   onZoom,
   onLink,
   onComment,
@@ -209,7 +212,7 @@ const ToolbarView = memo(function ToolbarView({
           items={[
             { label: "Fit", checked: zoomFit, onSelect: () => onZoom("fit") },
             { kind: "separator" },
-            ...ZOOMS.map<MenuItem>((value) => ({ label: `${Math.round(value * 100)}%`, checked: !zoomFit && value === zoom, onSelect: () => onZoom(value) })),
+            ...ZOOMS.map<MenuItem>((value) => ({ label: `${Math.round(value * 100)}%`, checked: !zoomFit && !zoomRaised && value === zoom, onSelect: () => onZoom(value) })),
           ]}
         >
           {Math.round(zoom * 100)}% <ChevronDown size={13} />

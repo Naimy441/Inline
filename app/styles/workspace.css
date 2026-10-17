@@ -544,6 +544,11 @@
   margin: 0 auto;
 }
 
+/* Past the zoom lock the page sits where the pointer left it, instead of margin centering it. */
+.page-stack-wrap.is-anchored .page-stack-frame {
+  margin: 0;
+}
+
 .page-stack {
   position: relative;
   /* Stay at the frame's top-left. Centering the unscaled box (margin: auto)
@@ -563,6 +568,7 @@
   left: 0;
   background: var(--paper);
   box-shadow: var(--paper-shadow);
+  border: 1px solid var(--page-edge);
   border-radius: 2px;
   pointer-events: none;
 }
