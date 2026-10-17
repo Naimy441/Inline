@@ -240,7 +240,6 @@ export function OutlinePanel({
             icon: <Trash2 size={14} />,
             danger: true,
             disabled: tabs.length < 2,
-            hint: tabs.length < 2 ? "A document keeps at least one tab" : undefined,
             onSelect: () => menu && void remove(menu.id),
           },
         ]}

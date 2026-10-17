@@ -167,7 +167,6 @@ export function ContextMenu({
           { kind: "separator" },
           {
             label: `Add “${shown}” to dictionary`,
-            hint: "Stop underlining this word",
             icon: <BookPlus size={14} />,
             onSelect: () => {
               session.addToDictionary(word.text);

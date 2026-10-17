@@ -207,7 +207,7 @@ const ToolbarView = memo(function ToolbarView({
           className="tb-select tb-zoom"
           label="Zoom"
           items={[
-            { label: "Fit", hint: "Shrink pages that don't fit the window", checked: zoomFit, onSelect: () => onZoom("fit") },
+            { label: "Fit", checked: zoomFit, onSelect: () => onZoom("fit") },
             { kind: "separator" },
             ...ZOOMS.map<MenuItem>((value) => ({ label: `${Math.round(value * 100)}%`, checked: !zoomFit && value === zoom, onSelect: () => onZoom(value) })),
           ]}

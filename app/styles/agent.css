@@ -2040,11 +2040,9 @@ button.context-row:hover {
 }
 
 .link-purpose label {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  column-gap: 8px;
-  row-gap: 1px;
+  display: flex;
   align-items: center;
+  gap: 8px;
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -2056,16 +2054,11 @@ button.context-row:hover {
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
 }
 
-.link-purpose input {
-  grid-row: 1 / span 2;
-}
-
 .link-purpose-name {
   font-size: 13px;
   font-weight: 600;
 }
 
-.link-purpose-hint,
 .link-note,
 .link-page-preview {
   color: var(--muted);

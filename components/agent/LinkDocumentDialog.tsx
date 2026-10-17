@@ -151,12 +151,10 @@ export function LinkDocumentDialog({
           <label className={purpose === "voice" ? "is-selected" : ""}>
             <input type="radio" name="link-purpose" checked={purpose === "voice"} onChange={() => setPurpose("voice")} />
             <span className="link-purpose-name">Match the voice</span>
-            <span className="link-purpose-hint">Use the pages you choose as a writing sample.</span>
           </label>
           <label className={purpose === "context" ? "is-selected" : ""}>
             <input type="radio" name="link-purpose" checked={purpose === "context"} onChange={() => setPurpose("context")} />
             <span className="link-purpose-name">Use as context</span>
-            <span className="link-purpose-hint">Include the whole document because its information matters.</span>
           </label>
         </div>
       )}

@@ -381,14 +381,12 @@ export const Composer = forwardRef<
             items={[
               {
                 label: "Agent",
-                hint: "Claude edits the document directly",
                 icon: <PenLine size={14} />,
                 checked: settings.mode === "agent",
                 onSelect: () => onSettings({ mode: "agent" as AgentMode }),
               },
               {
                 label: "Ask",
-                hint: "Read-only: answers without editing",
                 icon: <MessageCircleQuestion size={14} />,
                 checked: settings.mode === "ask",
                 onSelect: () => onSettings({ mode: "ask" as AgentMode }),
@@ -404,7 +402,7 @@ export const Composer = forwardRef<
               className="pill pill-ghost"
               label="Model"
               placement="top-start"
-              items={models.map((item) => ({ label: item.displayName, hint: item.description, checked: item.value === model?.value, onSelect: () => onSettings({ model: item.value }) }))}
+              items={models.map((item) => ({ label: item.displayName, checked: item.value === model?.value, onSelect: () => onSettings({ model: item.value }) }))}
             >
               {model ? model.displayName.replace(/\s*\(.*\)$/, "") : "Model"}
               <ChevronDown size={12} />

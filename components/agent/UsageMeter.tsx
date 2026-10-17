@@ -192,7 +192,6 @@ export function UsageMeter({ chat, running, usageLimit, onUsageLimit }: { chat: 
               <span>100%</span>
             </div>
           </div>
-          <p className="usage-note">Claude stops when your 5-hour or weekly usage reaches this share of your plan.</p>
         </div>
       </Popover>
     </>
