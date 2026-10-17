@@ -2083,7 +2083,7 @@ button.status-item:hover {
   }
 }
 
-/* Special characters */
+/* Special characters. The grid is windowed: a block can hold tens of thousands of code points. */
 
 .charmap-tools {
   display: flex;
@@ -2091,50 +2091,121 @@ button.status-item:hover {
   gap: 8px;
 }
 
-.charmap {
-  max-height: 52vh;
-  margin-top: 12px;
-  overflow-y: auto;
+.charmap-filters {
+  display: flex;
+  gap: 8px;
 }
 
-.charmap section {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 280px;
+.charmap-filters .input {
+  flex: 1;
+  min-width: 0;
 }
 
-.charmap h4 {
-  margin: 12px 0 6px;
-  font-size: 11.5px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--muted);
+.charmap-preview {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 32px;
+  margin-top: 10px;
 }
 
-.charmap section:first-child h4 {
-  margin-top: 0;
-}
-
-.charmap-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(38px, 1fr));
-  gap: 4px;
-}
-
-.charmap-cell {
-  height: 38px;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
+.charmap-preview-glyph,
+.charmap-glyph {
   font-family: "Noto Sans Symbols 2", "Noto Sans Symbols", "Segoe UI Symbol", "Apple Symbols", "DejaVu Sans", var(--font-ui);
-  font-size: 18px;
   line-height: 1;
 }
 
-.charmap-cell:hover {
+.charmap-preview-glyph {
+  font-size: 22px;
+}
+
+.charmap-preview-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.charmap-preview-code,
+.charmap-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--muted);
+}
+
+.charmap-preview-code {
+  font-size: 12px;
+}
+
+.charmap-meta {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.charmap-empty {
+  margin: 12px 0 0;
+}
+
+.charmap {
+  position: relative;
+  height: min(440px, 48vh);
+  min-height: 200px;
+  margin-top: 8px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.charmap-canvas {
+  position: relative;
+  width: 100%;
+}
+
+.charmap-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: grid;
+  grid-template-columns: repeat(var(--charmap-columns, 8), minmax(0, 1fr));
+  gap: 4px;
+  height: 56px;
+}
+
+.charmap-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 56px;
+  padding: 2px 1px 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.charmap-glyph {
+  min-height: 20px;
+  font-size: 20px;
+}
+
+.charmap-code {
+  font-size: 10px;
+  letter-spacing: -0.02em;
+}
+
+.charmap-cell:hover,
+.charmap-cell:focus-visible {
   border-color: var(--accent);
   background: var(--accent-soft);
+  outline: none;
+}
+
+@media (max-width: 640px) {
+  .charmap-filters {
+    flex-direction: column;
+  }
 }
 
 /* Focus mode hides every AI surface: chat chrome, inline actions, usage, and Claude's cursor. */

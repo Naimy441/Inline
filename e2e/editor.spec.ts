@@ -452,6 +452,7 @@ test("capitalization, special characters and table of contents", async ({ page }
   await page.keyboard.press("End");
   await page.locator(".menubar-item", { hasText: "Insert" }).click();
   const insertMenu = page.locator(".menu");
+  await expect(insertMenu.locator(".menu-item", { hasText: "Equation" })).toBeVisible();
   await expect(insertMenu.locator(".menu-item", { hasText: "Footnote" })).toBeVisible();
   await expect(insertMenu.locator(".menu-item", { hasText: "Citation" })).toHaveCount(0);
   await expect(insertMenu.locator(".menu-item", { hasText: "Bibliography" })).toHaveCount(0);
@@ -459,31 +460,52 @@ test("capitalization, special characters and table of contents", async ({ page }
   await insertMenu.locator(".menu-item", { hasText: "Special characters" }).click();
   const charmap = page.getByRole("dialog", { name: "Special characters" });
   await expect(charmap).toBeVisible();
-  await expect(charmap.locator("h4", { hasText: "Emoji" })).toHaveCount(0);
-  await expect(charmap.locator(".charmap-cell", { hasText: "😀" })).toHaveCount(0);
+  await expect(charmap).toContainText("172,808");
+  await expect(charmap.locator(".charmap-code").first()).toHaveText(/^U\+[0-9A-F]{4,6}$/);
   await expect(charmap.getByLabel("Character category").locator("option")).toHaveText([
-    "All categories",
+    "Symbol",
     "Punctuation",
-    "Symbols",
-    "Arrows",
-    "Math",
-    "Currency",
-    "Numbers",
+    "Number",
+    "Format & Whitespace",
+    "Modifier",
     "Latin",
-    "Greek",
-    "Letterlike",
-    "Geometric",
-    "Enclosed",
-    "Technical",
-    "Music",
-    "Modifiers",
-    "Box drawing",
+    "Other European Scripts",
+    "American Scripts",
+    "African Scripts",
+    "Middle Eastern Scripts",
+    "South Asian Scripts",
+    "Southeast Asian Scripts",
+    "Hangul",
+    "Other East Asian Scripts",
+    "Han",
+    "Other",
   ]);
-  await expect.poll(async () => charmap.locator(".charmap-cell").count()).toBeGreaterThan(100);
   await page.getByLabel("Search characters").fill("euro");
-  await page.getByRole("button", { name: "euro sign", exact: true }).click();
+  await charmap.getByRole("button", { name: "EURO SIGN, U+20AC", exact: true }).click();
   await expect(page.locator(".doc-content p", { hasText: "SHOUT THIS€" })).toHaveCount(1);
+  await page.getByLabel("Search characters").fill("U+00E9");
+  const acute = charmap.getByRole("button", { name: "LATIN SMALL LETTER E WITH ACUTE, U+00E9", exact: true });
+  await expect(acute).toBeVisible();
+  await expect(acute.locator(".charmap-code")).toHaveText("U+00E9");
+  await acute.click();
+  await expect(page.locator(".doc-content p", { hasText: "SHOUT THIS€é" })).toHaveCount(1);
+
+  await charmap.getByLabel("Character category").selectOption("Han");
+  await charmap.getByLabel("Character block").selectOption("All blocks");
+  await expect(charmap.locator(".charmap-meta")).toHaveText("Han · 114,327");
+  await expect.poll(async () => charmap.locator(".charmap-cell").count()).toBeLessThan(200);
+  await charmap.getByLabel("Character block").selectOption("CJK Unified Ideographs");
+  const grid = charmap.locator(".charmap");
+  await grid.evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  await expect(charmap.getByRole("button", { name: /CJK UNIFIED IDEOGRAPH-9FFF, U\+9FFF/ })).toBeVisible();
+  await expect.poll(async () => charmap.locator(".charmap-cell").count()).toBeLessThan(200);
   await page.keyboard.press("Escape");
+  await page.locator(".doc-content p", { hasText: "SHOUT THIS" }).click();
+  await page.keyboard.press("End");
+  await page.keyboard.type("z");
+  await expect(page.locator(".doc-content p", { hasText: "SHOUT THIS€éz" })).toHaveCount(1);
 
   await page.locator(".menubar-item", { hasText: "Insert" }).click();
   await page.getByRole("menuitem", { name: /^Table of contents/ }).click();
