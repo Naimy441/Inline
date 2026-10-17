@@ -10,6 +10,7 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test \"lib/**/*.test.ts\" \"tests/**/*.test.ts\"",
+    "unicode:catalog": "node scripts/build-unicode-catalog.mjs",
     "test:e2e": "playwright test",
     "desktop:dev": "npm --prefix desktop run dev",
     "desktop:dist": "npm --prefix desktop run dist"
