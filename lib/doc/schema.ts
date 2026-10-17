@@ -726,6 +726,8 @@ const nodes: Record<string, NodeSpec> = {
       alt: { default: "" },
       title: { default: "" },
       width: { default: null as string | null },
+      /** Set when a side handle squishes the picture. Null keeps the aspect ratio. */
+      height: { default: null as string | null },
       align: { default: "center" as Align },
       /** null keeps today's block picture: text above and below it. */
       wrap: { default: null as PictureWrap | null },
@@ -739,12 +741,15 @@ const nodes: Record<string, NodeSpec> = {
         getAttrs: (dom) => {
           const el = dom as HTMLImageElement;
           const width = el.style.width || el.getAttribute("width") || null;
+          const height = el.style.height || el.getAttribute("height") || null;
           const picture = readPictureDom(el);
+          const length = (value: string | null) => (value ? (/^\d+$/.test(value) ? `${value}px` : value) : null);
           return {
             src: el.getAttribute("src") || "",
             alt: el.getAttribute("alt") || "",
             title: el.getAttribute("title") || "",
-            width: width ? (/^\d+$/.test(width) ? `${width}px` : width) : null,
+            width: length(width),
+            height: length(height),
             ...picture,
           };
         },
@@ -753,7 +758,7 @@ const nodes: Record<string, NodeSpec> = {
     toDOM: (node): DOMOutputSpec => {
       const wrap = pictureWrap(node.attrs.wrap);
       const picture = pictureDom(node.attrs.crop, node.attrs.rotate);
-      const style = [node.attrs.width ? `width: ${node.attrs.width}` : "", picture.style].filter(Boolean).join("; ");
+      const style = [node.attrs.width ? `width: ${node.attrs.width}` : "", node.attrs.height ? `height: ${node.attrs.height}` : "", picture.style].filter(Boolean).join("; ");
       return [
         "figure",
         {

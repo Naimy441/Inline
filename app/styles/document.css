@@ -680,9 +680,13 @@ img.ProseMirror-separator {
   margin: 0 0 var(--para-space, 8pt);
   line-height: 0;
   max-width: 100%;
-  /* The frame is only a box around the picture. Clicks on the text under or
-     beside it pass through; the picture itself still takes the click. */
+  /* Wrapped pictures let the text beside them take the click. A picture on its
+     own line keeps the empty margin beside it, so that click can select it. */
   pointer-events: none;
+}
+
+.doc-content .doc-image:not(.wrap-square):not(.wrap-behind):not(.wrap-front) {
+  pointer-events: auto;
 }
 
 .doc-content .doc-image img {
@@ -771,52 +775,112 @@ img.ProseMirror-separator {
   outline: none;
 }
 
-.doc-content .doc-image.ProseMirror-selectednode img {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
-.doc-content .doc-image.is-cropped.ProseMirror-selectednode .image-frame {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
+.doc-content .doc-image.ProseMirror-selectednode img,
 .doc-content .doc-image.is-cropped.ProseMirror-selectednode img {
   outline: none;
 }
 
-/* Resize handles on the selected image's corners */
+.doc-content .doc-image.ProseMirror-selectednode .image-frame,
+.doc-content .doc-image.is-cropped.ProseMirror-selectednode .image-frame {
+  outline: 1.5px solid var(--focus);
+  outline-offset: 0;
+}
+
+/* Corner handles keep the ratio, side handles squish one axis, and the dot turns the picture. */
 .doc-content .image-frame {
   position: relative;
   display: inline-block;
   max-width: 100%;
+  transform-origin: center center;
 }
 .doc-content .image-frame img {
   display: block;
 }
 .doc-content .image-handle {
   position: absolute;
-  bottom: -6px;
-  width: 12px;
-  height: 12px;
-  border: 2px solid var(--focus);
-  border-radius: 2px;
-  background: var(--surface);
+  width: 8px;
+  height: 8px;
+  border: 1px solid #fff;
+  border-radius: 1px;
+  background: var(--focus);
+  box-sizing: border-box;
   display: none;
   touch-action: none;
   pointer-events: auto;
 }
-.doc-content .image-handle-left {
-  left: -6px;
-  cursor: nesw-resize;
+.doc-content .image-handle-nw { top: -5px; left: -5px; cursor: nwse-resize; }
+.doc-content .image-handle-n { top: -5px; left: 50%; margin-left: -4px; cursor: ns-resize; }
+.doc-content .image-handle-ne { top: -5px; right: -5px; cursor: nesw-resize; }
+.doc-content .image-handle-e,
+.doc-content .image-handle-right { top: 50%; right: -5px; bottom: auto; margin-top: -4px; cursor: ew-resize; }
+.doc-content .image-handle-se { right: -5px; bottom: -5px; cursor: nwse-resize; }
+.doc-content .image-handle-s { bottom: -5px; left: 50%; margin-left: -4px; cursor: ns-resize; }
+.doc-content .image-handle-sw { bottom: -5px; left: -5px; cursor: nesw-resize; }
+.doc-content .image-handle-w,
+.doc-content .image-handle-left { top: 50%; left: -5px; bottom: auto; margin-top: -4px; cursor: ew-resize; }
+.doc-content .image-rotate {
+  position: absolute;
+  top: -26px;
+  left: 50%;
+  width: 1px;
+  height: 20px;
+  background: var(--focus);
+  transform: translateX(-50%);
+  display: none;
+  pointer-events: none;
 }
-.doc-content .image-handle-right {
-  right: -6px;
-  cursor: nwse-resize;
+.doc-content .image-rotate-dot {
+  position: absolute;
+  top: -9px;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  border: 1px solid #fff;
+  border-radius: 50%;
+  background: var(--focus);
+  box-sizing: border-box;
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
 }
 .doc-content[contenteditable="true"] .doc-image.ProseMirror-selectednode .image-handle,
-.doc-content .doc-image.is-resizing .image-handle {
+.doc-content .doc-image.is-resizing .image-handle,
+.doc-content[contenteditable="true"] .doc-image.ProseMirror-selectednode .image-rotate,
+.doc-content .doc-image.is-resizing .image-rotate {
   display: block;
+}
+.doc-content .doc-image.is-dragging {
+  opacity: 0.45;
+}
+.doc-content .doc-image.is-dragging,
+.doc-content .doc-image.is-dragging * {
+  pointer-events: none !important;
+}
+.doc-content.picture-line .ProseMirror-gapcursor {
+  display: none !important;
+}
+
+.image-drop-caret,
+.picture-line-caret {
+  position: fixed;
+  z-index: 80;
+  pointer-events: none;
+}
+.image-drop-caret {
+  width: 3px;
+  background: #1a73e8;
+  border-radius: 1px;
+}
+.picture-line-caret {
+  z-index: 30;
+  width: 2px;
+  background: var(--paper-text, #202124);
+  animation: gapcursor-blink 1.1s steps(2, start) infinite;
+}
+.image-drop-caret[hidden],
+.picture-line-caret[hidden] {
+  display: none !important;
 }
 
 /* Page breaks and pagination spacers */

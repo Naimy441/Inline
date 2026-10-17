@@ -4,7 +4,7 @@ import { liftListItem, sinkListItem, wrapInList } from "prosemirror-schema-list"
 import { NodeSelection, TextSelection, type Command, type EditorState } from "prosemirror-state";
 import { canSplit } from "prosemirror-transform";
 import { isInTable } from "prosemirror-tables";
-import { pictureCrop, pictureRotate, pictureWrap, type PictureCrop, type PictureWrap } from "@/lib/doc/picture";
+import { pictureCrop, pictureRotate, pictureWidth, pictureWrap, type PictureCrop, type PictureWrap } from "@/lib/doc/picture";
 import { fileLinkHref, MAX_INDENT, safeHref, schema, type Align } from "@/lib/doc/schema";
 import { createToc, findToc, tocTitleSelection } from "@/lib/doc/toc";
 import { findStyle, nodeStyleId, resolveStyle, storedStyleId, structuralRole, type ParagraphStyle, type StyleRole } from "@/lib/doc/styles";
@@ -540,20 +540,32 @@ export function insertTable(rows: number, cols: number): Command {
   };
 }
 
-export function setImageAttrs(attrs: Partial<{ width: string | null; align: Align; alt: string; wrap: PictureWrap | null; crop: PictureCrop | null; rotate: number | null }>): Command {
+function storedPictureSize(node: PMNode, value: string | number | null | undefined) {
+  if (node.type === nodes.inline_image) {
+    if (value == null || value === "") return null;
+    const n = typeof value === "number" ? value : Number.parseFloat(String(value));
+    return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+  }
+  return pictureWidth(value);
+}
+
+export function setImageAttrs(attrs: Partial<{ width: string | number | null; height: string | number | null; align: Align; alt: string; wrap: PictureWrap | null; crop: PictureCrop | null; rotate: number | null }>): Command {
   return (state, dispatch) => {
     const selection = state.selection;
     if (!(selection instanceof NodeSelection)) return false;
     const node = selection.node;
     if (node.type !== nodes.image && node.type !== nodes.inline_image) return false;
     const next: Record<string, unknown> = { ...node.attrs };
-    if ("width" in attrs && "width" in node.attrs) next.width = attrs.width ?? null;
+    if ("width" in attrs && "width" in node.attrs) next.width = storedPictureSize(node, attrs.width);
+    if ("height" in attrs && "height" in node.attrs) next.height = storedPictureSize(node, attrs.height);
     if ("align" in attrs && node.type === nodes.image) next.align = attrs.align;
     if ("alt" in attrs) next.alt = attrs.alt ?? "";
     if ("wrap" in attrs && node.type === nodes.image) next.wrap = pictureWrap(attrs.wrap);
     if ("crop" in attrs) next.crop = pictureCrop(attrs.crop);
     if ("rotate" in attrs) next.rotate = pictureRotate(attrs.rotate);
-    dispatch?.(state.tr.setNodeMarkup(selection.from, undefined, next));
+    const tr = state.tr.setNodeMarkup(selection.from, undefined, next);
+    tr.setSelection(NodeSelection.create(tr.doc, selection.from));
+    dispatch?.(tr);
     return true;
   };
 }

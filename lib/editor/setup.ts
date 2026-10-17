@@ -34,6 +34,7 @@ import {
 } from "@/lib/editor/commands";
 import { commentsPlugin } from "@/lib/editor/comments";
 import { imageSelectionPlugin } from "@/lib/editor/imageView";
+import { deleteSelectedPicture } from "@/lib/editor/pictureEdit";
 import { findPlugin } from "@/lib/editor/find";
 import { spellingPlugin } from "@/lib/editor/spelling";
 import { invisiblesPlugin } from "@/lib/editor/invisibles";
@@ -277,6 +278,9 @@ function buildKeymap(extra: Record<string, Command>, styles: () => readonly Para
     "Alt-ArrowUp": joinUp,
     "Alt-ArrowDown": joinDown,
     Escape: selectParentNode,
+    // Before the base map, so a selected picture is removed instead of the browser walking into it.
+    Backspace: deleteSelectedPicture,
+    Delete: deleteSelectedPicture,
     ...extra,
   };
   return keymap(bindings);
@@ -405,7 +409,7 @@ export function editorPlugins(options: EditorPluginOptions) {
     buildKeymap(options.keys ?? {}, options.styles ?? (() => BUILTIN_STYLES)),
     keymap(baseKeymap),
     history(),
-    dropCursor({ color: "var(--accent)", width: 2 }),
+    dropCursor({ color: "#1a73e8", width: 3 }),
     // Before the gap cursor: a click under a picture is a text caret, which the gap cursor would claim first.
     imageSelectionPlugin(),
     gapCursor(),

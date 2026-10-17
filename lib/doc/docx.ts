@@ -230,7 +230,12 @@ function fittedExtent(entry: { width: number; height: number }, node: PMNode, co
     if (Number.isFinite(parsed) && parsed > 0) width = parsed;
   }
   width = Math.min(Math.max(1, width), contentWidth);
-  const height = (width * entry.height * visH) / (entry.width * visW);
+  let height = (width * entry.height * visH) / (entry.width * visW);
+  const requestedHeight = String(node.attrs.height ?? "");
+  if (requestedHeight && !requestedHeight.endsWith("%")) {
+    const parsed = Number.parseFloat(requestedHeight);
+    if (Number.isFinite(parsed) && parsed > 0) height = parsed;
+  }
   return { cx: Math.round(width * EMU_PER_PX), cy: Math.round(Math.max(1, height) * EMU_PER_PX) };
 }
 

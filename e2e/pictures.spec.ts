@@ -63,7 +63,7 @@ test("square wrap, behind, in front, crop and rotate survive a reload", async ({
   const id = await createDocument(
     request,
     "Pictures",
-    `![Wide stripe](${url}){width=220px align=left}\n\nWords flow beside the picture and keep going across the line so wrap can put them next to it, under it, or behind it on the page.`,
+    `![Wide stripe](${url}){width=220px align=left crop=50,0,0,0}\n\nWords flow beside the picture and keep going across the line so wrap can put them next to it, under it, or behind it on the page.`,
   );
   await openDocument(page, id);
   const image = page.locator(".doc-content .doc-image img");
@@ -104,10 +104,15 @@ test("square wrap, behind, in front, crop and rotate survive a reload", async ({
 
   await image.click();
   const bar = page.locator(".picture-bar");
-  const square = bar.getByRole("button", { name: "Square", exact: true });
-  await expect(square).toBeVisible();
+  await expect(bar.getByRole("button", { name: "Wrap text" })).toBeVisible();
+  await expect(bar.getByRole("button", { name: "Image options" })).toBeVisible();
+  await expect(bar.getByRole("button", { name: "Square" })).toHaveCount(0);
 
-  await square.click();
+  await bar.getByRole("button", { name: "Wrap text" }).click();
+  const wrapMenu = page.getByRole("menu", { name: "Wrap text" });
+  await expect(wrapMenu.getByRole("menuitemcheckbox", { name: "In line" })).toBeVisible();
+  await expect(wrapMenu.getByRole("menuitemcheckbox", { name: "Break text" })).toHaveAttribute("aria-checked", "true");
+  await wrapMenu.getByRole("menuitemcheckbox", { name: "Wrap text" }).click();
   await expect.poll(async () => (await layout()).wrap).toBe("square");
   const beside = await layout();
   expect(beside.line).toBeTruthy();
@@ -117,31 +122,35 @@ test("square wrap, behind, in front, crop and rotate survive a reload", async ({
 
   const upright = beside.visual;
   expect(upright.width).toBeGreaterThan(upright.height);
-  await bar.getByLabel("Rotate").fill("90");
+  await bar.getByRole("button", { name: "Image options" }).click();
+  const options = page.getByRole("dialog", { name: "Image options" });
+  await expect(options.getByText("Size & rotation")).toBeVisible();
+  await options.getByLabel("Angle").fill("90");
   await expect.poll(async () => (await layout()).rotate).toBe("90");
   const turned = await layout();
   expect(turned.visual.height).toBeGreaterThan(turned.visual.width);
   expect(turned.visual.transform).not.toBe("none");
 
-  await bar.getByRole("button", { name: "Behind text" }).click();
+  await bar.getByRole("button", { name: "Wrap text" }).click();
+  await page.getByRole("menuitemcheckbox", { name: "Behind text" }).click();
   await expect.poll(async () => (await layout()).wrap).toBe("behind");
   await expect.poll(async () => (await layout()).hit).not.toBe("IMG");
   const behind = await layout();
   expect(behind.line!.top).toBeLessThan(behind.frame.bottom - 4);
   expect(behind.line!.left).toBeLessThan(behind.frame.right - 20);
 
-  await bar.getByRole("button", { name: "In front of text" }).click();
+  await bar.getByRole("button", { name: "Wrap text" }).click();
+  await page.getByRole("menuitemcheckbox", { name: "In front of text" }).click();
   await expect.poll(async () => (await layout()).wrap).toBe("front");
   await expect.poll(async () => (await layout()).hit).toBe("IMG");
 
-  await bar.getByLabel("Crop from left").fill("50");
-  await bar.getByLabel("Crop from left").press("Tab");
   await expect.poll(async () => (await layout()).crop).toBe("50,0,0,0");
   const cropped = await layout();
   expect(cropped.imgWidth).toBeGreaterThan(cropped.frameWidth + 20);
   expect(cropped.imgShift).toBeLessThan(-10);
 
-  await bar.getByRole("button", { name: "Square", exact: true }).click();
+  await bar.getByRole("button", { name: "Wrap text" }).click();
+  await page.getByRole("menuitemcheckbox", { name: "Wrap text" }).click();
   await expect.poll(async () => (await layout()).wrap).toBe("square");
   await expect(page.locator(".sync-status")).toHaveText(/Saved/);
   await page.reload();
