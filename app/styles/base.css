@@ -45,7 +45,7 @@
   --paper: #ffffff;
   --paper-text: #202124;
   --paper-shadow: 0 1px 2px rgba(31, 30, 28, 0.06), 0 4px 16px rgba(31, 30, 28, 0.06);
-  --page-edge: #c4c7c5;
+  --page-edge: #e1e3e2;
   --canvas: #f8fafd;
 
   --shadow-sm: 0 1px 2px rgba(31, 30, 28, 0.06);
@@ -105,8 +105,8 @@
   --paper: #262624;
   --paper-text: #e6e4df;
   --paper-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.25);
-  /* Lighter than the page and the canvas, so the edge stays visible. Not the light-mode gray. */
-  --page-edge: #9b9890;
+  /* Lighter than the page and the canvas, close to the page so the edge stays quiet. */
+  --page-edge: #55544f;
   --canvas: #181817;
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
