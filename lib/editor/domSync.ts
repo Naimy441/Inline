@@ -18,8 +18,83 @@ let adoptingSelection = false;
  */
 const arrowLag = new WeakMap<EditorView, { doc: PMNode; positions: Set<number> }>();
 
+/**
+ * Home or End moved off this caret. The browser can paint it again before the
+ * editor has recorded the new one; that paint is not a new place to land.
+ */
+const homeGuard = new WeakMap<EditorView, { doc: PMNode; typedFrom: number; home: TextSelection | null }>();
+let restoringHome = false;
+
+/** The position where typing finished, just before Home or End moves the caret. */
+export function armHomeGuard(view: EditorView) {
+  const sel = view.state.selection;
+  if (!(sel instanceof TextSelection) || !sel.empty) {
+    homeGuard.delete(view);
+    return;
+  }
+  homeGuard.set(view, { doc: view.state.doc, typedFrom: sel.from, home: null });
+}
+
+/** A click or another key chooses its own caret. */
+export function clearHomeGuard(view: EditorView) {
+  homeGuard.delete(view);
+}
+
+/** The caret Home or End left on screen, the first time the browser shows it. */
+export function noteHomeCaret(view: EditorView, selection: TextSelection) {
+  const guard = homeGuard.get(view);
+  if (!guard || guard.home || guard.doc !== view.state.doc || !selection.empty || selection.from === guard.typedFrom) return;
+  guard.home = selection;
+}
+
+/** The caret Home or End just left, once the caret they moved to has been seen. */
+export function isGuardedCaret(view: EditorView, doc: PMNode, from: number) {
+  const guard = homeGuard.get(view);
+  return Boolean(guard?.home && guard.doc === doc && guard.typedFrom === from);
+}
+
+function guardedHome(view: EditorView): TextSelection | null {
+  const guard = homeGuard.get(view);
+  if (!guard?.home || guard.doc !== view.state.doc) return null;
+  return guard.home;
+}
+
+/**
+ * Put the Home or End caret back when the page shows where typing finished.
+ * A layout pass can paint that older caret into both the DOM and editor state.
+ */
+export function restoreGuardedHome(view: EditorView): boolean {
+  if (restoringHome) return true;
+  const visible = readDomSelection(view);
+  if (visible?.empty) noteHomeCaret(view, visible);
+  const home = guardedHome(view);
+  if (!home) return false;
+  const doc = view.state.doc;
+  const state = view.state.selection;
+  const stateBad = state instanceof TextSelection && state.empty && isGuardedCaret(view, doc, state.from);
+  const domBad = Boolean(visible?.empty && isGuardedCaret(view, doc, visible.from));
+  if (!stateBad && !domBad) return false;
+  restoringHome = true;
+  try {
+    if (!home.eq(view.state.selection)) view.dispatch(view.state.tr.setSelection(home).setMeta("addToHistory", false));
+    if (!domBad) return true;
+    try {
+      const point = view.domAtPos(home.head);
+      view.dom.ownerDocument.getSelection()?.collapse(point.node, point.offset);
+    } catch {
+      // The DOM caret can sit where the browser will not move it. State already has Home.
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    restoringHome = false;
+  }
+}
+
 /** A DOM caret the user moved, rather than one an arrow already left behind. */
 export function domCaretIsCurrent(view: EditorView, doc: PMNode, stateFrom: number, domFrom: number) {
+  if (isGuardedCaret(view, doc, domFrom)) return false;
   const lag = arrowLag.get(view);
   if (!lag || lag.doc !== doc) return true;
   return !(lag.positions.has(domFrom) && domFrom !== stateFrom);
@@ -52,6 +127,11 @@ export function noteArrowLag(view: EditorView, doc: PMNode, origin: number) {
 export function syncDomSelection(view: EditorView, options?: { adoptCaret?: boolean }) {
   if (!adoptingSelection) {
     const stateSel = view.state.selection;
+    const read = readDomSelection(view);
+    if (read?.empty) noteHomeCaret(view, read);
+    // A paint of the caret from before Home has to be undone before this flush
+    // writes that caret back over the one the page is showing.
+    restoreGuardedHome(view);
     const visible = readDomSelection(view);
     // A cell or picture selection is already what the next command should use.
     // A range on the page (Shift+End) or a caret Home left at the start of a
@@ -171,7 +251,10 @@ export function keepVisibleSelection(view: EditorView, tr: Transaction): Transac
   // Spelling and page layout redraw the caret from the editor state. Home can
   // already have moved the on-screen caret; painting the state puts it back
   // where typing finished.
-  const visible = readDomSelection(view);
+  let visible = readDomSelection(view);
+  if (visible?.empty) noteHomeCaret(view, visible);
+  const home = guardedHome(view);
+  if (home && (!visible || (visible.empty && isGuardedCaret(view, tr.doc, visible.from)))) visible = home;
   if (!visible || visible.eq(tr.selection)) return tr;
   if (visible.empty && !domCaretIsCurrent(view, tr.doc, tr.selection.from, visible.from)) return tr;
   return tr.setSelection(visible);

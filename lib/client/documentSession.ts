@@ -16,7 +16,7 @@ import { stylesOf } from "@/lib/doc/styles";
 import { setTabs } from "@/lib/client/tabs";
 import { api, ApiError, del, patch, post, Store, uploadFile } from "@/lib/client/api";
 import { setCommentState } from "@/lib/editor/comments";
-import { domCaretIsCurrent, keepVisibleSelection, noteArrowLag, rangeTouchingCaret, readDomSelection, retainHeldSelection, syncDomSelection, visibleTextSelection, type HeldRange } from "@/lib/editor/domSync";
+import { clearHomeGuard, domCaretIsCurrent, keepVisibleSelection, noteArrowLag, noteHomeCaret, rangeTouchingCaret, readDomSelection, restoreGuardedHome, retainHeldSelection, syncDomSelection, visibleTextSelection, type HeldRange } from "@/lib/editor/domSync";
 import { formatSelectionKey, retainFormattingRange, setFormatSelection, type FormatRange } from "@/lib/editor/formatSelection";
 import type { PdfDocumentModel, PdfImage } from "@/lib/pdf/pdfWriter";
 import { APPEARANCE_PAPER, screenshotPage, type PageAppearance } from "@/lib/pdf/screenAppearance";
@@ -1404,6 +1404,7 @@ export class DocumentSession {
     const view = this.view;
     if (!view || this.destroyed || this.adoptingDomCaret) return;
     const dom = readDomSelection(view);
+    if (dom?.empty) noteHomeCaret(view, dom);
     if (dom && !dom.empty) this.pendingSelection = { from: dom.from, to: dom.to };
     const stateSel = view.state.selection;
     // Captured before ProseMirror handles this event. Home can move the caret
@@ -1421,7 +1422,9 @@ export class DocumentSession {
     const view = this.view;
     const pending = this.pendingDomCaret;
     this.pendingDomCaret = null;
-    if (!view || this.destroyed || this.adoptingDomCaret || !pending || pending.doc !== view.state.doc) return;
+    if (!view || this.destroyed || this.adoptingDomCaret) return;
+    if (restoreGuardedHome(view)) return;
+    if (!pending || pending.doc !== view.state.doc) return;
     const stateSel = view.state.selection;
     if (!(stateSel instanceof TextSelection) || !stateSel.empty || pending.selection.eq(stateSel)) return;
     // An arrow already moved the caret. This event still has the previous one.
@@ -1443,7 +1446,11 @@ export class DocumentSession {
     const view = this.view;
     if (!view || this.destroyed) return;
     const target = event.target;
-    if (target instanceof Node && view.dom.contains(target)) this.pendingSelection = null;
+    if (target instanceof Node && view.dom.contains(target)) {
+      this.pendingSelection = null;
+      // A press in the text chooses that caret. Home's guard must not pull it back.
+      clearHomeGuard(view);
+    }
   };
 
   /**
