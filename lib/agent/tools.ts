@@ -473,6 +473,18 @@ function withWriteCheck(result: ToolResult, scrubs: Array<{ removed: number; sym
   return note ? { ...result, text: `${result.text}\n${note}` } : result;
 }
 
+function canvasScreenshotText(report: { pages: number; page?: number; issues?: Array<{ id: string; message: string }>; blocks?: Array<{ id: string; page: number; toPage: number }> }, includeBlocks: boolean) {
+  const page = report.page ?? 1;
+  const blocks = (report.blocks ?? []).filter((block) => block.page === page || block.toPage === page);
+  const onPage = new Set(blocks.map((block) => block.id));
+  const issues = (report.issues ?? []).filter((issue) => issue.id === `page-${page}` || onPage.has(issue.id));
+  const lines = [`Page ${page} of ${report.pages}.`];
+  if (!issues.length) lines.push("No layout issues on this page.");
+  else for (const issue of issues) lines.push(`${issue.id}: ${issue.message}`);
+  if (includeBlocks) lines.push(JSON.stringify({ blocks }, null, 2));
+  return lines.join("\n");
+}
+
 function blockHasLock(node: PMNode) {
   let locked = false;
   node.descendants((child) => {
@@ -822,13 +834,14 @@ export const TOOLS = [
     title: "Screenshot page",
     description:
       "A picture of one page as the editor lays it out, so you can see layout the Markdown does not show: a crowded or split table, an image that is too big, uneven spacing, a stray font, or a last page with only a line or two. Home-page thumbnails are only a small picture of the first page; this is the page itself. Page numbers are 1-based. If the document is open, the picture comes from that editor. If it is not, the page is laid out the same way with no window open. The picture uses the light or dark appearance the user is using. Pass theme light or dark to picture the page in that appearance instead.\n\n" +
-      "Use it when the user wants the document to look good and the picture is the right signal. get_page_count is enough for how many pages there are and how full the last page is. After you change a page you judged from a picture, call screenshot_page again. For a Canvas, the text lists the blocks on that page, with their positions, not the whole document.",
+      "Use it when the user wants the document to look good and the picture is the right signal. get_page_count is enough for how many pages there are and how full the last page is. After you change a page you judged from a picture, call screenshot_page again. For a Canvas, the text is a short issue summary for that page. Pass include_blocks when you also need the block list inspect_canvas already returns.",
     shape: {
       document_id: documentId,
       page: z.number().int().min(1).describe("Page number to picture (1-based)."),
       theme: z.enum(["light", "dark"]).optional().describe("The app's light or dark appearance. Omit it to use the appearance the user is using."),
       epoch: z.string().optional().describe("Canvas only: epoch from read_canvas or inspect_canvas. A mismatch is rejected instead of picturing a different revision."),
       version: z.number().int().optional().describe("Canvas only: revision that epoch belongs to."),
+      include_blocks: z.boolean().optional().describe("Canvas only: include the block list for this page. Omit it for the image and a short issue summary."),
     },
     write: false,
     async handler(args, ctx) {
@@ -839,7 +852,7 @@ export const TOOLS = [
           return fail(`This Canvas is now revision ${doc.version} (epoch ${doc.epoch}). That page reference is stale, so nothing was captured. Read the canvas again; page numbers are not content identity.`);
         }
         const rendered = await renderCanvas(doc, { page: args.page });
-        return { text: JSON.stringify(rendered.report, null, 2), images: rendered.png ? [{ data: Buffer.from(rendered.png).toString("base64"), mimeType: "image/png" }] : [] };
+        return { text: canvasScreenshotText(rendered.report, Boolean(args.include_blocks)), images: rendered.png ? [{ data: Buffer.from(rendered.png).toString("base64"), mimeType: "image/png" }] : [] };
       }
       const count = pageCountNow(doc);
       const visible = count.showing ?? count.pages;

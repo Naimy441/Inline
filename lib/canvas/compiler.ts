@@ -14,7 +14,7 @@ export const isCanvas = (doc: PMNode) => doc.attrs.canvas?.format === 1;
 const CONTAINERS: Record<string, string> = { section: "canvas_section", stack: "canvas_stack", columns: "canvas_columns", column: "canvas_column", richtext: "canvas_richtext", figure: "canvas_figure" };
 const CLASSES = /^(?:[A-Za-z_][\w-]*)(?:\s+[A-Za-z_][\w-]*)*$/;
 const IDS = /^[a-zA-Z0-9_-]{1,80}$/;
-const ATTRS = new Set(["id", "class", "as", "pagination", "ratio", "href", "src", "alt", "colspan", "rowspan", "width"]);
+const ATTRS = new Set(["id", "class", "as", "pagination", "ratio", "href", "src", "alt", "colspan", "rowspan", "width", "bleed"]);
 const IMAGE_WIDTH = /^(?:\d+(?:\.\d+)?(?:px|%|in|cm|mm|pt|em|rem)?)$/i;
 
 function imageWidth(value: string): string {
@@ -60,10 +60,12 @@ export function compileCanvas(html: string, css = ""): PMNode {
       const pagination = a.pagination || (tag === "columns" || tag === "figure" ? "keep-together" : "flow");
       if (!["flow", "keep-together"].includes(pagination) || ((tag === "columns" || tag === "figure") && pagination !== "keep-together")) throw new Error(`${tag}: use pagination="keep-together"; independent cross-page column flow is unsupported.`);
       if (a.ratio && (tag !== "columns" || !/^[1-4]:[1-4](?::[1-4])?$/.test(a.ratio))) throw new Error("Columns ratio must contain two or three values between 1 and 4, e.g. 2:1.");
+      const bleed = a.bleed != null && !/^(false|0)$/i.test(a.bleed);
+      if (bleed && (tag !== "section" || pagination !== "keep-together")) throw new Error("bleed is only supported on a keep-together Section.");
       const content = trim(children(el, [], depth));
       if (tag === "columns" && (content.length < 2 || content.length > 3)) throw new Error("Columns needs two or three Column children.");
       if (tag === "columns" && a.ratio && a.ratio.split(":").length !== content.length) throw new Error("Columns ratio must match its number of children.");
-      return make(CONTAINERS[tag], content, { pagination, ratio: a.ratio || null });
+      return make(CONTAINERS[tag], content, { pagination, ratio: a.ratio || null, ...(bleed ? { bleed: true } : {}) });
     }
     if (tag === "text" || /^(p|h[1-6]|figcaption)$/.test(tag)) {
       const as = tag === "text" ? a.as || "p" : tag;
@@ -147,7 +149,7 @@ export function canvasMarkup(doc: PMNode): string {
     const container = Object.entries(CONTAINERS).find(([, type]) => type === node.type.name)?.[0];
     const name = container || (node.type.name === "heading" ? `h${node.attrs.level}` : ({ paragraph: "p", title: "h1", subtitle: "p", bullet_list: "ul", ordered_list: "ol", list_item: "li", blockquote: "blockquote", table: "table", table_row: "tr", table_header: "th", table_cell: "td", image: "img", horizontal_rule: "hr", page_break: "PageBreak" } as Record<string, string>)[node.type.name]);
     if (!name) throw new Error(`Canvas authoring cannot represent ${node.type.name}. Use focused patches to preserve this content.`);
-    const attrs = [node.attrs.id ? `id="${escapeHtml(node.attrs.id)}"` : "", node.attrs.canvasClass ? `class="${escapeHtml(node.attrs.canvasClass)}"` : "", container ? `pagination="${node.attrs.pagination}"` : "", node.attrs.ratio ? `ratio="${node.attrs.ratio}"` : "", name === "img" ? `src="${escapeHtml(node.attrs.src)}" alt="${escapeHtml(node.attrs.alt || "Image")}"${node.attrs.width ? ` width="${escapeHtml(node.attrs.width)}"` : ""}` : "", node.attrs.colspan > 1 ? `colspan="${node.attrs.colspan}"` : "", node.attrs.rowspan > 1 ? `rowspan="${node.attrs.rowspan}"` : ""].filter(Boolean).join(" ");
+    const attrs = [node.attrs.id ? `id="${escapeHtml(node.attrs.id)}"` : "", node.attrs.canvasClass ? `class="${escapeHtml(node.attrs.canvasClass)}"` : "", container ? `pagination="${node.attrs.pagination}"` : "", node.attrs.bleed ? "bleed" : "", node.attrs.ratio ? `ratio="${node.attrs.ratio}"` : "", name === "img" ? `src="${escapeHtml(node.attrs.src)}" alt="${escapeHtml(node.attrs.alt || "Image")}"${node.attrs.width ? ` width="${escapeHtml(node.attrs.width)}"` : ""}` : "", node.attrs.colspan > 1 ? `colspan="${node.attrs.colspan}"` : "", node.attrs.rowspan > 1 ? `rowspan="${node.attrs.rowspan}"` : ""].filter(Boolean).join(" ");
     if (["img", "hr"].includes(name)) return `<${name} ${attrs}>`;
     if (name === "PageBreak") return `<PageBreak ${attrs}></PageBreak>`;
     const inner: string[] = [];

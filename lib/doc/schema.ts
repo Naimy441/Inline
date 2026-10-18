@@ -1245,12 +1245,13 @@ for (const [kind, content] of Object.entries({ section: "block+", stack: "block+
     ...(kind === "column" ? {} : { group: "block" }),
     defining: true,
     isolating: kind === "column",
-    attrs: { id: { default: null }, canvasClass: { default: null }, pagination: { default: kind === "columns" || kind === "figure" ? "keep-together" : "flow" }, ratio: { default: null } },
-    parseDOM: [{ tag: `[data-canvas="${kind}"]`, getAttrs: (dom) => { const el = dom as HTMLElement; return { id: el.dataset.id || null, canvasClass: el.dataset.canvasClass || null, pagination: el.dataset.pagination || "flow", ratio: el.dataset.ratio || null }; } }],
+    attrs: { id: { default: null }, canvasClass: { default: null }, pagination: { default: kind === "columns" || kind === "figure" ? "keep-together" : "flow" }, ratio: { default: null }, ...(kind === "section" ? { bleed: { default: null } } : {}) },
+    parseDOM: [{ tag: `[data-canvas="${kind}"]`, getAttrs: (dom) => { const el = dom as HTMLElement; return { id: el.dataset.id || null, canvasClass: el.dataset.canvasClass || null, pagination: el.dataset.pagination || "flow", ratio: el.dataset.ratio || null, ...(kind === "section" ? { bleed: el.dataset.bleed === "true" ? true : null } : {}) }; } }],
     toDOM: (node): DOMOutputSpec => ["div", {
       "data-canvas": kind,
       "data-pagination": node.attrs.pagination,
       ...(node.attrs.id ? { "data-id": node.attrs.id } : {}),
+      ...(kind === "section" && node.attrs.bleed ? { "data-bleed": "true" } : {}),
       ...(kind === "columns" ? { style: `--canvas-columns:${(node.attrs.ratio || "1:1").split(":").map((n: string) => `${Number(n) || 1}fr`).join(" ")}` } : {}),
     }, 0],
   };

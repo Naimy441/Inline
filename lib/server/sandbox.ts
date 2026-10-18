@@ -3,6 +3,7 @@ import { accessSync, constants } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { SandboxManager, type SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
+import { dataDir } from "@/lib/server/store";
 
 export type SandboxResult = {
   code: number;
@@ -38,12 +39,17 @@ export function commandEnvironment() {
 }
 
 /**
- * Matplotlib and fontconfig write a cache on import. The sandbox can only
- * write inside the document folder, and `.tmp` is hidden from the file list.
+ * Matplotlib and fontconfig write a cache on import. The cache lives beside
+ * the document repositories, not inside one, so a plot does not create
+ * `matplotlib-*` in that document's git repo. The sandbox may write there.
  */
-async function commandCacheEnv(folder: string) {
-  const cache = path.join(folder, ".tmp", "cache");
-  const mpl = path.join(folder, ".tmp", "matplotlib");
+function cacheRoot() {
+  return path.join(dataDir(), "cache");
+}
+
+async function commandCacheEnv() {
+  const cache = path.join(cacheRoot(), "xdg");
+  const mpl = path.join(cacheRoot(), "matplotlib");
   await mkdir(cache, { recursive: true });
   await mkdir(mpl, { recursive: true });
   return { XDG_CACHE_HOME: cache, MPLCONFIGDIR: mpl };
@@ -90,7 +96,7 @@ export async function runInFolder(folder: string, command: string, timeoutMs: nu
   try {
     await ensureSandbox();
     const wrapped = await SandboxManager.wrapWithSandboxArgv(command, undefined, folderConfig(root), signal, root);
-    const cache = await commandCacheEnv(root);
+    const cache = await commandCacheEnv();
     const captured = await capture(wrapped.argv[0]!, wrapped.argv.slice(1), timeoutMs, { cwd: root, env: { ...wrapped.env, ...cache }, signal });
     const stderr = SandboxManager.annotateStderrWithSandboxFailures(command, captured.stderr);
     return { ...captured, stderr, started: true, backend: BACKEND };
@@ -108,7 +114,7 @@ export async function runInFolder(folder: string, command: string, timeoutMs: nu
 function folderConfig(folder: string): SandboxRuntimeConfig {
   return {
     network: { deniedDomains: [] },
-    filesystem: { denyRead: [], allowWrite: [folder], denyWrite: [] },
+    filesystem: { denyRead: [], allowWrite: [folder, cacheRoot()], denyWrite: [] },
   } as unknown as SandboxRuntimeConfig;
 }
 

@@ -7,7 +7,7 @@ import { Transform } from "prosemirror-transform";
 import { EditorState } from "prosemirror-state";
 import { history, undo } from "prosemirror-history";
 import { compileCanvas, canvasMarkup } from "./compiler";
-import { CANVAS_EXAMPLES, CANVAS_GUIDE } from "./examples";
+import { CANVAS_EXAMPLES, CANVAS_FRAGMENTS, CANVAS_GUIDE } from "./examples";
 import { canvasFlowIssues, canvasPageSpace, type CanvasBlockBox } from "./editor";
 import { darkScreenCanvasCss, canvasCssNotes, validateCanvasCss, scopedCanvasCss } from "./styles";
 import { darkColor } from "@/lib/pdf/thumbnail";
@@ -86,7 +86,13 @@ describe("Canvas SDK", () => {
     assert.match(CANVAS_GUIDE, /6\.5in \(624px at 96px per inch\)/);
     assert.match(CANVAS_GUIDE, /ratio of 3:2/);
     assert.match(CANVAS_GUIDE, /Pass operations, at most 12/);
-    assert.match(CANVAS_GUIDE, /screenshot_page returns the blocks on that page only/);
+    assert.match(CANVAS_GUIDE, /screenshot_page returns the image and a short issue summary/);
+    assert.match(CANVAS_GUIDE, /syntax only/);
+    assert.match(CANVAS_GUIDE, /do not reuse a title, equation, or palette/);
+    assert.match(CANVAS_GUIDE, /dry_run/);
+    assert.match(CANVAS_GUIDE, /add a class or set <img width>/);
+    assert.doesNotMatch(JSON.stringify(CANVAS_FRAGMENTS), /A better beginning|Evidence before assumptions|Make room for discovery/);
+    assert.match(CANVAS_FRAGMENTS.map((fragment) => fragment.html).join("\n"), /<Math display/);
     assert.match(CANVAS_GUIDE, /class that is not on any element/);
     assert.doesNotMatch(CANVAS_GUIDE, /\/api\/images/);
   });
@@ -133,7 +139,14 @@ describe("Canvas SDK", () => {
     assert.equal(empty[0].free, 784);
     assert.match(canvasFlowIssues([block({ id: "head", page: 1, top: 0, height: 80, kind: "heading" })], empty).map((issue) => issue.message).join("\n"), /Page 1 is mostly empty/);
     const broken = [block({ id: "split", page: 1, top: 40, height: 12, kind: "break" }), block({ id: "head", page: 1, top: 0, height: 28, kind: "heading" })];
-    assert.equal(canvasFlowIssues(broken, canvasPageSpace(broken, 2, content.contentWidth, content.contentHeight)).length, 0);
+    const brokenIssues = canvasFlowIssues(broken, canvasPageSpace(broken, 2, content.contentWidth, content.contentHeight));
+    assert.match(brokenIssues.map((issue) => issue.message).join("\n"), /very little content before a page break/);
+    assert.equal(brokenIssues.some((issue) => /short block|mostly empty/.test(issue.message)), false);
+    const gap = [block({ id: "note", page: 2, top: 0, height: 70 }), block({ id: "br", page: 2, top: 72, height: 14, toPage: 3, kind: "break" })];
+    const gapSpace = canvasPageSpace(gap, 3, content.contentWidth, content.contentHeight);
+    assert.equal(gapSpace[1]!.used, 86);
+    assert.ok(gapSpace[1]!.free > 700);
+    assert.equal(gapSpace[2]!.used, 0);
     const stranded = [block({ id: "late", page: 1, top: 620, height: 36, kind: "heading" })];
     assert.match(canvasFlowIssues(stranded, canvasPageSpace(stranded, 2, content.contentWidth, content.contentHeight)).map((issue) => issue.message).join("\n"), /Heading late sits in the lower part/);
     const short = [block({ id: "body", page: 1, top: 0, height: 800 }), block({ id: "coda", page: 2, top: 0, height: 28 })];
@@ -152,7 +165,50 @@ describe("Canvas SDK", () => {
   });
   test("painted containers must be indivisible, with decoration allowed inside atomic columns", () => {
     assert.throws(() => compileCanvas('<Canvas><Section class="box"><Text>x</Text></Section></Canvas>', '.box {padding:20px;background-color:red}'), /Flowing containers/);
+    assert.throws(() => compileCanvas('<Canvas><Section class="box"><Text>x</Text></Section></Canvas>', '.box { background: linear-gradient(#ffffff, #eeeeee) }'), /Flowing containers/);
     assert.doesNotThrow(() => compileCanvas('<Canvas><Columns><Column class="box"><Text>x</Text></Column><Column><Text>y</Text></Column></Columns></Canvas>', '.box {padding:20px;background-color:red}'));
+    assert.doesNotThrow(() => compileCanvas('<Canvas><Section class="wash" pagination="keep-together"><Text>x</Text></Section></Canvas>', '.wash { background: linear-gradient(#f7f7f7, #e4e4e4); padding: 12px }'));
+  });
+  test("an id selector points at a class or img width", () => {
+    assert.throws(() => validateCanvasCss("#fig2 img { max-width: 330px }"), /Add a class \(or set <img width>\) instead of #fig2 img/);
+    assert.throws(() => validateCanvasCss(".x { background: radial-gradient(#fff, #000) }"), /linear-gradient/);
+    assert.throws(() => validateCanvasCss(".x { background-image: linear-gradient(#fff, #000) }"), /background images/);
+    const scoped = scopedCanvasCss("Math.rule { border-top: 1px solid #111111 }", "document-1");
+    assert.match(scoped, /\.math-block\.rule/);
+    const dark = darkScreenCanvasCss(scopedCanvasCss(".wash { background: linear-gradient(#112233, #ffffff) }", "document-1"));
+    assert.match(dark, /linear-gradient/);
+    assert.doesNotMatch(dark, /#112233|#ffffff/);
+  });
+  test("bleed is only a keep-together section and round-trips", () => {
+    assert.throws(() => compileCanvas('<Canvas><Section bleed><Text>x</Text></Section></Canvas>'), /keep-together Section/);
+    assert.throws(() => compileCanvas('<Canvas><Stack bleed pagination="keep-together"><Text>x</Text></Stack></Canvas>'), /keep-together Section/);
+    const doc = compileCanvas('<Canvas><Section id="band" class="wash" pagination="keep-together" bleed><Text>x</Text></Section></Canvas>', '.wash { background: linear-gradient(#f7f7f7, #e4e4e4) }');
+    assert.equal(doc.child(0).attrs.bleed, true);
+    assert.match(canvasMarkup(doc), /<section id="band" class="wash" pagination="keep-together" bleed>/);
+    assert.equal(compileCanvas(canvasMarkup(doc), doc.attrs.canvas.css).child(0).attrs.bleed, true);
+  });
+  test("a dry run measures without writing", async () => {
+    const doc = await create();
+    const version = doc.version;
+    const css = doc.doc.attrs.canvas.css;
+    const guide = await runTool("get_canvas_guide", {}, { author: "claude" });
+    assert.match(guide.text, /syntax only/);
+    assert.doesNotMatch(guide.text, /A better beginning/);
+    const read = await runTool("read_canvas", { document_id: doc.id, include_guide: true }, { author: "claude", documentId: doc.id });
+    const body = JSON.parse(read.text) as { fragments?: unknown; examples?: unknown };
+    assert.ok(body.fragments);
+    assert.equal(body.examples, undefined);
+    const bad = await runTool("patch_canvas", {
+      document_id: doc.id, epoch: doc.epoch, version: doc.version, operation: "styles", css: "#fig2 img { max-width: 10px }", dry_run: true,
+    }, { author: "claude", documentId: doc.id });
+    assert.equal(bad.isError, true);
+    assert.match(bad.text, /<img width>/);
+    const measured = await runTool("patch_canvas", {
+      document_id: doc.id, epoch: doc.epoch, version: doc.version, operation: "styles", css: "h1 { color: #112233 }", dry_run: true,
+    }, { author: "claude", documentId: doc.id });
+    if (!measured.isError) assert.match(measured.text, /Dry run only/);
+    assert.equal(doc.version, version);
+    assert.equal(doc.doc.attrs.canvas.css, css);
   });
 });
 

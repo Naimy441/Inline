@@ -2,6 +2,7 @@ import type { Node as PMNode } from "prosemirror-model";
 import { Plugin, PluginKey, type EditorState } from "prosemirror-state";
 import { Decoration, DecorationSet, type EditorView } from "prosemirror-view";
 import { TableMap } from "prosemirror-tables";
+import { syncCanvasBleed } from "@/lib/canvas/bleed";
 import { syncDomSelection } from "@/lib/editor/domSync";
 import { headerRowCount } from "@/lib/editor/tables";
 
@@ -228,6 +229,7 @@ export function paginationPlugin(geometry: () => PageGeometry, onLayout?: (layou
           };
           if (sameBreaks(current.breaks, result.breaks) && current.pages === result.pages) {
             settle = 0;
+            if (view.state.doc.attrs.canvas) syncCanvasBleed(view);
             report();
             return;
           }

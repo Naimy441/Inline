@@ -507,7 +507,7 @@ class MathBlockView implements NodeView {
   ) {
     this.dom = document.createElement("div");
     this.dom.className = "math-block";
-    if (node.attrs.id) this.dom.dataset.id = node.attrs.id;
+    this.applyCanvasClass();
     this.preview = document.createElement("div");
     this.preview.className = "math-render math-display";
     this.preview.contentEditable = "false";
@@ -540,9 +540,24 @@ class MathBlockView implements NodeView {
   update(node: PMNode) {
     if (node.type !== this.node.type || node.attrs.language !== MATH_LANGUAGE) return false;
     this.node = node;
+    this.applyCanvasClass();
     this.render();
     this.applySpacing();
     return true;
+  }
+
+  /** Authored classes live on the box the stylesheet targets. The node view replaces toDOM, so the class has to be applied here or border, padding, margin, and background never match. */
+  private applyCanvasClass() {
+    const previous = (this.dom.dataset.canvasClass || "").split(/\s+/).filter(Boolean);
+    for (const name of previous) this.dom.classList.remove(name);
+    const value = this.node.attrs.canvasClass as string | null;
+    if (value) {
+      for (const name of value.split(/\s+/)) if (name) this.dom.classList.add(name);
+      this.dom.dataset.canvasClass = value;
+    } else delete this.dom.dataset.canvasClass;
+    this.dom.classList.add("math-block");
+    if (this.node.attrs.id) this.dom.dataset.id = this.node.attrs.id;
+    else delete this.dom.dataset.id;
   }
 
   /** The equation's own space above and below (an imported PDF's), when it has one. */
