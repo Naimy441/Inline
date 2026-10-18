@@ -1,8 +1,8 @@
 "use client";
 
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent, type PointerEvent, type RefObject } from "react";
-import { TextSelection } from "prosemirror-state";
 import { geometryFor, type DocumentSession } from "@/lib/client/documentSession";
+import { readDomSelection } from "@/lib/editor/domSync";
 import { lineFactor, lineMetrics } from "@/lib/doc/fontMetrics";
 import { DEFAULT_MATH_SIZE, DEFAULT_TAB_STOP, fillHeaderTokens, headerParts, type DocumentMeta } from "@/lib/doc/settings";
 import { styleSheetCss } from "@/lib/doc/styles";
@@ -182,50 +182,17 @@ function textAlignOf(align: string): CSSProperties["textAlign"] {
 }
 
 /**
- * Keep the caret a margin click found. The browser can move it onto the header
- * words, and the editor then paints whatever caret it last adopted — often the
- * one from before Home. Put the same DOM range back until that settles.
+ * A click in the margin must not move the body caret. Home can leave that caret
+ * on a page gap, which is not a text position, so the editor still has the caret
+ * from before Home and the next layout paints that one back. Adopt the caret
+ * the page is showing before the click can.
  */
 function holdBodyCaret(session: DocumentSession) {
-  const selection = document.getSelection();
-  const editor = session.view?.dom;
-  if (!selection || selection.rangeCount === 0 || !editor || !selection.anchorNode || !selection.focusNode || !editor.contains(selection.anchorNode)) return;
-  const range = selection.getRangeAt(0).cloneRange();
   const view = session.view;
-  if (view) {
-    try {
-      const next = TextSelection.create(view.state.doc, view.posAtDOM(selection.anchorNode, selection.anchorOffset), view.posAtDOM(selection.focusNode, selection.focusOffset));
-      if (!next.eq(view.state.selection)) view.dispatch(view.state.tr.setSelection(next).setMeta("addToHistory", false));
-    } catch {
-      // The caret is on a page gap, which is not a text position. The DOM range still stands.
-    }
-  }
-  let restoring = false;
-  const restore = () => {
-    if (restoring || document.querySelector("textarea.sheet-zone-field") || !range.startContainer.isConnected) return;
-    const current = document.getSelection();
-    if (!current) return;
-    if (current.rangeCount > 0 && current.anchorNode && editor.contains(current.anchorNode)) {
-      const now = current.getRangeAt(0);
-      if (now.compareBoundaryPoints(Range.START_TO_START, range) === 0 && now.compareBoundaryPoints(Range.END_TO_END, range) === 0) return;
-    }
-    restoring = true;
-    try {
-      current.removeAllRanges();
-      current.addRange(range);
-    } catch {
-      // A page-gap range cannot always be reselected. Leaving it is safer than jumping elsewhere.
-    } finally {
-      restoring = false;
-    }
-  };
-  const onChange = () => requestAnimationFrame(restore);
-  document.addEventListener("selectionchange", onChange);
-  queueMicrotask(restore);
-  window.setTimeout(() => {
-    document.removeEventListener("selectionchange", onChange);
-    restore();
-  }, 120);
+  if (!view) return;
+  const next = readDomSelection(view);
+  if (!next || next.eq(view.state.selection)) return;
+  view.dispatch(view.state.tr.setSelection(next).setMeta("addToHistory", false));
 }
 
 const Sheet = memo(function Sheet({

@@ -1,4 +1,5 @@
-import { TextSelection, type Transaction } from "prosemirror-state";
+import { Selection, TextSelection, type Transaction } from "prosemirror-state";
+import type { Node as PMNode } from "prosemirror-model";
 import type { EditorView } from "prosemirror-view";
 
 /**
@@ -80,17 +81,36 @@ export function rangeTouchingCaret(range: { from: number; to: number } | null, c
  * Null for a caret, or when the browser selection sits outside the document.
  */
 export function visibleTextSelection(view: EditorView): TextSelection | null {
+  const selection = readDomSelection(view);
+  return selection && !selection.empty ? selection : null;
+}
+
+/**
+ * The browser selection inside the editor, as a real text selection.
+ * A caret that sits on a page gap or between blocks is moved to the nearest
+ * text position. Null when the selection is outside the document.
+ */
+export function readDomSelection(view: EditorView): TextSelection | null {
   const sel = view.dom.ownerDocument.getSelection();
   if (!sel?.anchorNode || !sel.focusNode) return null;
   if (!view.dom.contains(sel.anchorNode) || !view.dom.contains(sel.focusNode)) return null;
   try {
-    const anchor = view.posAtDOM(sel.anchorNode, sel.anchorOffset);
-    const head = view.posAtDOM(sel.focusNode, sel.focusOffset);
-    const selection = TextSelection.create(view.state.doc, anchor, head);
-    return selection.empty ? null : selection;
+    return textSelectionNear(view.state.doc, view.posAtDOM(sel.anchorNode, sel.anchorOffset), view.posAtDOM(sel.focusNode, sel.focusOffset));
   } catch {
     return null;
   }
+}
+
+/** A text selection at these positions, even when one of them is not inside a text block. */
+export function textSelectionNear(doc: PMNode, anchor: number, head: number): TextSelection | null {
+  const clamp = (pos: number) => Math.max(0, Math.min(doc.content.size, pos));
+  const $anchor = doc.resolve(clamp(anchor));
+  const $head = doc.resolve(clamp(head));
+  const found = TextSelection.between($anchor, $head, anchor <= head ? 1 : -1);
+  if (found instanceof TextSelection && found.$from.parent.inlineContent && found.$to.parent.inlineContent) return found;
+  const bias = anchor <= head ? 1 : -1;
+  const near = Selection.findFrom($head, bias, true) || Selection.findFrom($head, -bias, true);
+  return near instanceof TextSelection ? near : null;
 }
 
 /**
