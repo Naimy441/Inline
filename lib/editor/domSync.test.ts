@@ -5,7 +5,7 @@ import { EditorState, TextSelection } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 
 import { schema } from "@/lib/doc/schema";
-import { keepVisibleSelection, rangeTouchingCaret, retainHeldSelection, syncDomSelection, textSelectionNear } from "./domSync";
+import { keepVisibleSelection, noteArrowLag, rangeTouchingCaret, retainHeldSelection, syncDomSelection, textSelectionNear } from "./domSync";
 
 describe("retainHeldSelection", () => {
   it("keeps a range the next toolbar press can no longer see, until the caret moves", () => {
@@ -133,6 +133,7 @@ describe("keepVisibleSelection", () => {
       // The next key already moved the caret. The page still shows the previous one,
       // including a second pass after the first one refused to follow it.
       view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1 + "Hello".length)));
+      noteArrowLag(view, view.state.doc, 1);
       syncDomSelection(view);
       syncDomSelection(view);
       assert.equal(view.state.selection.from, 1 + "Hello".length);
@@ -152,6 +153,16 @@ describe("keepVisibleSelection", () => {
           anchorOffset: 0,
           focusNode: node,
           focusOffset: 0,
+        }) as unknown as Selection;
+      syncDomSelection(view);
+      assert.equal(view.state.selection.from, 1);
+      // The page paints the caret from before Home. That is behind, not a new move.
+      dom.window.document.getSelection = () =>
+        ({
+          anchorNode: node,
+          anchorOffset: "Hello".length,
+          focusNode: node,
+          focusOffset: "Hello".length,
         }) as unknown as Selection;
       syncDomSelection(view);
       assert.equal(view.state.selection.from, 1);

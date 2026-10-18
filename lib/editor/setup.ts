@@ -49,7 +49,7 @@ import { bordersPlugin } from "@/lib/editor/borders";
 import { lineFitPlugin } from "@/lib/editor/lineFit";
 import { tabsPlugin } from "@/lib/editor/tabs";
 import { endWithTextblock, pasteIntoEmptyTextblock, transformPastedHtml } from "@/lib/editor/paste";
-import { syncDomSelection } from "@/lib/editor/domSync";
+import { clearArrowLag, noteArrowLag, syncDomSelection } from "@/lib/editor/domSync";
 import { formatSelectionPlugin } from "@/lib/editor/formatSelection";
 import { imageClipboardPlugin } from "@/lib/editor/imageClipboard";
 import { justifyPlugin } from "@/lib/editor/justify";
@@ -293,8 +293,28 @@ function buildKeymap(extra: Record<string, Command>, styles: () => readonly Para
 function readSelectionPlugin() {
   return new Plugin({
     props: {
-      handleKeyDown(view) {
-        syncDomSelection(view);
+      handleKeyDown(view, event) {
+        const plainArrow = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey
+          && (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "ArrowUp" || event.key === "ArrowDown");
+        // Home and End move the browser caret after this handler. Don't adopt the
+        // caret they have not moved yet, and don't let an arrow's old caret block them.
+        if (event.key === "Home" || event.key === "End") {
+          clearArrowLag(view);
+          syncDomSelection(view, { adoptCaret: false });
+        } else {
+          syncDomSelection(view);
+        }
+        if (plainArrow && view.state.selection instanceof TextSelection && view.state.selection.empty) {
+          const origin = view.state.selection.from;
+          const doc = view.state.doc;
+          queueMicrotask(() => {
+            try {
+              noteArrowLag(view, doc, origin);
+            } catch {
+              // The view can close before this arrow's caret is recorded.
+            }
+          });
+        }
         return false;
       },
     },
