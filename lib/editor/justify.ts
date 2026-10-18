@@ -1,6 +1,7 @@
 import type { Node as PMNode } from "prosemirror-model";
 import { Plugin, PluginKey } from "prosemirror-state";
 import { Decoration, DecorationSet, type EditorView } from "prosemirror-view";
+import { syncDomSelection } from "@/lib/editor/domSync";
 
 /**
  * Justified text the way Google Docs justifies it, for documents laid out as
@@ -59,6 +60,7 @@ export function justifyPlugin(enabled: () => boolean) {
         if (frame || !enabled()) return;
         frame = requestAnimationFrame(() => {
           frame = 0;
+          syncDomSelection(view);
           const extras = measure(view);
           if (!extras) return;
           const current = key.getState(view.state)!.extras;

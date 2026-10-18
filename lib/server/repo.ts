@@ -9,6 +9,7 @@ import {
   assertSafeId,
   dataDir,
   documentFilePath,
+  withDocument,
   writeDocumentFile,
   type StoredDocumentFile,
 } from "@/lib/server/store";
@@ -58,15 +59,9 @@ export type WorkspaceFile = { path: string; size: number; kind: "image" | "text"
 
 export type DraftFile = { format: 1; updatedAt: number; doc: unknown };
 
-const locks = new Map<string, Promise<unknown>>();
-
+/** Git, drafts, exports and workspace files share the document queue with saves and delete. */
 function withLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
-  const previous = locks.get(id) ?? Promise.resolve();
-  const next = previous.catch(() => undefined).then(fn);
-  locks.set(id, next);
-  return next.finally(() => {
-    if (locks.get(id) === next) locks.delete(id);
-  });
+  return withDocument(id, fn);
 }
 
 export function documentRepoPath(id: string) {
@@ -79,19 +74,21 @@ function draftPath(id: string) {
 
 export async function ensureDocumentRepo(id: string) {
   assertSafeId(id);
-  const root = documentRepoPath(id);
-  await fs.mkdir(root, { recursive: true });
-  if (!(await fs.stat(path.join(root, ".git")).catch(() => null))) {
-    await git(id, ["init", "-b", "main"]);
-  }
-  const info = path.join(root, ".git", "info");
-  await fs.mkdir(info, { recursive: true });
-  const exclude = path.join(info, "exclude");
-  const current = await fs.readFile(exclude, "utf8").catch(() => "");
-  if (!current.includes(".draft/")) await fs.writeFile(exclude, `${current.trim()}\n${EXCLUDE}`.trim() + "\n");
-  // Once the document itself lives in the repo, the old snapshot folder is not a second history.
-  const legacy = path.join(dataDir(), "documents", `${id}.json`);
-  if (!(await fs.stat(legacy).catch(() => null))) await fs.rm(path.join(dataDir(), "versions", id), { recursive: true, force: true });
+  await withDocument(id, async () => {
+    const root = documentRepoPath(id);
+    await fs.mkdir(root, { recursive: true });
+    if (!(await fs.stat(path.join(root, ".git")).catch(() => null))) {
+      await git(id, ["init", "-b", "main"]);
+    }
+    const info = path.join(root, ".git", "info");
+    await fs.mkdir(info, { recursive: true });
+    const exclude = path.join(info, "exclude");
+    const current = await fs.readFile(exclude, "utf8").catch(() => "");
+    if (!current.includes(".draft/")) await fs.writeFile(exclude, `${current.trim()}\n${EXCLUDE}`.trim() + "\n");
+    // Once the document itself lives in the repo, the old snapshot folder is not a second history.
+    const legacy = path.join(dataDir(), "documents", `${id}.json`);
+    if (!(await fs.stat(legacy).catch(() => null))) await fs.rm(path.join(dataDir(), "versions", id), { recursive: true, force: true });
+  });
 }
 
 type GitResult = { code: number; stdout: string; stderr: string };
@@ -640,30 +637,37 @@ export async function runWorkspaceCommand(documentId: string, command: string, t
 // --- drafts -----------------------------------------------------------------
 
 export async function readDraft(documentId: string): Promise<DraftFile | null> {
-  await ensureDocumentRepo(documentId);
-  try {
-    const parsed = JSON.parse(await fs.readFile(draftPath(documentId), "utf8")) as DraftFile;
-    if (parsed?.format !== 1 || parsed.doc == null) return null;
-    return parsed;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
+  return withDocument(documentId, async () => {
+    // A delete already removed the document. Don't create its repository again.
+    if (!(await fs.stat(documentFilePath(documentId)).catch(() => null))) return null;
+    await ensureDocumentRepo(documentId);
+    try {
+      const parsed = JSON.parse(await fs.readFile(draftPath(documentId), "utf8")) as DraftFile;
+      if (parsed?.format !== 1 || parsed.doc == null) return null;
+      return parsed;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  });
 }
 
 export async function writeDraft(documentId: string, doc: unknown) {
-  await ensureDocumentRepo(documentId);
-  const file: DraftFile = { format: 1, updatedAt: Date.now(), doc };
-  const target = draftPath(documentId);
-  await fs.mkdir(path.dirname(target), { recursive: true });
-  const tmp = `${target}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(file));
-  await fs.rename(tmp, target);
-  return file;
+  return withDocument(documentId, async () => {
+    if (!(await fs.stat(documentFilePath(documentId)).catch(() => null))) throw new Error("Document not found.");
+    await ensureDocumentRepo(documentId);
+    const file: DraftFile = { format: 1, updatedAt: Date.now(), doc };
+    const target = draftPath(documentId);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    const tmp = `${target}.${process.pid}.tmp`;
+    await fs.writeFile(tmp, JSON.stringify(file));
+    await fs.rename(tmp, target);
+    return file;
+  });
 }
 
 export async function discardDraft(documentId: string) {
-  await fs.rm(path.dirname(draftPath(documentId)), { recursive: true, force: true });
+  await withDocument(documentId, () => fs.rm(path.dirname(draftPath(documentId)), { recursive: true, force: true }));
 }
 
 export function workspaceFileUrl(documentId: string, userPath: string) {

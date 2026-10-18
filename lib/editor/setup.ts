@@ -49,7 +49,7 @@ import { bordersPlugin } from "@/lib/editor/borders";
 import { lineFitPlugin } from "@/lib/editor/lineFit";
 import { tabsPlugin } from "@/lib/editor/tabs";
 import { endWithTextblock, pasteIntoEmptyTextblock, transformPastedHtml } from "@/lib/editor/paste";
-import { armHomeGuard, clearArrowLag, clearHomeGuard, noteArrowLag, noteHomeCaret, readDomSelection, restoreGuardedHome, syncDomSelection } from "@/lib/editor/domSync";
+import { commitDomCaret, syncDomSelection } from "@/lib/editor/domSync";
 import { formatSelectionPlugin } from "@/lib/editor/formatSelection";
 import { imageClipboardPlugin } from "@/lib/editor/imageClipboard";
 import { justifyPlugin } from "@/lib/editor/justify";
@@ -289,49 +289,31 @@ function buildKeymap(extra: Record<string, Command>, styles: () => readonly Para
   return keymap(bindings);
 }
 
-/** Read the browser caret into the editor state before key commands, so Enter follows Ctrl/⌘+End. */
+/**
+ * The caret on the page is committed as soon as the browser reports it, and
+ * again before a key command reads it. Home, End and the arrows move the caret
+ * after keydown; the selection change is what records them, before a layout
+ * pass can paint the previous one.
+ */
 function readSelectionPlugin() {
   return new Plugin({
+    view(view) {
+      let closed = false;
+      const onSelectionChange = () => {
+        if (closed) return;
+        commitDomCaret(view);
+      };
+      view.dom.ownerDocument.addEventListener("selectionchange", onSelectionChange);
+      return {
+        destroy() {
+          closed = true;
+          view.dom.ownerDocument.removeEventListener("selectionchange", onSelectionChange);
+        },
+      };
+    },
     props: {
-      handleKeyDown(view, event) {
-        const plainArrow = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey
-          && (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "ArrowUp" || event.key === "ArrowDown");
-        // Home and End move the browser caret after this handler. Don't adopt the
-        // caret they have not moved yet, and don't let an arrow's old caret block them.
-        const plainHome = (event.key === "Home" || event.key === "End") && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
-        if (plainHome) {
-          armHomeGuard(view);
-          clearArrowLag(view);
-          syncDomSelection(view, { adoptCaret: false });
-          // keyup follows the browser's move, still before the click that samples
-          // the caret. selectionchange can be a later task, after a layout paint.
-          const doc = view.dom.ownerDocument;
-          const capture = (keyEvent: KeyboardEvent) => {
-            if (keyEvent.key !== "Home" && keyEvent.key !== "End") return;
-            try {
-              const visible = readDomSelection(view);
-              if (visible?.empty) noteHomeCaret(view, visible);
-              restoreGuardedHome(view);
-            } catch {
-              // The view can close before Home's caret is recorded.
-            }
-          };
-          doc.addEventListener("keyup", capture, { capture: true, once: true });
-        } else {
-          clearHomeGuard(view);
-          syncDomSelection(view);
-        }
-        if (plainArrow && view.state.selection instanceof TextSelection && view.state.selection.empty) {
-          const origin = view.state.selection.from;
-          const doc = view.state.doc;
-          queueMicrotask(() => {
-            try {
-              noteArrowLag(view, doc, origin);
-            } catch {
-              // The view can close before this arrow's caret is recorded.
-            }
-          });
-        }
+      handleKeyDown(view) {
+        syncDomSelection(view);
         return false;
       },
     },

@@ -2,6 +2,7 @@ import type { Node as PMNode } from "prosemirror-model";
 import { Plugin, PluginKey } from "prosemirror-state";
 import { Decoration, DecorationSet, type EditorView } from "prosemirror-view";
 import { liveLineBreaks } from "@/lib/doc/lineBreaks";
+import { syncDomSelection } from "@/lib/editor/domSync";
 
 /**
  * Paragraphs that keep the line breaks of the PDF they were rebuilt from
@@ -128,6 +129,7 @@ export function fitLinesNow(view: EditorView) {
 const done = new WeakMap<EditorView, Map<string, string>>();
 
 function fitLines(view: EditorView, fontsVersion: number) {
+  syncDomSelection(view);
   const root = view.dom as HTMLElement;
   if (!root.isConnected || !root.offsetWidth) return false;
   const state = key.getState(view.state);

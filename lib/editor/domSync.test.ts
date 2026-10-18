@@ -5,7 +5,7 @@ import { EditorState, Plugin, TextSelection } from "prosemirror-state";
 import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
 
 import { schema } from "@/lib/doc/schema";
-import { armHomeGuard, isGuardedCaret, keepVisibleSelection, noteArrowLag, rangeTouchingCaret, readDomSelection, restoreGuardedHome, retainHeldSelection, syncDomSelection, textSelectionNear } from "./domSync";
+import { keepVisibleSelection, rangeTouchingCaret, readDomSelection, retainHeldSelection, syncDomSelection, textSelectionNear } from "./domSync";
 
 describe("retainHeldSelection", () => {
   it("keeps a range the next toolbar press can no longer see, until the caret moves", () => {
@@ -130,42 +130,6 @@ describe("keepVisibleSelection", () => {
       syncDomSelection(view);
       assert.equal(view.state.selection.empty, true);
       assert.equal(view.state.selection.from, 1);
-      // The next key already moved the caret. The page still shows the previous one,
-      // including a second pass after the first one refused to follow it.
-      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1 + "Hello".length)));
-      noteArrowLag(view, view.state.doc, 1);
-      syncDomSelection(view);
-      syncDomSelection(view);
-      assert.equal(view.state.selection.from, 1 + "Hello".length);
-      // Home: state is still where typing finished, and the page shows the line start.
-      dom.window.document.getSelection = () =>
-        ({
-          anchorNode: node,
-          anchorOffset: "Hello".length,
-          focusNode: node,
-          focusOffset: "Hello".length,
-        }) as unknown as Selection;
-      syncDomSelection(view);
-      assert.equal(view.state.selection.from, 1 + "Hello".length);
-      dom.window.document.getSelection = () =>
-        ({
-          anchorNode: node,
-          anchorOffset: 0,
-          focusNode: node,
-          focusOffset: 0,
-        }) as unknown as Selection;
-      syncDomSelection(view);
-      assert.equal(view.state.selection.from, 1);
-      // The page paints the caret from before Home. That is behind, not a new move.
-      dom.window.document.getSelection = () =>
-        ({
-          anchorNode: node,
-          anchorOffset: "Hello".length,
-          focusNode: node,
-          focusOffset: "Hello".length,
-        }) as unknown as Selection;
-      syncDomSelection(view);
-      assert.equal(view.state.selection.from, 1);
     } finally {
       destroy();
     }
@@ -192,6 +156,84 @@ describe("keepVisibleSelection", () => {
       syncDomSelection(view);
       assert.equal(view.state.selection.from, 1);
       assert.equal(view.state.selection.to, 3);
+    } finally {
+      destroy();
+    }
+  });
+
+  function showCaret(node: ChildNode, offset: number) {
+    dom.window.document.getSelection = () =>
+      ({
+        anchorNode: node,
+        anchorOffset: offset,
+        focusNode: node,
+        focusOffset: offset,
+      }) as unknown as Selection;
+  }
+
+  /**
+   * Home, End, an arrow, and a click in the margin each leave the caret on the
+   * page before the editor has recorded it. A layout pass, and a later pass
+   * that still carries the old caret, must not put that caret back.
+   */
+  function gesture(name: string, text: string, fromOffset: number, toOffset: number) {
+    it(`${name}: commits the caret before a layout pass, and a later pass cannot restore the old one`, () => {
+      const { view, node, destroy } = mount(text);
+      try {
+        const previous = 1 + fromOffset;
+        const next = 1 + toOffset;
+        view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, previous)));
+        const stale = view.state.tr.setMeta("spell", true);
+        showCaret(node, toOffset);
+        let flushed: number | null = null;
+        const observer = (view as unknown as { domObserver: { flush(): void } }).domObserver;
+        const originalFlush = observer.flush;
+        observer.flush = () => {
+          flushed = view.state.selection.from;
+        };
+        view.dom.focus();
+        syncDomSelection(view);
+        observer.flush = originalFlush;
+        assert.equal(view.state.selection.empty, true);
+        assert.equal(view.state.selection.from, next);
+        assert.equal(flushed, next);
+        const painted = keepVisibleSelection(view, view.state.tr.setMeta("page", true));
+        view.dispatch(painted);
+        assert.equal(view.state.selection.from, next);
+        const later = keepVisibleSelection(view, stale);
+        view.dispatch(later);
+        assert.equal(view.state.selection.from, next);
+        const again = keepVisibleSelection(
+          view,
+          EditorState.create({ doc: view.state.doc, selection: TextSelection.create(view.state.doc, previous) }).tr.setMeta("spell", true),
+        );
+        view.dispatch(again);
+        assert.equal(view.state.selection.from, next);
+      } finally {
+        destroy();
+      }
+    });
+  }
+
+  gesture("Home", "Start here.Hello", "Start here.Hello".length, 0);
+  gesture("End", "Start here.Hello", 0, "Start here.Hello".length);
+  gesture("ArrowLeft", "Start here.Hello", "Start here.Hello".length, "Start here.".length);
+  gesture("a margin click", "Start here.Hello", "Start here.Hello".length, "Start ".length);
+
+  it("a later gesture replaces the caret a pass already committed", () => {
+    const text = "Start here.Hello";
+    const { view, node, destroy } = mount(text);
+    try {
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1 + text.length)));
+      showCaret(node, 0);
+      syncDomSelection(view);
+      assert.equal(view.state.selection.from, 1);
+      showCaret(node, text.length);
+      syncDomSelection(view);
+      assert.equal(view.state.selection.from, 1 + text.length);
+      const stale = keepVisibleSelection(view, EditorState.create({ doc: view.state.doc, selection: TextSelection.create(view.state.doc, 1) }).tr.setMeta("page", true));
+      view.dispatch(stale);
+      assert.equal(view.state.selection.from, 1 + text.length);
     } finally {
       destroy();
     }
@@ -258,38 +300,6 @@ describe("keepVisibleSelection", () => {
       assert.equal(view.state.doc.textBetween(0, read.from), "Start here.");
     } finally {
       view.destroy();
-    }
-  });
-
-  it("puts the Home caret back when a later paint shows where typing finished", () => {
-    const text = "HelloSecond page.";
-    const { view, node, destroy } = mount(text);
-    const typed = 1 + "Hello".length;
-    const at = (offset: number) => {
-      dom.window.document.getSelection = () =>
-        ({
-          anchorNode: node,
-          anchorOffset: offset,
-          focusNode: node,
-          focusOffset: offset,
-        }) as unknown as Selection;
-    };
-    try {
-      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, typed)));
-      armHomeGuard(view);
-      at(0);
-      syncDomSelection(view);
-      assert.equal(view.state.selection.from, 1);
-      // The editor and the page both show the caret from before Home.
-      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, typed)));
-      at("Hello".length);
-      assert.equal(isGuardedCaret(view, view.state.doc, view.state.selection.from), true);
-      assert.equal(restoreGuardedHome(view), true);
-      assert.equal(view.state.selection.from, 1);
-      const tr = keepVisibleSelection(view, view.state.tr.setMeta("spell", true));
-      assert.equal(tr.selection.from, 1);
-    } finally {
-      destroy();
     }
   });
 });

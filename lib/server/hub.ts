@@ -632,8 +632,10 @@ export class LiveDocument {
 
   /** Used by the draft tools to copy the live document the first time. */
   async seedDraft() {
+    if (this.deleted) return null;
     const existing = await readDraft(this.id);
     if (existing) return existing;
+    if (this.deleted) return null;
     const file = await writeDraft(this.id, this.doc.toJSON());
     this.setDraft({ updatedAt: file.updatedAt, words: docWordCount(this.doc) });
     return file;

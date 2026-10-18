@@ -2,7 +2,7 @@
 
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent, type PointerEvent, type RefObject } from "react";
 import { geometryFor, type DocumentSession } from "@/lib/client/documentSession";
-import { isGuardedCaret, readDomSelection, restoreGuardedHome } from "@/lib/editor/domSync";
+import { commitDomCaret } from "@/lib/editor/domSync";
 import { lineFactor, lineMetrics } from "@/lib/doc/fontMetrics";
 import { DEFAULT_MATH_SIZE, DEFAULT_TAB_STOP, fillHeaderTokens, headerParts, type DocumentMeta } from "@/lib/doc/settings";
 import { styleSheetCss } from "@/lib/doc/styles";
@@ -183,20 +183,12 @@ function textAlignOf(align: string): CSSProperties["textAlign"] {
 
 /**
  * A click in the margin must not move the body caret. Home can leave that caret
- * on a page gap, which is not a text position, so the editor still has the caret
- * from before Home and the next layout paints that one back. Adopt the caret
- * the page is showing before the click can.
+ * on a page gap before the editor has recorded it, and the next layout would
+ * paint the caret from before Home. Commit the caret the page is showing first.
  */
 function holdBodyCaret(session: DocumentSession) {
   const view = session.view;
-  if (!view) return;
-  // Home can already have been painted back to where typing finished. Put that
-  // caret back before adopting whatever the page shows now.
-  if (restoreGuardedHome(view)) return;
-  const next = readDomSelection(view);
-  if (!next || next.eq(view.state.selection)) return;
-  if (next.empty && isGuardedCaret(view, view.state.doc, next.from)) return;
-  view.dispatch(view.state.tr.setSelection(next).setMeta("addToHistory", false));
+  if (view) commitDomCaret(view);
 }
 
 const Sheet = memo(function Sheet({
