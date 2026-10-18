@@ -5,7 +5,7 @@ import { EditorState, TextSelection } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 
 import { schema } from "@/lib/doc/schema";
-import { keepVisibleSelection, rangeTouchingCaret, retainHeldSelection, syncDomSelection } from "./domSync";
+import { keepVisibleSelection, rangeTouchingCaret, retainHeldSelection, syncDomSelection, textSelectionNear } from "./domSync";
 
 describe("retainHeldSelection", () => {
   it("keeps a range the next toolbar press can no longer see, until the caret moves", () => {
@@ -25,6 +25,29 @@ describe("rangeTouchingCaret", () => {
     assert.equal(rangeTouchingCaret(range, 4), null);
     assert.equal(rangeTouchingCaret(null, 1), null);
     assert.equal(rangeTouchingCaret({ from: 3, to: 3 }, 3), null);
+  });
+});
+
+describe("textSelectionNear", () => {
+  it("turns a caret between blocks into the nearest text caret, not a later word", () => {
+    const doc = schema.nodes.doc.create(null, [
+      schema.nodes.paragraph.create(null, schema.text("Start here.")),
+      schema.nodes.paragraph.create(null, schema.text("HelloSecond page.")),
+    ]);
+    const boundary = doc.child(0).nodeSize;
+    const caret = textSelectionNear(doc, boundary, boundary);
+    assert.ok(caret);
+    assert.equal(caret.empty, true);
+    assert.equal(caret.$from.parent.inlineContent, true);
+    assert.equal(doc.textBetween(0, caret.from), "Start here.");
+  });
+
+  it("keeps a Shift+End range when the moving end is past the block", () => {
+    const text = "A sentence to select.";
+    const doc = schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, schema.text(text)));
+    const range = textSelectionNear(doc, 1, doc.content.size);
+    assert.ok(range);
+    assert.equal(doc.textBetween(range.from, range.to), text);
   });
 });
 
