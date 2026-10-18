@@ -48,8 +48,59 @@ test("Canvas pages are styled, editable, undoable, persistent, and version check
   expect(stale.status()).toBe(422);
   await page.reload();
   await expect(page.locator('.doc-content [data-id="title"]')).toContainText("My correction");
-  await page.getByRole("button", { name: "Check layout", exact: true }).click();
-  await expect(page.getByText("Layout checked:", { exact: false })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Edit design", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Check layout", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Select section", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Move section up", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Move section down", exact: true })).toHaveCount(0);
+  await expect(page.locator(".canvas-layout-notice")).toHaveCount(0);
+});
+
+test("hovering a canvas block shows handles that insert and reorder", async ({ page, request }) => {
+  const response = await request.post("/api/documents", { data: { canvas: "editorial", title: "Block handles" } });
+  expect(response.ok()).toBeTruthy();
+  const { document } = await response.json();
+  const id = document.meta.id;
+  const source = await (await request.get(`/api/documents/${id}/canvas`)).json();
+  const changed = await request.patch(`/api/documents/${id}/canvas`, {
+    data: {
+      epoch: source.epoch,
+      version: source.version,
+      operation: "replace",
+      html: "<Canvas><Text id=\"one\">Alpha block</Text><Text id=\"two\">Beta block</Text></Canvas>",
+      css: "p { font-size: 16pt; }",
+    },
+  });
+  expect(changed.ok()).toBeTruthy();
+  await page.goto(`/d/${id}`);
+  const one = page.locator('.doc-content [data-id="one"]');
+  const two = page.locator('.doc-content [data-id="two"]');
+  await expect(one).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add block", exact: true })).toBeHidden();
+  await one.hover();
+  const add = page.getByRole("button", { name: "Add block", exact: true });
+  const drag = page.getByRole("button", { name: "Drag block", exact: true });
+  await expect(add).toBeVisible();
+  await expect(drag).toBeVisible();
+  await page.mouse.move(8, 8);
+  await expect(add).toBeHidden();
+  await one.hover();
+  await add.click();
+  await page.keyboard.type("Inserted line");
+  await expect(page.locator(".doc-content")).toContainText("Inserted line");
+  await expect.poll(async () => (await (await request.get(`/api/documents/${id}/canvas`)).json()).html).toContain("Inserted line");
+  const order = async () => page.locator(".doc-content").innerText();
+  expect(await order()).toMatch(/Alpha block[\s\S]*Inserted line[\s\S]*Beta block/);
+  await two.hover();
+  const grip = await drag.boundingBox();
+  expect(grip).toBeTruthy();
+  await page.mouse.move(grip!.x + grip!.width / 2, grip!.y + grip!.height / 2);
+  await page.mouse.down();
+  const first = await one.boundingBox();
+  expect(first).toBeTruthy();
+  await page.mouse.move(first!.x + 24, first!.y + 4, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(order).toMatch(/Beta block[\s\S]*Alpha block/);
 });
 
 test("a canvas page follows dark mode and print stays light", async ({ page, request }) => {
