@@ -443,6 +443,17 @@ export class DocumentSession {
       await nextFrames(2);
       if (view.state.doc.attrs.canvas) await this.prepareCanvasRender();
       else { relayout(view); await settleLayout(() => pageCount(view.state)); }
+      // Sheets keep a gap on screen. Printing closes it, and the stack must already be
+      // a whole number of pages before Chromium slices it, or the leftover gap is a blank page.
+      const frame = view.dom.closest<HTMLElement>(".page-stack-frame");
+      const expected = pageCount(view.state) * geometry.pageHeight;
+      for (let attempt = 0; frame && attempt < 20; attempt += 1) {
+        if (Math.abs(frame.getBoundingClientRect().height - expected) < 1) break;
+        await nextFrames(1);
+      }
+      if (frame && Math.abs(frame.getBoundingClientRect().height - expected) >= 1) {
+        throw new Error("The pages were still spaced apart, so the PDF would have gained a blank page.");
+      }
       return restore;
     } catch (error) { restore(); throw error; }
   }

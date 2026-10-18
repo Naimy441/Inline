@@ -89,7 +89,8 @@ export function HeadlessPages({ documentId, appearance }: { documentId: string; 
 
   return (
     <div className="render-pages">
-      <PageCanvas session={session} meta={ui.meta} pages={ui.pages} zoom={1} printing={false} flow={false} />
+      {/* printing follows the session: PDF export closes the sheet gap, or the leftover gap prints as a blank page. */}
+      <PageCanvas session={session} meta={ui.meta} pages={ui.pages} zoom={1} printing={ui.printing} flow={false} />
     </div>
   );
 }

@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
 
+/** `/Type /Pages` is the page tree; each leaf is `/Type /Page` followed by a non-letter. */
+function pdfPageCount(bytes: Buffer) {
+  return bytes.toString("latin1").match(/\/Type\s*\/Page(?![A-Za-z])/g)?.length ?? 0;
+}
+
 test("the home Canvas card is a blank page and opens an empty canvas", async ({ page }) => {
   await page.goto("/");
   const card = page.locator(".template-card").filter({ hasText: "Canvas" }).first();
@@ -142,6 +147,7 @@ test("Canvas browser export uses its actual HTML and all pages", async ({ page, 
   const bytes = await pdf.body();
   expect(bytes.subarray(0, 5).toString()).toBe("%PDF-");
   expect(bytes.byteLength).toBeGreaterThan(1000);
+  expect(pdfPageCount(bytes)).toBe(2);
   const shot = await request.get(`/api/documents/${id}/canvas/render?page=2`, { timeout: 90_000 });
   expect(shot.ok(), await shot.text()).toBeTruthy();
   expect(shot.headers()["content-type"]).toBe("image/png");
