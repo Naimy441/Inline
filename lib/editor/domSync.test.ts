@@ -5,7 +5,8 @@ import { EditorState, Plugin, TextSelection } from "prosemirror-state";
 import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
 
 import { schema } from "@/lib/doc/schema";
-import { commitDomCaret, keepVisibleSelection, noteCaretGesture, rangeTouchingCaret, readDomSelection, resetCaretGesture, retainHeldSelection, syncDomSelection, textSelectionNear } from "./domSync";
+import { commitDomCaret, keepVisibleSelection, noteCaretGesture, rangeTouchingCaret, readDomSelection, resetCaretGesture, retainHeldSelection, selectionExtends, syncDomSelection, textSelectionNear } from "./domSync";
+import { presenceKey } from "./presence";
 
 describe("retainHeldSelection", () => {
   it("keeps a range the next toolbar press can no longer see, until the caret moves", () => {
@@ -14,6 +15,18 @@ describe("retainHeldSelection", () => {
     assert.equal(retainHeldSelection(held, null, { from: 12, empty: true }), held);
     assert.equal(retainHeldSelection(held, null, { from: 1, empty: true }), held);
     assert.equal(retainHeldSelection(held, null, { from: 4, empty: true }), null);
+  });
+});
+
+describe("selectionExtends", () => {
+  it("is a longer phrase with the same anchor", () => {
+    const doc = schema.nodes.doc.create(null, schema.nodes.paragraph.create(null, schema.text("umbrella today.")));
+    const end = doc.content.size - 1;
+    const one = TextSelection.create(doc, end, end - 1);
+    const phrase = TextSelection.create(doc, end, 1);
+    assert.equal(selectionExtends(one, phrase), true);
+    assert.equal(selectionExtends(phrase, one), false);
+    assert.equal(selectionExtends(one, TextSelection.create(doc, end - 1, end - 2)), false);
   });
 });
 
@@ -170,6 +183,25 @@ describe("keepVisibleSelection", () => {
     }
   });
 
+  it("does not adopt a page range onto the update that shows where Claude is working", () => {
+    const text = "Hello world";
+    const { view, node, destroy } = mount(text);
+    try {
+      dom.window.document.getSelection = () =>
+        ({
+          anchorNode: node,
+          anchorOffset: 0,
+          focusNode: node,
+          focusOffset: text.length,
+        }) as unknown as Selection;
+      const tr = keepVisibleSelection(view, view.state.tr.setMeta(presenceKey, { presence: null }));
+      assert.equal(tr.selection.empty, true);
+      assert.equal(tr.getMeta(presenceKey) !== undefined, true);
+    } finally {
+      destroy();
+    }
+  });
+
   it("adopts a range the page shows so a later flush cannot paint the caret", () => {
     const text = "Hello world";
     const { view, node, destroy } = mount(text);
@@ -191,6 +223,130 @@ describe("keepVisibleSelection", () => {
       syncDomSelection(view);
       assert.equal(view.state.selection.from, 1);
       assert.equal(view.state.selection.to, 3);
+    } finally {
+      destroy();
+    }
+  });
+
+  it("grows a Shift+Arrow selection instead of painting the first character back", () => {
+    const text = "umbrella today.";
+    const { view, node, destroy } = mount(text);
+    try {
+      const end = 1 + text.length;
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, end, end - 1)));
+      dom.window.document.getSelection = () =>
+        ({
+          anchorNode: node,
+          anchorOffset: text.length,
+          focusNode: node,
+          focusOffset: 0,
+        }) as unknown as Selection;
+      view.dom.focus();
+      const flushed = keepVisibleSelection(view, view.state.tr.setMeta("page", true).setMeta("addToHistory", false));
+      assert.equal(view.state.doc.textBetween(flushed.selection.from, flushed.selection.to), text);
+      assert.equal(flushed.selection.anchor, end);
+    } finally {
+      destroy();
+    }
+  });
+
+  it("does not put a phrase back after End collapsed it", () => {
+    const text = "SHOUT THIS";
+    const { view, node, destroy } = mount(text);
+    try {
+      const end = 1 + text.length;
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, end)));
+      dom.window.document.getSelection = () =>
+        ({
+          anchorNode: node,
+          anchorOffset: 0,
+          focusNode: node,
+          focusOffset: text.length,
+        }) as unknown as Selection;
+      noteCaretGesture();
+      const flushed = keepVisibleSelection(view, view.state.tr.setMeta("page", true).setMeta("addToHistory", false));
+      assert.equal(flushed.selection.empty, true);
+      assert.equal(flushed.selection.from, end);
+      resetCaretGesture();
+      noteCaretGesture(true);
+      const extended = keepVisibleSelection(view, view.state.tr.setMeta("page", true).setMeta("addToHistory", false));
+      assert.equal(view.state.doc.textBetween(extended.selection.from, extended.selection.to), text);
+    } finally {
+      destroy();
+      resetCaretGesture();
+    }
+  });
+
+  it("does not adopt a range that does not touch the caret", () => {
+    const text = "umbrella today.";
+    const { view, node, destroy } = mount(text);
+    try {
+      const end = 1 + text.length;
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, end)));
+      const a = text.lastIndexOf("a");
+      dom.window.document.getSelection = () =>
+        ({
+          anchorNode: node,
+          anchorOffset: a,
+          focusNode: node,
+          focusOffset: a + 1,
+        }) as unknown as Selection;
+      const flushed = keepVisibleSelection(view, view.state.tr.setMeta("page", true).setMeta("addToHistory", false));
+      assert.equal(flushed.selection.empty, true);
+      assert.equal(flushed.selection.from, end);
+    } finally {
+      destroy();
+    }
+  });
+
+  it("reads a Shift+Home range that ends on the editor element, and a flush keeps it", () => {
+    const text = "Hello world";
+    const { view, node, destroy } = mount(text);
+    try {
+      // Chrome reports Shift+Home with one end on the contenteditable itself.
+      // contains() is false for that node, so the phrase used to be invisible.
+      dom.window.document.getSelection = () =>
+        ({
+          anchorNode: node,
+          anchorOffset: text.length,
+          focusNode: view.dom,
+          focusOffset: 0,
+        }) as unknown as Selection;
+      const read = readDomSelection(view);
+      assert.ok(read);
+      assert.equal(read.empty, false);
+      assert.equal(view.state.doc.textBetween(read.from, read.to), text);
+      const flushed = keepVisibleSelection(view, view.state.tr.setMeta("page", true).setMeta("addToHistory", false));
+      assert.equal(view.state.doc.textBetween(flushed.selection.from, flushed.selection.to), text);
+    } finally {
+      destroy();
+    }
+  });
+
+  it("clamps a Shift+Home end that sits just outside the editor", () => {
+    const text = "Hello world";
+    const { view, node, destroy } = mount(text);
+    try {
+      dom.window.document.getSelection = () =>
+        ({
+          anchorNode: node,
+          anchorOffset: text.length,
+          focusNode: dom.window.document.body,
+          focusOffset: 0,
+        }) as unknown as Selection;
+      const read = readDomSelection(view);
+      assert.ok(read);
+      assert.equal(view.state.doc.textBetween(read.from, read.to), text);
+      dom.window.document.getSelection = () =>
+        ({
+          anchorNode: node,
+          anchorOffset: 0,
+          focusNode: dom.window.document.body,
+          focusOffset: 1,
+        }) as unknown as Selection;
+      const end = readDomSelection(view);
+      assert.ok(end);
+      assert.equal(view.state.doc.textBetween(end.from, end.to), text);
     } finally {
       destroy();
     }

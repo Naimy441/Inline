@@ -318,8 +318,8 @@ function readSelectionPlugin() {
       };
     },
     props: {
-      handleKeyDown(view) {
-        noteCaretGesture();
+      handleKeyDown(view, event) {
+        noteCaretGesture(event.shiftKey);
         syncDomSelection(view);
         return false;
       },

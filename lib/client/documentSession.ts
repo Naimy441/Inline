@@ -895,9 +895,12 @@ export class DocumentSession {
         const to = tr.mapping.map(this.pendingSelection.to, -1);
         this.pendingSelection = from < to ? { from, to } : null;
       }
-      // The reader collapsed a range the editor already had (an arrow key). A caret the
-      // browser showed and the state never recorded is not this — that one stays pending.
-      if (this.pendingSelection && !strayCollapse && !view.state.selection.empty && tr.selectionSet && tr.selection.empty) this.pendingSelection = null;
+      // The reader collapsed a range the editor already had (End, an arrow). That
+      // phrase is finished, even when the caret sits on its last letter: the next
+      // insert must not replace the words. A layout flush is not this collapse.
+      if (this.pendingSelection && !strayCollapse && !view.state.selection.empty && tr.selectionSet && tr.selection.empty) {
+        this.pendingSelection = null;
+      }
     }
     // Focusing the font search or the size field collapses the DOM selection
     // after the editor has already blurred. Put the phrase back. While the
