@@ -1,12 +1,19 @@
 import { z } from "zod";
+import { readCanvasPreview } from "@/lib/server/canvasPreview";
 import { HttpError, json, readJson, route, routeDocument } from "@/lib/server/http";
 import { folderExists } from "@/lib/server/folders";
 import { documentHub } from "@/lib/server/hub";
 
 type Context = { params: Promise<{ id: string }> };
 
-export const GET = route(async (_request, context: Context) => {
+export const GET = route(async (request, context: Context) => {
   const doc = await routeDocument(context, { allowTrashed: true });
+  const preview = new URL(request.url).searchParams.get("preview");
+  if (preview) {
+    const snapshot = readCanvasPreview(preview, doc.id);
+    if (!snapshot) throw new HttpError(404, "That canvas preview expired. Measure the patch again.");
+    return json({ document: snapshot });
+  }
   return json({ document: doc.snapshot() });
 });
 

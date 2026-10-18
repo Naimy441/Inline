@@ -1,5 +1,5 @@
 import { canvasTools } from "@/lib/agent/canvasTools";
-import { isCanvas } from "@/lib/canvas/compiler";
+import { canvasMarkup, isCanvas } from "@/lib/canvas/compiler";
 import { renderCanvas } from "@/lib/server/canvasRender";
 import type { Node as PMNode } from "prosemirror-model";
 import { Transform } from "prosemirror-transform";
@@ -30,6 +30,7 @@ import {
   type StringEdit,
 } from "@/lib/doc/editing";
 import { imageSize } from "@/lib/doc/docx";
+import { imagePreview } from "@/lib/server/imagePreview";
 import { BLOCK_SEPARATOR, markdownToDoc, parseMarkdown, serializeBlocks, serializeDoc } from "@/lib/doc/markdown";
 import { changedRanges, describeHunk, isUserSuggestion } from "@/lib/doc/review";
 import { FONT_FAMILIES, googleFontValue, PAPER_SIZES, type DocumentSettings, type PaperSize } from "@/lib/doc/settings";
@@ -125,6 +126,12 @@ function defineTool<S extends Shape>(tool: ToolDefinition<S>): ToolDefinition<S>
 const ok = (text: string): ToolResult => ({ text });
 const fail = (text: string): ToolResult => ({ text, isError: true });
 
+/** Markdown reads and rewrites flatten a Canvas. Refuse them and leave the document alone. */
+function canvasMarkupRefusal(doc: LiveDocument): string | null {
+  if (!isCanvas(doc.doc)) return null;
+  return "This is a Canvas. Read it with read_canvas and change it with patch_canvas. Markdown tools would drop its composition and design, so this call was refused and the canvas is unchanged.";
+}
+
 const documentId = z
   .string()
   .optional()
@@ -187,7 +194,29 @@ async function imageNaturals(doc: PMNode) {
  * hand over unasked. The in-app chat sends this with a message so Claude can
  * start editing without first spending a round trip on read_document.
  */
+/**
+ * What <inline-context> should say about an open Canvas. The Markdown projection
+ * of a Canvas drops the text inside Section and Text, so it is not included.
+ */
+export function canvasTurnContext(doc: LiveDocument) {
+  let markup = "";
+  try {
+    markup = canvasMarkup(doc.doc);
+  } catch {
+    markup = "";
+  }
+  const include = Boolean(markup) && markup.length <= 40_000 && markup.split("\n").length <= 400;
+  const lines = [
+    "Type: Canvas.",
+    "This is a Canvas, not a Markdown document. Do not rewrite it with write_document, insert_image, or other Markdown tools. Read it with read_canvas and change it with patch_canvas.",
+  ];
+  if (include) lines.push(`Current Canvas markup, not a Markdown document. A patch still needs the epoch and revision from read_canvas:\n<canvas-markup>\n${markup}\n</canvas-markup>`);
+  else lines.push("Read it with read_canvas before changing it. Its markup is not included here.");
+  return lines.join("\n");
+}
+
 export function documentListing(doc: LiveDocument, maxLines = 400, maxChars = 40_000) {
+  if (isCanvas(doc.doc)) return null;
   const lines = markdownLines(serializeDoc(doc.doc));
   if (lines.length > maxLines) return null;
   const body = numberLines(lines, 1, lines.length);
@@ -324,6 +353,7 @@ const EXTERNAL_ACTIVITY_MS = 4000;
 
 /** Measure one page range, solve the font size and line spacing, and apply them. */
 async function fitPageRange(ctx: ToolContext, doc: LiveDocument, fromPage: number, toPage: number, pages: number) {
+  if (isCanvas(doc.doc)) return fail("A Canvas is fitted through its own type and spacing. Use patch_canvas styles, or page settings, instead of squeezing the document font.");
   const span = fromPage === toPage ? `page ${fromPage}` : `pages ${fromPage}–${toPage}`;
   showActivity(ctx, doc, { chatId: ctx.author, status: "reading", label: `Fitting ${span}` });
   let measured;
@@ -444,6 +474,18 @@ function withWriteCheck(result: ToolResult, scrubs: Array<{ removed: number; sym
   return note ? { ...result, text: `${result.text}\n${note}` } : result;
 }
 
+export function canvasScreenshotText(report: { pages: number; page?: number; issues?: Array<{ id: string; message: string }>; blocks?: Array<{ id: string; page: number; toPage: number }> }, includeBlocks: boolean) {
+  const page = report.page ?? 1;
+  const blocks = (report.blocks ?? []).filter((block) => block.page === page || block.toPage === page);
+  const onPage = new Set(blocks.map((block) => block.id));
+  const issues = (report.issues ?? []).filter((issue) => issue.id === `page-${page}` || onPage.has(issue.id));
+  const lines = [`Page ${page} of ${report.pages}.`];
+  if (!issues.length) lines.push("No layout issues on this page.");
+  else for (const issue of issues) lines.push(`${issue.id}: ${issue.message}`);
+  if (includeBlocks) lines.push(JSON.stringify({ blocks }, null, 2));
+  return lines.join("\n");
+}
+
 function blockHasLock(node: PMNode) {
   let locked = false;
   node.descendants((child) => {
@@ -485,6 +527,8 @@ export const TOOLS = [
     write: false,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
+      const canvasRefusal = canvasMarkupRefusal(doc);
+      if (canvasRefusal) return fail(canvasRefusal);
       const lines = markdownLines(serializeDoc(doc.doc));
       const offset = args.offset ?? 1;
       const limit = args.limit ?? 2000;
@@ -512,6 +556,8 @@ export const TOOLS = [
     write: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
+      const canvasRefusal = canvasMarkupRefusal(doc);
+      if (canvasRefusal) return fail(canvasRefusal);
       const scrub = scrubWritten(args.new_string);
       if (scrub.text === args.old_string && scrub.removed) {
         return ok(`Deleted ${scrub.removed} invisible character${scrub.removed === 1 ? "" : "s"} from the replacement. The remaining text matches the document, so nothing else changed.`);
@@ -545,6 +591,8 @@ export const TOOLS = [
     write: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
+      const canvasRefusal = canvasMarkupRefusal(doc);
+      if (canvasRefusal) return fail(canvasRefusal);
       const prepared = args.edits.map((edit) => ({ edit, scrub: scrubWritten(edit.new_string) }));
       const applicable = prepared.filter((item) => item.scrub.text !== item.edit.old_string);
       if (!applicable.length) {
@@ -572,6 +620,8 @@ export const TOOLS = [
     destructive: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
+      const canvasRefusal = canvasMarkupRefusal(doc);
+      if (canvasRefusal) return fail(canvasRefusal);
       const scrub = scrubWritten(args.content);
       if (!scrub.text.trim() && scrub.removed) {
         return ok(`Deleted ${scrub.removed} invisible character${scrub.removed === 1 ? "" : "s"}. No visible text was left to write, so the document was not replaced.`);
@@ -598,6 +648,8 @@ export const TOOLS = [
     write: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
+      const canvasRefusal = canvasMarkupRefusal(doc);
+      if (canvasRefusal) return fail(canvasRefusal);
       if ((args.position === "after_line" || args.position === "before_line") && !args.line) {
         return fail("line is required when position is after_line or before_line.");
       }
@@ -783,18 +835,25 @@ export const TOOLS = [
     title: "Screenshot page",
     description:
       "A picture of one page as the editor lays it out, so you can see layout the Markdown does not show: a crowded or split table, an image that is too big, uneven spacing, a stray font, or a last page with only a line or two. Home-page thumbnails are only a small picture of the first page; this is the page itself. Page numbers are 1-based. If the document is open, the picture comes from that editor. If it is not, the page is laid out the same way with no window open. The picture uses the light or dark appearance the user is using. Pass theme light or dark to picture the page in that appearance instead.\n\n" +
-      "Use it when the user wants the document to look good and the picture is the right signal. get_page_count is enough for how many pages there are and how full the last page is. After you change a page you judged from a picture, call screenshot_page again.",
+      "Use it when the user wants the document to look good and the picture is the right signal. get_page_count is enough for how many pages there are and how full the last page is. After you change a page you judged from a picture, call screenshot_page again. For a Canvas, the text is a short issue summary for that page. Pass include_blocks when you also need the block list inspect_canvas already returns.",
     shape: {
       document_id: documentId,
       page: z.number().int().min(1).describe("Page number to picture (1-based)."),
       theme: z.enum(["light", "dark"]).optional().describe("The app's light or dark appearance. Omit it to use the appearance the user is using."),
+      epoch: z.string().optional().describe("Canvas only: epoch from read_canvas or inspect_canvas. A mismatch is rejected instead of picturing a different revision."),
+      version: z.number().int().optional().describe("Canvas only: revision that epoch belongs to."),
+      include_blocks: z.boolean().optional().describe("Canvas only: include the block list for this page. Omit it for the image and a short issue summary."),
     },
     write: false,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
       if (isCanvas(doc.doc)) {
+        if ((args.epoch == null) !== (args.version == null)) return fail("Pass both epoch and version from the canvas you inspected, or neither to picture the current revision.");
+        if (args.epoch != null && (args.epoch !== doc.epoch || args.version !== doc.version)) {
+          return fail(`This Canvas is now revision ${doc.version} (epoch ${doc.epoch}). That page reference is stale, so nothing was captured. Read the canvas again; page numbers are not content identity.`);
+        }
         const rendered = await renderCanvas(doc, { page: args.page });
-        return { text: JSON.stringify(rendered.report, null, 2), images: rendered.png ? [{ data: Buffer.from(rendered.png).toString("base64"), mimeType: "image/png" }] : [] };
+        return { text: canvasScreenshotText(rendered.report, Boolean(args.include_blocks)), images: rendered.png ? [{ data: Buffer.from(rendered.png).toString("base64"), mimeType: "image/png" }] : [] };
       }
       const count = pageCountNow(doc);
       const visible = count.showing ?? count.pages;
@@ -925,6 +984,8 @@ export const TOOLS = [
     write: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
+      const canvasRefusal = canvasMarkupRefusal(doc);
+      if (canvasRefusal) return fail(canvasRefusal);
       const lines = lineRange(args.from_line, args.to_line)!;
       return commitEdit(
         ctx,
@@ -1302,6 +1363,9 @@ export const TOOLS = [
     write: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
+      if (isCanvas(doc.doc)) {
+        return fail(`This is a Canvas. insert_image writes Markdown, so it was refused and the canvas is unchanged. A file in this document's folder is a lasting image at /api/documents/${doc.id}/files/<name> (for example /api/documents/${doc.id}/files/graphs.png). Put that URL in <Figure><img src="…" alt="…"></Figure> with patch_canvas. The PDF includes it.`);
+      }
       let src = args.url?.trim() ?? "";
       if (args.file) {
         const found = await readWorkspaceBytes(doc.id, args.file).catch((error: unknown) => {
@@ -1382,6 +1446,8 @@ export const TOOLS = [
     write: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
+      const canvasRefusal = canvasMarkupRefusal(doc);
+      if (canvasRefusal) return fail(canvasRefusal);
       const serialized = serializeDoc(doc.doc);
       let removed = 0;
       const rewrites: AiSymbolHit[] = [];
@@ -1764,14 +1830,15 @@ export const TOOLS = [
   defineTool({
     name: "read_file",
     title: "Read file",
-    description: "Read a text file in this document's folder, or an image (returned as a picture). Paths stay inside the folder.",
+    description: "Read a text file in this document's folder, or an image. An image larger than the visual-token cap comes back as a downscaled preview; the file on disk is unchanged. After that image is placed on the page, use screenshot_page instead of reading the file again. Paths stay inside the folder.",
     shape: { document_id: documentId, path: z.string().describe("Path relative to the document folder, such as chart.py or charts/q3.png.") },
     write: false,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
       const found = await readWorkspaceText(doc.id, args.path);
       if (found.kind === "image") {
-        return { text: `${args.path} (${found.mime}, ${found.data.byteLength} bytes).`, images: [{ data: found.data.toString("base64"), mimeType: found.mime }] };
+        const preview = imagePreview(args.path, found.data, found.mime);
+        return preview.image ? { text: preview.text, images: [{ data: Buffer.from(preview.data).toString("base64"), mimeType: preview.mime }] } : { text: preview.text };
       }
       const text = found.text.length > 100_000 ? `${found.text.slice(0, 100_000)}\n…[truncated]` : found.text;
       return ok(text || "(empty file)");
@@ -1782,7 +1849,7 @@ export const TOOLS = [
     name: "write_file",
     title: "Write file",
     description:
-      "Create or overwrite a text file in this document's folder. Use it for scripts and data. It cannot write outside the folder, and it does not change the document. Generate images by running the script, then insert_image with file.",
+      "Create or overwrite a text file in this document's folder. Use it for scripts and data. It cannot write outside the folder, and it does not change the document. Generate images by running the script, then insert_image with file. On a Canvas, insert_image is refused: the file is already served at /api/documents/<id>/files/<name>, and patch_canvas places that URL in a Figure.",
     shape: {
       document_id: documentId,
       path: z.string().describe("Path relative to the document folder."),

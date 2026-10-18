@@ -8,6 +8,6 @@ export const GET = route(async (_request, context: Context) => json(readCanvas(a
 export const PATCH = route(async (request, context: Context) => {
   const doc = await routeDocument(context);
   const patch = await readJson(request, z.object(canvasPatchShape));
-  doc.applyTransform(canvasTransform(doc, patch), { kind: "system", label: "canvas-design" });
+  doc.applyTransform(canvasTransform(doc, patch).tr, { kind: "system", label: "canvas-design" });
   return json(readCanvas(doc));
 });

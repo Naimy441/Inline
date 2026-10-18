@@ -53,7 +53,7 @@ function lock(doc: LiveDocument, text: string) {
 
 /** Minimal valid arguments for every tool, used by the cross-cutting tests. */
 const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
-  read_canvas: {}, get_canvas_guide: {}, inspect_canvas: {},
+  read_canvas: {}, get_canvas_guide: {}, inspect_canvas: {}, check_layout: {},
   create_canvas: { title: "Canvas", html: "<Canvas><Text>Hello</Text></Canvas>", css: "" },
   patch_canvas: { epoch: "stale", version: 0, operation: "styles", css: "" },
   read_document: {},
@@ -1662,8 +1662,9 @@ describe("document folder", () => {
     const { ctx } = await setup();
     const ran = await runTool("run_command", { command: "python3 -c 'import os; print(os.environ[\"MPLCONFIGDIR\"]); print(os.environ[\"XDG_CACHE_HOME\"])'" }, ctx);
     assert.equal(ran.isError, undefined, ran.text);
-    assert.match(ran.text, /\.tmp\/matplotlib/);
-    assert.match(ran.text, /\.tmp\/cache/);
+    assert.match(ran.text, /\/cache\/matplotlib/);
+    assert.match(ran.text, /\/cache\/xdg/);
+    assert.doesNotMatch(ran.text, /\/repos\/.*matplotlib|\/\.tmp\/matplotlib/);
     assert.match(ran.text, /python3 is \//);
     assert.doesNotMatch(ran.text, /environment: PATH=/);
   });

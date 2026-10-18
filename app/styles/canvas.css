@@ -1,24 +1,59 @@
+/* Light publication palette. Dark editing overrides it on screen; print keeps these values. */
 .page-stack.is-canvas-document { --paper: #fff; --paper-text: #25392f; }
 /* SDK layout belongs to Inline; authored CSS controls visual treatment. */
-.doc-content[data-canvas-root] { color: #25392f; background: #fff; overflow-wrap: anywhere; }
+.doc-content[data-canvas-root] { color: var(--paper-text); background: var(--paper); overflow-wrap: anywhere; }
 .doc-content[data-canvas-root] [data-canvas] { min-width: 0; }
 .doc-content[data-canvas-root] [data-canvas="columns"] { display: grid; grid-template-columns: var(--canvas-columns, 1fr 1fr); gap: 24px; align-items: start; }
-.doc-content[data-canvas-root] [data-canvas="figure"] img { max-width: 100%; }
-.doc-content[data-canvas-root] [data-canvas="figure"] > p { font-size: .85em; color: #58645e; margin-top: 8px; }
+.doc-content[data-canvas-root] [data-canvas="figure"] > p { font-size: .85em; color: var(--canvas-caption, #58645e); margin-top: 8px; }
 .doc-content[data-canvas-root] [data-canvas="column"] > :first-child,
 .doc-content[data-canvas-root] [data-pagination="keep-together"] > :first-child { margin-top: 0; }
 .doc-content[data-canvas-root] [data-canvas="column"] > :last-child,
 .doc-content[data-canvas-root] [data-pagination="keep-together"] > :last-child { margin-bottom: 0; }
 .doc-content[data-canvas-root] [data-pagination="keep-together"] { break-inside: avoid; }
+/* Bleed paints the section's own background (a color or one linear gradient) to the sheet edge. The element stays in the column, so text and images do not move. */
+.doc-content[data-canvas-root] [data-canvas="section"][data-bleed] { position: relative; }
+.doc-content[data-canvas-root] [data-canvas="section"][data-bleed]::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
+  left: calc(-1 * var(--bleed-left, 0px));
+  right: calc(-1 * var(--bleed-right, 0px));
+  top: calc(-1 * var(--bleed-top, 0px));
+  bottom: calc(-1 * var(--bleed-bottom, 0px));
+  background: inherit;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+.doc-content[data-canvas-root] [data-canvas="section"][data-bleed] > * { position: relative; z-index: 1; }
+/* A split paragraph's background stops at the content box: paper through the margins, the desk through the sheet gap. */
+.doc-content[data-canvas-root] .canvas-page-gap { position: relative; }
+.doc-content[data-canvas-root] .canvas-gap-mask {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+.doc-content[data-canvas-root] .canvas-gap-mask[data-mask="paper"] { background: var(--paper, #fff); }
+.doc-content[data-canvas-root] .canvas-gap-mask[data-mask="desk"] {
+  left: -3in;
+  right: -3in;
+  background: var(--canvas, #e6e8ec);
+}
 .doc-content[data-canvas-root] [data-canvas="section"]:focus-within { outline: 1px dashed color-mix(in srgb, currentColor 18%, transparent); outline-offset: 5px; }
-.canvas-design-tools { display: flex; align-items: center; gap: 8px; padding: 5px 16px; border-bottom: 1px solid var(--border); background: var(--bg); font-size: 12px; }
-.canvas-design-tools button { font: inherit; border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 5px; padding: 4px 9px; cursor: pointer; }
-.canvas-design-tools .canvas-label { color: var(--muted); margin-right: auto; }
-.canvas-source-fields { display: grid; gap: 12px; }
-.canvas-source-fields label { display: grid; gap: 5px; font-size: 12px; }
-.canvas-source-fields textarea { width: 100%; min-height: 180px; font: 12px/1.5 monospace; resize: vertical; padding: 10px; border: 1px solid var(--border); border-radius: 5px; color: var(--text); background: var(--bg); }
-.canvas-design-error { font-size: 12px; color: var(--danger, #b3261e); white-space: pre-wrap; overflow-wrap: anywhere; }
-.canvas-layout-notice { max-height: 100px; overflow: auto; padding: 6px 16px; font-size: 12px; color: var(--text-2); background: var(--bg-sunken); }
-.template-thumb.is-canvas { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 8px; padding: 22px; background: #edf1e7; color: #2d4c3e; }
-.template-thumb.is-canvas strong { font: 24px/1.1 Georgia, serif; }
-@media print { .canvas-design-tools, .canvas-layout-notice { display: none !important; } .doc-content[data-canvas-root] [data-canvas="section"]:focus-within { outline: none; } }
+@media screen {
+  :root[data-theme="dark"] .page-stack.is-canvas-document {
+    --paper: #262624;
+    --paper-text: #e6e4df;
+    --canvas-caption: rgb(151 164 158);
+  }
+}
+.canvas-block-handles { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+.canvas-block-handle { position: absolute; display: none; gap: 2px; pointer-events: auto; }
+.canvas-block-handle.is-on { display: flex; }
+.canvas-block-handle button { width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted, #5c6570); font: 15px/22px system-ui, sans-serif; cursor: pointer; }
+.canvas-block-handle button:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+.canvas-block-handle [data-handle="drag"] { cursor: grab; }
+html.canvas-block-dragging, html.canvas-block-dragging * { cursor: grabbing !important; }
+@media print { .canvas-block-handles { display: none !important; } .doc-content[data-canvas-root] [data-canvas="section"]:focus-within { outline: none; } }

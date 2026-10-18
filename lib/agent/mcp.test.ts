@@ -13,6 +13,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Fragment, Slice } from "prosemirror-model";
 import { ReplaceStep } from "prosemirror-transform";
 import { createInlineHttpServer, createInlineSdkServer } from "@/lib/agent/mcp";
+import { CANVAS_TOOL_NAMES } from "@/lib/agent/toolLoad";
 import { type ToolContext } from "@/lib/agent/tools";
 import { docToMarkdown } from "@/lib/doc/markdown";
 import { schema } from "@/lib/doc/schema";
@@ -64,6 +65,30 @@ describe("protocol", () => {
       inApp.map((tool) => [tool.name, tool.annotations?.readOnlyHint]).sort(),
       http.map((tool) => [tool.name, tool.annotations?.readOnlyHint]).sort(),
     );
+  });
+
+  it("always loads canvas tools only on a canvas, and defers them on a document", async () => {
+    const load = async (canvas: boolean) => {
+      const { client } = await connect(createInlineSdkServer(() => ({ author: "chat" }), { canvas }).instance as McpServer);
+      const tools = (await client.listTools()).tools;
+      return new Map(tools.map((tool) => [tool.name, tool._meta as Record<string, unknown> | undefined]));
+    };
+    const onCanvas = await load(true);
+    const onDocument = await load(false);
+    for (const name of CANVAS_TOOL_NAMES) {
+      assert.equal(onCanvas.get(name)?.["anthropic/alwaysLoad"], true, name);
+      assert.equal(onDocument.get(name)?.["anthropic/alwaysLoad"], undefined, name);
+      assert.match(String(onDocument.get(name)?.["anthropic/searchHint"] ?? ""), new RegExp(name));
+    }
+    for (const name of ["list_files", "read_file", "write_file", "edit_file", "delete_file", "run_command", "screenshot_page", "start_job", "get_job", "stop_job", "start_jobs"]) {
+      assert.equal(onCanvas.get(name)?.["anthropic/alwaysLoad"], true, name);
+      assert.equal(onDocument.get(name)?.["anthropic/alwaysLoad"], true, name);
+    }
+    assert.equal(onCanvas.get("read_document")?.["anthropic/alwaysLoad"], undefined);
+    assert.match(String(onCanvas.get("read_document")?.["anthropic/searchHint"] ?? ""), /read_document/);
+    assert.equal(onDocument.get("read_document")?.["anthropic/alwaysLoad"], true);
+    assert.equal(onCanvas.get("create_canvas")?.["anthropic/searchHint"], undefined);
+    assert.match(String(onDocument.get("create_canvas")?.["anthropic/searchHint"]), /create_canvas/);
   });
 
   it("returns bad arguments and unknown tools as errors, not crashes", async () => {

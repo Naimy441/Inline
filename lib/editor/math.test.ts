@@ -8,7 +8,8 @@ import { EditorView } from "prosemirror-view";
 import { ensureBlockIds } from "@/lib/doc/ids";
 import { docToMarkdown, markdownToDoc } from "@/lib/doc/markdown";
 import { MATH_LANGUAGE, schema } from "@/lib/doc/schema";
-import { insertEquation, mathKey, mathPlugin, mathRanges } from "./math";
+import { compileCanvas } from "@/lib/canvas/compiler";
+import { codeBlockView, insertEquation, mathKey, mathPlugin, mathRanges } from "./math";
 import { editorPlugins } from "./setup";
 
 function stateFor(markdown: string) {
@@ -153,6 +154,21 @@ describe("deleting a displayed equation", () => {
         Object.defineProperty(host, key, { configurable: true, writable: true, value });
       }
     }
+  });
+
+  it("puts the authored class on a displayed equation", () => {
+    const doc = compileCanvas('<Canvas><Math display id="eq" class="eqbox">a+b</Math></Canvas>', ".eqbox { border-top: 1px solid #111111; padding: 8px 0; margin: 12px 0; background-color: #fafafa }");
+    const mountPoint = document.createElement("div");
+    document.body.append(mountPoint);
+    const view = new EditorView(mountPoint, {
+      state: EditorState.create({ doc }),
+      nodeViews: { code_block: codeBlockView },
+    });
+    const block = view.dom.querySelector(".math-block");
+    assert.ok(block?.classList.contains("eqbox"));
+    assert.equal((block as HTMLElement).dataset.id, "eq");
+    view.destroy();
+    mountPoint.remove();
   });
 
   function mount(markdown: string) {

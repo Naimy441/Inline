@@ -20,10 +20,11 @@ function bytesToBase64(bytes: Uint8Array) {
   return btoa(binary);
 }
 
-export function HeadlessPages({ documentId, appearance }: { documentId: string; appearance: PageAppearance }) {
+export function HeadlessPages({ documentId, appearance, preview }: { documentId: string; appearance: PageAppearance; preview?: string }) {
   // Offline: lay the page out without joining the live editor stream, so this
-  // picture isn't mistaken for a window the user has open.
-  const session = useMemo(() => new DocumentSession(documentId, { offline: true }), [documentId]);
+  // picture isn't mistaken for a window the user has open. A preview token
+  // measures a canvas patch that was not written.
+  const session = useMemo(() => new DocumentSession(documentId, { offline: true, ...(preview ? { preview } : {}) }), [documentId, preview]);
   const ui = useSyncExternalStore(session.ui.subscribe, session.ui.get, session.ui.get);
 
   useLayoutEffect(() => {
@@ -89,7 +90,8 @@ export function HeadlessPages({ documentId, appearance }: { documentId: string; 
 
   return (
     <div className="render-pages">
-      <PageCanvas session={session} meta={ui.meta} pages={ui.pages} zoom={1} printing={false} flow={false} />
+      {/* printing follows the session: PDF export closes the sheet gap, or the leftover gap prints as a blank page. */}
+      <PageCanvas session={session} meta={ui.meta} pages={ui.pages} zoom={1} printing={ui.printing} flow={false} />
     </div>
   );
 }

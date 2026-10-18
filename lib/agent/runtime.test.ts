@@ -115,6 +115,55 @@ describe("a turn", () => {
     assert.deepEqual(options.skills, [PAGE_LAYOUT_SKILL]);
   });
 
+  it("does not resend canvas markup after this chat's own patches, and does after a user edit", async () => {
+    const { compileCanvas } = await import("@/lib/canvas/compiler");
+    const canvas = compileCanvas('<Canvas><Text id="body">Prove the claim.</Text></Canvas>');
+    const doc = await documentHub().create({ title: "Canvas", doc: canvas.toJSON() });
+    const fake = useModel(async (_turn, claude) => {
+      if (fake.turns.length === 1) {
+        const read = await claude.call("read_canvas", {});
+        const state = JSON.parse(read.text) as { epoch: string; version: number };
+        const patched = await claude.call("patch_canvas", { epoch: state.epoch, version: state.version, operation: "styles", css: "p { color: #112233 }" });
+        assert.equal(patched.isError, false, patched.text);
+      }
+    });
+    const chat = await agentRuntime().create({ documentId: doc.id });
+    await turn(chat, "Style it");
+    assert.match(fake.turns[0]!.context, /<canvas-markup>/);
+    assert.match(fake.turns[0]!.context, /Prove the claim/);
+    await turn(chat, "Again");
+    assert.doesNotMatch(fake.turns[1]!.context, /<canvas-markup>/);
+    assert.match(fake.turns[1]!.context, /hasn't changed since you last saw its markup/);
+    const { Transform } = await import("prosemirror-transform");
+    const { schema } = await import("@/lib/doc/schema");
+    let at = 0;
+    doc.doc.descendants((node, pos) => {
+      if (node.isText && node.text?.includes("Prove")) at = pos;
+    });
+    doc.applyTransform(new Transform(doc.doc).insert(at, schema.text("Please ")), { kind: "client", clientID: "human" });
+    await turn(chat, "What changed?");
+    assert.match(fake.turns[2]!.context, /<canvas-markup>/);
+    assert.match(fake.turns[2]!.context, /Please Prove the claim/);
+  });
+
+  it("describes an open Canvas as a Canvas and includes its markup", async () => {
+    const { compileCanvas } = await import("@/lib/canvas/compiler");
+    const fake = useModel(() => undefined);
+    const canvas = compileCanvas('<Canvas><Text class="eyebrow">§ CALCULUS · PROBLEM SET 01</Text><Text as="h1">The fundamental theorem</Text><Section id="body"><Text>Prove the claim.</Text></Section></Canvas>');
+    const doc = await documentHub().create({ title: "Untitled canvas", doc: canvas.toJSON() });
+    await doc.flush();
+    assert.equal(doc.meta.title, "The fundamental theorem");
+    const chat = await agentRuntime().create({ documentId: doc.id });
+    await turn(chat, "Set the problems");
+    const context = fake.turns[0]!.context;
+    assert.match(context, /Type: Canvas\./);
+    assert.match(context, /Prove the claim/);
+    assert.match(context, /The fundamental theorem/);
+    assert.doesNotMatch(context, /no need to read it again before editing/);
+    assert.doesNotMatch(context, /&nbsp;/);
+    assert.equal(doc.meta.title, "The fundamental theorem");
+  });
+
   it("tells Claude which document is open, the mode and what the user selected", async () => {
     const fake = useModel(() => undefined);
     const { doc, chat } = await newChat();
@@ -207,6 +256,36 @@ describe("a turn", () => {
       chat.state.messages.map((message) => message.id),
       ["user-id-1234", "reply-id-1234"],
     );
+  });
+
+  it("defers canvas tools on a document and loads them when the open document is a canvas", async () => {
+    const fake = useModel(() => undefined);
+    const { chat } = await newChat();
+    await turn(chat, "Hello");
+    const markdown = await fake.sessions[0]!.tools.listTools();
+    const markdownLoad = new Map(markdown.tools.map((tool) => [tool.name, tool._meta as Record<string, unknown> | undefined]));
+    assert.equal(markdownLoad.get("read_canvas")?.["anthropic/alwaysLoad"], undefined);
+    assert.match(String(markdownLoad.get("create_canvas")?.["anthropic/searchHint"] ?? ""), /create_canvas/);
+    assert.equal(markdownLoad.get("read_document")?.["anthropic/alwaysLoad"], true);
+    assert.equal(markdownLoad.get("screenshot_page")?.["anthropic/alwaysLoad"], true);
+
+    const { compileCanvas } = await import("@/lib/canvas/compiler");
+    const canvas = await documentHub().create({ title: "Poster", doc: compileCanvas("<Canvas><Text>Hi</Text></Canvas>").toJSON() });
+    await turn(chat, "Open the poster", { documentId: canvas.id });
+    const server = fake.sessions[0]!.options.mcpServers?.inline as { instance: import("@modelcontextprotocol/sdk/server/mcp.js").McpServer };
+    const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+    const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
+    const client = new Client({ name: "reload", version: "0" });
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await server.instance.connect(serverSide);
+    await client.connect(clientSide);
+    const reloaded = await client.listTools();
+    const canvasLoad = new Map(reloaded.tools.map((tool) => [tool.name, tool._meta as Record<string, unknown> | undefined]));
+    assert.equal(canvasLoad.get("patch_canvas")?.["anthropic/alwaysLoad"], true);
+    assert.equal(canvasLoad.get("read_file")?.["anthropic/alwaysLoad"], true);
+    assert.equal(canvasLoad.get("run_command")?.["anthropic/alwaysLoad"], true);
+    assert.equal(canvasLoad.get("read_document")?.["anthropic/alwaysLoad"], undefined);
+    assert.match(String(canvasLoad.get("read_document")?.["anthropic/searchHint"] ?? ""), /read_document/);
   });
 
   it("says when no document is open", async () => {

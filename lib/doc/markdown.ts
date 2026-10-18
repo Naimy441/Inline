@@ -128,6 +128,16 @@ export function serializeBlock(node: PMNode, context: BlockContext = {}): string
       return serializeList(node, context);
     case "table":
       return serializeTable(node);
+    case "canvas_section":
+    case "canvas_stack":
+    case "canvas_richtext":
+    case "canvas_columns":
+    case "canvas_column":
+    case "canvas_figure": {
+      const inner: string[] = [];
+      node.forEach((child) => inner.push(serializeBlock(child, context)));
+      return inner.join(BLOCK_SEPARATOR) || EMPTY_PARAGRAPH;
+    }
     default:
       return serializeInline(node, { atLineStart: true });
   }
