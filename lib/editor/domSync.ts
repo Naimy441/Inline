@@ -68,9 +68,12 @@ export function commitDomCaret(view: EditorView) {
   const onScreen = readDomSelection(view);
   const stateSel = view.state.selection;
   if (!onScreen || !(stateSel instanceof TextSelection) || onScreen.eq(stateSel)) return;
-  if (!stateSel.empty && !onScreen.empty) return;
+  // A Shift+Arrow grows the phrase. A different range the editor already recorded stays.
+  const growing = !stateSel.empty && !onScreen.empty && hasCaretGesture() && selectionExtends(stateSel, onScreen);
+  if (!stateSel.empty && !onScreen.empty && !growing) return;
   if (!stateSel.empty && onScreen.empty && (!view.hasFocus() || !caretGesture)) return;
-  if (caretGesture) consumeCaretGesture();
+  // Leave the gesture while a phrase is still growing. The next arrow is the same selection.
+  if (caretGesture && onScreen.empty) consumeCaretGesture();
   adoptingSelection = true;
   try {
     view.dispatch(view.state.tr.setSelection(onScreen).setMeta("addToHistory", false));
@@ -115,6 +118,25 @@ export function retainHeldSelection(held: HeldRange | null, read: { from: number
   // A caret anywhere else is a new insertion point.
   if (held && held.to > held.from && state.empty && (state.from === held.anchor || state.from === held.from || state.from === held.to)) return held;
   return null;
+}
+
+/**
+ * The page grew a phrase the editor already has, keeping the same anchor
+ * (Shift+Arrow). A shorter phrase, or one with a different anchor, is not this.
+ */
+export function selectionExtends(recorded: TextSelection, onScreen: TextSelection): boolean {
+  if (recorded.empty || onScreen.empty || onScreen.eq(recorded)) return false;
+  if (onScreen.anchor !== recorded.anchor) return false;
+  return onScreen.from < recorded.from || onScreen.to > recorded.to;
+}
+
+/** Put the on-screen range on a transaction without flipping its anchor. */
+function putOnScreen(tr: Transaction, onScreen: TextSelection): Transaction {
+  const doc = tr.doc;
+  const anchor = tr.mapping.map(onScreen.anchor, onScreen.anchor <= onScreen.head ? 1 : -1);
+  const head = tr.mapping.map(onScreen.head, onScreen.head >= onScreen.anchor ? -1 : 1);
+  if (anchor === head || anchor < 0 || head < 0 || Math.max(anchor, head) > doc.content.size) return tr;
+  return tr.setSelection(TextSelection.create(doc, anchor, head));
 }
 
 /**
@@ -196,19 +218,22 @@ export function keepVisibleSelection(view: EditorView, tr: Transaction): Transac
   if (!(view.state.selection instanceof TextSelection) || !(tr.selection instanceof TextSelection)) return tr;
   const onScreen = readDomSelection(view);
   const stateSel = view.state.selection;
-  if (onScreen && !onScreen.empty && stateSel.empty) {
-    const from = tr.mapping.map(onScreen.from, 1);
-    const to = tr.mapping.map(onScreen.to, -1);
-    if (from < to && to <= tr.doc.content.size) return tr.setSelection(TextSelection.create(tr.doc, from, to));
-  }
+  // A caret adopts a phrase only when it still sits on one end. A range in the
+  // middle of the line is not the selection Shift+Home just made.
+  if (onScreen && !onScreen.empty && stateSel.empty && (stateSel.from === onScreen.from || stateSel.from === onScreen.to)) return putOnScreen(tr, onScreen);
+  // Shift+Arrow lengthens the phrase. Painting the first character back would
+  // freeze it there; the anchor has to stay or the next arrow starts over.
+  if (onScreen && !onScreen.empty && selectionExtends(stateSel, onScreen) && (hasCaretGesture() || view.hasFocus())) return putOnScreen(tr, onScreen);
+  // A phrase that does not belong to this caret is not a caret the pass should paint.
+  const caretOnScreen = onScreen && onScreen.empty ? onScreen : null;
   if (tr.docChanged || tr.selectionSet) return tr;
   if (!tr.selection.empty) return tr;
   if (!tr.selection.eq(stateSel)) {
     // The pass captured an older caret. The state may already have the one the
     // user moved to; the page may have a still newer one.
-    if (onScreen && stateSel.empty && !onScreen.eq(stateSel)) return tr.setSelection(onScreen);
+    if (caretOnScreen && stateSel.empty && !caretOnScreen.eq(stateSel)) return tr.setSelection(caretOnScreen);
     return tr.setSelection(stateSel);
   }
-  if (onScreen && stateSel.empty && !onScreen.eq(tr.selection)) return tr.setSelection(onScreen);
+  if (caretOnScreen && stateSel.empty && !caretOnScreen.eq(tr.selection)) return tr.setSelection(caretOnScreen);
   return tr;
 }
