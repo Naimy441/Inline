@@ -22,11 +22,12 @@ let adoptingSelection = false;
  */
 export function syncDomSelection(view: EditorView) {
   if (!adoptingSelection) {
-    const visible = visibleTextSelection(view);
+    const visible = readDomSelection(view);
     // A cell or picture selection is already what the next command should use.
-    // Only a caret is behind the page: Shift+End can be on screen before the
-    // editor has recorded it, and a flush would paint that caret back.
-    if (visible && view.state.selection.empty && !visible.eq(view.state.selection)) {
+    // A range on the page (Shift+End) or a caret Home left at the start of a
+    // line can be on screen before the editor has recorded it. A flush paints
+    // the state caret, which is still where typing finished.
+    if (visible && view.state.selection instanceof TextSelection && view.state.selection.empty && !visible.eq(view.state.selection)) {
       adoptingSelection = true;
       try {
         view.dispatch(view.state.tr.setSelection(visible).setMeta("addToHistory", false));
@@ -115,12 +116,16 @@ export function textSelectionNear(doc: PMNode, anchor: number, head: number): Te
 
 /**
  * A layout or spelling pass dispatches a transaction that does not mean to
- * move the caret. If the page is showing a range the state missed, applying
- * that transaction paints the old caret and the range is gone. Keep it.
+ * move the caret. If the page is showing a range or a caret the state missed,
+ * applying that transaction paints the old caret and the newer one is gone.
+ * Keep what the page shows. A picture or gap selection is left alone.
  */
 export function keepVisibleSelection(view: EditorView, tr: Transaction): Transaction {
-  if (tr.docChanged || tr.selectionSet || !tr.selection.empty) return tr;
-  const visible = visibleTextSelection(view);
+  if (tr.docChanged || tr.selectionSet || !(tr.selection instanceof TextSelection) || !tr.selection.empty) return tr;
+  // Spelling and page layout redraw the caret from the editor state. Home can
+  // already have moved the on-screen caret; painting the state puts it back
+  // where typing finished.
+  const visible = readDomSelection(view);
   if (!visible || visible.eq(tr.selection)) return tr;
   return tr.setSelection(visible);
 }
