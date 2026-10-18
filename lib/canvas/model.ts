@@ -37,7 +37,8 @@ export function validateCanvasDecorations(doc: PMNode) {
   root.walkRules((rule) => {
     if (!flowing.some((path) => rule.selectors.some((s) => selectorMatches(s, path)))) return;
     rule.walkDecls((decl) => {
-      if ((/^padding|^border/.test(decl.prop) && !/^(0(?:px|pt|em|rem)?|none)$/.test(decl.value.trim())) || (decl.prop === "background-color" && decl.value !== "transparent")) throw decl.error("Flowing containers must be transparent and have no padding or border. Use pagination=\"keep-together\" or decorate individual paragraphs.");
+      const painted = (decl.prop === "background-color" && decl.value !== "transparent") || (decl.prop === "background" && decl.value.trim() !== "transparent");
+      if ((/^padding|^border/.test(decl.prop) && !/^(0(?:px|pt|em|rem)?|none)$/.test(decl.value.trim())) || painted) throw decl.error("Flowing containers must be transparent and have no padding or border. Use pagination=\"keep-together\" or decorate individual paragraphs.");
     });
   });
 }
@@ -63,6 +64,7 @@ export function validateCanvasDocument(doc: PMNode) {
     if (node.type.name.startsWith("canvas_")) {
       if (!["flow", "keep-together"].includes(node.attrs.pagination)) throw new Error("Invalid Canvas pagination policy.");
       if (["canvas_columns", "canvas_figure"].includes(node.type.name) && node.attrs.pagination !== "keep-together") throw new Error("Columns and figures must stay together.");
+      if (node.attrs.bleed && (node.type.name !== "canvas_section" || node.attrs.pagination !== "keep-together")) throw new Error("bleed is only supported on a keep-together Section.");
       if (node.type.name === "canvas_columns" && node.attrs.ratio && (!/^[1-4]:[1-4](?::[1-4])?$/.test(node.attrs.ratio) || node.attrs.ratio.split(":").length !== node.childCount)) throw new Error("Invalid Columns ratio.");
     }
   });

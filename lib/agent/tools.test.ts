@@ -1662,8 +1662,9 @@ describe("document folder", () => {
     const { ctx } = await setup();
     const ran = await runTool("run_command", { command: "python3 -c 'import os; print(os.environ[\"MPLCONFIGDIR\"]); print(os.environ[\"XDG_CACHE_HOME\"])'" }, ctx);
     assert.equal(ran.isError, undefined, ran.text);
-    assert.match(ran.text, /\.tmp\/matplotlib/);
-    assert.match(ran.text, /\.tmp\/cache/);
+    assert.match(ran.text, /\/cache\/matplotlib/);
+    assert.match(ran.text, /\/cache\/xdg/);
+    assert.doesNotMatch(ran.text, /\/repos\/.*matplotlib|\/\.tmp\/matplotlib/);
     assert.match(ran.text, /python3 is \//);
     assert.doesNotMatch(ran.text, /environment: PATH=/);
   });

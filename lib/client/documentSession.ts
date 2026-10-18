@@ -1,5 +1,6 @@
 "use client";
 
+import { syncCanvasBleed } from "@/lib/canvas/bleed";
 import { canvasFlowIssues, canvasPageSpace, inspectCanvasDom, type CanvasBlockBox } from "@/lib/canvas/editor";
 
 import { getVersion, receiveTransaction, sendableSteps } from "prosemirror-collab";
@@ -129,6 +130,33 @@ export function geometryFor(meta: DocumentMeta | null): PageGeometry & { pageWid
 
 /** Effectively endless: reflowed text is one long page. */
 const FLOW_PAGE_HEIGHT = 10_000_000;
+
+/** Vertical slices of an element, with page-gap spacers removed. A page break is only its marker. */
+function contentIntervals(el: HTMLElement): Array<{ top: number; bottom: number }> {
+  const rect = el.getBoundingClientRect();
+  if (el.classList.contains("page-break")) {
+    const zoom = el.offsetWidth > 0 ? rect.width / el.offsetWidth || 1 : 1;
+    const height = el.offsetHeight * zoom;
+    return height > 0 ? [{ top: rect.top, bottom: rect.top + height }] : [];
+  }
+  const gaps = [...el.querySelectorAll<HTMLElement>(".page-gap")]
+    .map((gap) => gap.getBoundingClientRect())
+    .filter((gap) => gap.height > 0.5 && gap.bottom > rect.top + 0.5 && gap.top < rect.bottom - 0.5);
+  let parts = [{ top: rect.top, bottom: rect.bottom }];
+  for (const gap of gaps) {
+    const next: Array<{ top: number; bottom: number }> = [];
+    for (const part of parts) {
+      if (gap.bottom <= part.top + 0.5 || gap.top >= part.bottom - 0.5) {
+        next.push(part);
+        continue;
+      }
+      if (gap.top > part.top + 0.5) next.push({ top: part.top, bottom: Math.min(part.bottom, gap.top) });
+      if (gap.bottom < part.bottom - 0.5) next.push({ top: Math.max(part.top, gap.bottom), bottom: part.bottom });
+    }
+    parts = next;
+  }
+  return parts.filter((part) => part.bottom - part.top > 0.5);
+}
 
 function nextFrames(count: number) {
   return new Promise<void>((resolve) => {
@@ -284,6 +312,8 @@ export type SessionCallbacks = {
   onKeyCommand?: (name: "link" | "find" | "replace" | "comment" | "askClaude" | "askClaudeInline") => boolean;
   /** A read-only copy laid out off screen (exporting another tab): no live connection. */
   offline?: boolean;
+  /** Load a measured canvas preview instead of the saved document. The editor is unchanged. */
+  preview?: string;
 };
 
 export class DocumentSession {
@@ -405,6 +435,7 @@ export class DocumentSession {
     if (failed) throw new Error(`An image could not be loaded: ${failed.getAttribute("alt") || failed.getAttribute("src")}.`);
     relayout(view);
     await settleLayout(() => pageCount(view.state));
+    if (view.state.doc.attrs.canvas) syncCanvasBleed(view);
     const geometry = this.geometry();
     const stack = view.dom.closest<HTMLElement>(".page-stack")!;
     const sheets = [...stack.querySelectorAll<HTMLElement>(".sheet")];
@@ -414,17 +445,27 @@ export class DocumentSession {
     const assets: Array<{ src: string; alt: string }> = [];
     const contentWidth = geometry.pageWidth - geometry.marginLeft - geometry.marginRight;
     const contentHeight = geometry.pageHeight - geometry.marginTop - geometry.marginBottom;
-    const pageAt = (y: number) => Math.max(0, sheets.findIndex((sheet) => { const r = sheet.getBoundingClientRect(); return y >= r.top - 1 && y <= r.bottom + 1; }));
     for (const el of view.dom.querySelectorAll<HTMLElement>("[data-id]")) {
-      const box = el.getBoundingClientRect();
+      if (el.closest(".page-gap")) continue;
       fonts.add(getComputedStyle(el).fontFamily);
-      const page = pageAt(box.top + Math.min(1, box.height)) + 1;
-      const sheet = sheets[page - 1];
-      const sheetRect = sheet?.getBoundingClientRect();
-      const scale = sheetRect && geometry.pageHeight ? sheetRect.height / geometry.pageHeight || 1 : 1;
-      const top = sheetRect ? (box.top - sheetRect.top) / scale - geometry.marginTop : 0;
       const kind = el.classList.contains("page-break") ? "break" : /^H[1-6]$/.test(el.tagName) ? "heading" : "block";
-      blocks.push({ id: el.dataset.id!, page, toPage: pageAt(box.bottom - 1) + 1, top: Math.round(top), height: Math.round(box.height / scale), kind });
+      for (const interval of contentIntervals(el)) {
+        for (let index = 0; index < sheets.length; index += 1) {
+          const sheetRect = sheets[index]!.getBoundingClientRect();
+          const topY = Math.max(interval.top, sheetRect.top);
+          const bottomY = Math.min(interval.bottom, sheetRect.bottom);
+          if (bottomY - topY <= 0.5) continue;
+          const scale = sheetRect.height / geometry.pageHeight || 1;
+          blocks.push({
+            id: el.dataset.id!,
+            page: index + 1,
+            toPage: index + 1,
+            top: Math.round((topY - sheetRect.top) / scale - geometry.marginTop),
+            height: Math.round((bottomY - topY) / scale),
+            kind,
+          });
+        }
+      }
     }
     for (const img of view.dom.querySelectorAll("img")) assets.push({ src: img.getAttribute("src") || "", alt: img.getAttribute("alt") || "" });
     const pages = pageCount(view.state);
@@ -457,6 +498,7 @@ export class DocumentSession {
       if (frame && Math.abs(frame.getBoundingClientRect().height - expected) >= 1) {
         throw new Error("The pages were still spaced apart, so the PDF would have gained a blank page.");
       }
+      if (view.state.doc.attrs.canvas) syncCanvasBleed(view);
       return restore;
     } catch (error) { restore(); throw error; }
   }
@@ -676,7 +718,8 @@ export class DocumentSession {
     const generation = ++this.generation;
     this.destroyed = false;
     try {
-      const { document } = await api<{ document: Snapshot }>(`/api/documents/${this.id}`);
+      const preview = this.callbacks.preview ? `?preview=${encodeURIComponent(this.callbacks.preview)}` : "";
+      const { document } = await api<{ document: Snapshot }>(`/api/documents/${this.id}${preview}`);
       if (this.destroyed || generation !== this.generation) return;
       // Google Fonts the document uses, fetched the first time, and the fonts it brought with it (an
       // imported Word or Google document), loaded before the first layout.

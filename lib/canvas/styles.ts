@@ -4,8 +4,8 @@ import type { RGB } from "@/lib/pdf/pdfWriter";
 import { darkColor } from "@/lib/pdf/thumbnail";
 
 /** Canvas CSS is data, never a document-wide stylesheet. */
-const PROPERTIES = new Set(`color background-color font-family font-size font-weight font-style line-height letter-spacing text-align text-transform text-decoration text-decoration-color text-underline-offset margin margin-top margin-right margin-bottom margin-left padding padding-top padding-right padding-bottom padding-left border border-top border-right border-bottom border-left border-color border-width border-style border-radius gap column-gap row-gap width max-width min-width vertical-align list-style-type`.split(" "));
-const TAGS: Record<string, string> = { Canvas: "[data-canvas-root]", Section: '[data-canvas="section"]', Stack: '[data-canvas="stack"]', Columns: '[data-canvas="columns"]', Column: '[data-canvas="column"]', Figure: '[data-canvas="figure"]', Text: ":is(p,h1,h2,h3,h4,h5,h6)", RichText: '[data-canvas="richtext"]', Table: "table" };
+const PROPERTIES = new Set(`color background-color background font-family font-size font-weight font-style line-height letter-spacing text-align text-transform text-decoration text-decoration-color text-underline-offset margin margin-top margin-right margin-bottom margin-left padding padding-top padding-right padding-bottom padding-left border border-top border-right border-bottom border-left border-color border-width border-style border-radius gap column-gap row-gap width max-width min-width vertical-align list-style-type`.split(" "));
+const TAGS: Record<string, string> = { Canvas: "[data-canvas-root]", Section: '[data-canvas="section"]', Stack: '[data-canvas="stack"]', Columns: '[data-canvas="columns"]', Column: '[data-canvas="column"]', Figure: '[data-canvas="figure"]', Text: ":is(p,h1,h2,h3,h4,h5,h6)", RichText: '[data-canvas="richtext"]', Table: "table", Math: ".math-block" };
 const SELECTOR = /^(?:[A-Za-z][A-Za-z0-9-]*|\.[A-Za-z_][\w-]*)(?:(?:\s+|\s*>\s*)(?:[A-Za-z][A-Za-z0-9-]*|\.[A-Za-z_][\w-]*)|\.[A-Za-z_][\w-]*)*$/;
 
 export function validateCanvasClass(value: string) {
@@ -20,13 +20,17 @@ export function validateCanvasCss(css: string): string {
   root.walkRules((rule) => {
     if (rule.parent !== root) throw rule.error("Nested CSS is unsupported. Write a separate selector.");
     for (const selector of rule.selectors) {
+      if (selector.includes("#")) throw rule.error(`Ids are patch targets, not CSS selectors. Add a class (or set <img width>) instead of ${selector.trim()}.`);
       if (!SELECTOR.test(selector.trim())) throw rule.error(`Unsupported selector ${selector}. Use component names, HTML tags, classes, descendants, or child selectors.`);
       for (const match of selector.matchAll(/\.([A-Za-z_][\w-]*)/g)) validateCanvasClass(match[1]);
       if (selector.split(/[\s>.]+/).some((part) => ["html", "body", "script", "style", "iframe"].includes(part.toLowerCase()))) throw rule.error("Canvas selectors cannot target the application.");
     }
   });
   root.walkDecls((decl) => {
-    if (decl.parent?.type !== "rule" || !PROPERTIES.has(decl.prop.toLowerCase())) throw decl.error(`Unsupported Canvas CSS property ${decl.prop}. Layout comes from Stack/Columns; fixed positioning, height, clipping, and scripts are unsupported.`);
+    const prop = decl.prop.toLowerCase();
+    if (/^(?:background-image|background-blend-mode|mix-blend-mode)$/.test(prop)) throw decl.error("Canvas background is a color or one linear-gradient(). Radial gradients, blend modes, and background images are unsupported.");
+    if (decl.parent?.type !== "rule" || !PROPERTIES.has(prop)) throw decl.error(`Unsupported Canvas CSS property ${decl.prop}. Layout comes from Stack/Columns; fixed positioning, height, clipping, and scripts are unsupported.`);
+    if (prop === "background" && !singleLinearGradient(decl.value)) throw decl.error("background must be one linear-gradient(). Use background-color for a solid color. Radial gradients, blend modes, and background images are unsupported.");
     if (decl.important || /[\\<>@]|url\s*\(|expression\s*\(|var\s*\(|attr\s*\(|(?:javascript|data):/i.test(decl.value)) throw decl.error(`Unsupported value for ${decl.prop}. Use literal colors, lengths, and font names.`);
     if (/^-/.test(decl.value.trim()) && /margin|padding|width|gap/.test(decl.prop)) throw decl.error("Negative layout lengths are unsupported.");
   });
@@ -35,7 +39,22 @@ export function validateCanvasCss(css: string): string {
 }
 
 const COLOR_VALUE = /#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b|rgba?\([^)]*\)/g;
-const COLOR_PROPS = /^(?:color|background-color|border-color|text-decoration-color|border|border-top|border-right|border-bottom|border-left)$/;
+const COLOR_PROPS = /^(?:color|background-color|background|border-color|text-decoration-color|border|border-top|border-right|border-bottom|border-left)$/;
+
+/** One linear-gradient() and nothing else. Commas inside the function are color stops. */
+export function singleLinearGradient(value: string) {
+  const trimmed = value.trim().replace(/\s+/g, " ");
+  if (!/^linear-gradient\(/i.test(trimmed) || !trimmed.endsWith(")")) return false;
+  if (/radial-gradient|conic-gradient|repeating-|url\s*\(|image-set|cross-fade|blend/i.test(trimmed)) return false;
+  let depth = 0;
+  for (const ch of trimmed) {
+    if (ch === "(") depth += 1;
+    else if (ch === ")") depth -= 1;
+    else if (ch === "," && depth === 0) return false;
+    if (depth < 0) return false;
+  }
+  return depth === 0;
+}
 
 function parseColorToken(token: string): RGB | null {
   const hex = /^#([0-9a-fA-F]{3,8})$/.exec(token);
@@ -108,7 +127,7 @@ export function scopedCanvasCss(css: string, id: string): string {
   const scope = `.doc-content[data-canvas-root="${id.replace(/[^a-zA-Z0-9_-]/g, "")}"]`;
   root.walkRules((rule) => {
     rule.selectors = rule.selectors.map((selector) => {
-      let converted = selector.replace(/(^|[\s>])(Canvas|Section|Stack|Columns|Column|Figure|Text|RichText|Table)(?=[.\s>]|$)/g, (_match, prefix, tag) => prefix + TAGS[tag]);
+      let converted = selector.replace(/(^|[\s>])(Canvas|Section|Stack|Columns|Column|Figure|Text|RichText|Table|Math)(?=[.\s>]|$)/g, (_match, prefix, tag) => prefix + TAGS[tag]);
       if (converted.startsWith("[data-canvas-root]")) return converted.replace("[data-canvas-root]", scope);
       return `${scope} ${converted}`;
     });

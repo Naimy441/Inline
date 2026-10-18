@@ -5,8 +5,9 @@ import { documentHub } from "@/lib/server/hub";
 import { compileCanvas } from "@/lib/canvas/compiler";
 import { canvasTransform, readCanvas, type CanvasOp, type CanvasPatch } from "@/lib/canvas/operations";
 import { canvasCssNotes } from "@/lib/canvas/styles";
-import { CANVAS_EXAMPLES, CANVAS_GUIDE } from "@/lib/canvas/examples";
+import { CANVAS_FRAGMENTS, CANVAS_GUIDE } from "@/lib/canvas/examples";
 import { renderCanvas } from "@/lib/server/canvasRender";
+import { dropCanvasPreview, putCanvasPreview } from "@/lib/server/canvasPreview";
 
 const document_id = z.string().optional();
 const canvasOpShape = {
@@ -35,11 +36,11 @@ function define<S extends z.ZodRawShape>(tool: ToolDefinition<S>): ToolDefinitio
 export const canvasTools = [
   define({
     name: "read_canvas", title: "Read canvas", write: false,
-    description: "Read current Canvas markup, CSS, epoch and revision, including the user's manual edits. Read before every patch. Set include_guide for SDK contracts and example designs.",
+    description: "Read current Canvas markup, CSS, epoch and revision, including the user's manual edits. Read before every patch. Set include_guide for SDK contracts and syntax fragments. The fragments are syntax only: invent the composition, and do not reuse a title, equation, or palette from a previous canvas.",
     shape: { document_id, include_guide: z.boolean().optional() },
     async handler(args, ctx) {
       const state = readCanvas(await resolve(ctx, args.document_id));
-      return { text: JSON.stringify({ ...state, ...(args.include_guide ? { guide: CANVAS_GUIDE, examples: CANVAS_EXAMPLES } : {}) }, null, 2) };
+      return { text: JSON.stringify({ ...state, ...(args.include_guide ? { guide: CANVAS_GUIDE, fragments: CANVAS_FRAGMENTS } : {}) }, null, 2) };
     },
   }),
   define({
@@ -56,17 +57,27 @@ export const canvasTools = [
   }),
   define({
     name: "get_canvas_guide", title: "Canvas design guide", write: false,
-    description: "Read the Inline Canvas SDK capabilities, pagination contracts, supported CSS, and three complete design examples before designing a Canvas.",
+    description: "Read the Inline Canvas SDK capabilities, pagination contracts, supported CSS, and short syntax fragments. The fragments are syntax only: invent the composition for the subject, and do not reuse a title, equation, or palette from a previous canvas.",
     shape: {},
-    async handler() { return { text: `${CANVAS_GUIDE}\n\n${JSON.stringify(CANVAS_EXAMPLES, null, 2)}` }; },
+    async handler() { return { text: `${CANVAS_GUIDE}\n\n${JSON.stringify(CANVAS_FRAGMENTS, null, 2)}` }; },
   }),
   define({
     name: "patch_canvas", title: "Edit canvas", write: true,
-    description: "Apply one atomic Canvas design/content operation, or a list of up to 12 operations, against the epoch and revision returned by read_canvas. Pass operations instead of operation to apply them together; the result's steps field is how many steps the revision advanced (a rekeyed duplicate id adds a step). styles preserves every word; component operations preserve untouched model content and the ids you write. html is a complete Canvas root, with one block for component operations. Whole replace is for initial composition or an explicitly requested redesign/rewrite; prefer focused patches.",
-    shape: { document_id, ...canvasPatchShape },
+    description: "Apply one atomic Canvas design/content operation, or a list of up to 12 operations, against the epoch and revision returned by read_canvas. Pass operations instead of operation to apply them together; the result's steps field is how many steps the revision advanced (a rekeyed duplicate id adds a step). styles preserves every word; component operations preserve untouched model content and the ids you write. html is a complete Canvas root, with one block for component operations. Whole replace is for initial composition or an explicitly requested redesign/rewrite; prefer focused patches. Set dry_run to validate and measure the patch without writing it. A dry run returns the same page measurements as inspect_canvas, and the editor does not change.",
+    shape: { document_id, ...canvasPatchShape, dry_run: z.boolean().optional().describe("Validate and measure the patch without writing it. Returns the same page measurements as inspect_canvas.") },
     async handler(args, ctx) {
       const doc = await resolve(ctx, args.document_id);
       const patch = args as unknown as CanvasPatch;
+      if (args.dry_run) {
+        const { tr, notes } = canvasTransform(doc, patch);
+        const token = putCanvasPreview(doc.id, { ...doc.snapshot(), doc: tr.doc.toJSON() });
+        try {
+          const result = await renderCanvas(doc, { preview: token });
+          return { text: `Dry run only; the canvas was not changed.\n${JSON.stringify({ ...result.report, notes }, null, 2)}` };
+        } finally {
+          dropCanvasPreview(token);
+        }
+      }
       canvasTransform(doc, patch); // Validate before checkpointing; recheck after the await.
       await ctx.beforeWrite?.(doc);
       const before = doc.version;
@@ -84,7 +95,7 @@ export const canvasTools = [
   }),
   define({
     name: "inspect_canvas", title: "Inspect canvas layout", write: false,
-    description: "Measure the actual paginated HTML in a browser. Returns page count, content IDs with top and height in CSS pixels, the content box, free space on each page, fonts, assets, layout issues and the exact revision/profile. Issues include overflow, a component taller than a page, decorated flowing containers, a mostly empty page, a heading left at the bottom, and a last page with only a short block. Use screenshot_page for visual composition. Page numbers are valid only for the returned revision. Pass epoch and version to reject a stale page reference instead of measuring a newer revision.",
+    description: "Measure the actual paginated HTML in a browser. Returns page count, content IDs with top and height in CSS pixels, the content box, free space on each page, fonts, assets, layout issues and the exact revision/profile. A PageBreak counts only its own height. Overflow names the child and says width or height, in px. Issues also include a component taller than a page, decorated flowing containers, a mostly empty page, a heading left at the bottom, a last page with only a short block, and a page with very little content before a PageBreak. The page a PageBreak starts is not flagged for being short. Use screenshot_page for visual composition. Page numbers are valid only for the returned revision. Pass epoch and version to reject a stale page reference instead of measuring a newer revision.",
     shape: { document_id, epoch: z.string().optional(), version: z.number().int().optional() },
     async handler(args, ctx) {
       const doc = await resolve(ctx, args.document_id);
@@ -99,7 +110,7 @@ export const canvasTools = [
   }),
   define({
     name: "check_layout", title: "Check canvas layout", write: false,
-    description: "Check a Canvas for layout problems a design change can cause: content overflowing its box, a component taller than a page, padding, borders, or backgrounds on flowing containers, a mostly empty page, a heading left at the bottom, and a last page with only a short block. Returns those issues and the revision they were measured on. Use this after changing layout. Page numbers are valid only for the returned revision.",
+    description: "Check a Canvas for layout problems a design change can cause: content overflowing its width or height (the child and the overflow in px), a component taller than a page, padding, borders, or backgrounds on flowing containers, a mostly empty page, a heading left at the bottom, a last page with only a short block, and a page with very little content before a PageBreak. Returns those issues and the revision they were measured on. Use patch_canvas dry_run to measure a patch before writing it. Page numbers are valid only for the returned revision.",
     shape: { document_id, epoch: z.string().optional(), version: z.number().int().optional() },
     async handler(args, ctx) {
       const doc = await resolve(ctx, args.document_id);

@@ -10,6 +10,22 @@
 .doc-content[data-canvas-root] [data-canvas="column"] > :last-child,
 .doc-content[data-canvas-root] [data-pagination="keep-together"] > :last-child { margin-bottom: 0; }
 .doc-content[data-canvas-root] [data-pagination="keep-together"] { break-inside: avoid; }
+/* Bleed paints the section's own background (a color or one linear gradient) to the sheet edge. The element stays in the column, so text and images do not move. */
+.doc-content[data-canvas-root] [data-canvas="section"][data-bleed] { position: relative; }
+.doc-content[data-canvas-root] [data-canvas="section"][data-bleed]::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
+  left: calc(-1 * var(--bleed-left, 0px));
+  right: calc(-1 * var(--bleed-right, 0px));
+  top: calc(-1 * var(--bleed-top, 0px));
+  bottom: calc(-1 * var(--bleed-bottom, 0px));
+  background: inherit;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+.doc-content[data-canvas-root] [data-canvas="section"][data-bleed] > * { position: relative; z-index: 1; }
 /* A split paragraph's background stops at the content box: paper through the margins, the desk through the sheet gap. */
 .doc-content[data-canvas-root] .canvas-page-gap { position: relative; }
 .doc-content[data-canvas-root] .canvas-gap-mask {

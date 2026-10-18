@@ -4,7 +4,7 @@ import { serverOrigin } from "./origin";
 import type { LiveDocument } from "./hub";
 import { EditError } from "@/lib/doc/editing";
 
-export async function renderCanvas(doc: LiveDocument, options: { page?: number; pdf?: boolean } = {}) {
+export async function renderCanvas(doc: LiveDocument, options: { page?: number; pdf?: boolean; preview?: string } = {}) {
   if (!doc.doc.attrs.canvas) throw new EditError("This is not a Canvas.");
   const origin = serverOrigin();
   if (!origin) throw new EditError("Open Inline in a browser before inspecting or exporting a Canvas.");
@@ -22,7 +22,8 @@ export async function renderCanvas(doc: LiveDocument, options: { page?: number; 
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    await page.goto(`${origin}/render/${encodeURIComponent(doc.id)}?theme=light`, { waitUntil: "domcontentloaded", timeout: 40_000 });
+    const preview = options.preview ? `&preview=${encodeURIComponent(options.preview)}` : "";
+    await page.goto(`${origin}/render/${encodeURIComponent(doc.id)}?theme=light${preview}`, { waitUntil: "domcontentloaded", timeout: 40_000 });
     await page.waitForFunction(() => document.documentElement.dataset.renderStatus === "ready" || document.documentElement.dataset.renderStatus === "error", { timeout: 40_000 });
     const report = await page.evaluate(async () => {
       if (document.documentElement.dataset.renderStatus === "error") throw new Error(document.documentElement.dataset.renderError);
