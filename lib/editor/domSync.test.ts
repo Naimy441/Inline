@@ -230,6 +230,33 @@ describe("keepVisibleSelection", () => {
     }
   });
 
+  it("does not put a phrase back after End collapsed it", () => {
+    const text = "SHOUT THIS";
+    const { view, node, destroy } = mount(text);
+    try {
+      const end = 1 + text.length;
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, end)));
+      dom.window.document.getSelection = () =>
+        ({
+          anchorNode: node,
+          anchorOffset: 0,
+          focusNode: node,
+          focusOffset: text.length,
+        }) as unknown as Selection;
+      noteCaretGesture();
+      const flushed = keepVisibleSelection(view, view.state.tr.setMeta("page", true).setMeta("addToHistory", false));
+      assert.equal(flushed.selection.empty, true);
+      assert.equal(flushed.selection.from, end);
+      resetCaretGesture();
+      noteCaretGesture(true);
+      const extended = keepVisibleSelection(view, view.state.tr.setMeta("page", true).setMeta("addToHistory", false));
+      assert.equal(view.state.doc.textBetween(extended.selection.from, extended.selection.to), text);
+    } finally {
+      destroy();
+      resetCaretGesture();
+    }
+  });
+
   it("does not adopt a range that does not touch the caret", () => {
     const text = "umbrella today.";
     const { view, node, destroy } = mount(text);

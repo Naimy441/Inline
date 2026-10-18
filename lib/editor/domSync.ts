@@ -19,6 +19,8 @@ let adoptingSelection = false;
  * pass, or the toolbar taking the pointer) and not a new insertion point.
  */
 let caretGesture = false;
+/** Shift is held: the key is growing a range, not placing a caret. */
+let extendingGesture = false;
 let clearCaretGesture: ReturnType<typeof setTimeout> | null = null;
 
 function clearCaretGestureSoon() {
@@ -27,19 +29,27 @@ function clearCaretGestureSoon() {
   // flush after that is not this key: adopting the change clears the gesture first.
   clearCaretGesture = setTimeout(() => {
     caretGesture = false;
+    extendingGesture = false;
     clearCaretGesture = null;
   }, 100);
 }
 
 function consumeCaretGesture() {
   caretGesture = false;
+  extendingGesture = false;
   if (clearCaretGesture) clearTimeout(clearCaretGesture);
   clearCaretGesture = null;
 }
 
-export function noteCaretGesture() {
+export function noteCaretGesture(extending = false) {
   caretGesture = true;
+  extendingGesture = extending;
   clearCaretGestureSoon();
+}
+
+/** True while Shift is held and the key is growing a range rather than placing a caret. */
+export function hasSelectionGesture() {
+  return extendingGesture;
 }
 
 /** True while a key or a press in the page can still be the cause of a caret move. */
@@ -50,6 +60,7 @@ export function hasCaretGesture() {
 /** Drop a gesture the tests noted, so a later case is not treated as that press. */
 export function resetCaretGesture() {
   caretGesture = false;
+  extendingGesture = false;
   if (clearCaretGesture) clearTimeout(clearCaretGesture);
   clearCaretGesture = null;
 }
@@ -72,8 +83,9 @@ export function commitDomCaret(view: EditorView) {
   const growing = !stateSel.empty && !onScreen.empty && hasCaretGesture() && selectionExtends(stateSel, onScreen);
   if (!stateSel.empty && !onScreen.empty && !growing) return;
   if (!stateSel.empty && onScreen.empty && (!view.hasFocus() || !caretGesture)) return;
-  // Leave the gesture while a phrase is still growing. The next arrow is the same selection.
-  if (caretGesture && onScreen.empty) consumeCaretGesture();
+  // A collapse has to dispatch while the gesture is still set. Clearing it first makes
+  // the session treat End as a layout flush and put the phrase back.
+  const collapsing = !stateSel.empty && onScreen.empty && caretGesture;
   adoptingSelection = true;
   try {
     view.dispatch(view.state.tr.setSelection(onScreen).setMeta("addToHistory", false));
@@ -81,6 +93,7 @@ export function commitDomCaret(view: EditorView) {
     // A dispatch during another update can throw; the caller reads the range itself.
   } finally {
     adoptingSelection = false;
+    if (collapsing) consumeCaretGesture();
   }
 }
 
@@ -219,8 +232,11 @@ export function keepVisibleSelection(view: EditorView, tr: Transaction): Transac
   const onScreen = readDomSelection(view);
   const stateSel = view.state.selection;
   // A caret adopts a phrase only when it still sits on one end. A range in the
-  // middle of the line is not the selection Shift+Home just made.
-  if (onScreen && !onScreen.empty && stateSel.empty && (stateSel.from === onScreen.from || stateSel.from === onScreen.to)) return putOnScreen(tr, onScreen);
+  // middle of the line is not the selection Shift+Home just made. End and the
+  // arrows leave a gesture too: the range still on the page is the one they
+  // just collapsed, and painting it back would replace the words on the next insert.
+  const touchesCaret = onScreen && !onScreen.empty && stateSel.empty && (stateSel.from === onScreen.from || stateSel.from === onScreen.to);
+  if (touchesCaret && (!hasCaretGesture() || hasSelectionGesture())) return putOnScreen(tr, onScreen);
   // Shift+Arrow lengthens the phrase. Painting the first character back would
   // freeze it there; the anchor has to stay or the next arrow starts over.
   if (onScreen && !onScreen.empty && selectionExtends(stateSel, onScreen) && (hasCaretGesture() || view.hasFocus())) return putOnScreen(tr, onScreen);
