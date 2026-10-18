@@ -216,3 +216,26 @@ test("a long paragraph stays editable as one paragraph across pages", async ({ p
   await expect(page.locator('.doc-content [data-id="long"]')).toContainText("A human correction.");
   await expect(page.locator('.doc-content [data-id="long"]')).toHaveCount(1);
 });
+
+test("an authored max-width sizes a canvas picture", async ({ page, request }) => {
+  const response = await request.post("/api/documents", { data: { canvas: "editorial", title: "Picture size" } });
+  expect(response.ok()).toBeTruthy();
+  const { document } = await response.json();
+  const id = document.meta.id;
+  const source = await (await request.get(`/api/documents/${id}/canvas`)).json();
+  const changed = await request.patch(`/api/documents/${id}/canvas`, {
+    data: {
+      epoch: source.epoch,
+      version: source.version,
+      operation: "replace",
+      html: `<Canvas><Figure id="fig1"><img src="/api/documents/${id}/files/missing.png" alt="A missing plot"><p id="cap">The caption sits under the picture.</p></Figure></Canvas>`,
+      css: "Figure img { max-width: 330px } Figure { text-align: center }",
+    },
+  });
+  expect(changed.ok()).toBeTruthy();
+  await page.goto(`/d/${id}`);
+  const img = page.locator('[data-canvas="figure"] img');
+  await expect(img).toBeVisible();
+  await expect(img).toHaveCSS("max-width", "330px");
+  await expect(page.locator("#cap, [data-id='cap']")).toHaveCSS("text-align", "center");
+});

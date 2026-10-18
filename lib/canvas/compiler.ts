@@ -3,6 +3,7 @@ import { type Node as PMNode, type Mark } from "prosemirror-model";
 import { MATH_LANGUAGE, schema, safeHref } from "@/lib/doc/schema";
 import { ensureBlockIds } from "@/lib/doc/ids";
 import { escapeHtml } from "@/lib/doc/html";
+import { pictureWidth, pictureWidthToken } from "@/lib/doc/picture";
 import { validateCanvasCss, validateCanvasClass } from "./styles";
 import { validateCanvasDocument } from "./model";
 
@@ -13,7 +14,15 @@ export const isCanvas = (doc: PMNode) => doc.attrs.canvas?.format === 1;
 const CONTAINERS: Record<string, string> = { section: "canvas_section", stack: "canvas_stack", columns: "canvas_columns", column: "canvas_column", richtext: "canvas_richtext", figure: "canvas_figure" };
 const CLASSES = /^(?:[A-Za-z_][\w-]*)(?:\s+[A-Za-z_][\w-]*)*$/;
 const IDS = /^[a-zA-Z0-9_-]{1,80}$/;
-const ATTRS = new Set(["id", "class", "as", "pagination", "ratio", "href", "src", "alt", "colspan", "rowspan"]);
+const ATTRS = new Set(["id", "class", "as", "pagination", "ratio", "href", "src", "alt", "colspan", "rowspan", "width"]);
+const IMAGE_WIDTH = /^(?:\d+(?:\.\d+)?(?:px|%|in|cm|mm|pt|em|rem)?)$/i;
+
+function imageWidth(value: string): string {
+  const token = pictureWidthToken(value);
+  const css = token ? pictureWidth(token) : null;
+  if (!token || !css || !IMAGE_WIDTH.test(token)) throw new Error("Image width must be a length such as 330, 330px, 60%, or 4.5in.");
+  return css;
+}
 
 export function compileCanvas(html: string, css = ""): PMNode {
   if (html.length > 500_000) throw new Error("Canvas markup exceeds 500,000 characters.");
@@ -27,6 +36,7 @@ export function compileCanvas(html: string, css = ""): PMNode {
     for (const name of Object.keys(a)) if (!ATTRS.has(name) && !(name === "display" && el.tagName === "math")) throw new Error(`<${el.tagName}>: unsupported attribute ${name}.`);
     if (a.id && (!IDS.test(a.id) || ids.has(a.id))) throw new Error(`Invalid or duplicate component id ${a.id}.`);
     if (a.id) ids.add(a.id);
+    if (a.width != null && el.tagName !== "img") throw new Error(`<${el.tagName}>: width is only supported on <img>.`);
     if (a.class && !CLASSES.test(a.class)) throw new Error(`Invalid class on ${a.id || el.tagName}.`);
     if (a.class) validateCanvasClass(a.class);
     return a;
@@ -88,7 +98,7 @@ export function compileCanvas(html: string, css = ""): PMNode {
     if (tag === "img") {
       if (!a.src || !/^\/api\/(images\/|documents\/[a-zA-Z0-9_-]+\/files\/)/.test(a.src) || /[\\<>]/.test(a.src)) throw new Error("Images must use a file from this document's folder, such as /api/documents/<id>/files/graphs.png.");
       if (!a.alt) throw new Error("Images require descriptive alt text.");
-      return make("image", [], { src: a.src, alt: a.alt });
+      return make("image", [], { src: a.src, alt: a.alt, ...(a.width ? { width: imageWidth(a.width) } : {}) });
     }
     const block = ({ ul: "bullet_list", ol: "ordered_list", li: "list_item", blockquote: "blockquote", table: "table", tr: "table_row", td: "table_cell", th: "table_header" } as Record<string, string>)[tag];
     if (tag === "tbody" || tag === "thead" || tag === "tfoot") { attrs(el); return trim(children(el, [], depth)); }
@@ -137,7 +147,7 @@ export function canvasMarkup(doc: PMNode): string {
     const container = Object.entries(CONTAINERS).find(([, type]) => type === node.type.name)?.[0];
     const name = container || (node.type.name === "heading" ? `h${node.attrs.level}` : ({ paragraph: "p", title: "h1", subtitle: "p", bullet_list: "ul", ordered_list: "ol", list_item: "li", blockquote: "blockquote", table: "table", table_row: "tr", table_header: "th", table_cell: "td", image: "img", horizontal_rule: "hr", page_break: "PageBreak" } as Record<string, string>)[node.type.name]);
     if (!name) throw new Error(`Canvas authoring cannot represent ${node.type.name}. Use focused patches to preserve this content.`);
-    const attrs = [node.attrs.id ? `id="${escapeHtml(node.attrs.id)}"` : "", node.attrs.canvasClass ? `class="${escapeHtml(node.attrs.canvasClass)}"` : "", container ? `pagination="${node.attrs.pagination}"` : "", node.attrs.ratio ? `ratio="${node.attrs.ratio}"` : "", name === "img" ? `src="${escapeHtml(node.attrs.src)}" alt="${escapeHtml(node.attrs.alt || "Image")}"` : "", node.attrs.colspan > 1 ? `colspan="${node.attrs.colspan}"` : "", node.attrs.rowspan > 1 ? `rowspan="${node.attrs.rowspan}"` : ""].filter(Boolean).join(" ");
+    const attrs = [node.attrs.id ? `id="${escapeHtml(node.attrs.id)}"` : "", node.attrs.canvasClass ? `class="${escapeHtml(node.attrs.canvasClass)}"` : "", container ? `pagination="${node.attrs.pagination}"` : "", node.attrs.ratio ? `ratio="${node.attrs.ratio}"` : "", name === "img" ? `src="${escapeHtml(node.attrs.src)}" alt="${escapeHtml(node.attrs.alt || "Image")}"${node.attrs.width ? ` width="${escapeHtml(node.attrs.width)}"` : ""}` : "", node.attrs.colspan > 1 ? `colspan="${node.attrs.colspan}"` : "", node.attrs.rowspan > 1 ? `rowspan="${node.attrs.rowspan}"` : ""].filter(Boolean).join(" ");
     if (["img", "hr"].includes(name)) return `<${name} ${attrs}>`;
     if (name === "PageBreak") return `<PageBreak ${attrs}></PageBreak>`;
     const inner: string[] = [];
@@ -147,4 +157,22 @@ export function canvasMarkup(doc: PMNode): string {
   const out: string[] = [];
   doc.forEach((child) => out.push(render(child)));
   return `<Canvas>\n${out.join("\n")}\n</Canvas>`;
+}
+
+/** Ids written in the markup, before missing ones are filled in. */
+export function canvasAuthoredIds(html: string): { rootId: string | null; ids: string[] } {
+  const parsed = parseFragment(html);
+  const roots = parsed.childNodes.filter((n) => n.nodeName !== "#text" || ("value" in n && n.value.trim()));
+  const canvas = roots[0];
+  if (!canvas || !("tagName" in canvas)) return { rootId: null, ids: [] };
+  const blocks = canvas.childNodes.filter((n): n is Element => "tagName" in n);
+  const ids: string[] = [];
+  const walk = (el: Element) => {
+    const id = el.attrs.find((attr) => attr.name === "id")?.value;
+    if (id) ids.push(id);
+    for (const child of el.childNodes) if ("tagName" in child) walk(child as Element);
+  };
+  const root = blocks[0];
+  if (root) walk(root);
+  return { rootId: root?.attrs.find((attr) => attr.name === "id")?.value || null, ids };
 }

@@ -26,16 +26,18 @@ export async function renderCanvas(doc: LiveDocument, options: { page?: number; 
     await page.waitForFunction(() => document.documentElement.dataset.renderStatus === "ready" || document.documentElement.dataset.renderStatus === "error", { timeout: 40_000 });
     const report = await page.evaluate(async () => {
       if (document.documentElement.dataset.renderStatus === "error") throw new Error(document.documentElement.dataset.renderError);
-      const inspect = (window as unknown as { __inlineCanvasInspect?: () => Promise<{ epoch: string; version: number; pages: number; issues: unknown[]; blocks: unknown[]; pageSetup: unknown }> }).__inlineCanvasInspect;
+      const inspect = (window as unknown as { __inlineCanvasInspect?: () => Promise<{ epoch: string; version: number; pages: number; issues: Array<{ id: string; message: string; severity?: string }>; blocks: Array<{ id: string; page: number; toPage: number }>; pageSetup: unknown }> }).__inlineCanvasInspect;
       if (!inspect) throw new Error("Canvas inspector is unavailable.");
       return inspect();
     });
     if (report.epoch !== expected.epoch || report.version !== expected.version) throw new EditError("Canvas changed while preparing its pages. Inspect/export again to use the latest revision.");
     if (errors.length) throw new EditError(`Canvas render failed: ${errors[0]}`);
     await page.locator(".page-stack").evaluate((root) => root.classList.add("is-clean"));
-    const metadata = { ...report, layoutFingerprint: fingerprint, profile: `Chromium ${browser.version()} / 96 CSS px per inch / managed fonts / light paper`, ...(options.page ? { page: options.page } : {}) };
+    const blocks = options.page ? report.blocks.filter((block) => block.page === options.page || block.toPage === options.page) : report.blocks;
+    const metadata = { ...report, blocks, layoutFingerprint: fingerprint, profile: `Chromium ${browser.version()} / 96 CSS px per inch / managed fonts / light paper`, ...(options.page ? { page: options.page } : {}) };
     if (options.pdf) {
-      if (report.issues.length) throw new EditError(`Resolve Canvas layout issues before export: ${JSON.stringify(report.issues)}`);
+      const blocking = report.issues.filter((issue) => issue.severity !== "warning");
+      if (blocking.length) throw new EditError(`Resolve Canvas layout issues before export: ${JSON.stringify(blocking)}`);
       await page.evaluate(async () => { await (window as unknown as { __inlineCanvasPrint: () => Promise<unknown> }).__inlineCanvasPrint(); });
       await page.emulateMedia({ media: "print" });
       return { report: metadata, pdf: await page.pdf({ preferCSSPageSize: true, printBackground: true, displayHeaderFooter: false }), png: undefined };

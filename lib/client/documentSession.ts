@@ -1,6 +1,6 @@
 "use client";
 
-import { inspectCanvasDom } from "@/lib/canvas/editor";
+import { canvasFlowIssues, canvasPageSpace, inspectCanvasDom, type CanvasBlockBox } from "@/lib/canvas/editor";
 
 import { getVersion, receiveTransaction, sendableSteps } from "prosemirror-collab";
 import { Node as PMNode } from "prosemirror-model";
@@ -405,18 +405,29 @@ export class DocumentSession {
     const geometry = this.geometry();
     const stack = view.dom.closest<HTMLElement>(".page-stack")!;
     const sheets = [...stack.querySelectorAll<HTMLElement>(".sheet")];
-    const blocks: Array<{ id: string; page: number; toPage: number }> = [];
+    const blocks: CanvasBlockBox[] = [];
     const fonts = new Set<string>();
     fonts.add(getComputedStyle(view.dom).fontFamily);
     const assets: Array<{ src: string; alt: string }> = [];
+    const contentWidth = geometry.pageWidth - geometry.marginLeft - geometry.marginRight;
+    const contentHeight = geometry.pageHeight - geometry.marginTop - geometry.marginBottom;
     const pageAt = (y: number) => Math.max(0, sheets.findIndex((sheet) => { const r = sheet.getBoundingClientRect(); return y >= r.top - 1 && y <= r.bottom + 1; }));
     for (const el of view.dom.querySelectorAll<HTMLElement>("[data-id]")) {
       const box = el.getBoundingClientRect();
       fonts.add(getComputedStyle(el).fontFamily);
-      blocks.push({ id: el.dataset.id!, page: pageAt(box.top + Math.min(1, box.height)) + 1, toPage: pageAt(box.bottom - 1) + 1 });
+      const page = pageAt(box.top + Math.min(1, box.height)) + 1;
+      const sheet = sheets[page - 1];
+      const sheetRect = sheet?.getBoundingClientRect();
+      const scale = sheetRect && geometry.pageHeight ? sheetRect.height / geometry.pageHeight || 1 : 1;
+      const top = sheetRect ? (box.top - sheetRect.top) / scale - geometry.marginTop : 0;
+      const kind = el.classList.contains("page-break") ? "break" : /^H[1-6]$/.test(el.tagName) ? "heading" : "block";
+      blocks.push({ id: el.dataset.id!, page, toPage: pageAt(box.bottom - 1) + 1, top: Math.round(top), height: Math.round(box.height / scale), kind });
     }
     for (const img of view.dom.querySelectorAll("img")) assets.push({ src: img.getAttribute("src") || "", alt: img.getAttribute("alt") || "" });
-    return { epoch: this.epoch, version: getVersion(view.state), pages: pageCount(view.state), pageSetup: this.meta?.settings.pageSetup, fonts: [...fonts], assets, blocks, issues: inspectCanvasDom(view.dom as HTMLElement, geometry.pageHeight - geometry.marginTop - geometry.marginBottom) };
+    const pages = pageCount(view.state);
+    const space = canvasPageSpace(blocks, pages, contentWidth, contentHeight);
+    const issues = [...inspectCanvasDom(view.dom as HTMLElement, contentHeight), ...canvasFlowIssues(blocks, space)].slice(0, 50);
+    return { epoch: this.epoch, version: getVersion(view.state), pages, pageSetup: this.meta?.settings.pageSetup, contentBox: { width: Math.round(contentWidth), height: Math.round(contentHeight) }, space, fonts: [...fonts], assets, blocks, issues };
   }
 
   async prepareCanvasPrint() {
