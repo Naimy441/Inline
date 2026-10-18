@@ -1,6 +1,7 @@
 import type { Node as PMNode } from "prosemirror-model";
 import { Selection, TextSelection, type Transaction } from "prosemirror-state";
 import type { EditorView } from "prosemirror-view";
+import { presenceKey } from "@/lib/editor/presence";
 
 /**
  * Make the editor state catch up with a DOM selection change that the browser
@@ -149,7 +150,13 @@ function putOnScreen(tr: Transaction, onScreen: TextSelection): Transaction {
   const anchor = tr.mapping.map(onScreen.anchor, onScreen.anchor <= onScreen.head ? 1 : -1);
   const head = tr.mapping.map(onScreen.head, onScreen.head >= onScreen.anchor ? -1 : 1);
   if (anchor === head || anchor < 0 || head < 0 || Math.max(anchor, head) > doc.content.size) return tr;
-  return tr.setSelection(TextSelection.create(doc, anchor, head));
+  // Mapped ends can land between blocks. Dropping the transaction would also drop
+  // the edit or the activity it was carrying, and the working caret would never appear.
+  try {
+    return tr.setSelection(TextSelection.create(doc, anchor, head));
+  } catch {
+    return tr;
+  }
 }
 
 /**
@@ -228,6 +235,9 @@ export function keepVisibleSelection(view: EditorView, tr: Transaction): Transac
   // it carries addToHistory false, and painting it must not drop a phrase the
   // page is showing but the editor has not recorded yet.
   if (tr.selectionSet && tr.getMeta("addToHistory") !== false) return tr;
+  // Where Claude is working is not a selection the page made. Adopting one here
+  // can throw and the caret update is lost with it.
+  if (tr.getMeta(presenceKey)) return tr;
   if (!(view.state.selection instanceof TextSelection) || !(tr.selection instanceof TextSelection)) return tr;
   const onScreen = readDomSelection(view);
   const stateSel = view.state.selection;

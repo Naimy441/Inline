@@ -6,6 +6,7 @@ import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
 
 import { schema } from "@/lib/doc/schema";
 import { commitDomCaret, keepVisibleSelection, noteCaretGesture, rangeTouchingCaret, readDomSelection, resetCaretGesture, retainHeldSelection, selectionExtends, syncDomSelection, textSelectionNear } from "./domSync";
+import { presenceKey } from "./presence";
 
 describe("retainHeldSelection", () => {
   it("keeps a range the next toolbar press can no longer see, until the caret moves", () => {
@@ -179,6 +180,25 @@ describe("keepVisibleSelection", () => {
     } finally {
       destroy();
       resetCaretGesture();
+    }
+  });
+
+  it("does not adopt a page range onto the update that shows where Claude is working", () => {
+    const text = "Hello world";
+    const { view, node, destroy } = mount(text);
+    try {
+      dom.window.document.getSelection = () =>
+        ({
+          anchorNode: node,
+          anchorOffset: 0,
+          focusNode: node,
+          focusOffset: text.length,
+        }) as unknown as Selection;
+      const tr = keepVisibleSelection(view, view.state.tr.setMeta(presenceKey, { presence: null }));
+      assert.equal(tr.selection.empty, true);
+      assert.equal(tr.getMeta(presenceKey) !== undefined, true);
+    } finally {
+      destroy();
     }
   });
 
