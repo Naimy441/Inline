@@ -48,11 +48,31 @@ function cacheRoot() {
 }
 
 async function commandCacheEnv() {
-  const cache = path.join(cacheRoot(), "xdg");
-  const mpl = path.join(cacheRoot(), "matplotlib");
+  const root = cacheRoot();
+  const cache = path.join(root, "xdg");
+  const mpl = path.join(root, "matplotlib");
+  // Darwin lays out temp as .../T and the xcrun cache as the sibling .../C.
+  // Python on macOS calls xcrun, which fails with "Operation not permitted"
+  // when that cache is outside the sandbox's writable paths.
+  const tmp = path.join(root, "T");
+  const xcrun = path.join(root, "C");
+  const pyc = path.join(root, "pyc");
   await mkdir(cache, { recursive: true });
   await mkdir(mpl, { recursive: true });
-  return { XDG_CACHE_HOME: cache, MPLCONFIGDIR: mpl };
+  await mkdir(tmp, { recursive: true });
+  await mkdir(xcrun, { recursive: true });
+  await mkdir(pyc, { recursive: true });
+  // The sandbox bakes TMPDIR from CLAUDE_CODE_TMPDIR when it wraps the command.
+  process.env.CLAUDE_CODE_TMPDIR = tmp;
+  return { XDG_CACHE_HOME: cache, MPLCONFIGDIR: mpl, TMPDIR: tmp, TMP: tmp, TEMP: tmp, PYTHONPYCACHEPREFIX: pyc };
+}
+
+const COMMAND_SHOWN_MAX = 200;
+
+/** A short one-line command can be echoed. A heredoc or a long body must not come back in the tool result. */
+export function commandShown(command: string): string | null {
+  if (/<<[-~]?/.test(command) || command.includes("\n") || command.length > COMMAND_SHOWN_MAX) return null;
+  return command;
 }
 
 /** Text Claude should see for a command: the exit reason, both streams, and where it ran. */
@@ -69,9 +89,10 @@ export function formatCommandReport(command: string, result: SandboxResult) {
             ? "finished"
             : "finished with an error";
   const env = commandEnvironment();
+  const shown = commandShown(command);
   const text = [
     `exit ${result.code} (${reason})`,
-    `command: ${command}`,
+    ...(shown ? [`command: ${shown}`] : []),
     "working directory: the document folder",
     `sandbox: Claude Code (${result.backend})`,
     `environment: HOME=${env.HOME || "(unset)"}; python3 is ${env.python3}`,
@@ -95,8 +116,10 @@ export async function runInFolder(folder: string, command: string, timeoutMs: nu
   }
   try {
     await ensureSandbox();
-    const wrapped = await SandboxManager.wrapWithSandboxArgv(command, undefined, folderConfig(root), signal, root);
+    // The wrapper reads CLAUDE_CODE_TMPDIR while it builds the command, so the
+    // writable temp has to exist before that, not after.
     const cache = await commandCacheEnv();
+    const wrapped = await SandboxManager.wrapWithSandboxArgv(command, undefined, folderConfig(root), signal, root);
     const captured = await capture(wrapped.argv[0]!, wrapped.argv.slice(1), timeoutMs, { cwd: root, env: { ...wrapped.env, ...cache }, signal });
     const stderr = SandboxManager.annotateStderrWithSandboxFailures(command, captured.stderr);
     return { ...captured, stderr, started: true, backend: BACKEND };

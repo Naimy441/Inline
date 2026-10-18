@@ -3,6 +3,8 @@ import { describe, test } from "node:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { JSDOM } from "jsdom";
+import { DOMSerializer } from "prosemirror-model";
 import { Transform } from "prosemirror-transform";
 import { EditorState } from "prosemirror-state";
 import { history, undo } from "prosemirror-history";
@@ -97,6 +99,12 @@ describe("Canvas SDK", () => {
     assert.match(CANVAS_GUIDE, /syntax only/);
     assert.match(CANVAS_GUIDE, /do not reuse a title, equation, or palette/);
     assert.match(CANVAS_GUIDE, /dry_run/);
+    assert.match(CANVAS_GUIDE, /Spans cannot nest: a span class applies to its own text, and a nested span is rejected with that element's name\./);
+    assert.match(CANVAS_GUIDE, /A preformatted block is <pre>, placed beside text and not inside it\. It keeps leading spaces and column alignment, and the page sets white-space: pre so copying it copies real spaces\./);
+    assert.match(CANVAS_GUIDE, /styles replaces the whole stylesheet\./);
+    assert.match(CANVAS_GUIDE, /html_file or operations_file/);
+    assert.match(CANVAS_GUIDE, /measurement is unavailable/);
+    assert.doesNotMatch(CANVAS_GUIDE, /nbsp|invisible dot/);
     assert.match(CANVAS_GUIDE, /add a class or set <img width>/);
     assert.doesNotMatch(JSON.stringify(CANVAS_FRAGMENTS), /A better beginning|Evidence before assumptions|Make room for discovery/);
     assert.match(CANVAS_FRAGMENTS.map((fragment) => fragment.html).join("\n"), /<Math display/);
@@ -227,9 +235,39 @@ describe("Canvas SDK", () => {
     const measured = await runTool("patch_canvas", {
       document_id: doc.id, epoch: doc.epoch, version: doc.version, operation: "styles", css: "h1 { color: #112233 }", dry_run: true,
     }, { author: "claude", documentId: doc.id });
-    if (!measured.isError) assert.match(measured.text, /Dry run only/);
+    assert.notEqual(measured.isError, true);
+    assert.match(measured.text, /Dry run only/);
+    assert.match(measured.text, /Measurement is unavailable/);
+    assert.match(measured.text, /styles replaces the whole stylesheet/);
     assert.equal(doc.version, version);
     assert.equal(doc.doc.attrs.canvas.css, css);
+  });
+  test("a preformatted block keeps spaces, round-trips, and copies as real spaces", () => {
+    const aligned = "name  value\na     1\nbb    22\n  indented";
+    const doc = compileCanvas(`<Canvas><Text id="note">See the listing.</Text><pre id="listing">${aligned}</pre></Canvas>`);
+    assert.equal(doc.child(1).type.name, "code_block");
+    assert.equal(doc.child(1).attrs.language, "canvas-pre");
+    assert.equal(doc.child(1).textContent, aligned);
+    const html = canvasMarkup(doc);
+    assert.match(html, /<pre id="listing">name {2}value\na {5}1\nbb {4}22\n {2}indented<\/pre>/);
+    assert.equal(compileCanvas(html).child(1).textContent, aligned);
+    const wrapped = compileCanvas("<Canvas><pre>\n  def f():\n      return 1\n</pre></Canvas>");
+    assert.equal(wrapped.child(0).textContent, "  def f():\n      return 1");
+    const nbsp = compileCanvas("<Canvas><pre>&nbsp;&nbsp;kept</pre></Canvas>");
+    assert.equal(nbsp.child(0).textContent, "  kept");
+    const markup = canvasMarkup(nbsp);
+    assert.equal(markup.includes("&nbsp;"), false);
+    assert.equal(markup.includes("&#160;"), false);
+    const { window } = new JSDOM("<!doctype html><body></body>");
+    window.document.body.appendChild(DOMSerializer.fromSchema(schema).serializeFragment(nbsp.content, { document: window.document }));
+    const pre = window.document.querySelector("pre");
+    assert.ok(pre);
+    assert.equal(pre.textContent, "  kept");
+    assert.match(pre.getAttribute("style") || "", /white-space:\s*pre/);
+    assert.equal(pre.innerHTML.includes("nbsp"), false);
+    assert.equal(pre.innerHTML.includes("&#160;"), false);
+    assert.throws(() => compileCanvas('<Canvas><Text id="t"><pre>inside</pre></Text></Canvas>'), /<pre> is its own block[\s\S]*<Text id="t">/);
+    assert.throws(() => compileCanvas('<Canvas><Text id="t"><span class="a"><span class="b">Hi</span></span></Text></Canvas>'), /Spans cannot nest: <span class="b"> is inside <span class="a"> in <Text id="t">/);
   });
 });
 
@@ -336,6 +374,78 @@ describe("Canvas authority", () => {
     assert.match(result.text, /\.narrow is not on any element/);
     assert.doesNotMatch(result.text, /\.opening is not on any element/);
     assert.match(result.text, /"steps":1/);
+    assert.match(result.text, /styles replaces the whole stylesheet\./);
+  });
+  test("a nested span names the element and a seven-operation batch changes nothing", async () => {
+    const doc = await create();
+    const version = doc.version;
+    const before = doc.doc.textContent;
+    const result = await runTool("patch_canvas", {
+      document_id: doc.id, epoch: doc.epoch, version: doc.version,
+      operations: [
+        { operation: "styles", css: "h1 { color: #112233 }" },
+        { operation: "replace_component", target: "eyebrow", html: "<Canvas><Text id=\"eyebrow\">One</Text></Canvas>" },
+        { operation: "replace_component", target: "title", html: "<Canvas><Text id=\"title\" as=\"h1\">Two</Text></Canvas>" },
+        { operation: "replace_component", target: "intro", html: "<Canvas><Text id=\"intro\"><span class=\"a\"><span class=\"b\">Nested</span></span></Text></Canvas>" },
+        { operation: "replace_component", target: "approach", html: "<Canvas><Column id=\"approach\"><Text>Four</Text></Column></Canvas>" },
+        { operation: "replace_component", target: "details", html: "<Canvas><Column id=\"details\"><Text>Five</Text></Column></Canvas>" },
+        { operation: "remove", target: "next" },
+      ],
+    }, { author: "claude", documentId: doc.id });
+    assert.equal(result.isError, true);
+    assert.match(result.text, /Spans cannot nest: <span class="b"> is inside <span class="a"> in <Text id="intro"/);
+    assert.equal(doc.version, version);
+    assert.equal(doc.doc.textContent, before);
+  });
+  test("a dry run validates markup when the page cannot be measured", async () => {
+    const blank = await documentHub().create({ title: "Blank", doc: compileCanvas("<Canvas></Canvas>").toJSON() });
+    const marker = "UniqueDryRunMarkerXYZ-should-not-echo";
+    const version = blank.version;
+    const dry = await runTool("patch_canvas", {
+      document_id: blank.id, epoch: blank.epoch, version: blank.version, operation: "replace",
+      html: `<Canvas><Text id="body">${marker}</Text></Canvas>`, dry_run: true,
+    }, { author: "claude", documentId: blank.id });
+    assert.notEqual(dry.isError, true);
+    assert.match(dry.text, /Dry run only/);
+    assert.match(dry.text, /The markup is valid/);
+    assert.match(dry.text, /Measurement is unavailable/);
+    assert.match(dry.text, /Apply this same patch to write it/);
+    assert.doesNotMatch(dry.text, /UniqueDryRunMarkerXYZ/);
+    assert.equal(blank.version, version);
+    assert.equal(blank.doc.textContent.includes(marker), false);
+  });
+  test("patch_canvas reads HTML and operations from the document folder", async () => {
+    const blank = await documentHub().create({ title: "Blank", doc: compileCanvas("<Canvas></Canvas>").toJSON() });
+    const ctx = { author: "claude", documentId: blank.id };
+    const html = "<Canvas><Text id=\"body\">From a file.</Text></Canvas>";
+    const wrote = await runTool("write_file", { path: "piece.html", content: html }, ctx);
+    assert.equal(wrote.isError, undefined, wrote.text);
+    const both = await runTool("patch_canvas", {
+      document_id: blank.id, epoch: blank.epoch, version: blank.version, operation: "replace", html, html_file: "piece.html",
+    }, ctx);
+    assert.equal(both.isError, true);
+    assert.match(both.text, /html or html_file, not both/);
+    const fromFile = await runTool("patch_canvas", {
+      document_id: blank.id, epoch: blank.epoch, version: blank.version, operation: "replace", html_file: "piece.html",
+    }, ctx);
+    assert.equal(fromFile.isError, undefined, fromFile.text);
+    assert.match(blank.doc.textContent, /From a file/);
+    const inline = await runTool("patch_canvas", {
+      document_id: blank.id, epoch: blank.epoch, version: blank.version, operation: "replace_component", target: "body", html: "<Canvas><Text id=\"body\">Inline still works.</Text></Canvas>",
+    }, ctx);
+    assert.equal(inline.isError, undefined, inline.text);
+    assert.match(blank.doc.textContent, /Inline still works/);
+    await runTool("write_file", { path: "ops.json", content: JSON.stringify([{ operation: "replace_component", target: "body", html_file: "piece.html" }]) }, ctx);
+    const fromOps = await runTool("patch_canvas", {
+      document_id: blank.id, epoch: blank.epoch, version: blank.version, operations_file: "ops.json",
+    }, ctx);
+    assert.equal(fromOps.isError, undefined, fromOps.text);
+    assert.match(blank.doc.textContent, /From a file/);
+    const clash = await runTool("patch_canvas", {
+      document_id: blank.id, epoch: blank.epoch, version: blank.version, operations_file: "ops.json", operations: [{ operation: "remove", target: "body" }],
+    }, ctx);
+    assert.equal(clash.isError, true);
+    assert.match(clash.text, /operations or operations_file, not both/);
   });
   test("locked content rejects replacement while allowing a stylesheet change", async () => {
     const doc = await create(); let from = 0;

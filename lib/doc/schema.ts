@@ -613,7 +613,7 @@ const nodes: Record<string, NodeSpec> = {
       },
     ],
     toDOM: (node): DOMOutputSpec => {
-      const style = codeBlockStyle(node);
+      const style = [codeBlockStyle(node), node.attrs.language === CANVAS_PRE_LANGUAGE ? "white-space: pre" : ""].filter(Boolean).join("; ");
       return [
         "pre",
         {
@@ -1294,6 +1294,9 @@ export const MARKDOWN_MARKS = new Set(["bold", "italic", "underline", "strike", 
 
 /** The code block language that makes it a displayed equation. */
 export const MATH_LANGUAGE = "math";
+
+/** A canvas `<pre>`: real spaces, kept by `white-space: pre`, not a displayed equation. */
+export const CANVAS_PRE_LANGUAGE = "canvas-pre";
 
 /** Marks that describe ranges (comments, locks, text an agent inserted) rather than styling. */
 export const RANGE_MARKS = new Set(["comment", "locked", "agent"]);

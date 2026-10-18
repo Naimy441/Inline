@@ -1,10 +1,12 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
+import { homedir } from "node:os";
 import path from "node:path";
 import type { Browser } from "playwright";
 import type { PageAppearance } from "@/lib/pdf/screenAppearance";
 import { serverOrigin } from "@/lib/server/origin";
+import { dataDir } from "@/lib/server/store";
 
 /**
  * A PNG of one page when no editor has the document open.
@@ -116,15 +118,74 @@ export async function launchPlaywrightChromium(chromium: LayoutChromium, install
   }
 }
 
+/**
+ * Playwright's default browser cache, matching playwright-core. `npm ci` does
+ * not download Chromium; the binary appears only after `playwright install`.
+ */
+function defaultBrowsersDir() {
+  const home = homedir();
+  if (process.platform === "linux") return path.join(process.env.XDG_CACHE_HOME || path.join(home, ".cache"), "ms-playwright");
+  if (process.platform === "darwin") return path.join(home, "Library", "Caches", "ms-playwright");
+  return path.join(process.env.LOCALAPPDATA || path.join(home, "AppData", "Local"), "ms-playwright");
+}
+
+function cacheWritable(dir: string) {
+  try {
+    mkdirSync(dir, { recursive: true });
+    accessSync(dir, constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Point Playwright at a writable cache before it is loaded. The registry path
+ * is fixed on first import, and a dynamic import from the Next server bundle
+ * throws when it cannot see node_modules — that throw was reported as
+ * "the layout browser isn't installed" and the Chromium download never ran.
+ */
+export function prepareBrowserCache() {
+  if (process.env.PLAYWRIGHT_BROWSERS_PATH) return;
+  const preferred = defaultBrowsersDir();
+  let installed = false;
+  try {
+    installed = readdirSync(preferred).some((name) => name.startsWith("chromium"));
+  } catch {
+    installed = false;
+  }
+  if (installed || cacheWritable(preferred)) return;
+  const dir = path.join(dataDir(), "cache", "ms-playwright");
+  mkdirSync(dir, { recursive: true });
+  process.env.PLAYWRIGHT_BROWSERS_PATH = dir;
+}
+
+/** Load Playwright from this project's node_modules. The dynamic import is the fallback the server bundle can see. */
+export async function loadPlaywrightChromium(): Promise<LayoutChromium> {
+  prepareBrowserCache();
+  const errors: string[] = [];
+  try {
+    const req = createRequire(path.join(process.cwd(), "package.json"));
+    const loaded = req("playwright") as { chromium?: LayoutChromium };
+    if (typeof loaded.chromium?.launch === "function") return loaded.chromium;
+    errors.push("playwright did not provide a chromium launcher");
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : "playwright did not load");
+  }
+  try {
+    const loaded = await import("playwright");
+    if (typeof loaded.chromium?.launch === "function") return loaded.chromium;
+    errors.push("playwright did not provide a chromium launcher");
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : "playwright did not load");
+  }
+  throw new Error(`Couldn't picture the page because the layout browser isn't installed. ${errors[0] ?? "playwright did not load"}`);
+}
+
 export async function layoutBrowser() {
   if (!browserPromise) {
     browserPromise = (async () => {
-      let chromium: typeof import("playwright").chromium;
-      try {
-        chromium = (await import("playwright")).chromium;
-      } catch {
-        throw new Error("Couldn't picture the page because the layout browser isn't installed.");
-      }
+      const chromium = await loadPlaywrightChromium();
       return launchPlaywrightChromium(chromium);
     })().catch((error) => {
       browserPromise = null;

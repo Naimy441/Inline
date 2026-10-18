@@ -2,6 +2,8 @@
 .page-stack.is-canvas-document { --paper: #fff; --paper-text: #25392f; }
 /* SDK layout belongs to Inline; authored CSS controls visual treatment. */
 .doc-content[data-canvas-root] { color: var(--paper-text); background: var(--paper); overflow-wrap: anywhere; }
+/* Preformatted code keeps leading spaces and columns. white-space: pre, not pre-wrap, so a copy is those spaces. */
+.doc-content[data-canvas-root] pre[data-language="canvas-pre"] { white-space: pre; overflow-wrap: normal; word-break: normal; }
 .doc-content[data-canvas-root] [data-canvas] { min-width: 0; }
 .doc-content[data-canvas-root] [data-canvas="columns"] { display: grid; grid-template-columns: var(--canvas-columns, 1fr 1fr); gap: 24px; align-items: start; }
 .doc-content[data-canvas-root] [data-canvas="figure"] > p { font-size: .85em; color: var(--canvas-caption, #58645e); margin-top: 8px; }
