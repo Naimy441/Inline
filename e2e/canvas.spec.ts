@@ -49,6 +49,7 @@ test("Canvas pages are styled, editable, undoable, persistent, and version check
   await expect.poll(async () => (await (await request.get(`/api/documents/${id}/canvas`)).json()).html).toContain("My correction");
   const before = await (await request.get(`/api/documents/${id}/canvas`)).json();
   await heading.click();
+  await page.keyboard.press("End");
   await page.keyboard.type(" extra");
   await expect.poll(async () => (await (await request.get(`/api/documents/${id}/canvas`)).json()).version).toBeGreaterThan(before.version);
   const stale = await request.patch(`/api/documents/${id}/canvas`, { data: { epoch: before.epoch, version: before.version, operation: "styles", css: "" } });
