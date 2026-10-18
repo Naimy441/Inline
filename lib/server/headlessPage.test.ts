@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import type { Browser } from "playwright";
-import { launchPlaywrightChromium } from "./headlessPage";
+import { launchPlaywrightChromium, playwrightCliPath } from "./headlessPage";
 
 const shellMissing = new Error("browserType.launch: Executable doesn't exist at /Users/naim/Library/Caches/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-mac-arm64/chrome-headless-shell");
 
@@ -13,6 +14,13 @@ function fakeBrowser() {
 }
 
 describe("layout browser", () => {
+  test("the installer uses the Playwright package root instead of the unexported cli.js subpath", () => {
+    const cli = playwrightCliPath();
+    assert.equal(existsSync(cli), true);
+    assert.match(cli, /[/\\]playwright[/\\]cli\.js$/);
+    assert.throws(() => createRequire(path.join(process.cwd(), "package.json")).resolve("playwright/cli.js"), /Package subpath '\.\/cli\.js' is not defined/);
+  });
+
   const savedPath = process.env.CHROMIUM_PATH;
   beforeEach(() => {
     delete process.env.CHROMIUM_PATH;

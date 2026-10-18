@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { compileCanvas } from "@/lib/canvas/compiler";
 import type { Node as PMNode } from "prosemirror-model";
 import { Transform } from "prosemirror-transform";
 import {
@@ -59,6 +60,11 @@ describe("followed document title", () => {
 
   it("has no name when the document is empty", () => {
     assert.equal(followedDocumentTitle(schema.node("doc", null, [schema.node("paragraph")])), null);
+  });
+
+  it("names a Canvas from its h1, not the eyebrow above it", () => {
+    const doc = compileCanvas('<Canvas><Text class="eyebrow">§ CALCULUS · PROBLEM SET 01</Text><Text as="h1">The fundamental theorem</Text><Text>Q.E.D.</Text></Canvas>');
+    assert.equal(followedDocumentTitle(doc), "The fundamental theorem");
   });
 });
 

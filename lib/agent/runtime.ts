@@ -6,7 +6,8 @@ import { contextFromReport } from "@/lib/agent/contextUsage";
 import { systemPrompt } from "@/lib/agent/prompt";
 import { PAGE_LAYOUT_PLUGIN_DIR, PAGE_LAYOUT_SKILL } from "@/lib/agent/skills";
 import { documentTurnLog } from "@/lib/agent/documentLog";
-import { documentListing, type ToolContext } from "@/lib/agent/tools";
+import { canvasTurnContext, documentListing, type ToolContext } from "@/lib/agent/tools";
+import { isCanvas } from "@/lib/canvas/compiler";
 import type {
   AgentStatus,
   AssistantMessage,
@@ -562,7 +563,15 @@ class ChatRuntime {
       if (suggestions) context.push(`The user has ${suggestions} pending suggestion${suggestions === 1 ? "" : "s"} of their own (suggesting mode).`);
       if (doc.editorMode !== "editing") context.push(`The user's editor is in ${doc.editorMode} mode.`);
       // Small documents come with the message, saving Claude a read_document round trip before it can edit.
-      if (!this.listed || this.listed.id !== doc.id || this.listed.version !== doc.version) {
+      // A Canvas is not that Markdown view: its text lives in the canvas markup, and a patch needs a fresh read.
+      if (isCanvas(doc.doc)) {
+        if (!this.listed || this.listed.id !== doc.id || this.listed.version !== doc.version) {
+          context.push(canvasTurnContext(doc));
+          this.listed = { id: doc.id, version: doc.version };
+        } else {
+          context.push("Type: Canvas.\nThe Canvas hasn't changed since you last saw its markup. Keep using read_canvas and patch_canvas.");
+        }
+      } else if (!this.listed || this.listed.id !== doc.id || this.listed.version !== doc.version) {
         const listing = documentListing(doc);
         if (listing) {
           context.push(`The document as read_document would return it now (no need to read it again before editing, unless it changes):\n<document>\n${listing}\n</document>`);
@@ -587,12 +596,12 @@ class ChatRuntime {
       context.push(this.rewindNote);
       this.rewindNote = null;
     }
-    if (input.selection && !input.selection.text.trim() && doc && input.selection.documentId === doc.id) {
+    if (input.selection && !input.selection.text.trim() && doc && input.selection.documentId === doc.id && !isCanvas(doc.doc)) {
       const where = cursorContext(doc, input.selection.from);
       if (where) context.push(where);
     }
     if (input.selection?.text.trim()) {
-      const where = doc && input.selection.documentId === doc.id ? selectionLines(doc, input.selection) : "";
+      const where = doc && input.selection.documentId === doc.id && !isCanvas(doc.doc) ? selectionLines(doc, input.selection) : "";
       context.push(`The user selected this text in the document${where}:\n"""\n${input.selection.text.slice(0, 8000)}\n"""`);
     }
     if (input.mentions?.length) {
@@ -620,7 +629,7 @@ class ChatRuntime {
     }
     if (input.attachments?.length) {
       context.push(
-        `Attached to this message: ${input.attachments.map((item) => `"${item.name}" (${item.kind}, id ${item.id})`).join(", ")}. Images can be placed in the document with insert_image; text files can be read again later with read_attachment.`,
+        `Attached to this message: ${input.attachments.map((item) => `"${item.name}" (${item.kind}, id ${item.id})`).join(", ")}. ${doc && isCanvas(doc.doc) ? `On this Canvas, place an image with patch_canvas. A file in the document folder is /api/documents/${doc.id}/files/<name>.` : "Images can be placed in the document with insert_image; text files can be read again later with read_attachment."}`,
       );
     }
     const blocks: Array<Record<string, unknown>> = [{ type: "text", text: `<inline-context>\n${context.join("\n")}\n</inline-context>` }];

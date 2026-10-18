@@ -33,7 +33,6 @@ import { acquireChat, releaseChat, rememberChat, rememberedChat } from "@/lib/cl
 import { addTab, rememberedRoot, takeScroll, useTabs } from "@/lib/client/tabs";
 import { documentMenus, MenuBar, type MenuActions } from "@/components/workspace/MenuBar";
 import { OutlinePanel } from "@/components/workspace/OutlinePanel";
-import { CanvasTools } from "@/components/workspace/CanvasTools";
 import { PageCanvas } from "@/components/workspace/PageCanvas";
 import { PageSetupDialog } from "@/components/workspace/PageSetupDialog";
 import { ReviewBar } from "@/components/workspace/ReviewBar";
@@ -989,6 +988,7 @@ export function Workspace({ documentId }: { documentId: string }) {
         <div className="title-stack">
           <div className="title-line">
             <TitleInput meta={meta} session={session} onRename={(title) => void session.updateMeta({ title })} />
+            {meta?.kind === "canvas" && <span className="canvas-kind-badge">Canvas</span>}
             {openTab && <TabHeading title={openTab.title} />}
           </div>
           <MenuBar session={session} actions={actions} zoom={effectiveZoom} hunks={ui.hunks.length} />
@@ -1117,7 +1117,6 @@ export function Workspace({ documentId }: { documentId: string }) {
             void insertImageFile(file);
           }}
         >
-          <CanvasTools session={session} />
           {find && <WithEditorState session={session}>{(state) => <FindBar session={session} state={state} replace={find.replace} onClose={() => setFind(null)} />}</WithEditorState>}
           <div className="canvas-notices">
             <OfflineNotice offline={ui.status === "ready" && (ui.connection === "reconnecting" || ui.sync === "error")} />
@@ -1422,10 +1421,12 @@ function useCrowdedTitlebar(ref: RefObject<HTMLElement | null>, narrow: boolean,
         const lineGap = titleLine ? Number.parseFloat(getComputedStyle(titleLine).columnGap) || 0 : 0;
         const sizer = stack.querySelector<HTMLElement>(".title-sizer");
         const tab = stack.querySelector<HTMLElement>(".title-tab");
+        const badge = stack.querySelector<HTMLElement>(".canvas-kind-badge");
         const natural = (el: HTMLElement) => el.scrollWidth + el.offsetWidth - el.clientWidth;
         const reservedTitle = Math.min(MIN_TITLE_WIDTH, sizer ? natural(sizer) : MIN_TITLE_WIDTH);
+        const badgeWidth = badge ? lineGap + natural(badge) : 0;
         const tabWidth = tab ? lineGap + natural(tab) : 0;
-        fullWidth.current = used - stack.offsetWidth + reservedTitle + tabWidth + stackGap + menubar.offsetWidth - (status.clientWidth - sync.offsetWidth);
+        fullWidth.current = used - stack.offsetWidth + reservedTitle + badgeWidth + tabWidth + stackGap + menubar.offsetWidth - (status.clientWidth - sync.offsetWidth);
       }
       const width = bar.clientWidth;
       const next = crowded ? width < fullWidth.current + UNFOLD_SLACK : width < fullWidth.current;

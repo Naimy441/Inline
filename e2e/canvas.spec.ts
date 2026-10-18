@@ -13,7 +13,9 @@ test("the home Canvas card is a blank page and opens an empty canvas", async ({ 
   await expect(card.locator(".template-thumb")).toHaveCSS("background-color", "rgb(38, 38, 36)");
   await card.click();
   await expect(page.locator(".doc-content[data-canvas-root]")).toBeVisible();
-  await expect(page.getByText("Canvas · editable pages")).toBeVisible();
+  await expect(page.locator(".titlebar .canvas-kind-badge")).toHaveText("Canvas");
+  await expect(page.locator(".canvas-design-tools")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Edit design", exact: true })).toHaveCount(0);
   await expect(page.locator(".doc-content")).not.toContainText("PROJECT PROPOSAL");
   await expect(page.locator(".doc-content")).not.toContainText("A better beginning");
   await expect(page.locator(".doc-content .is-empty")).toBeVisible();
@@ -26,29 +28,35 @@ test("Canvas pages are styled, editable, undoable, persistent, and version check
   const id = document.meta.id;
   await page.goto(`/d/${id}`);
   await expect(page.locator('.doc-content[data-canvas-root]')).toBeVisible();
-  await expect(page.getByText("Canvas · editable pages")).toBeVisible();
+  await expect(page.locator(".titlebar .canvas-kind-badge")).toHaveText("Canvas");
+  await expect(page.locator(".canvas-design-tools")).toHaveCount(0);
   const heading = page.locator('.doc-content [data-id="title"]');
   await expect(heading).toHaveCSS("font-size", "56px");
   await heading.click();
   await page.keyboard.press("Home");
   await page.keyboard.type("My correction: ");
   await expect(heading).toContainText("My correction");
+  const undo = process.platform === "darwin" ? "Meta+z" : "Control+z";
+  const redo = process.platform === "darwin" ? "Meta+Shift+z" : "Control+Shift+z";
+  let undos = 0;
+  while (undos < 8 && (await heading.textContent())?.includes("My correction")) {
+    await page.keyboard.press(undo);
+    undos += 1;
+  }
+  await expect(heading).not.toContainText("My correction");
+  for (let step = 0; step < undos; step += 1) await page.keyboard.press(redo);
+  await expect(heading).toContainText("My correction");
   await expect.poll(async () => (await (await request.get(`/api/documents/${id}/canvas`)).json()).html).toContain("My correction");
   const before = await (await request.get(`/api/documents/${id}/canvas`)).json();
-  await page.getByRole("button", { name: "Edit design", exact: true }).click();
-  await page.getByLabel("Stylesheet", { exact: true }).fill(before.css + '\nh1 { color: #bb3300; }');
-  await page.getByRole("button", { name: "Apply design", exact: true }).click();
-  await expect(heading).toHaveCSS("color", "rgb(187, 51, 0)");
   await heading.click();
-  await page.keyboard.press(process.platform === "darwin" ? "Meta+z" : "Control+z");
-  await expect(heading).not.toHaveCSS("color", "rgb(187, 51, 0)");
-  await expect(heading).toContainText("My correction");
+  await page.keyboard.type(" extra");
   await expect.poll(async () => (await (await request.get(`/api/documents/${id}/canvas`)).json()).version).toBeGreaterThan(before.version);
   const stale = await request.patch(`/api/documents/${id}/canvas`, { data: { epoch: before.epoch, version: before.version, operation: "styles", css: "" } });
   expect(stale.status()).toBe(422);
   await page.reload();
   await expect(page.locator('.doc-content [data-id="title"]')).toContainText("My correction");
-  await expect(page.getByRole("button", { name: "Edit design", exact: true })).toBeVisible();
+  await expect(page.locator(".titlebar .canvas-kind-badge")).toHaveText("Canvas");
+  await expect(page.getByRole("button", { name: "Edit design", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Check layout", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Select section", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Move section up", exact: true })).toHaveCount(0);
@@ -56,7 +64,7 @@ test("Canvas pages are styled, editable, undoable, persistent, and version check
   await expect(page.locator(".canvas-layout-notice")).toHaveCount(0);
 });
 
-test("hovering a canvas block shows handles that insert and reorder", async ({ page, request }) => {
+test("hovering a canvas block shows a drag handle that reorders", async ({ page, request }) => {
   const response = await request.post("/api/documents", { data: { canvas: "editorial", title: "Block handles" } });
   expect(response.ok()).toBeTruthy();
   const { document } = await response.json();
@@ -76,31 +84,25 @@ test("hovering a canvas block shows handles that insert and reorder", async ({ p
   const one = page.locator('.doc-content [data-id="one"]');
   const two = page.locator('.doc-content [data-id="two"]');
   await expect(one).toBeVisible();
-  await expect(page.getByRole("button", { name: "Add block", exact: true })).toBeHidden();
+  await expect(page.getByRole("button", { name: "Add block", exact: true })).toHaveCount(0);
   await one.hover();
-  const add = page.getByRole("button", { name: "Add block", exact: true });
   const drag = page.getByRole("button", { name: "Drag block", exact: true });
-  await expect(add).toBeVisible();
   await expect(drag).toBeVisible();
   await page.mouse.move(8, 8);
-  await expect(add).toBeHidden();
-  await one.hover();
-  await add.click();
-  await page.keyboard.type("Inserted line");
-  await expect(page.locator(".doc-content")).toContainText("Inserted line");
-  await expect.poll(async () => (await (await request.get(`/api/documents/${id}/canvas`)).json()).html).toContain("Inserted line");
-  const order = async () => page.locator(".doc-content").innerText();
-  expect(await order()).toMatch(/Alpha block[\s\S]*Inserted line[\s\S]*Beta block/);
+  await expect(drag).toBeHidden();
   await two.hover();
   const grip = await drag.boundingBox();
   expect(grip).toBeTruthy();
-  await page.mouse.move(grip!.x + grip!.width / 2, grip!.y + grip!.height / 2);
-  await page.mouse.down();
   const first = await one.boundingBox();
   expect(first).toBeTruthy();
-  await page.mouse.move(first!.x + 24, first!.y + 4, { steps: 8 });
+  await page.mouse.move(grip!.x + grip!.width / 2, grip!.y + grip!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(grip!.x + grip!.width / 2, first!.y + 4, { steps: 12 });
+  await expect(page.locator(".image-drop-caret")).toBeVisible();
   await page.mouse.up();
+  const order = async () => page.locator(".doc-content").innerText();
   await expect.poll(order).toMatch(/Beta block[\s\S]*Alpha block/);
+  await expect.poll(async () => (await (await request.get(`/api/documents/${id}/canvas`)).json()).html).toMatch(/id="two"[\s\S]*id="one"/);
 });
 
 test("a canvas page follows dark mode and print stays light", async ({ page, request }) => {

@@ -6,7 +6,11 @@ Canvases are paginated, directly editable HTML/CSS compositions. The Canvas card
 
 `get_canvas_guide` returns the SDK and three complete examples. `read_canvas` returns the current live composition, stylesheet, epoch, and revision, including manual edits. Claude authors declarative markup rather than executable React. The importer translates it into the shared document schema. The live document is authoritative; the authoring markup is derived on read.
 
-Components: Canvas, Section, Stack, RichText, Text, Columns, Column, Figure, Table, and PageBreak. Basic semantic paragraphs, headings, lists, emphasis, links, table rows/cells, and managed images are supported. `Columns` contains two or three `Column` children and an optional ratio such as `2:1`. `Figure` contains a managed image and optional paragraph caption.
+Create a Canvas when the layout is part of the piece. Ordinary writing stays a Markdown document.
+
+Components: Canvas, Section, Stack, RichText, Text, Columns, Column, Figure, Math, Table, and PageBreak. Basic semantic paragraphs, headings, lists, emphasis, links, and table rows/cells are supported. Tables are `table`, `tr`, `th`, and `td` (`Table` is the same tag). `Columns` contains two or three `Column` children and an optional ratio such as `2:1`. `Figure` contains an image and an optional paragraph caption. `<Math>` is inline LaTeX; `<Math display>` is a displayed equation. id attributes are patch targets, not CSS selectors. The document title is the first h1, not an eyebrow above it.
+
+An image file in the document folder is a lasting source at `/api/documents/<id>/files/<name>` (for example `/api/documents/<id>/files/graphs.png`). The editor and the PDF both load that URL. `insert_image` is a Markdown tool and is refused on a Canvas.
 
 CSS supports component/tag/class selectors and descendant/child relationships, typography, literal colors, spacing, borders, widths, and gaps. Layout comes from SDK primitives. At-rules, network resources, scripts, inline styles, arbitrary positioning, clipping, heights, nested CSS, and editor-reserved classes are rejected. CSS is parsed with PostCSS and scoped to one editor root. HTML is parsed with parse5 and imported into checked schema nodes.
 
@@ -18,7 +22,7 @@ Canvas design lives in the document root's versioned `canvas` attribute, alongsi
 
 `patch_canvas` accepts the epoch and revision from `read_canvas`. Operations are `styles`, `replace`, `replace_component`, `insert_after`, `remove`, and `move_after`. Component operations preserve untouched nodes and formatting. Stale patches and changes to locked content are rejected. A component replacement supplies one replacement block wrapped in Canvas; its root inherits the target's stable ID.
 
-The Edit design dialog changes CSS through local editor transactions, so normal undo works. Claude changes use the existing per-turn checkpoints/rewind workflow. Save a named version through the existing history controls when appropriate.
+CSS changes go through `patch_canvas` and undo with the document. Claude changes use the existing per-turn checkpoints/rewind workflow. Save a named version through the existing history controls when appropriate.
 
 ## Rendering and export
 
@@ -32,6 +36,6 @@ Server capture and PDF export launch Playwright's Chromium and print the settled
 
 ## Verification
 
-`lib/canvas/canvas.test.ts` covers import/export round trips, supported contracts, CSS isolation, stale patches, locks, focused changes, undo, authority validation, persistence, and restoring content with design. `e2e/canvas.spec.ts` covers actual editing, CSS precedence, design undo, reopening, stale changes, spanning paragraphs, direct browser capture, and HTML-based PDF export.
+`lib/canvas/canvas.test.ts` covers import/export round trips, supported contracts, CSS isolation, stale patches, locks, focused changes, undo, authority validation, persistence, and restoring content with design. `e2e/canvas.spec.ts` covers actual editing, authored CSS, text undo, reopening, stale changes, block reordering, spanning paragraphs, direct browser capture, and HTML-based PDF export.
 
 Use a supported Node runtime for the existing dependency set (Node 24 for the PDF/sandbox suite). The browser suite uses the repository's normal Playwright configuration; `CHROMIUM_PATH` can point at an installed Chrome.
