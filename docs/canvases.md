@@ -1,6 +1,6 @@
 # Canvases
 
-Canvases are paginated, directly editable HTML/CSS compositions. Create one from the Canvas card on the home screen, then ask Claude to design it. Text editing uses the existing ProseMirror editor, collaboration, comments, locks, and history. There is no Canvas flow mode.
+Canvases are paginated, directly editable HTML/CSS compositions. The Canvas card on the home screen is an empty page, like Blank document, and opens an empty canvas. Ask Claude to design it. Text editing uses the existing ProseMirror editor, collaboration, comments, locks, and history. There is no Canvas flow mode.
 
 ## Authoring contract
 
@@ -28,7 +28,7 @@ Canvas rendering keeps one editable DOM and uses the existing measured paginatio
 
 The PDF action uses `/api/documents/:id/canvas/pdf`, which prints the same paginated HTML using Chromium, retaining selectable text and supported CSS. Required missing images, stalled font loading, stale snapshots, and known layout issues produce errors. Browser Print / Save PDF remains available. Match paper size and disable browser-added headers/margins when printing manually.
 
-Server capture/export needs Playwright and a Chromium installation, using the existing `CHROMIUM_PATH` setting when provided. The render route mounts an offline document session, preventing an inspection window from joining collaboration. Each render verifies its snapshot's epoch/revision and reports a layout fingerprint. Canvas paper uses the light publication palette independently of app theme.
+Server capture and PDF export launch Playwright's Chromium and print the settled pages, including backgrounds and canvas CSS, on light paper. If that headless shell is not downloaded, export launches the Chromium this project's Playwright already installed, or installs that browser and tries again. `CHROMIUM_PATH` still selects a binary explicitly. The render route mounts an offline document session, preventing an inspection window from joining collaboration. Each render verifies its snapshot's epoch/revision and reports a layout fingerprint. The page being edited follows the app's light or dark theme. Print and PDF stay on the light publication palette.
 
 ## Verification
 

@@ -1,10 +1,11 @@
+/* Light publication palette. Dark editing overrides it on screen; print keeps these values. */
 .page-stack.is-canvas-document { --paper: #fff; --paper-text: #25392f; }
 /* SDK layout belongs to Inline; authored CSS controls visual treatment. */
-.doc-content[data-canvas-root] { color: #25392f; background: #fff; overflow-wrap: anywhere; }
+.doc-content[data-canvas-root] { color: var(--paper-text); background: var(--paper); overflow-wrap: anywhere; }
 .doc-content[data-canvas-root] [data-canvas] { min-width: 0; }
 .doc-content[data-canvas-root] [data-canvas="columns"] { display: grid; grid-template-columns: var(--canvas-columns, 1fr 1fr); gap: 24px; align-items: start; }
 .doc-content[data-canvas-root] [data-canvas="figure"] img { max-width: 100%; }
-.doc-content[data-canvas-root] [data-canvas="figure"] > p { font-size: .85em; color: #58645e; margin-top: 8px; }
+.doc-content[data-canvas-root] [data-canvas="figure"] > p { font-size: .85em; color: var(--canvas-caption, #58645e); margin-top: 8px; }
 .doc-content[data-canvas-root] [data-canvas="column"] > :first-child,
 .doc-content[data-canvas-root] [data-pagination="keep-together"] > :first-child { margin-top: 0; }
 .doc-content[data-canvas-root] [data-canvas="column"] > :last-child,
@@ -34,6 +35,11 @@
 .canvas-source-fields textarea { width: 100%; min-height: 180px; font: 12px/1.5 monospace; resize: vertical; padding: 10px; border: 1px solid var(--border); border-radius: 5px; color: var(--text); background: var(--bg); }
 .canvas-design-error { font-size: 12px; color: var(--danger, #b3261e); white-space: pre-wrap; overflow-wrap: anywhere; }
 .canvas-layout-notice { max-height: 100px; overflow: auto; padding: 6px 16px; font-size: 12px; color: var(--text-2); background: var(--bg-sunken); }
-.template-thumb.is-canvas { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 8px; padding: 22px; background: #edf1e7; color: #2d4c3e; }
-.template-thumb.is-canvas strong { font: 24px/1.1 Georgia, serif; }
+@media screen {
+  :root[data-theme="dark"] .page-stack.is-canvas-document {
+    --paper: #262624;
+    --paper-text: #e6e4df;
+    --canvas-caption: rgb(151 164 158);
+  }
+}
 @media print { .canvas-design-tools, .canvas-layout-notice { display: none !important; } .doc-content[data-canvas-root] [data-canvas="section"]:focus-within { outline: none; } }

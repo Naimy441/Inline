@@ -12,7 +12,7 @@ export const GET = route(async (request) => {
 
 const CreateBody = z.object({
   title: z.string().max(300).optional(),
-  canvas: z.enum(["editorial", "research", "guide"]).optional(),
+  canvas: z.enum(["blank", "editorial", "research", "guide"]).optional(),
   markdown: z.string().max(5_000_000).optional(),
   doc: z.unknown().optional(),
   settings: z.unknown().optional(),
@@ -29,7 +29,8 @@ export const DELETE = route(async (request) => {
 export const POST = route(async (request) => {
   const body = await readJson(request, CreateBody);
   if (body.folderId && !(await folderExists(body.folderId))) throw new HttpError(404, "That folder was not found.");
-  const example = body.canvas ? CANVAS_EXAMPLES[body.canvas] : null;
-  const doc = await documentHub().create(example ? { ...body, title: body.title || example.title, doc: compileCanvas(example.html, example.css).toJSON() } : body);
+  const example = body.canvas && body.canvas !== "blank" ? CANVAS_EXAMPLES[body.canvas] : null;
+  const canvas = body.canvas === "blank" ? compileCanvas("<Canvas></Canvas>") : example ? compileCanvas(example.html, example.css) : null;
+  const doc = await documentHub().create(canvas ? { ...body, title: body.title || example?.title || "Untitled canvas", doc: canvas.toJSON() } : body);
   return json({ document: doc.snapshot() }, { status: 201 });
 });
