@@ -196,6 +196,59 @@ describe("keepVisibleSelection", () => {
     }
   });
 
+  it("reads a Shift+Home range that ends on the editor element, and a flush keeps it", () => {
+    const text = "Hello world";
+    const { view, node, destroy } = mount(text);
+    try {
+      // Chrome reports Shift+Home with one end on the contenteditable itself.
+      // contains() is false for that node, so the phrase used to be invisible.
+      dom.window.document.getSelection = () =>
+        ({
+          anchorNode: node,
+          anchorOffset: text.length,
+          focusNode: view.dom,
+          focusOffset: 0,
+        }) as unknown as Selection;
+      const read = readDomSelection(view);
+      assert.ok(read);
+      assert.equal(read.empty, false);
+      assert.equal(view.state.doc.textBetween(read.from, read.to), text);
+      const flushed = keepVisibleSelection(view, view.state.tr.setMeta("page", true).setMeta("addToHistory", false));
+      assert.equal(view.state.doc.textBetween(flushed.selection.from, flushed.selection.to), text);
+    } finally {
+      destroy();
+    }
+  });
+
+  it("clamps a Shift+Home end that sits just outside the editor", () => {
+    const text = "Hello world";
+    const { view, node, destroy } = mount(text);
+    try {
+      dom.window.document.getSelection = () =>
+        ({
+          anchorNode: node,
+          anchorOffset: text.length,
+          focusNode: dom.window.document.body,
+          focusOffset: 0,
+        }) as unknown as Selection;
+      const read = readDomSelection(view);
+      assert.ok(read);
+      assert.equal(view.state.doc.textBetween(read.from, read.to), text);
+      dom.window.document.getSelection = () =>
+        ({
+          anchorNode: node,
+          anchorOffset: 0,
+          focusNode: dom.window.document.body,
+          focusOffset: 1,
+        }) as unknown as Selection;
+      const end = readDomSelection(view);
+      assert.ok(end);
+      assert.equal(view.state.doc.textBetween(end.from, end.to), text);
+    } finally {
+      destroy();
+    }
+  });
+
   function showCaret(node: ChildNode, offset: number) {
     dom.window.document.getSelection = () =>
       ({

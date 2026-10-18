@@ -897,7 +897,18 @@ export class DocumentSession {
       }
       // The reader collapsed a range the editor already had (an arrow key). A caret the
       // browser showed and the state never recorded is not this — that one stays pending.
-      if (this.pendingSelection && !strayCollapse && !view.state.selection.empty && tr.selectionSet && tr.selection.empty) this.pendingSelection = null;
+      // A flush that drops the highlight onto either end of the phrase is not a new
+      // insertion point either: Bold still applies to the phrase.
+      if (
+        this.pendingSelection &&
+        !strayCollapse &&
+        !view.state.selection.empty &&
+        tr.selectionSet &&
+        tr.selection.empty &&
+        !rangeTouchingCaret(this.pendingSelection, tr.selection.from)
+      ) {
+        this.pendingSelection = null;
+      }
     }
     // Focusing the font search or the size field collapses the DOM selection
     // after the editor has already blurred. Put the phrase back. While the

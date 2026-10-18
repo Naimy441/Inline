@@ -137,6 +137,21 @@ export function visibleTextSelection(view: EditorView): TextSelection | null {
   return selection && !selection.empty ? selection : null;
 }
 
+/** True for a node inside the editor, including the editor element itself. `contains` does not count the node it is called on. */
+function inEditor(view: EditorView, node: Node): boolean {
+  return node === view.dom || view.dom.contains(node);
+}
+
+/**
+ * An endpoint Shift+Home / Shift+End left on the editor element, or just
+ * outside it. The browser still reports the phrase, but one side is not a
+ * text node inside the page. Clamp that side to the editor edge.
+ */
+function clampedEndpoint(view: EditorView, node: Node, offset: number, otherOffset: number): { node: Node; offset: number } {
+  if (inEditor(view, node)) return { node, offset };
+  return { node: view.dom, offset: otherOffset > 0 ? 0 : view.dom.childNodes.length };
+}
+
 /**
  * The browser selection inside the editor, caret included. A caret that sits
  * on a page gap or between blocks moves to the nearest text position. Null
@@ -145,9 +160,11 @@ export function visibleTextSelection(view: EditorView): TextSelection | null {
 export function readDomSelection(view: EditorView): TextSelection | null {
   const sel = view.dom.ownerDocument.getSelection();
   if (!sel?.anchorNode || !sel.focusNode) return null;
-  if (!view.dom.contains(sel.anchorNode) || !view.dom.contains(sel.focusNode)) return null;
+  if (!inEditor(view, sel.anchorNode) && !inEditor(view, sel.focusNode)) return null;
+  const anchor = clampedEndpoint(view, sel.anchorNode, sel.anchorOffset, sel.focusOffset);
+  const focus = clampedEndpoint(view, sel.focusNode, sel.focusOffset, sel.anchorOffset);
   try {
-    return textSelectionNear(view.state.doc, view.posAtDOM(sel.anchorNode, sel.anchorOffset), view.posAtDOM(sel.focusNode, sel.focusOffset));
+    return textSelectionNear(view.state.doc, view.posAtDOM(anchor.node, anchor.offset), view.posAtDOM(focus.node, focus.offset));
   } catch {
     return null;
   }
@@ -172,11 +189,20 @@ export function textSelectionNear(doc: PMNode, anchor: number, head: number): Te
  * committed cannot put the old one back. A picture or gap selection is left alone.
  */
 export function keepVisibleSelection(view: EditorView, tr: Transaction): Transaction {
-  if (tr.docChanged || tr.selectionSet) return tr;
-  if (!(tr.selection instanceof TextSelection) || !tr.selection.empty) return tr;
-  if (!(view.state.selection instanceof TextSelection)) return tr;
+  // Typing and arrow keys pick their own selection. A layout flush does not:
+  // it carries addToHistory false, and painting it must not drop a phrase the
+  // page is showing but the editor has not recorded yet.
+  if (tr.selectionSet && tr.getMeta("addToHistory") !== false) return tr;
+  if (!(view.state.selection instanceof TextSelection) || !(tr.selection instanceof TextSelection)) return tr;
   const onScreen = readDomSelection(view);
   const stateSel = view.state.selection;
+  if (onScreen && !onScreen.empty && stateSel.empty) {
+    const from = tr.mapping.map(onScreen.from, 1);
+    const to = tr.mapping.map(onScreen.to, -1);
+    if (from < to && to <= tr.doc.content.size) return tr.setSelection(TextSelection.create(tr.doc, from, to));
+  }
+  if (tr.docChanged || tr.selectionSet) return tr;
+  if (!tr.selection.empty) return tr;
   if (!tr.selection.eq(stateSel)) {
     // The pass captured an older caret. The state may already have the one the
     // user moved to; the page may have a still newer one.
