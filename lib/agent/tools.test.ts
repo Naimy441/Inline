@@ -11,6 +11,7 @@ import { READ_ONLY_TOOL_NAMES, TOOLS, WRITE_TOOL_NAMES, runTool, type ToolContex
 import { schema } from "@/lib/doc/schema";
 import { docToMarkdown } from "@/lib/doc/markdown";
 import { documentHub, type HubEvent, type LiveDocument } from "@/lib/server/hub";
+import { commandShown } from "@/lib/server/sandbox";
 
 // The store resolves its directory on each call, so this applies before any write.
 process.env.INLINE_DATA_DIR = mkdtempSync(path.join(tmpdir(), "inline-tools-"));
@@ -1674,8 +1675,29 @@ describe("document folder", () => {
     const ran = await runTool("run_command", { command: "false" }, ctx);
     assert.equal(ran.isError, true, ran.text);
     assert.match(ran.text, /exit 1 \(finished with an error\)/);
+    assert.match(ran.text, /command: false/);
     assert.match(ran.text, /stdout:\n\(empty\)/);
     assert.match(ran.text, /stderr:\n\(empty\)/);
+  });
+
+  test("a heredoc is not copied back, and python temp lives outside the document repository", async () => {
+    assert.equal(commandShown("echo hi"), "echo hi");
+    assert.equal(commandShown("x".repeat(201)), null);
+    assert.equal(commandShown("python3 - <<'PY'\nprint('x')\nPY"), null);
+    const { ctx } = await setup();
+    const ran = await runTool("run_command", { command: "python3 - <<'PY'\nprint('stdout-heredoc-ok')\nPY\n" }, ctx);
+    assert.equal(ran.isError, undefined, ran.text);
+    assert.match(ran.text, /exit 0 \(finished\)/);
+    assert.match(ran.text, /stdout:\nstdout-heredoc-ok/);
+    assert.doesNotMatch(ran.text, /command:/);
+    assert.doesNotMatch(ran.text, /print\('stdout-heredoc-ok'\)/);
+    assert.doesNotMatch(ran.text, /<<'PY'/);
+    const temp = await runTool("run_command", { command: "python3 -c 'import os,tempfile; f=tempfile.NamedTemporaryFile(delete=False); f.write(b\"ok\"); f.close(); print(f.name); print(os.environ[\"TMPDIR\"]); print(os.environ[\"PYTHONPYCACHEPREFIX\"])'" }, ctx);
+    assert.equal(temp.isError, undefined, temp.text);
+    assert.match(temp.text, /\/cache\/T/);
+    assert.match(temp.text, /\/cache\/pyc/);
+    assert.doesNotMatch(temp.text, /\/repos\//);
+    assert.doesNotMatch(temp.text, /Operation not permitted/);
   });
 
   test("files and commands stay inside the document folder", async () => {

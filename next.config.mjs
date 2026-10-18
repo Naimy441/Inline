@@ -33,8 +33,9 @@ const nextConfig = {
     "/api/pdfjs/\\[\\.\\.\\.path\\]": ["./node_modules/pdfjs-dist/cmaps/**", "./node_modules/pdfjs-dist/standard_fonts/**", "./node_modules/pdfjs-dist/wasm/**", "./node_modules/pdfjs-dist/iccs/**"],
     "/api/documents/import/pdf": ["./node_modules/katex/dist/fonts/KaTeX_Main-*.ttf"],
     // The page-layout skill is a directory the agent passes to Claude Code, not an import.
-    "/api/agent/**": ["./lib/agent/skills/page-layout/**/*", "./lib/server/hunspell/**"],
-    "/api/mcp/**": ["./lib/server/hunspell/**"],
+    "/api/agent/**": ["./lib/agent/skills/page-layout/**/*", "./lib/server/hunspell/**", "./node_modules/playwright/**/*", "./node_modules/playwright-core/**/*"],
+    "/api/mcp/**": ["./lib/server/hunspell/**", "./node_modules/playwright/**/*", "./node_modules/playwright-core/**/*"],
+    "/api/documents/**": ["./node_modules/playwright/**/*", "./node_modules/playwright-core/**/*"],
     "/api/spellcheck": ["./lib/server/hunspell/**"],
   },
   // The agent routes' traces take in the whole project folder, which would put

@@ -8,21 +8,79 @@ import { canvasCssNotes } from "@/lib/canvas/styles";
 import { CANVAS_FRAGMENTS, CANVAS_GUIDE } from "@/lib/canvas/examples";
 import { renderCanvas } from "@/lib/server/canvasRender";
 import { dropCanvasPreview, putCanvasPreview } from "@/lib/server/canvasPreview";
+import { readWorkspaceText } from "@/lib/server/repo";
 
 const document_id = z.string().optional();
 const canvasOpShape = {
   operation: z.enum(["replace", "replace_component", "insert_after", "remove", "move_after", "styles"]),
   target: z.string().optional(), after: z.string().optional(), html: z.string().max(500_000).optional(), css: z.string().max(80_000).optional(),
+  html_file: z.string().max(500).optional().describe("Path in this document's folder whose contents are the HTML. Use this instead of pasting html again."),
 };
 export const canvasPatchShape = {
   epoch: z.string(), version: z.number().int().min(0),
   operation: canvasOpShape.operation.optional(),
   operations: z.array(z.object(canvasOpShape)).min(1).max(12).optional(),
+  operations_file: z.string().max(500).optional().describe("Path in this document's folder. The file is a JSON array of operations, used instead of operations."),
   target: z.string().optional(), after: z.string().optional(), html: z.string().max(500_000).optional(), css: z.string().max(80_000).optional(),
+  html_file: z.string().max(500).optional().describe("Path in this document's folder whose contents are the HTML. Inline html still works."),
 };
 function patchWroteCss(patch: CanvasPatch) {
   const ops: CanvasOp[] = patch.operations ?? (patch.operation ? [{ operation: patch.operation, css: patch.css }] : []);
   return ops.some((op) => op.operation === "styles" || op.css !== undefined);
+}
+
+const STYLES_REPLACE = "styles replaces the whole stylesheet.";
+
+function measurementUnavailable(error: unknown) {
+  const message = error instanceof Error ? error.message : "";
+  return /layout browser|Couldn't picture the page|Couldn't install the layout browser|no address a browser can open|Open Inline in a browser/i.test(message);
+}
+
+type FileOp = CanvasOp & { html_file?: string };
+
+async function readFolderText(documentId: string, file: string) {
+  try {
+    const found = await readWorkspaceText(documentId, file);
+    if (found.kind !== "text") throw new EditError(`${file} is not a text file.`);
+    return found.text;
+  } catch (error) {
+    if (error instanceof EditError) throw error;
+    throw new EditError(error instanceof Error ? error.message : "Couldn't read that file.");
+  }
+}
+
+/** Inline HTML still works. A path reads that payload from the document folder instead of pasting it again. */
+async function materializePatch(documentId: string, patch: CanvasPatch & { html_file?: string; operations_file?: string }): Promise<CanvasPatch> {
+  let operations: FileOp[] | undefined = patch.operations?.map((op) => ({ ...op }));
+  if (patch.operations_file) {
+    if (operations || patch.operation) throw new EditError("Pass operations or operations_file, not both.");
+    let parsed: unknown;
+    try { parsed = JSON.parse(await readFolderText(documentId, patch.operations_file)); }
+    catch (error) {
+      if (error instanceof EditError) throw error;
+      if (error instanceof SyntaxError) throw new EditError(`${patch.operations_file} must be a JSON array of operations.`);
+      throw error;
+    }
+    if (!Array.isArray(parsed)) throw new EditError(`${patch.operations_file} must be a JSON array of operations.`);
+    operations = parsed as FileOp[];
+  }
+  const fill = async (op: FileOp): Promise<CanvasOp> => {
+    if (op.html_file) {
+      if (op.html !== undefined) throw new EditError("Pass html or html_file, not both.");
+      const html = await readFolderText(documentId, op.html_file);
+      const { html_file: _file, ...rest } = op;
+      return { ...rest, html };
+    }
+    const { html_file: _file, ...rest } = op;
+    return rest;
+  };
+  if (operations) {
+    const resolved: CanvasOp[] = [];
+    for (const op of operations) resolved.push(await fill(op));
+    return { epoch: patch.epoch, version: patch.version, operations: resolved };
+  }
+  const one = await fill({ operation: patch.operation!, target: patch.target, after: patch.after, html: patch.html, css: patch.css, html_file: patch.html_file });
+  return { epoch: patch.epoch, version: patch.version, ...one };
 }
 
 async function resolve(ctx: ToolContext, id?: string) {
@@ -63,7 +121,7 @@ export const canvasTools = [
   }),
   define({
     name: "patch_canvas", title: "Edit canvas", write: true,
-    description: "Apply one atomic Canvas design/content operation, or a list of up to 12 operations, against the epoch and revision returned by read_canvas. Pass operations instead of operation to apply them together; the result's steps field is how many steps the revision advanced (a rekeyed duplicate id adds a step). styles preserves every word; component operations preserve untouched model content and the ids you write. html is a complete Canvas root, with one block for component operations. Whole replace is for the first composition of an empty canvas. Once the canvas has content, replace is rejected unless redesign is true because the user asked for a redesign or rewrite. Prefer replace_component, insert_after, remove, move_after, or styles. Set dry_run to validate and measure the patch without writing it. A dry run returns the same page measurements as inspect_canvas, and the editor does not change.",
+    description: "Apply one atomic Canvas design/content operation, or a list of up to 12 operations, against the epoch and revision returned by read_canvas. Pass operations instead of operation to apply them together; the result's steps field is how many steps the revision advanced (a rekeyed duplicate id adds a step). styles replaces the whole stylesheet and preserves every word; component operations preserve untouched model content and the ids you write. html is a complete Canvas root, with one block for component operations. Pass html_file or operations_file to read that HTML or those operations from a file in this document's folder. Inline html still works. Whole replace is for the first composition of an empty canvas. Once the canvas has content, replace is rejected unless redesign is true because the user asked for a redesign or rewrite. Prefer replace_component, insert_after, remove, move_after, or styles. Set dry_run to validate and measure the patch without writing it. A dry run returns the same page measurements as inspect_canvas, and the editor does not change. If the page cannot be measured, the dry run still validates the markup and says measurement is unavailable.",
     shape: {
       document_id,
       ...canvasPatchShape,
@@ -72,17 +130,22 @@ export const canvasTools = [
     },
     async handler(args, ctx) {
       const doc = await resolve(ctx, args.document_id);
-      const patch = args as unknown as CanvasPatch;
+      const patch = await materializePatch(doc.id, args as unknown as CanvasPatch & { html_file?: string; operations_file?: string });
       const ops = patch.operations ?? (patch.operation ? [{ operation: patch.operation }] : []);
       if (!args.redesign && ops.some((op) => op.operation === "replace") && canvasHasContent(doc.doc)) {
         throw new EditError("This canvas already has content, so a whole-document replace was rejected and nothing was written. Edit with replace_component, insert_after, remove, move_after, or styles. Pass redesign: true only when the user asked for a redesign or rewrite.");
       }
+      const styleNote = patchWroteCss(patch) ? ` ${STYLES_REPLACE}` : "";
       if (args.dry_run) {
         const { tr, notes } = canvasTransform(doc, patch);
         const token = putCanvasPreview(doc.id, { ...doc.snapshot(), doc: tr.doc.toJSON() });
         try {
           const result = await renderCanvas(doc, { preview: token });
-          return { text: `Dry run only; the canvas was not changed.\n${JSON.stringify({ ...result.report, notes }, null, 2)}` };
+          return { text: `Dry run only; the canvas was not changed.${styleNote}\n${JSON.stringify({ ...result.report, notes }, null, 2)}` };
+        } catch (error) {
+          if (!measurementUnavailable(error)) throw error;
+          const reason = error instanceof Error ? error.message : "The page could not be measured.";
+          return { text: `Dry run only; the canvas was not changed. The markup is valid. Measurement is unavailable. ${reason} Apply this same patch to write it.${styleNote}\n${JSON.stringify({ notes }, null, 2)}` };
         } finally {
           dropCanvasPreview(token);
         }
@@ -97,9 +160,12 @@ export const canvasTools = [
       const detail = [...notes];
       if (steps > planned) detail.push(`Duplicate ids were rekeyed, which advanced the revision by ${steps - planned} extra step${steps - planned === 1 ? "" : "s"}.`);
       else if (steps > 1) detail.push(`The revision advanced by ${steps} steps.`);
-      if (patchWroteCss(patch)) detail.push(...canvasCssNotes(doc.doc.attrs.canvas.css as string, doc.doc));
+      if (patchWroteCss(patch)) {
+        detail.push(STYLES_REPLACE);
+        detail.push(...canvasCssNotes(doc.doc.attrs.canvas.css as string, doc.doc));
+      }
       ctx.onChange?.({ documentId: doc.id, title: doc.meta.title, tool: "patch_canvas", added: 0, removed: 0 });
-      return { text: `Canvas updated atomically. ${JSON.stringify({ epoch: doc.epoch, version: doc.version, steps, notes: detail })}. Call check_layout after a layout change.` };
+      return { text: `Canvas updated atomically. ${JSON.stringify({ epoch: doc.epoch, version: doc.version, steps, notes: detail })}.${styleNote} Call check_layout after a layout change.` };
     },
   }),
   define({

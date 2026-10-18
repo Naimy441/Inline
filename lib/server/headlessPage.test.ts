@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import type { Browser } from "playwright";
-import { launchPlaywrightChromium, playwrightCliPath } from "./headlessPage";
+import { launchPlaywrightChromium, loadPlaywrightChromium, playwrightCliPath } from "./headlessPage";
 
 const shellMissing = new Error("browserType.launch: Executable doesn't exist at /Users/naim/Library/Caches/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-mac-arm64/chrome-headless-shell");
 
@@ -14,6 +14,11 @@ function fakeBrowser() {
 }
 
 describe("layout browser", () => {
+  test("loads Playwright without launching or installing a browser", async () => {
+    const chromium = await loadPlaywrightChromium();
+    assert.equal(typeof chromium.launch, "function");
+  });
+
   test("the installer uses the Playwright package root instead of the unexported cli.js subpath", () => {
     const cli = playwrightCliPath();
     assert.equal(existsSync(cli), true);
