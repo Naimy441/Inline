@@ -145,14 +145,30 @@ export function openingLine(doc: PMNode): string {
   return line;
 }
 
+/** The first h1 in a Canvas. An eyebrow above that heading is not the document title. */
+export function canvasHeadingTitle(doc: PMNode): string | null {
+  if (doc.attrs.canvas?.format !== 1) return null;
+  let heading = "";
+  doc.descendants((node) => {
+    if (heading) return false;
+    if (node.type.name === "heading" && Number(node.attrs.level) === 1) {
+      heading = node.textContent.replace(/\s+/g, " ").trim();
+      return false;
+    }
+    return true;
+  });
+  return heading ? titleFromText(heading) : null;
+}
+
 /**
  * The name an untitled document follows: the start of its first text.
  * A Normal paragraph, a heading, or a Title block can supply it. The Title
  * style does not win over text above it, and a blank block at the top does
  * not clear the name. An empty document has no name of its own.
+ * A Canvas uses its first h1 when it has one.
  */
 export function followedDocumentTitle(doc: PMNode): string | null {
-  return titleFromText(openingLine(doc));
+  return canvasHeadingTitle(doc) ?? titleFromText(openingLine(doc));
 }
 
 export function docWordCount(doc: PMNode): number {

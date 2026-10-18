@@ -60,9 +60,18 @@ async function launchPair(launch: LayoutChromium["launch"], options: LayoutLaunc
   }
 }
 
+/**
+ * The Playwright CLI in this install. `playwright/package.json` is exported;
+ * `playwright/cli.js` is not, so resolving that subpath throws.
+ */
+export function playwrightCliPath() {
+  const req = createRequire(path.join(process.cwd(), "package.json"));
+  return path.join(path.dirname(req.resolve("playwright/package.json")), "cli.js");
+}
+
 /** Install the Chromium (and its headless shell) that this project's Playwright depends on. */
 export function installPlaywrightBrowser() {
-  const cli = createRequire(path.join(process.cwd(), "package.json")).resolve("playwright/cli.js");
+  const cli = playwrightCliPath();
   return new Promise<void>((resolve, reject) => {
     const child = spawn(process.execPath, [cli, "install", "chromium"], { stdio: "inherit" });
     child.on("error", reject);

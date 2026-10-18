@@ -115,6 +115,24 @@ describe("a turn", () => {
     assert.deepEqual(options.skills, [PAGE_LAYOUT_SKILL]);
   });
 
+  it("describes an open Canvas as a Canvas and includes its markup", async () => {
+    const { compileCanvas } = await import("@/lib/canvas/compiler");
+    const fake = useModel(() => undefined);
+    const canvas = compileCanvas('<Canvas><Text class="eyebrow">§ CALCULUS · PROBLEM SET 01</Text><Text as="h1">The fundamental theorem</Text><Section id="body"><Text>Prove the claim.</Text></Section></Canvas>');
+    const doc = await documentHub().create({ title: "Untitled canvas", doc: canvas.toJSON() });
+    await doc.flush();
+    assert.equal(doc.meta.title, "The fundamental theorem");
+    const chat = await agentRuntime().create({ documentId: doc.id });
+    await turn(chat, "Set the problems");
+    const context = fake.turns[0]!.context;
+    assert.match(context, /Type: Canvas\./);
+    assert.match(context, /Prove the claim/);
+    assert.match(context, /The fundamental theorem/);
+    assert.doesNotMatch(context, /no need to read it again before editing/);
+    assert.doesNotMatch(context, /&nbsp;/);
+    assert.equal(doc.meta.title, "The fundamental theorem");
+  });
+
   it("tells Claude which document is open, the mode and what the user selected", async () => {
     const fake = useModel(() => undefined);
     const { doc, chat } = await newChat();

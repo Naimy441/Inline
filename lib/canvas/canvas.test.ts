@@ -7,13 +7,14 @@ import { Transform } from "prosemirror-transform";
 import { EditorState } from "prosemirror-state";
 import { history, undo } from "prosemirror-history";
 import { compileCanvas, canvasMarkup } from "./compiler";
-import { CANVAS_EXAMPLES } from "./examples";
+import { CANVAS_EXAMPLES, CANVAS_GUIDE } from "./examples";
 import { darkScreenCanvasCss, validateCanvasCss, scopedCanvasCss } from "./styles";
 import { darkColor } from "@/lib/pdf/thumbnail";
 import { validateCanvasDocument } from "./model";
 import { canvasTransform, readCanvas } from "./operations";
 import { documentHub, type LiveDocument } from "@/lib/server/hub";
-import { runTool } from "@/lib/agent/tools";
+import { canvasTurnContext, documentListing, runTool } from "@/lib/agent/tools";
+import { docToMarkdown } from "@/lib/doc/markdown";
 import { schema } from "@/lib/doc/schema";
 import { readDocumentFile } from "@/lib/server/store";
 
@@ -52,6 +53,35 @@ describe("Canvas SDK", () => {
     const css = scopedCanvasCss('Canvas {color:red} .foo p, Columns > Column { padding: 4px }', "document-1");
     assert.ok(!css.includes('[data-canvas-root="document-1"] [data-canvas-root]'));
     assert.ok(css.includes('.doc-content[data-canvas-root="document-1"] .foo p'));
+  });
+  test("math, document images, and section text round-trip", () => {
+    const src = "/api/documents/u794f4zkt9xd/files/graphs.png";
+    const doc = compileCanvas(`<Canvas><Text id="stem">Let <Math>x^2</Math> be given.</Text><Math display id="integral">\\int_0^1 x dx</Math><Figure id="plot"><img src="${src}" alt="A graph"></Figure><Section id="close"><Text>Q.E.D.</Text></Section></Canvas>`);
+    assert.equal(doc.child(0).textContent, "Let x^2 be given.");
+    let marked = false;
+    doc.child(0).descendants((node) => { if (node.isText && node.marks.some((mark) => mark.type.name === "math")) marked = true; });
+    assert.equal(marked, true);
+    assert.equal(doc.child(1).type.name, "code_block");
+    assert.equal(doc.child(1).attrs.language, "math");
+    assert.equal(doc.child(2).child(0).attrs.src, src);
+    const html = canvasMarkup(doc);
+    assert.match(html, /<Math>x\^2<\/Math>/);
+    assert.match(html, /<Math display id="integral">/);
+    assert.match(html, new RegExp(src.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(html, /<section id="close"[\s\S]*Q\.E\.D\./);
+    const again = compileCanvas(html, doc.attrs.canvas.css);
+    assert.equal(again.textContent, doc.textContent);
+    const markdown = docToMarkdown(doc);
+    assert.match(markdown, /Let \$x\^2\$ be given/);
+    assert.match(markdown, /Q\.E\.D\./);
+    assert.equal(markdown.includes("&nbsp;"), false);
+    assert.match(CANVAS_GUIDE, /id attributes are patch targets, not CSS selectors/);
+    assert.match(CANVAS_GUIDE, /Create a Canvas when the layout is part of the piece/);
+    assert.match(CANVAS_GUIDE, /\/api\/documents\/<document id>\/files\/<file>/);
+    assert.match(CANVAS_GUIDE, /<Math> is inline LaTeX/);
+    assert.match(CANVAS_GUIDE, /<table> with <tr>, <th>, and <td>/);
+    assert.match(CANVAS_GUIDE, /The document title is the first h1/);
+    assert.doesNotMatch(CANVAS_GUIDE, /\/api\/images/);
   });
   test("a blank canvas is an empty page", () => {
     const doc = compileCanvas("<Canvas></Canvas>");
@@ -122,6 +152,15 @@ describe("Canvas authority", () => {
     assert.throws(() => doc.receiveClientSteps(doc.version, tr.steps.map((s) => s.toJSON()), "forged"));
     assert.equal(doc.doc, before);
   });
+  test("create_canvas names the document from its h1", async () => {
+    const created = await runTool("create_canvas", {
+      title: "§ CALCULUS · PROBLEM SET 01",
+      html: '<Canvas><Text class="eyebrow">§ CALCULUS · PROBLEM SET 01</Text><Text as="h1">The fundamental theorem</Text></Canvas>',
+      css: "",
+    }, { author: "claude" });
+    assert.equal(created.isError, undefined);
+    assert.equal(JSON.parse(created.text).title, "The fundamental theorem");
+  });
   test("markdown tools are refused and the valid canvas stays", async () => {
     const doc = await create();
     const before = doc.doc.textContent;
@@ -129,6 +168,15 @@ describe("Canvas authority", () => {
     const result = await runTool("write_document", { document_id: doc.id, content: "# Replaced" }, { author: "claude", documentId: doc.id });
     assert.equal(result.isError, true);
     assert.match(result.text, /patch_canvas/);
+    assert.equal(documentListing(doc), null);
+    const note = canvasTurnContext(doc);
+    assert.match(note, /^Type: Canvas\./);
+    assert.match(note, /A better beginning/);
+    assert.doesNotMatch(note, /no need to read/);
+    assert.doesNotMatch(note, /&nbsp;/);
+    const image = await runTool("insert_image", { document_id: doc.id, file: "graphs.png", alt: "Graph", position: "end" }, { author: "claude", documentId: doc.id });
+    assert.equal(image.isError, true);
+    assert.match(image.text, new RegExp(`/api/documents/${doc.id}/files/graphs.png`));
     assert.equal(doc.doc.textContent, before);
     assert.equal(doc.version, version);
     const stale = await runTool("inspect_canvas", { document_id: doc.id, epoch: "old", version: 0 }, { author: "claude", documentId: doc.id });

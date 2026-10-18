@@ -1,5 +1,5 @@
 import { canvasTools } from "@/lib/agent/canvasTools";
-import { isCanvas } from "@/lib/canvas/compiler";
+import { canvasMarkup, isCanvas } from "@/lib/canvas/compiler";
 import { renderCanvas } from "@/lib/server/canvasRender";
 import type { Node as PMNode } from "prosemirror-model";
 import { Transform } from "prosemirror-transform";
@@ -193,7 +193,29 @@ async function imageNaturals(doc: PMNode) {
  * hand over unasked. The in-app chat sends this with a message so Claude can
  * start editing without first spending a round trip on read_document.
  */
+/**
+ * What <inline-context> should say about an open Canvas. The Markdown projection
+ * of a Canvas drops the text inside Section and Text, so it is not included.
+ */
+export function canvasTurnContext(doc: LiveDocument) {
+  let markup = "";
+  try {
+    markup = canvasMarkup(doc.doc);
+  } catch {
+    markup = "";
+  }
+  const include = Boolean(markup) && markup.length <= 40_000 && markup.split("\n").length <= 400;
+  const lines = [
+    "Type: Canvas.",
+    "This is a Canvas, not a Markdown document. Do not rewrite it with write_document, insert_image, or other Markdown tools. Read it with read_canvas and change it with patch_canvas.",
+  ];
+  if (include) lines.push(`Current Canvas markup, not a Markdown document. A patch still needs the epoch and revision from read_canvas:\n<canvas-markup>\n${markup}\n</canvas-markup>`);
+  else lines.push("Read it with read_canvas before changing it. Its markup is not included here.");
+  return lines.join("\n");
+}
+
 export function documentListing(doc: LiveDocument, maxLines = 400, maxChars = 40_000) {
+  if (isCanvas(doc.doc)) return null;
   const lines = markdownLines(serializeDoc(doc.doc));
   if (lines.length > maxLines) return null;
   const body = numberLines(lines, 1, lines.length);
@@ -1327,6 +1349,9 @@ export const TOOLS = [
     write: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
+      if (isCanvas(doc.doc)) {
+        return fail(`This is a Canvas. insert_image writes Markdown, so it was refused and the canvas is unchanged. A file in this document's folder is a lasting image at /api/documents/${doc.id}/files/<name> (for example /api/documents/${doc.id}/files/graphs.png). Put that URL in <Figure><img src="…" alt="…"></Figure> with patch_canvas. The PDF includes it.`);
+      }
       let src = args.url?.trim() ?? "";
       if (args.file) {
         const found = await readWorkspaceBytes(doc.id, args.file).catch((error: unknown) => {
@@ -1809,7 +1834,7 @@ export const TOOLS = [
     name: "write_file",
     title: "Write file",
     description:
-      "Create or overwrite a text file in this document's folder. Use it for scripts and data. It cannot write outside the folder, and it does not change the document. Generate images by running the script, then insert_image with file.",
+      "Create or overwrite a text file in this document's folder. Use it for scripts and data. It cannot write outside the folder, and it does not change the document. Generate images by running the script, then insert_image with file. On a Canvas, insert_image is refused: the file is already served at /api/documents/<id>/files/<name>, and patch_canvas places that URL in a Figure.",
     shape: {
       document_id: documentId,
       path: z.string().describe("Path relative to the document folder."),

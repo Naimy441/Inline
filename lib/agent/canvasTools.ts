@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition, ToolContext } from "./tools";
-import { EditError } from "@/lib/doc/editing";
+import { EditError, canvasHeadingTitle } from "@/lib/doc/editing";
 import { documentHub } from "@/lib/server/hub";
 import { compileCanvas } from "@/lib/canvas/compiler";
 import { canvasTransform, readCanvas, type CanvasPatch } from "@/lib/canvas/operations";
@@ -33,11 +33,11 @@ export const canvasTools = [
   }),
   define({
     name: "create_canvas", title: "Create canvas", write: true,
-    description: "Create a designed, directly editable paged Canvas from validated SDK HTML and scoped CSS. Content and design should be composed together. Read read_canvas(include_guide:true) on an existing canvas for the SDK, or use get_canvas_guide first.",
+    description: "Create a designed, directly editable paged Canvas from validated SDK HTML and scoped CSS. Content and design should be composed together. Use this for a composed page, and create_document for ordinary Markdown. The document title becomes the first h1 when the markup has one. Read read_canvas(include_guide:true) on an existing canvas for the SDK, or use get_canvas_guide first.",
     shape: { title: z.string().max(300), html: z.string().max(500_000), css: z.string().max(80_000), folder_id: z.string().optional() },
     async handler(args, ctx) {
       const candidate = compileCanvas(args.html, args.css);
-      const doc = await documentHub().create({ title: args.title, doc: candidate.toJSON(), folderId: args.folder_id });
+      const doc = await documentHub().create({ title: canvasHeadingTitle(candidate) || args.title, doc: candidate.toJSON(), folderId: args.folder_id });
       ctx.onChange?.({ documentId: doc.id, title: doc.meta.title, tool: "create_canvas", added: doc.meta.wordCount, removed: 0 });
       ctx.onOpen?.(doc.id);
       return { text: JSON.stringify(readCanvas(doc), null, 2) };

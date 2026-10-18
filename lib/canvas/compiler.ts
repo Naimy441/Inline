@@ -1,6 +1,6 @@
 import { parseFragment, type DefaultTreeAdapterMap } from "parse5";
 import { type Node as PMNode, type Mark } from "prosemirror-model";
-import { schema, safeHref } from "@/lib/doc/schema";
+import { MATH_LANGUAGE, schema, safeHref } from "@/lib/doc/schema";
 import { ensureBlockIds } from "@/lib/doc/ids";
 import { escapeHtml } from "@/lib/doc/html";
 import { validateCanvasCss, validateCanvasClass } from "./styles";
@@ -24,7 +24,7 @@ export function compileCanvas(html: string, css = ""): PMNode {
   let count = 0;
   const attrs = (el: Element) => {
     const a = Object.fromEntries(el.attrs.map(({ name, value }) => [name, value]));
-    for (const name of Object.keys(a)) if (!ATTRS.has(name)) throw new Error(`<${el.tagName}>: unsupported attribute ${name}.`);
+    for (const name of Object.keys(a)) if (!ATTRS.has(name) && !(name === "display" && el.tagName === "math")) throw new Error(`<${el.tagName}>: unsupported attribute ${name}.`);
     if (a.id && (!IDS.test(a.id) || ids.has(a.id))) throw new Error(`Invalid or duplicate component id ${a.id}.`);
     if (a.id) ids.add(a.id);
     if (a.class && !CLASSES.test(a.class)) throw new Error(`Invalid class on ${a.id || el.tagName}.`);
@@ -58,7 +58,9 @@ export function compileCanvas(html: string, css = ""): PMNode {
     if (tag === "text" || /^(p|h[1-6]|figcaption)$/.test(tag)) {
       const as = tag === "text" ? a.as || "p" : tag;
       if (!/^(p|h[1-6]|figcaption)$/.test(as)) throw new Error("Text as must be p or h1–h6.");
-      return make(as.startsWith("h") ? "heading" : "paragraph", children(el, marks, depth), as.startsWith("h") ? { level: Number(as[1]) } : {});
+      const content = children(el, marks, depth);
+      if (content.some((node) => node.type.name === "code_block")) throw new Error("Display math is its own block. Put <Math display> beside Text, not inside it.");
+      return make(as.startsWith("h") ? "heading" : "paragraph", content, as.startsWith("h") ? { level: Number(as[1]) } : {});
     }
     const markType = ({ strong: "bold", b: "bold", em: "italic", i: "italic", u: "underline", s: "strike", code: "code" } as Record<string, string>)[tag];
     if (markType) return children(el, [...marks, schema.mark(markType)], depth);
@@ -71,8 +73,20 @@ export function compileCanvas(html: string, css = ""): PMNode {
     if (tag === "br") return [schema.node("hard_break", null, undefined, marks)];
     if (tag === "hr") return make("horizontal_rule", []);
     if (tag === "pagebreak") return make("page_break", []);
+    if (tag === "math") {
+      let tex = "";
+      for (const child of el.childNodes) {
+        if (child.nodeName === "#text" && "value" in child) tex += child.value;
+        else throw new Error("Math contains only LaTeX, not nested elements. Write < as &lt;.");
+      }
+      tex = tex.replace(/^\n/, "").replace(/\n$/, "").trim();
+      if (!tex) throw new Error("Math needs LaTeX source.");
+      const display = a.display != null && !/^(false|inline)$/i.test(a.display);
+      if (display) return make("code_block", [schema.text(tex)], { language: MATH_LANGUAGE });
+      return [schema.text(tex, [...marks, schema.mark("math")])];
+    }
     if (tag === "img") {
-      if (!a.src || !/^\/api\/(images\/|documents\/[a-zA-Z0-9_-]+\/files\/)/.test(a.src) || /[\\<>]/.test(a.src)) throw new Error("Images must use an uploaded Inline asset URL, e.g. /api/images/… .");
+      if (!a.src || !/^\/api\/(images\/|documents\/[a-zA-Z0-9_-]+\/files\/)/.test(a.src) || /[\\<>]/.test(a.src)) throw new Error("Images must use a file from this document's folder, such as /api/documents/<id>/files/graphs.png.");
       if (!a.alt) throw new Error("Images require descriptive alt text.");
       return make("image", [], { src: a.src, alt: a.alt });
     }
@@ -110,10 +124,16 @@ export function canvasMarkup(doc: PMNode): string {
         if (tag) text = `<${tag}>${text}</${tag}>`;
         if (mark.type.name === "link") text = `<a href="${escapeHtml(mark.attrs.href)}">${text}</a>`;
         if (mark.type.name === "canvas_span") text = `<span class="${escapeHtml(mark.attrs.class)}">${text}</span>`;
+        if (mark.type.name === "math") text = `<Math>${text}</Math>`;
       }
       return text;
     }
     if (node.type.name === "hard_break") return "<br>";
+    if (node.type.name === "code_block") {
+      if (node.attrs.language !== MATH_LANGUAGE) throw new Error("Canvas authoring cannot represent a code block. Use <Math display> for an equation.");
+      const attrs = [node.attrs.id ? `id="${escapeHtml(node.attrs.id)}"` : "", node.attrs.canvasClass ? `class="${escapeHtml(node.attrs.canvasClass)}"` : ""].filter(Boolean).join(" ");
+      return `<Math display${attrs ? ` ${attrs}` : ""}>${escapeHtml(node.textContent)}</Math>`;
+    }
     const container = Object.entries(CONTAINERS).find(([, type]) => type === node.type.name)?.[0];
     const name = container || (node.type.name === "heading" ? `h${node.attrs.level}` : ({ paragraph: "p", title: "h1", subtitle: "p", bullet_list: "ul", ordered_list: "ol", list_item: "li", blockquote: "blockquote", table: "table", table_row: "tr", table_header: "th", table_cell: "td", image: "img", horizontal_rule: "hr", page_break: "PageBreak" } as Record<string, string>)[node.type.name]);
     if (!name) throw new Error(`Canvas authoring cannot represent ${node.type.name}. Use focused patches to preserve this content.`);

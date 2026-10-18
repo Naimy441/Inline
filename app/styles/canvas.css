@@ -27,14 +27,6 @@
   background: var(--canvas, #e6e8ec);
 }
 .doc-content[data-canvas-root] [data-canvas="section"]:focus-within { outline: 1px dashed color-mix(in srgb, currentColor 18%, transparent); outline-offset: 5px; }
-.canvas-design-tools { display: flex; align-items: center; gap: 8px; padding: 5px 16px; border-bottom: 1px solid var(--border); background: var(--bg); font-size: 12px; }
-.canvas-design-tools button { font: inherit; border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 5px; padding: 4px 9px; cursor: pointer; }
-.canvas-design-tools .canvas-label { color: var(--muted); margin-right: auto; }
-.canvas-source-fields { display: grid; gap: 12px; }
-.canvas-source-fields label { display: grid; gap: 5px; font-size: 12px; }
-.canvas-source-fields textarea { width: 100%; min-height: 180px; font: 12px/1.5 monospace; resize: vertical; padding: 10px; border: 1px solid var(--border); border-radius: 5px; color: var(--text); background: var(--bg); }
-.canvas-design-error { font-size: 12px; color: var(--danger, #b3261e); white-space: pre-wrap; overflow-wrap: anywhere; }
-.canvas-layout-notice { max-height: 100px; overflow: auto; padding: 6px 16px; font-size: 12px; color: var(--text-2); background: var(--bg-sunken); }
 @media screen {
   :root[data-theme="dark"] .page-stack.is-canvas-document {
     --paper: #262624;
@@ -48,6 +40,5 @@
 .canvas-block-handle button { width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted, #5c6570); font: 15px/22px system-ui, sans-serif; cursor: pointer; }
 .canvas-block-handle button:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
 .canvas-block-handle [data-handle="drag"] { cursor: grab; }
-.canvas-block-handles.is-dragging [data-handle="drag"] { cursor: grabbing; }
-.canvas-block-drop { position: absolute; height: 2px; margin-top: -1px; background: var(--focus, #2f6fed); border-radius: 1px; pointer-events: none; }
-@media print { .canvas-design-tools, .canvas-layout-notice, .canvas-block-handles { display: none !important; } .doc-content[data-canvas-root] [data-canvas="section"]:focus-within { outline: none; } }
+html.canvas-block-dragging, html.canvas-block-dragging * { cursor: grabbing !important; }
+@media print { .canvas-block-handles { display: none !important; } .doc-content[data-canvas-root] [data-canvas="section"]:focus-within { outline: none; } }
