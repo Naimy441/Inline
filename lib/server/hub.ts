@@ -664,8 +664,10 @@ export class LiveDocument {
     if (this.deleted) return;
     this.meta = { ...this.meta, wordCount: docWordCount(this.doc), preview: docPreview(this.doc) };
     this.syncAutoTitle();
+    // Delete forever can land while this save is queued. Don't write the file back.
+    if (this.deleted) return;
     await writeDocumentFile(this.toFile());
-    libraryChanged();
+    if (!this.deleted) libraryChanged();
   }
 
   async flush() {

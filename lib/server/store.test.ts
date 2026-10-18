@@ -123,6 +123,16 @@ describe("documents", () => {
     await Promise.all(jobs);
   });
 
+  it("a delete during a write still removes the repository", async () => {
+    await inFreshDir(async () => {
+      const writes = Promise.all(Array.from({ length: 12 }, (_, i) => writeDocumentFile(docFile("race", `v${i}`))));
+      await deleteDocumentFile("race");
+      await writes;
+      await deleteDocumentFile("race");
+      assert.equal(existsSync(path.dirname(documentFilePath("race"))), false);
+    });
+  });
+
   it("deleteDocumentFile removes the document's repository", async () => {
     await writeDocumentFile(docFile("gone"));
     mkdirSync(path.join(dataDir(), "version-files", "gone"), { recursive: true });
