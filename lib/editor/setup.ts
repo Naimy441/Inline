@@ -1,4 +1,5 @@
 import { canvasDesignPlugin } from "@/lib/canvas/editor";
+import { canvasBlockHandlesPlugin } from "@/lib/canvas/handles";
 import { collab } from "prosemirror-collab";
 import { baseKeymap, chainCommands, exitCode, joinDown, joinUp, selectParentNode } from "prosemirror-commands";
 import { dropCursor } from "prosemirror-dropcursor";
@@ -446,6 +447,7 @@ export function editorPlugins(options: EditorPluginOptions) {
     lineFitPlugin(),
     tocSyncPlugin(),
     canvasDesignPlugin(),
+    canvasBlockHandlesPlugin(),
     paginationPlugin(options.geometry, options.onPages),
   ];
 }

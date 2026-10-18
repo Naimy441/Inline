@@ -1,6 +1,7 @@
 "use client";
 
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent, type RefObject } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent, type PointerEvent, type RefObject } from "react";
+import { TextSelection } from "prosemirror-state";
 import { geometryFor, type DocumentSession } from "@/lib/client/documentSession";
 import { lineFactor, lineMetrics } from "@/lib/doc/fontMetrics";
 import { DEFAULT_MATH_SIZE, DEFAULT_TAB_STOP, fillHeaderTokens, headerParts, type DocumentMeta } from "@/lib/doc/settings";
@@ -133,6 +134,7 @@ export const PageCanvas = memo(function PageCanvas({
                 index={index}
                 pages={pages}
                 meta={meta}
+                session={session}
                 top={index * pitch}
                 geometry={geometry}
                 pending={pending?.page === index ? pending : null}
@@ -179,10 +181,58 @@ function textAlignOf(align: string): CSSProperties["textAlign"] {
   return align === "right" || align === "center" ? align : "left";
 }
 
+/**
+ * Keep the caret a margin click found. The browser can move it onto the header
+ * words, and the editor then paints whatever caret it last adopted — often the
+ * one from before Home. Put the same DOM range back until that settles.
+ */
+function holdBodyCaret(session: DocumentSession) {
+  const selection = document.getSelection();
+  const editor = session.view?.dom;
+  if (!selection || selection.rangeCount === 0 || !editor || !selection.anchorNode || !selection.focusNode || !editor.contains(selection.anchorNode)) return;
+  const range = selection.getRangeAt(0).cloneRange();
+  const view = session.view;
+  if (view) {
+    try {
+      const next = TextSelection.create(view.state.doc, view.posAtDOM(selection.anchorNode, selection.anchorOffset), view.posAtDOM(selection.focusNode, selection.focusOffset));
+      if (!next.eq(view.state.selection)) view.dispatch(view.state.tr.setSelection(next).setMeta("addToHistory", false));
+    } catch {
+      // The caret is on a page gap, which is not a text position. The DOM range still stands.
+    }
+  }
+  let restoring = false;
+  const restore = () => {
+    if (restoring || document.querySelector("textarea.sheet-zone-field") || !range.startContainer.isConnected) return;
+    const current = document.getSelection();
+    if (!current) return;
+    if (current.rangeCount > 0 && current.anchorNode && editor.contains(current.anchorNode)) {
+      const now = current.getRangeAt(0);
+      if (now.compareBoundaryPoints(Range.START_TO_START, range) === 0 && now.compareBoundaryPoints(Range.END_TO_END, range) === 0) return;
+    }
+    restoring = true;
+    try {
+      current.removeAllRanges();
+      current.addRange(range);
+    } catch {
+      // A page-gap range cannot always be reselected. Leaving it is safer than jumping elsewhere.
+    } finally {
+      restoring = false;
+    }
+  };
+  const onChange = () => requestAnimationFrame(restore);
+  document.addEventListener("selectionchange", onChange);
+  queueMicrotask(restore);
+  window.setTimeout(() => {
+    document.removeEventListener("selectionchange", onChange);
+    restore();
+  }, 120);
+}
+
 const Sheet = memo(function Sheet({
   index,
   pages,
   meta,
+  session,
   top,
   geometry,
   pending,
@@ -195,6 +245,7 @@ const Sheet = memo(function Sheet({
   index: number;
   pages: number;
   meta: DocumentMeta | null;
+  session: DocumentSession;
   top: number;
   geometry: ReturnType<typeof geometryFor>;
   pending: { kind: ZoneKind; value: string } | null;
@@ -262,11 +313,16 @@ const Sheet = memo(function Sheet({
     ...(align === "left" ? { left: geometry.marginLeft } : align === "right" ? { right: geometry.marginRight } : { left: 0, right: 0, textAlign: "center" as const }),
     ...numberAt(where),
   });
-  // A single click in the margin must not take the caret out of the body. preventDefault on
-  // mousedown keeps the editor focused; only a double-click opens the header or footer.
-  const keepCaret = (event: MouseEvent) => {
+  // A click in the margin must not move the body caret. Home can leave the caret on a page
+  // gap the editor will not adopt; the next selection change then paints the old caret.
+  // Remember the DOM caret on pointerdown, before that happens, and put it back.
+  const keepCaret = (event: PointerEvent | MouseEvent) => {
     if (event.target instanceof Element && event.target.closest("textarea")) return;
-    event.preventDefault();
+    if (event.type === "mousedown") {
+      event.preventDefault();
+      return;
+    }
+    holdBodyCaret(session);
   };
   const open = (kind: ZoneKind) => (event: MouseEvent) => {
     if (readOnly) return;
@@ -275,7 +331,7 @@ const Sheet = memo(function Sheet({
   };
   return (
     <div className="sheet" style={{ top, height: geometry.pageHeight, width: geometry.pageWidth }} aria-hidden={editing ? undefined : true}>
-      <div className="sheet-header" style={{ ...zoneStyle(geometry.marginTop, headerAlign), ...headerZone }} onMouseDown={keepCaret} onDoubleClick={open("header")}>
+      <div className="sheet-header" style={{ ...zoneStyle(geometry.marginTop, headerAlign), ...headerZone }} onPointerDown={keepCaret} onMouseDown={keepCaret} onDoubleClick={open("header")}>
         <div className="sheet-hit">
           {editing === "header" ? (
             <ZoneField label="Header" value={raw("header")} align={headerAlign} ruled={Boolean(hf?.headerRule)} onCommit={(value) => onCommit(index, "header", value)} onClose={() => onClose(index, "header")} />
@@ -285,7 +341,7 @@ const Sheet = memo(function Sheet({
         </div>
         {number?.where === "header" && <span className="sheet-number" style={numberStyle(number.align, "header")}>{page}</span>}
       </div>
-      <div className="sheet-footer" style={{ ...zoneStyle(geometry.marginBottom, footerAlign), ...footerZone }} onMouseDown={keepCaret} onDoubleClick={open("footer")}>
+      <div className="sheet-footer" style={{ ...zoneStyle(geometry.marginBottom, footerAlign), ...footerZone }} onPointerDown={keepCaret} onMouseDown={keepCaret} onDoubleClick={open("footer")}>
         <div className="sheet-hit">
           {editing === "footer" ? (
             <ZoneField label="Footer" value={raw("footer")} align={footerAlign} ruled={false} onCommit={(value) => onCommit(index, "footer", value)} onClose={() => onClose(index, "footer")} />

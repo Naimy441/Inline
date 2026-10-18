@@ -79,4 +79,21 @@ export const canvasTools = [
       return { text: JSON.stringify(result.report, null, 2) };
     },
   }),
+  define({
+    name: "check_layout", title: "Check canvas layout", write: false,
+    description: "Check a Canvas for layout problems a design change can cause: content overflowing its box, a component taller than a page, and padding, borders, or backgrounds on flowing containers. Returns those issues and the revision they were measured on. Use this after changing layout. Page numbers are valid only for the returned revision.",
+    shape: { document_id, epoch: z.string().optional(), version: z.number().int().optional() },
+    async handler(args, ctx) {
+      const doc = await resolve(ctx, args.document_id);
+      if ((args.epoch == null) !== (args.version == null)) throw new EditError("Pass both epoch and version, or neither.");
+      if (args.epoch != null && (args.epoch !== doc.epoch || args.version !== doc.version)) {
+        throw new EditError(`This Canvas is now revision ${doc.version} (epoch ${doc.epoch}). That page reference is stale. Read the canvas again; page numbers are not content identity.`);
+      }
+      readCanvas(doc);
+      const result = await renderCanvas(doc);
+      const issues = result.report.issues;
+      const summary = issues.length ? `${issues.length} layout issue${issues.length === 1 ? "" : "s"}.` : "No overflow or unsupported page decorations.";
+      return { text: `${summary}\n${JSON.stringify({ epoch: result.report.epoch, version: result.report.version, pages: result.report.pages, issues }, null, 2)}` };
+    },
+  }),
 ];

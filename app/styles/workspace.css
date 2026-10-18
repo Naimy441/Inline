@@ -658,8 +658,10 @@
   white-space: pre;
   overflow: hidden;
   /* Above the page text, so a double-click in the text column reaches the header
-     or footer. The side margins stay click-through: Keep and Undo sit there. */
+     or footer. The side margins stay click-through: Keep and Undo sit there.
+     The words themselves are not a text selection — a click must leave the body caret. */
   pointer-events: none;
+  user-select: none;
 }
 
 /* The clickable part of a header or footer: the text column, not the side margins. */
@@ -708,6 +710,7 @@
   resize: none;
   overflow: hidden;
   outline: none;
+  user-select: text;
 }
 
 .sheet-zone-field:focus {
