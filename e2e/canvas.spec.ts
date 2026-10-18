@@ -1,5 +1,24 @@
 import { expect, test } from "@playwright/test";
 
+test("the home Canvas card is a blank page and opens an empty canvas", async ({ page }) => {
+  await page.goto("/");
+  const card = page.locator(".template-card").filter({ hasText: "Canvas" }).first();
+  await expect(card).toBeVisible();
+  await expect(card.locator(".template-title")).toHaveText("Canvas");
+  await expect(card).not.toContainText("Designed");
+  await expect(card.locator(".template-thumb")).toHaveText("");
+  await expect(card.locator(".template-thumb")).toHaveCSS("background-color", "rgb(255, 255, 255)");
+  await page.getByRole("button", { name: "Dark theme" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(card.locator(".template-thumb")).toHaveCSS("background-color", "rgb(38, 38, 36)");
+  await card.click();
+  await expect(page.locator(".doc-content[data-canvas-root]")).toBeVisible();
+  await expect(page.getByText("Canvas · editable pages")).toBeVisible();
+  await expect(page.locator(".doc-content")).not.toContainText("PROJECT PROPOSAL");
+  await expect(page.locator(".doc-content")).not.toContainText("A better beginning");
+  await expect(page.locator(".doc-content .is-empty")).toBeVisible();
+});
+
 test("Canvas pages are styled, editable, undoable, persistent, and version checked", async ({ page, request }) => {
   const response = await request.post("/api/documents", { data: { canvas: "editorial", title: "Canvas editing test" } });
   expect(response.ok()).toBeTruthy();
@@ -31,6 +50,25 @@ test("Canvas pages are styled, editable, undoable, persistent, and version check
   await expect(page.locator('.doc-content [data-id="title"]')).toContainText("My correction");
   await page.getByRole("button", { name: "Check layout", exact: true }).click();
   await expect(page.getByText("Layout checked:", { exact: false })).toBeVisible();
+});
+
+test("a canvas page follows dark mode and print stays light", async ({ page, request }) => {
+  const response = await request.post("/api/documents", { data: { canvas: "editorial", title: "Dark canvas" } });
+  expect(response.ok()).toBeTruthy();
+  const { document } = await response.json();
+  await page.addInitScript(() => localStorage.setItem("inline-theme", "dark"));
+  await page.goto(`/d/${document.meta.id}`);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  const sheet = page.locator(".sheet").first();
+  await expect(sheet).toHaveCSS("background-color", "rgb(38, 38, 36)");
+  const ink = await page.locator(".doc-content[data-canvas-root]").evaluate((root) => getComputedStyle(root).color);
+  const channels = ink.match(/\d+/g)?.map(Number) ?? [];
+  expect(channels.reduce((sum, channel) => sum + channel, 0)).toBeGreaterThan(400);
+  const opening = await page.locator('[data-id="opening"]').evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(opening).not.toBe("rgb(238, 241, 231)");
+  await page.emulateMedia({ media: "print" });
+  await expect(sheet).toHaveCSS("background-color", "rgb(255, 255, 255)");
+  await expect(page.locator(".doc-content[data-canvas-root]")).toHaveCSS("color", "rgb(37, 57, 47)");
 });
 
 test("Canvas browser export uses its actual HTML and all pages", async ({ page, request }) => {

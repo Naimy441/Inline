@@ -1,4 +1,6 @@
 import postcss from "postcss";
+import type { RGB } from "@/lib/pdf/pdfWriter";
+import { darkColor } from "@/lib/pdf/thumbnail";
 
 /** Canvas CSS is data, never a document-wide stylesheet. */
 const PROPERTIES = new Set(`color background-color font-family font-size font-weight font-style line-height letter-spacing text-align text-transform text-decoration text-decoration-color text-underline-offset margin margin-top margin-right margin-bottom margin-left padding padding-top padding-right padding-bottom padding-left border border-top border-right border-bottom border-left border-color border-width border-style border-radius gap column-gap row-gap width max-width min-width vertical-align list-style-type`.split(" "));
@@ -29,6 +31,42 @@ export function validateCanvasCss(css: string): string {
   });
   root.walkComments((comment) => { comment.remove(); });
   return root.toString();
+}
+
+const COLOR_VALUE = /#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b|rgba?\([^)]*\)/g;
+const COLOR_PROPS = /^(?:color|background-color|border-color|text-decoration-color|border|border-top|border-right|border-bottom|border-left)$/;
+
+function parseColorToken(token: string): RGB | null {
+  const hex = /^#([0-9a-fA-F]{3,8})$/.exec(token);
+  if (hex) {
+    const raw = hex[1].length <= 4 ? [...hex[1].slice(0, 3)].map((channel) => channel + channel).join("") : hex[1];
+    return [parseInt(raw.slice(0, 2), 16) / 255, parseInt(raw.slice(2, 4), 16) / 255, parseInt(raw.slice(4, 6), 16) / 255];
+  }
+  const rgb = /^rgba?\(\s*([\d.]+)(%?)[,\s]+([\d.]+)(%?)[,\s]+([\d.]+)(%?)/i.exec(token);
+  if (!rgb) return null;
+  const channel = (value: string, percent: string) => (percent ? Number(value) / 100 : Number(value) / 255);
+  return [channel(rgb[1], rgb[2]), channel(rgb[3], rgb[4]), channel(rgb[5], rgb[6])];
+}
+
+function flipColorTokens(value: string) {
+  return value.replace(COLOR_VALUE, (token) => {
+    const rgb = parseColorToken(token);
+    if (!rgb) return token;
+    const [r, g, b] = darkColor(rgb);
+    return `rgb(${Math.round(r * 255)} ${Math.round(g * 255)} ${Math.round(b * 255)})`;
+  });
+}
+
+/**
+ * The same rules with lightness flipped the way the dark thumbnail flips painted
+ * colors. Wrapped in `@media screen` so print and PDF keep the light rules.
+ */
+export function darkScreenCanvasCss(scoped: string): string {
+  const root = postcss.parse(scoped);
+  root.walkDecls((decl) => {
+    if (COLOR_PROPS.test(decl.prop)) decl.value = flipColorTokens(decl.value);
+  });
+  return `@media screen {\n${root.toString()}\n}`;
 }
 
 /** Prefix every rule, including selectors targeting the Canvas itself. */

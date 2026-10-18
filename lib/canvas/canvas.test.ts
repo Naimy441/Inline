@@ -8,7 +8,8 @@ import { EditorState } from "prosemirror-state";
 import { history, undo } from "prosemirror-history";
 import { compileCanvas, canvasMarkup } from "./compiler";
 import { CANVAS_EXAMPLES } from "./examples";
-import { validateCanvasCss, scopedCanvasCss } from "./styles";
+import { darkScreenCanvasCss, validateCanvasCss, scopedCanvasCss } from "./styles";
+import { darkColor } from "@/lib/pdf/thumbnail";
 import { validateCanvasDocument } from "./model";
 import { canvasTransform, readCanvas } from "./operations";
 import { documentHub, type LiveDocument } from "@/lib/server/hub";
@@ -51,6 +52,22 @@ describe("Canvas SDK", () => {
     const css = scopedCanvasCss('Canvas {color:red} .foo p, Columns > Column { padding: 4px }', "document-1");
     assert.ok(!css.includes('[data-canvas-root="document-1"] [data-canvas-root]'));
     assert.ok(css.includes('.doc-content[data-canvas-root="document-1"] .foo p'));
+  });
+  test("a blank canvas is an empty page", () => {
+    const doc = compileCanvas("<Canvas></Canvas>");
+    assert.equal(doc.textContent, "");
+    assert.equal(doc.attrs.canvas.format, 1);
+    assert.equal(doc.attrs.canvas.css, "");
+    assert.equal(doc.childCount, 1);
+  });
+  test("dark editing flips painted colors on screen and leaves the light rules for print", () => {
+    const light = scopedCanvasCss("Canvas { color: #25392f; background-color: #ffffff } h1 { border-left: 2px solid #789079 }", "document-1");
+    const dark = darkScreenCanvasCss(light);
+    assert.match(dark, /^@media screen \{/);
+    const [r, g, b] = darkColor([0x25 / 255, 0x39 / 255, 0x2f / 255]);
+    assert.match(dark, new RegExp(`rgb\\(${Math.round(r * 255)} ${Math.round(g * 255)} ${Math.round(b * 255)}\\)`));
+    assert.doesNotMatch(dark, /#25392f|#ffffff|#789079/);
+    assert.match(dark, /border-left: 2px solid rgb\(/);
   });
   test("design attributes use normal ProseMirror history", () => {
     const doc = compileCanvas('<Canvas><Text>Keep my words</Text></Canvas>', 'p {color:red}');

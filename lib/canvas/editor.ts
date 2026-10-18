@@ -1,5 +1,5 @@
 import { Plugin } from "prosemirror-state";
-import { scopedCanvasCss } from "./styles";
+import { darkScreenCanvasCss, scopedCanvasCss } from "./styles";
 
 let sequence = 0;
 export type CanvasIssue = { id: string; message: string };
@@ -31,13 +31,18 @@ export function canvasDesignPlugin() {
         const design = view.state.doc.attrs.canvas;
         if (!design) { view.dom.removeAttribute("data-canvas-root"); sheet.textContent = ""; lastCss = null; return; }
         view.dom.setAttribute("data-canvas-root", id);
-        if (lastCss !== design.css) {
-          sheet.textContent = scopedCanvasCss(design.css, id);
-          lastCss = design.css;
+        const light = scopedCanvasCss(design.css, id);
+        // Screen-only. Print and the light PDF render keep the authored colors above.
+        const next = document.documentElement.dataset.theme === "dark" ? `${light}\n${darkScreenCanvasCss(light)}` : light;
+        if (lastCss !== next) {
+          sheet.textContent = next;
+          lastCss = next;
         }
       };
       update();
-      return { update, destroy() { sheet.remove(); } };
+      const theme = new MutationObserver(update);
+      theme.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+      return { update, destroy() { theme.disconnect(); sheet.remove(); } };
     },
   });
 }

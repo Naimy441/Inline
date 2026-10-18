@@ -10,7 +10,12 @@ export async function renderCanvas(doc: LiveDocument, options: { page?: number; 
   if (!origin) throw new EditError("Open Inline in a browser before inspecting or exporting a Canvas.");
   const expected = { epoch: doc.epoch, version: doc.version };
   const fingerprint = createHash("sha256").update(JSON.stringify({ doc: doc.doc.toJSON(), settings: doc.meta.settings })).digest("hex").slice(0, 20);
-  const browser = await layoutBrowser();
+  let browser;
+  try {
+    browser = await layoutBrowser();
+  } catch (error) {
+    throw new EditError(error instanceof Error ? error.message : "Canvas rendering failed.");
+  }
   const context = await browser.newContext({ viewport: { width: 1280, height: 1000 }, deviceScaleFactor: 1.5, colorScheme: "light" });
   try {
     if (process.env.INLINE_ACCESS_TOKEN) await context.addCookies([{ name: "inline_token", value: process.env.INLINE_ACCESS_TOKEN, url: origin }]);
