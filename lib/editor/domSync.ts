@@ -12,14 +12,34 @@ import type { EditorView } from "prosemirror-view";
 type DomObserver = { flush(): void; forceFlush(): void; flushingSoon: number };
 
 let adoptingSelection = false;
-/** The caret last left in editor state. A DOM caret still there is behind a newer arrow, not a Home. */
-const lastCommittedCaret = new WeakMap<EditorView, { doc: PMNode; pos: number }>();
+/**
+ * Positions an arrow just left, while the page may still show them.
+ * A click or Home can land on an older caret; those are not in this set.
+ */
+const arrowLag = new WeakMap<EditorView, { doc: PMNode; positions: Set<number> }>();
 
-/** A DOM caret the user moved, rather than the one still showing from before the last arrow. */
+/** A DOM caret the user moved, rather than one an arrow already left behind. */
 export function domCaretIsCurrent(view: EditorView, doc: PMNode, stateFrom: number, domFrom: number) {
-  const previous = lastCommittedCaret.get(view);
-  if (!previous || previous.doc !== doc) return true;
-  return !(domFrom === previous.pos && stateFrom !== previous.pos);
+  const lag = arrowLag.get(view);
+  if (!lag || lag.doc !== doc) return true;
+  return !(lag.positions.has(domFrom) && domFrom !== stateFrom);
+}
+
+/** Home and End start a fresh move. An arrow's old caret must not block them. */
+export function clearArrowLag(view: EditorView) {
+  arrowLag.delete(view);
+}
+
+/** The caret an arrow moved away from. The page can keep showing it for a moment. */
+export function noteArrowLag(view: EditorView, doc: PMNode, origin: number) {
+  const sel = view.state.selection;
+  if (view.state.doc !== doc || !(sel instanceof TextSelection) || !sel.empty || sel.from === origin) return;
+  const current = arrowLag.get(view);
+  if (!current || current.doc !== doc) {
+    arrowLag.set(view, { doc, positions: new Set([origin]) });
+    return;
+  }
+  current.positions.add(origin);
 }
 
 /**
@@ -29,7 +49,7 @@ export function domCaretIsCurrent(view: EditorView, doc: PMNode, stateFrom: numb
  * flush that cannot read it would put the old caret back and the highlight
  * would be gone before Bold runs.
  */
-export function syncDomSelection(view: EditorView) {
+export function syncDomSelection(view: EditorView, options?: { adoptCaret?: boolean }) {
   if (!adoptingSelection) {
     const stateSel = view.state.selection;
     const visible = readDomSelection(view);
@@ -39,12 +59,15 @@ export function syncDomSelection(view: EditorView) {
     // the state caret, which is still where typing finished. A DOM caret that
     // is only the previous arrow is behind; adopting it would undo that arrow.
     const textCaret = stateSel instanceof TextSelection && stateSel.empty;
-    const adoptCaret = Boolean(visible?.empty && textCaret && domCaretIsCurrent(view, view.state.doc, stateSel.from, visible.from));
+    const before = textCaret ? stateSel.from : null;
+    const adoptCaret = options?.adoptCaret !== false && Boolean(visible?.empty && textCaret && domCaretIsCurrent(view, view.state.doc, stateSel.from, visible.from));
     const adoptRange = Boolean(visible && !visible.empty && textCaret);
+    let adopted = false;
     if (visible && textCaret && !visible.eq(stateSel) && (adoptCaret || adoptRange)) {
       adoptingSelection = true;
       try {
         view.dispatch(view.state.tr.setSelection(visible).setMeta("addToHistory", false));
+        adopted = true;
       } catch {
         // A dispatch during another update can throw; the caller reads the range itself.
       } finally {
@@ -52,13 +75,13 @@ export function syncDomSelection(view: EditorView) {
       }
     }
     const committed = view.state.selection;
-    if (committed instanceof TextSelection && committed.empty) {
-      const previous = lastCommittedCaret.get(view);
-      const domFrom = visible?.empty ? visible.from : null;
-      // The page can still show the caret this state just left. Remembering the
-      // newer one would make the next pass treat that old caret as a Home.
-      const lagging = previous && previous.doc === view.state.doc && domFrom === previous.pos && committed.from !== previous.pos;
-      if (!lagging) lastCommittedCaret.set(view, { doc: view.state.doc, pos: committed.from });
+    if (adopted && before !== null && committed instanceof TextSelection && committed.empty && committed.from !== before) {
+      noteArrowLag(view, view.state.doc, before);
+    } else if (!adopted && visible?.empty && committed instanceof TextSelection && committed.empty && visible.from === committed.from) {
+      // The page caught up, so an older arrow no longer needs to be ignored.
+      clearArrowLag(view);
+    } else if (!(committed instanceof TextSelection) || !committed.empty) {
+      clearArrowLag(view);
     }
   }
   const observer = (view as unknown as { domObserver?: DomObserver }).domObserver;

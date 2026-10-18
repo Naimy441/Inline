@@ -15,7 +15,7 @@ import { stylesOf } from "@/lib/doc/styles";
 import { setTabs } from "@/lib/client/tabs";
 import { api, ApiError, del, patch, post, Store, uploadFile } from "@/lib/client/api";
 import { setCommentState } from "@/lib/editor/comments";
-import { domCaretIsCurrent, keepVisibleSelection, rangeTouchingCaret, readDomSelection, retainHeldSelection, syncDomSelection, visibleTextSelection, type HeldRange } from "@/lib/editor/domSync";
+import { domCaretIsCurrent, keepVisibleSelection, noteArrowLag, rangeTouchingCaret, readDomSelection, retainHeldSelection, syncDomSelection, visibleTextSelection, type HeldRange } from "@/lib/editor/domSync";
 import { formatSelectionKey, retainFormattingRange, setFormatSelection, type FormatRange } from "@/lib/editor/formatSelection";
 import type { PdfDocumentModel, PdfImage } from "@/lib/pdf/pdfWriter";
 import { APPEARANCE_PAPER, screenshotPage, type PageAppearance } from "@/lib/pdf/screenAppearance";
@@ -1383,9 +1383,11 @@ export class DocumentSession {
     if (!(stateSel instanceof TextSelection) || !stateSel.empty || pending.selection.eq(stateSel)) return;
     // An arrow already moved the caret. This event still has the previous one.
     if (pending.selection.empty && !domCaretIsCurrent(view, view.state.doc, stateSel.from, pending.selection.from)) return;
+    const before = stateSel.from;
     this.adoptingDomCaret = true;
     try {
       view.dispatch(view.state.tr.setSelection(pending.selection).setMeta("addToHistory", false));
+      noteArrowLag(view, view.state.doc, before);
     } catch {
       // A caret on a page gap is not always a text position. Leave the editor caret.
     } finally {
