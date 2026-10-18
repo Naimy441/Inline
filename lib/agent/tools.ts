@@ -822,7 +822,7 @@ export const TOOLS = [
     title: "Screenshot page",
     description:
       "A picture of one page as the editor lays it out, so you can see layout the Markdown does not show: a crowded or split table, an image that is too big, uneven spacing, a stray font, or a last page with only a line or two. Home-page thumbnails are only a small picture of the first page; this is the page itself. Page numbers are 1-based. If the document is open, the picture comes from that editor. If it is not, the page is laid out the same way with no window open. The picture uses the light or dark appearance the user is using. Pass theme light or dark to picture the page in that appearance instead.\n\n" +
-      "Use it when the user wants the document to look good and the picture is the right signal. get_page_count is enough for how many pages there are and how full the last page is. After you change a page you judged from a picture, call screenshot_page again.",
+      "Use it when the user wants the document to look good and the picture is the right signal. get_page_count is enough for how many pages there are and how full the last page is. After you change a page you judged from a picture, call screenshot_page again. For a Canvas, the text lists the blocks on that page, with their positions, not the whole document.",
     shape: {
       document_id: documentId,
       page: z.number().int().min(1).describe("Page number to picture (1-based)."),

@@ -1,4 +1,5 @@
 import postcss from "postcss";
+import type { Node as PMNode } from "prosemirror-model";
 import type { RGB } from "@/lib/pdf/pdfWriter";
 import { darkColor } from "@/lib/pdf/thumbnail";
 
@@ -67,6 +68,37 @@ export function darkScreenCanvasCss(scoped: string): string {
     if (COLOR_PROPS.test(decl.prop)) decl.value = flipColorTokens(decl.value);
   });
   return `@media screen {\n${root.toString()}\n}`;
+}
+
+/**
+ * Classes named in a stylesheet that are not on any element. The rule was
+ * accepted and then did nothing, which is otherwise silent.
+ */
+export function canvasCssNotes(css: string, doc: PMNode): string[] {
+  if (!css.trim()) return [];
+  const present = new Set<string>();
+  doc.descendants((node) => {
+    const value = node.attrs.canvasClass as string | null | undefined;
+    if (value) for (const name of value.split(/\s+/)) if (name) present.add(name);
+    for (const mark of node.marks) {
+      if (mark.type.name === "canvas_span" && mark.attrs.class) {
+        for (const name of String(mark.attrs.class).split(/\s+/)) if (name) present.add(name);
+      }
+    }
+  });
+  const notes: string[] = [];
+  const seen = new Set<string>();
+  postcss.parse(css).walkRules((rule) => {
+    for (const selector of rule.selectors) {
+      const missing = [...selector.matchAll(/\.([A-Za-z_][\w-]*)/g)].map((match) => match[1]).filter((name) => !present.has(name));
+      const key = `${selector}\0${missing.join(" ")}`;
+      if (!missing.length || seen.has(key)) continue;
+      seen.add(key);
+      const label = missing.map((name) => `.${name}`).join(" and ");
+      notes.push(`${label} ${missing.length === 1 ? "is" : "are"} not on any element, so \`${selector.trim()}\` does nothing.`);
+    }
+  });
+  return notes;
 }
 
 /** Prefix every rule, including selectors targeting the Canvas itself. */

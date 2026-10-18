@@ -120,8 +120,9 @@ export class ImageView implements NodeView {
     const height = pictureWidth(attrs.height);
     const heightPx = height && !height.endsWith("%") ? height : "";
     const percent = Boolean(width?.endsWith("%"));
-    // The figure stays inside the text column. A percent is that share of the column;
-    // a pixel width larger than the column shrinks to it (max-width on the frame and image).
+    // The frame stays inside the text column. A percent is that share of the column.
+    // Leave the image's max-width to the stylesheet: an inline 100% beats an
+    // authored `Figure img { max-width }` and the picture cannot be sized.
     this.dom.style.maxWidth = "100%";
     this.frame.style.maxWidth = "100%";
     this.dom.style.width = wrap === "square" && percent && width ? width : "";
@@ -161,7 +162,7 @@ export class ImageView implements NodeView {
     this.cropBox.style.cssText = "";
     this.img.style.width = percent ? "100%" : (width ?? "");
     this.img.style.height = heightPx || "auto";
-    this.img.style.maxWidth = "100%";
+    this.img.style.maxWidth = "";
     this.img.style.marginLeft = "";
     this.img.style.marginTop = "";
     this.img.style.transform = "";

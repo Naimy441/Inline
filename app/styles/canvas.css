@@ -4,7 +4,6 @@
 .doc-content[data-canvas-root] { color: var(--paper-text); background: var(--paper); overflow-wrap: anywhere; }
 .doc-content[data-canvas-root] [data-canvas] { min-width: 0; }
 .doc-content[data-canvas-root] [data-canvas="columns"] { display: grid; grid-template-columns: var(--canvas-columns, 1fr 1fr); gap: 24px; align-items: start; }
-.doc-content[data-canvas-root] [data-canvas="figure"] img { max-width: 100%; }
 .doc-content[data-canvas-root] [data-canvas="figure"] > p { font-size: .85em; color: var(--canvas-caption, #58645e); margin-top: 8px; }
 .doc-content[data-canvas-root] [data-canvas="column"] > :first-child,
 .doc-content[data-canvas-root] [data-pagination="keep-together"] > :first-child { margin-top: 0; }
