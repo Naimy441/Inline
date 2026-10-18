@@ -3,7 +3,7 @@ import type { ToolDefinition, ToolContext } from "./tools";
 import { EditError, canvasHeadingTitle } from "@/lib/doc/editing";
 import { documentHub } from "@/lib/server/hub";
 import { compileCanvas } from "@/lib/canvas/compiler";
-import { canvasTransform, readCanvas, type CanvasOp, type CanvasPatch } from "@/lib/canvas/operations";
+import { canvasHasContent, canvasTransform, readCanvas, type CanvasOp, type CanvasPatch } from "@/lib/canvas/operations";
 import { canvasCssNotes } from "@/lib/canvas/styles";
 import { CANVAS_FRAGMENTS, CANVAS_GUIDE } from "@/lib/canvas/examples";
 import { renderCanvas } from "@/lib/server/canvasRender";
@@ -63,11 +63,20 @@ export const canvasTools = [
   }),
   define({
     name: "patch_canvas", title: "Edit canvas", write: true,
-    description: "Apply one atomic Canvas design/content operation, or a list of up to 12 operations, against the epoch and revision returned by read_canvas. Pass operations instead of operation to apply them together; the result's steps field is how many steps the revision advanced (a rekeyed duplicate id adds a step). styles preserves every word; component operations preserve untouched model content and the ids you write. html is a complete Canvas root, with one block for component operations. Whole replace is for initial composition or an explicitly requested redesign/rewrite; prefer focused patches. Set dry_run to validate and measure the patch without writing it. A dry run returns the same page measurements as inspect_canvas, and the editor does not change.",
-    shape: { document_id, ...canvasPatchShape, dry_run: z.boolean().optional().describe("Validate and measure the patch without writing it. Returns the same page measurements as inspect_canvas.") },
+    description: "Apply one atomic Canvas design/content operation, or a list of up to 12 operations, against the epoch and revision returned by read_canvas. Pass operations instead of operation to apply them together; the result's steps field is how many steps the revision advanced (a rekeyed duplicate id adds a step). styles preserves every word; component operations preserve untouched model content and the ids you write. html is a complete Canvas root, with one block for component operations. Whole replace is for the first composition of an empty canvas. Once the canvas has content, replace is rejected unless redesign is true because the user asked for a redesign or rewrite. Prefer replace_component, insert_after, remove, move_after, or styles. Set dry_run to validate and measure the patch without writing it. A dry run returns the same page measurements as inspect_canvas, and the editor does not change.",
+    shape: {
+      document_id,
+      ...canvasPatchShape,
+      dry_run: z.boolean().optional().describe("Validate and measure the patch without writing it. Returns the same page measurements as inspect_canvas."),
+      redesign: z.boolean().optional().describe("Allow a whole-document replace on a canvas that already has content. Set this only when the user asked for a redesign or rewrite."),
+    },
     async handler(args, ctx) {
       const doc = await resolve(ctx, args.document_id);
       const patch = args as unknown as CanvasPatch;
+      const ops = patch.operations ?? (patch.operation ? [{ operation: patch.operation }] : []);
+      if (!args.redesign && ops.some((op) => op.operation === "replace") && canvasHasContent(doc.doc)) {
+        throw new EditError("This canvas already has content, so a whole-document replace was rejected and nothing was written. Edit with replace_component, insert_after, remove, move_after, or styles. Pass redesign: true only when the user asked for a redesign or rewrite.");
+      }
       if (args.dry_run) {
         const { tr, notes } = canvasTransform(doc, patch);
         const token = putCanvasPreview(doc.id, { ...doc.snapshot(), doc: tr.doc.toJSON() });
@@ -90,7 +99,7 @@ export const canvasTools = [
       else if (steps > 1) detail.push(`The revision advanced by ${steps} steps.`);
       if (patchWroteCss(patch)) detail.push(...canvasCssNotes(doc.doc.attrs.canvas.css as string, doc.doc));
       ctx.onChange?.({ documentId: doc.id, title: doc.meta.title, tool: "patch_canvas", added: 0, removed: 0 });
-      return { text: `Canvas updated atomically. ${JSON.stringify({ epoch: doc.epoch, version: doc.version, steps, notes: detail })}. Inspect the pages after changing layout.` };
+      return { text: `Canvas updated atomically. ${JSON.stringify({ epoch: doc.epoch, version: doc.version, steps, notes: detail })}. Call check_layout after a layout change.` };
     },
   }),
   define({

@@ -30,6 +30,7 @@ import {
   type StringEdit,
 } from "@/lib/doc/editing";
 import { imageSize } from "@/lib/doc/docx";
+import { imagePreview } from "@/lib/server/imagePreview";
 import { BLOCK_SEPARATOR, markdownToDoc, parseMarkdown, serializeBlocks, serializeDoc } from "@/lib/doc/markdown";
 import { changedRanges, describeHunk, isUserSuggestion } from "@/lib/doc/review";
 import { FONT_FAMILIES, googleFontValue, PAPER_SIZES, type DocumentSettings, type PaperSize } from "@/lib/doc/settings";
@@ -473,7 +474,7 @@ function withWriteCheck(result: ToolResult, scrubs: Array<{ removed: number; sym
   return note ? { ...result, text: `${result.text}\n${note}` } : result;
 }
 
-function canvasScreenshotText(report: { pages: number; page?: number; issues?: Array<{ id: string; message: string }>; blocks?: Array<{ id: string; page: number; toPage: number }> }, includeBlocks: boolean) {
+export function canvasScreenshotText(report: { pages: number; page?: number; issues?: Array<{ id: string; message: string }>; blocks?: Array<{ id: string; page: number; toPage: number }> }, includeBlocks: boolean) {
   const page = report.page ?? 1;
   const blocks = (report.blocks ?? []).filter((block) => block.page === page || block.toPage === page);
   const onPage = new Set(blocks.map((block) => block.id));
@@ -1829,14 +1830,15 @@ export const TOOLS = [
   defineTool({
     name: "read_file",
     title: "Read file",
-    description: "Read a text file in this document's folder, or an image (returned as a picture). Paths stay inside the folder.",
+    description: "Read a text file in this document's folder, or an image. An image larger than the visual-token cap comes back as a downscaled preview; the file on disk is unchanged. After that image is placed on the page, use screenshot_page instead of reading the file again. Paths stay inside the folder.",
     shape: { document_id: documentId, path: z.string().describe("Path relative to the document folder, such as chart.py or charts/q3.png.") },
     write: false,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
       const found = await readWorkspaceText(doc.id, args.path);
       if (found.kind === "image") {
-        return { text: `${args.path} (${found.mime}, ${found.data.byteLength} bytes).`, images: [{ data: found.data.toString("base64"), mimeType: found.mime }] };
+        const preview = imagePreview(args.path, found.data, found.mime);
+        return preview.image ? { text: preview.text, images: [{ data: Buffer.from(preview.data).toString("base64"), mimeType: preview.mime }] } : { text: preview.text };
       }
       const text = found.text.length > 100_000 ? `${found.text.slice(0, 100_000)}\n…[truncated]` : found.text;
       return ok(text || "(empty file)");

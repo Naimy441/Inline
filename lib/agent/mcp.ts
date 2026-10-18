@@ -1,6 +1,7 @@
 import { createSdkMcpServer, tool as sdkTool } from "@anthropic-ai/claude-agent-sdk";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { DOCUMENT_FOLDER_GUIDE, DOCUMENT_FORMAT_GUIDE, LIBRARY_GUIDE, PDF_IMPORT_NOTE } from "@/lib/agent/prompt";
+import { deferredSearchHint, toolIsAlwaysLoaded } from "@/lib/agent/toolLoad";
 import { TOOLS, runTool, type ToolContext, type ToolResult } from "@/lib/agent/tools";
 
 /**
@@ -31,20 +32,30 @@ function annotations(tool: (typeof TOOLS)[number]) {
   };
 }
 
-/** In-process MCP server for an in-app chat. `context` is read on every call, so it can change between turns. */
-export function createInlineSdkServer(context: () => ToolContext) {
+/**
+ * In-process MCP server for an in-app chat. `context` is read on every call, so it can change between turns.
+ * `canvas` chooses which schemas are in the prompt: a Canvas turn always loads the canvas, file, screenshot,
+ * and job tools, and a Markdown turn defers the canvas tools. Every tool stays registered either way.
+ */
+export function createInlineSdkServer(context: () => ToolContext, options: { canvas?: boolean } = {}) {
+  const canvas = Boolean(options.canvas);
   return createSdkMcpServer({
     name: MCP_SERVER_NAME,
     version: VERSION,
-    tools: TOOLS.map((definition) =>
-      sdkTool(
+    tools: TOOLS.map((definition) => {
+      const alwaysLoad = toolIsAlwaysLoaded(definition.name, canvas);
+      return sdkTool(
         definition.name,
         definition.description,
         definition.shape,
         async (args) => toCallToolResult(await runTool(definition.name, args as Record<string, unknown>, context())),
-        { annotations: annotations(definition), alwaysLoad: true },
-      ),
-    ),
+        {
+          annotations: annotations(definition),
+          alwaysLoad,
+          ...(alwaysLoad ? {} : { searchHint: deferredSearchHint(definition) }),
+        },
+      );
+    }),
   });
 }
 

@@ -293,6 +293,10 @@ export function fakeClaude(model: FakeModel): FakeClaude {
       async interrupt() {
         session.interrupt();
       },
+      async setMcpServers(servers: NonNullable<Options["mcpServers"]>) {
+        session.options.mcpServers = servers;
+        return { added: Object.keys(servers), removed: [] as string[], errors: {} };
+      },
       close() {
         out.close();
         void client.close().catch(() => undefined);

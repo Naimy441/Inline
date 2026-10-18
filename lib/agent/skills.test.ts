@@ -18,6 +18,9 @@ describe("page-layout skill", () => {
     assert.match(systemPrompt("Monday, January 1, 2026"), /page-layout skill/);
     assert.match(systemPrompt("Monday, January 1, 2026"), /screenshot_page/);
     assert.match(systemPrompt("Monday, January 1, 2026"), /Don't only comment/);
+    assert.match(systemPrompt("Monday, January 1, 2026"), /get_canvas_guide/);
+    assert.doesNotMatch(systemPrompt("Monday, January 1, 2026"), /Inline Canvas SDK v1/);
+    assert.doesNotMatch(systemPrompt("Monday, January 1, 2026"), /Flowing containers must be transparent/);
   });
 
   it("tells the agent to look, then fix, using a screenshot when that is the signal", () => {

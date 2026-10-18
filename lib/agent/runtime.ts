@@ -478,7 +478,7 @@ class ChatRuntime {
     try {
       message = await this.buildUserMessage(input);
       const live = this.live;
-      this.ensureQuery();
+      await this.syncCanvasTools(await this.openDocumentIsCanvas());
       const over = await this.overUsageLimit(true);
       if (over) {
         this.finishTurn("error", over);
@@ -565,12 +565,15 @@ class ChatRuntime {
       // Small documents come with the message, saving Claude a read_document round trip before it can edit.
       // A Canvas is not that Markdown view: its text lives in the canvas markup, and a patch needs a fresh read.
       if (isCanvas(doc.doc)) {
-        if (!this.listed || this.listed.id !== doc.id || this.listed.version !== doc.version) {
-          context.push(canvasTurnContext(doc));
-          this.listed = { id: doc.id, version: doc.version };
-        } else {
+        const seen = this.listed?.id === doc.id ? this.listed.version : null;
+        const since = seen != null && seen < doc.version ? doc.stepsSince(seen) : null;
+        const ownPatches = Boolean(since && since.clientIDs.length > 0 && since.clientIDs.every((id) => id === `agent:${this.state.id}`));
+        if (seen === doc.version || ownPatches) {
           context.push("Type: Canvas.\nThe Canvas hasn't changed since you last saw its markup. Keep using read_canvas and patch_canvas.");
+        } else {
+          context.push(canvasTurnContext(doc));
         }
+        this.listed = { id: doc.id, version: doc.version };
       } else if (!this.listed || this.listed.id !== doc.id || this.listed.version !== doc.version) {
         const listing = documentListing(doc);
         if (listing) {
@@ -770,8 +773,28 @@ class ChatRuntime {
       .catch(() => undefined);
   }
 
-  private ensureQuery() {
+  /** The tool profile the live query was given. A Canvas turn and a Markdown turn load different schemas. */
+  private loadedCanvas: boolean | null = null;
+
+  private async openDocumentIsCanvas() {
+    const doc = this.state.documentId ? await documentHub().get(this.state.documentId) : null;
+    return Boolean(doc && !doc.meta.trashedAt && isCanvas(doc.doc));
+  }
+
+  /** Replace the in-process tool server when the open document switches between Canvas and Markdown. */
+  private async syncCanvasTools(canvas: boolean) {
+    if (!this.query) {
+      this.ensureQuery(canvas);
+      return;
+    }
+    if (this.loadedCanvas === canvas) return;
+    this.loadedCanvas = canvas;
+    await this.query.setMcpServers({ inline: createInlineSdkServer(() => this.toolContext(), { canvas }) });
+  }
+
+  private ensureQuery(canvas = false) {
     if (this.query) return;
+    this.loadedCanvas = canvas;
     const input = new AsyncQueue<SDKUserMessage>();
     const settings = this.state.settings;
     const date = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
@@ -785,7 +808,7 @@ class ChatRuntime {
         systemPrompt: systemPrompt(date),
         tools: BUILTIN_TOOLS,
         allowedTools: [mcpToolName("*"), ...BUILTIN_TOOLS],
-        mcpServers: { inline: createInlineSdkServer(() => this.toolContext()) },
+        mcpServers: { inline: createInlineSdkServer(() => this.toolContext(), { canvas }) },
         // Only Inline's tools: none of the user's own MCP servers or claude.ai connectors (Google Drive and so on).
         strictMcpConfig: true,
         // The page-layout skill, and no other skills. The plugin path is absolute because cwd is the data folder.

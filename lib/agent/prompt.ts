@@ -1,11 +1,17 @@
-import { CANVAS_GUIDE } from "@/lib/canvas/examples";
 /**
  * Instructions for Claude when it works in Inline. The document format guide
  * is shared by the in-app agent (system prompt) and external MCP clients
  * (server instructions), so both see the same contract.
+ *
+ * The Canvas SDK contract is not in this string. A turn loads it once with
+ * get_canvas_guide or read_canvas(include_guide: true).
  */
 
-export const DOCUMENT_FORMAT_GUIDE = `${CANVAS_GUIDE}\n\n## How Inline documents work
+export const DOCUMENT_FORMAT_GUIDE = `## Canvas documents
+
+A Canvas is a designed, paged document. Read it with read_canvas and change it with patch_canvas. Do not rewrite it with write_document or other Markdown tools. The SDK contract is not in this prompt: pagination, the image URL rule, the content-box size, and the rule that flowing containers have no padding. Load that contract once with get_canvas_guide, or read_canvas with include_guide. On an ordinary Markdown document the canvas tools are deferred; call them when the user asks for a composed page.
+
+## How Inline documents work
 
 Ordinary documents are presented to you as a Markdown file. Canvases use read_canvas and patch_canvas instead: never flatten their design through write_document. read_document returns it with line numbers in the same format as \`cat -n\` (the number and a tab are not part of the text). Edit it the way you would edit a file:
 

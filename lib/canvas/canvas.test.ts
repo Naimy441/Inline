@@ -14,7 +14,7 @@ import { darkColor } from "@/lib/pdf/thumbnail";
 import { validateCanvasDocument } from "./model";
 import { canvasTransform, readCanvas } from "./operations";
 import { documentHub, type LiveDocument } from "@/lib/server/hub";
-import { canvasTurnContext, documentListing, runTool } from "@/lib/agent/tools";
+import { canvasScreenshotText, canvasTurnContext, documentListing, runTool } from "@/lib/agent/tools";
 import { docToMarkdown } from "@/lib/doc/markdown";
 import { schema } from "@/lib/doc/schema";
 import { readDocumentFile } from "@/lib/server/store";
@@ -87,6 +87,13 @@ describe("Canvas SDK", () => {
     assert.match(CANVAS_GUIDE, /ratio of 3:2/);
     assert.match(CANVAS_GUIDE, /Pass operations, at most 12/);
     assert.match(CANVAS_GUIDE, /screenshot_page returns the image and a short issue summary/);
+    assert.match(CANVAS_GUIDE, /call check_layout\. It is the cheap overflow check/);
+    assert.match(CANVAS_GUIDE, /only when you need a block's top or height in pixels/);
+    assert.match(CANVAS_GUIDE, /Do not call check_layout, inspect_canvas, and screenshot_page on every design pass/);
+    assert.match(CANVAS_GUIDE, /redesign: true/);
+    assert.match(CANVAS_GUIDE, /downscaled preview/);
+    assert.match(CANVAS_GUIDE, /no padding or borders/);
+    assert.doesNotMatch(CANVAS_GUIDE, /inspect_canvas and screenshot_page to inspect/);
     assert.match(CANVAS_GUIDE, /syntax only/);
     assert.match(CANVAS_GUIDE, /do not reuse a title, equation, or palette/);
     assert.match(CANVAS_GUIDE, /dry_run/);
@@ -95,6 +102,20 @@ describe("Canvas SDK", () => {
     assert.match(CANVAS_FRAGMENTS.map((fragment) => fragment.html).join("\n"), /<Math display/);
     assert.match(CANVAS_GUIDE, /class that is not on any element/);
     assert.doesNotMatch(CANVAS_GUIDE, /\/api\/images/);
+  });
+  test("a page screenshot summary does not repeat the block list", () => {
+    const report = {
+      pages: 2,
+      page: 1,
+      issues: [{ id: "fig", message: "overflows by 12px" }],
+      blocks: [{ id: "fig", page: 1, toPage: 1 }, { id: "next", page: 2, toPage: 2 }],
+    };
+    const summary = canvasScreenshotText(report, false);
+    assert.match(summary, /Page 1 of 2/);
+    assert.match(summary, /fig: overflows by 12px/);
+    assert.doesNotMatch(summary, /"blocks"/);
+    assert.doesNotMatch(summary, /"next"/);
+    assert.match(canvasScreenshotText(report, true), /"blocks"/);
   });
   test("a blank canvas is an empty page", () => {
     const doc = compileCanvas("<Canvas></Canvas>");
@@ -359,6 +380,36 @@ describe("Canvas authority", () => {
     const stale = await runTool("inspect_canvas", { document_id: doc.id, epoch: "old", version: 0 }, { author: "claude", documentId: doc.id });
     assert.equal(stale.isError, true);
     assert.match(stale.text, /stale/);
+  });
+  test("a whole replace is kept for an empty canvas and rejected once it has content", async () => {
+    const blank = await documentHub().create({ title: "Blank", doc: compileCanvas("<Canvas></Canvas>").toJSON() });
+    const first = await runTool("patch_canvas", {
+      document_id: blank.id, epoch: blank.epoch, version: blank.version, operation: "replace", html: "<Canvas><Text id=\"body\">First composition.</Text></Canvas>",
+    }, { author: "claude", documentId: blank.id });
+    assert.equal(first.isError, undefined, first.text);
+    assert.match(blank.doc.textContent, /First composition/);
+    const version = blank.version;
+    const again = await runTool("patch_canvas", {
+      document_id: blank.id, epoch: blank.epoch, version: blank.version, operation: "replace", html: "<Canvas><Text>Second</Text></Canvas>",
+    }, { author: "claude", documentId: blank.id });
+    assert.equal(again.isError, true);
+    assert.match(again.text, /redesign: true/);
+    assert.equal(blank.version, version);
+    const dry = await runTool("patch_canvas", {
+      document_id: blank.id, epoch: blank.epoch, version: blank.version, operation: "replace", html: "<Canvas><Text>Dry</Text></Canvas>", dry_run: true,
+    }, { author: "claude", documentId: blank.id });
+    assert.equal(dry.isError, true);
+    assert.equal(blank.version, version);
+    const batched = await runTool("patch_canvas", {
+      document_id: blank.id, epoch: blank.epoch, version: blank.version,
+      operations: [{ operation: "replace", html: "<Canvas><Text>Batched</Text></Canvas>" }],
+    }, { author: "claude", documentId: blank.id });
+    assert.equal(batched.isError, true);
+    const redesigned = await runTool("patch_canvas", {
+      document_id: blank.id, epoch: blank.epoch, version: blank.version, operation: "replace", html: "<Canvas><Text id=\"body\">Rewritten.</Text></Canvas>", redesign: true,
+    }, { author: "claude", documentId: blank.id });
+    assert.equal(redesigned.isError, undefined, redesigned.text);
+    assert.match(blank.doc.textContent, /Rewritten/);
   });
   test("saved history restores both composition and CSS", async () => {
     const doc = await create();

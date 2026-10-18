@@ -25,6 +25,14 @@ export function readCanvas(doc: LiveDocument) {
   return { id: doc.id, title: doc.meta.title, epoch: doc.epoch, version: doc.version, html: canvasMarkup(doc.doc), css: doc.doc.attrs.canvas.css as string };
 }
 
+/** A blank canvas is one empty paragraph. Anything else is content a later patch should edit in place. */
+export function canvasHasContent(doc: PMNode): boolean {
+  if (doc.textContent.trim()) return true;
+  if (doc.childCount !== 1) return true;
+  const only = doc.firstChild;
+  return !only || only.type.name !== "paragraph" || only.content.size > 0;
+}
+
 function normalizeOps(patch: CanvasPatch): CanvasOp[] {
   const hasList = patch.operations != null;
   const hasOne = patch.operation != null;
