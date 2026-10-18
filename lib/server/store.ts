@@ -156,12 +156,35 @@ async function listJson(folder: string): Promise<string[]> {
 
 // --- documents --------------------------------------------------------------
 
-export async function readDocumentFile(id: string) {
+/** The flat file a document used before each one had its own git repository. */
+export function legacyDocumentFilePath(id: string) {
+  return dir("documents", `${assertSafeId(id)}.json`);
+}
+
+/**
+ * The document file that is on disk: the repository copy, or the older flat
+ * file when the document has not been opened since that change. Null when
+ * neither exists.
+ */
+export async function findDocumentFile(id: string): Promise<string | null> {
+  const primary = documentFilePath(id);
+  if (await fs.stat(primary).catch(() => null)) return primary;
+  const legacy = legacyDocumentFilePath(id);
+  if (await fs.stat(legacy).catch(() => null)) return legacy;
+  return null;
+}
+
+/**
+ * Read a document's file. The repository copy wins. An older flat file is
+ * moved into the repository unless `migrate` is false, so a listing can show
+ * the document without moving it.
+ */
+export async function readDocumentFile(id: string, options: { migrate?: boolean } = {}) {
   assertSafeId(id);
   const primary = await readJson<StoredDocumentFile>(documentFilePath(id));
   if (primary) return primary;
-  const legacy = await readJson<StoredDocumentFile>(dir("documents", `${id}.json`));
-  if (!legacy) return null;
+  const legacy = await readJson<StoredDocumentFile>(legacyDocumentFilePath(id));
+  if (!legacy || options.migrate === false) return legacy;
   const { migrateLegacyDocument } = await import("@/lib/server/repo");
   await migrateLegacyDocument(id);
   return readJson<StoredDocumentFile>(documentFilePath(id));

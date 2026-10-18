@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -166,6 +166,38 @@ describe("DocumentHub lifecycle", () => {
     assert.equal(await hub.get(binned.id), binned);
     binned.setTrashed(false);
     assert.equal(await hub.require(binned.id), binned);
+  });
+
+  it("lists a document that still lives in the old flat file, in its folder, without moving the file", async () => {
+    const { createFolder } = await import("@/lib/server/folders");
+    const { documentFolder, summarizeFolders } = await import("@/lib/doc/folders");
+    const work = await createFolder({ name: "Work" });
+    const empty = await createFolder({ name: "Empty" });
+    const id = "oldworkdoc";
+    const documents = path.join(dataDir(), "documents");
+    mkdirSync(documents, { recursive: true });
+    const stored = {
+      format: 3,
+      meta: meta({ id, title: "Plan", folderId: work.id, preview: "Still here" }),
+      doc: markdownToDoc("# Plan\n\nStill here").toJSON(),
+      comments: [],
+      hunks: [],
+    };
+    writeFileSync(path.join(documents, `${id}.json`), JSON.stringify(stored));
+    const hub = freshHub();
+    const listed = await hub.list();
+    const found = listed.find((doc) => doc.id === id);
+    assert.ok(found, "the document on disk is in the library");
+    assert.equal(found.folderId, work.id);
+    const folders = new Map([work, empty].map((folder) => [folder.id, folder]));
+    assert.equal(documentFolder(folders, found), work.id);
+    const summaries = summarizeFolders(folders, listed);
+    assert.ok(summaries.get(work.id)!.documents.some((doc) => doc.id === id));
+    assert.equal(summaries.get(empty.id)!.documents.length, 0, "a folder with no documents stays empty");
+    assert.equal(existsSync(path.join(documents, `${id}.json`)), true, "listing does not move the file");
+    assert.equal(existsSync(documentFilePath(id)), false);
+    const again = (await hub.list()).find((doc) => doc.id === id);
+    assert.equal(again?.folderId, work.id, "a second listing still files it in the folder");
   });
 
   it("list is sorted most recently opened or updated first", async () => {

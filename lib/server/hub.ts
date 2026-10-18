@@ -38,11 +38,11 @@ import {
 } from "@/lib/server/repo";
 import {
   deleteDocumentFile,
+  findDocumentFile,
   listDocumentIds,
   readDocumentFile,
   writeDocumentFile,
   type StoredDocumentFile,
-  documentFilePath,
   FileSummaryCache,
 } from "@/lib/server/store";
 
@@ -927,8 +927,13 @@ class DocumentHub {
       ids.map(async (id) => {
         const live = this.open.get(id);
         if (live) return live.meta;
-        return this.metas.get(documentFilePath(id), async () => {
-          const file = await readDocumentFile(id).catch((error) => {
+        // Key the cache on the file that exists. A document from before the git
+        // repository still lives at documents/<id>.json; stat'ing only the new
+        // path skips it, so its folder looks empty while the file is still there.
+        const filePath = await findDocumentFile(id);
+        if (!filePath) return null;
+        return this.metas.get(filePath, async () => {
+          const file = await readDocumentFile(id, { migrate: false }).catch((error) => {
             log("error", "a document file couldn't be read; it is left out of the list", { documentId: id, error });
             return null;
           });
