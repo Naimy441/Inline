@@ -21,13 +21,25 @@ let adoptingSelection = false;
 let caretGesture = false;
 let clearCaretGesture: ReturnType<typeof setTimeout> | null = null;
 
-export function noteCaretGesture() {
-  caretGesture = true;
+function clearCaretGestureSoon() {
   if (clearCaretGesture) clearTimeout(clearCaretGesture);
+  // The selection change for End or an arrow can land on the next task. A layout
+  // flush after that is not this key: adopting the change clears the gesture first.
   clearCaretGesture = setTimeout(() => {
     caretGesture = false;
     clearCaretGesture = null;
-  }, 0);
+  }, 100);
+}
+
+function consumeCaretGesture() {
+  caretGesture = false;
+  if (clearCaretGesture) clearTimeout(clearCaretGesture);
+  clearCaretGesture = null;
+}
+
+export function noteCaretGesture() {
+  caretGesture = true;
+  clearCaretGestureSoon();
 }
 
 /** True while a key or a press in the page can still be the cause of a caret move. */
@@ -58,6 +70,7 @@ export function commitDomCaret(view: EditorView) {
   if (!onScreen || !(stateSel instanceof TextSelection) || onScreen.eq(stateSel)) return;
   if (!stateSel.empty && !onScreen.empty) return;
   if (!stateSel.empty && onScreen.empty && (!view.hasFocus() || !caretGesture)) return;
+  if (caretGesture) consumeCaretGesture();
   adoptingSelection = true;
   try {
     view.dispatch(view.state.tr.setSelection(onScreen).setMeta("addToHistory", false));

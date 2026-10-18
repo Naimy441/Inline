@@ -885,7 +885,8 @@ export class DocumentSession {
     }
     // A layout flush or a toolbar press can report a caret where the page was showing a
     // phrase. That is not the reader moving the insertion point. Keep the phrase.
-    const strayCollapse = !tr.docChanged && tr.selectionSet && tr.selection.empty && view.state.selection instanceof TextSelection && !view.state.selection.empty && view.hasFocus() && !hasCaretGesture();
+    // Only a DOM flush uses addToHistory: false. A key command that collapses a phrase must apply.
+    const strayCollapse = tr.getMeta("addToHistory") === false && !tr.docChanged && tr.selectionSet && tr.selection.empty && view.state.selection instanceof TextSelection && !view.state.selection.empty && view.hasFocus() && !hasCaretGesture();
     if (this.pendingSelection) {
       // Typing moves on from the phrase. A remote edit keeps it, mapped.
       if (tr.docChanged && tr.getMeta("addToHistory") !== false) this.pendingSelection = null;
