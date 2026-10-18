@@ -102,6 +102,24 @@ async function removeFile(file: string) {
   await serialized(file, () => fs.rm(file, { force: true }));
 }
 
+/**
+ * Remove a directory tree. A save can still be creating files in it (git init
+ * while the document is moved to the trash), and a single pass then fails
+ * with ENOTEMPTY, leaving the document in place.
+ */
+async function removeTree(folder: string) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await fs.rm(folder, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if ((code !== "ENOTEMPTY" && code !== "EBUSY" && code !== "EPERM") || attempt === 4) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+    }
+  }
+}
+
 async function listJson(folder: string): Promise<string[]> {
   try {
     const names = await fs.readdir(folder);
@@ -144,9 +162,11 @@ export async function deleteDocumentFile(id: string) {
   await removeFile(dir("thumbnails", `${id}.img`));
   await removeFile(dir("thumbnails", `${id}.dark.img`));
   await removeFile(dir("pdf-imports", `${id}.json`));
-  await fs.rm(dir("repos", id), { recursive: true, force: true });
-  await fs.rm(dir("versions", id), { recursive: true, force: true });
-  await fs.rm(dir("version-files", id), { recursive: true, force: true });
+  // Same queue as writeDocumentFile, so a trash save cannot recreate files
+  // under the repository while it is being removed.
+  await serialized(documentFilePath(id), () => removeTree(dir("repos", id)));
+  await removeTree(dir("versions", id));
+  await removeTree(dir("version-files", id));
 }
 
 export type ThumbnailTheme = "light" | "dark";
@@ -158,10 +178,14 @@ function thumbnailFile(id: string, theme: ThumbnailTheme) {
 /** The small first-page image shown on the home page (WebP or JPEG), drawn for the light or the dark theme. */
 export async function writeThumbnail(id: string, data: Uint8Array, theme: ThumbnailTheme = "light") {
   const file = thumbnailFile(id, theme);
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const temp = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(temp, data);
-  await fs.rename(temp, file);
+  // Same queue as delete, so a rename cannot land after the file was removed
+  // or fail because the file disappeared mid-write.
+  await serialized(file, async () => {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
+    await fs.writeFile(temp, data);
+    await fs.rename(temp, file);
+  });
 }
 
 export async function readThumbnail(id: string, theme: ThumbnailTheme = "light"): Promise<Uint8Array | null> {
