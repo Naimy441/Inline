@@ -19,7 +19,7 @@ async function fitRange(baseURL: string, args: Record<string, unknown>) {
 
 async function newBlankDocument(page: Page) {
   await page.goto("/");
-  await page.locator(".template-card").first().click();
+  await page.getByRole("button", { name: "Blank document" }).click();
   await page.waitForURL(/\/d\//);
   await expect(page.locator(".doc-content")).toBeVisible();
 }
