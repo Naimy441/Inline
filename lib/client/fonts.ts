@@ -110,6 +110,10 @@ export function googleFonts(): Promise<GoogleFont[]> {
 
 const ensuring = new Map<string, Promise<boolean>>();
 
+// Faces the page already has without asking Google. Opening a document set in one of them
+// must not wait on the Google Fonts catalog (a multi-megabyte download the first time).
+const SYSTEM_FAMILIES = new Set(["arial", "helvetica", "georgia", "times new roman", "times", "courier new", "courier"]);
+
 /**
  * The CSS font-family for a font kept from an import: the family itself, then
  * the stand-in its missing letters come from (a PDF subset), or a generic of
@@ -156,7 +160,7 @@ export async function ensureFonts(values: Iterable<string>): Promise<boolean> {
   // A font kept from another document is not on this page until its face is loaded.
   if (present.length) await loadDocumentFonts(present.join("\n"));
   const missing = families.filter((family) => !kept.has(family.toLowerCase()));
-  if (!missing.length) return false;
+  if (!missing.length || missing.every((family) => SYSTEM_FAMILIES.has(family.toLowerCase()))) return false;
   const google = new Map((await googleFonts()).map((font) => [font.family.toLowerCase(), font.family]));
   const results = await Promise.all(
     missing
