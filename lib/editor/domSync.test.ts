@@ -5,7 +5,7 @@ import { EditorState, Plugin, TextSelection } from "prosemirror-state";
 import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
 
 import { schema } from "@/lib/doc/schema";
-import { keepVisibleSelection, rangeTouchingCaret, readDomSelection, retainHeldSelection, syncDomSelection, textSelectionNear } from "./domSync";
+import { commitDomCaret, keepVisibleSelection, noteCaretGesture, rangeTouchingCaret, readDomSelection, resetCaretGesture, retainHeldSelection, syncDomSelection, textSelectionNear } from "./domSync";
 
 describe("retainHeldSelection", () => {
   it("keeps a range the next toolbar press can no longer see, until the caret moves", () => {
@@ -132,6 +132,41 @@ describe("keepVisibleSelection", () => {
       assert.equal(view.state.selection.from, 1);
     } finally {
       destroy();
+    }
+  });
+
+  it("keeps a phrase when the page drops the highlight without a key or a click", () => {
+    const text = "A sentence to select.";
+    const { view, node, destroy } = mount(text);
+    try {
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1, 1 + text.length)));
+      view.dom.focus();
+      showCaret(node, 0);
+      resetCaretGesture();
+      commitDomCaret(view);
+      assert.equal(view.state.selection.empty, false);
+      assert.equal(view.state.selection.from, 1);
+      assert.equal(view.state.selection.to, 1 + text.length);
+    } finally {
+      destroy();
+      resetCaretGesture();
+    }
+  });
+
+  it("adopts a caret the reader just placed over a phrase", () => {
+    const text = "A sentence to select.";
+    const { view, node, destroy } = mount(text);
+    try {
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1, 1 + text.length)));
+      view.dom.focus();
+      showCaret(node, 0);
+      noteCaretGesture();
+      commitDomCaret(view);
+      assert.equal(view.state.selection.empty, true);
+      assert.equal(view.state.selection.from, 1);
+    } finally {
+      destroy();
+      resetCaretGesture();
     }
   });
 

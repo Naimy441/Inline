@@ -49,7 +49,7 @@ import { bordersPlugin } from "@/lib/editor/borders";
 import { lineFitPlugin } from "@/lib/editor/lineFit";
 import { tabsPlugin } from "@/lib/editor/tabs";
 import { endWithTextblock, pasteIntoEmptyTextblock, transformPastedHtml } from "@/lib/editor/paste";
-import { commitDomCaret, syncDomSelection } from "@/lib/editor/domSync";
+import { commitDomCaret, noteCaretGesture, syncDomSelection } from "@/lib/editor/domSync";
 import { formatSelectionPlugin } from "@/lib/editor/formatSelection";
 import { imageClipboardPlugin } from "@/lib/editor/imageClipboard";
 import { justifyPlugin } from "@/lib/editor/justify";
@@ -303,16 +303,23 @@ function readSelectionPlugin() {
         if (closed) return;
         commitDomCaret(view);
       };
+      // Before the editor's own handler, so a click that places a caret still counts when that handler runs.
+      const onPointer = () => noteCaretGesture();
+      view.dom.addEventListener("pointerdown", onPointer, true);
+      view.dom.addEventListener("mousedown", onPointer, true);
       view.dom.ownerDocument.addEventListener("selectionchange", onSelectionChange);
       return {
         destroy() {
           closed = true;
+          view.dom.removeEventListener("pointerdown", onPointer, true);
+          view.dom.removeEventListener("mousedown", onPointer, true);
           view.dom.ownerDocument.removeEventListener("selectionchange", onSelectionChange);
         },
       };
     },
     props: {
       handleKeyDown(view) {
+        noteCaretGesture();
         syncDomSelection(view);
         return false;
       },

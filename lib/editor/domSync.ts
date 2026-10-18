@@ -14,11 +14,42 @@ type DomObserver = { flush(): void; forceFlush(): void; flushingSoon: number };
 let adoptingSelection = false;
 
 /**
+ * A key or a press in the page may move the caret. Cleared after that turn,
+ * so a later selection change is the browser dropping a highlight (a layout
+ * pass, or the toolbar taking the pointer) and not a new insertion point.
+ */
+let caretGesture = false;
+let clearCaretGesture: ReturnType<typeof setTimeout> | null = null;
+
+export function noteCaretGesture() {
+  caretGesture = true;
+  if (clearCaretGesture) clearTimeout(clearCaretGesture);
+  clearCaretGesture = setTimeout(() => {
+    caretGesture = false;
+    clearCaretGesture = null;
+  }, 0);
+}
+
+/** True while a key or a press in the page can still be the cause of a caret move. */
+export function hasCaretGesture() {
+  return caretGesture;
+}
+
+/** Drop a gesture the tests noted, so a later case is not treated as that press. */
+export function resetCaretGesture() {
+  caretGesture = false;
+  if (clearCaretGesture) clearTimeout(clearCaretGesture);
+  clearCaretGesture = null;
+}
+
+/**
  * The on-screen caret, including a collapsed one. Layout, spelling, and
  * pagination paint whatever the editor state says, so this is written into
  * that state before they read it. A range the editor already recorded stays
- * (a picture, cells, or a shorter phrase). Focus leaving the page is not a
- * caret move: the phrase held for a font or size change stays put.
+ * (a picture, cells, or a shorter phrase). A caret replaces that range only
+ * when the reader just pressed a key or the page; otherwise the highlight
+ * dropped on its own and the phrase is still the one to format. Focus leaving
+ * the page is not a caret move: the phrase held for a font or size change stays put.
  */
 export function commitDomCaret(view: EditorView) {
   if (adoptingSelection) return;
@@ -26,7 +57,7 @@ export function commitDomCaret(view: EditorView) {
   const stateSel = view.state.selection;
   if (!onScreen || !(stateSel instanceof TextSelection) || onScreen.eq(stateSel)) return;
   if (!stateSel.empty && !onScreen.empty) return;
-  if (!stateSel.empty && onScreen.empty && !view.hasFocus()) return;
+  if (!stateSel.empty && onScreen.empty && (!view.hasFocus() || !caretGesture)) return;
   adoptingSelection = true;
   try {
     view.dispatch(view.state.tr.setSelection(onScreen).setMeta("addToHistory", false));

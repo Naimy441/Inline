@@ -16,7 +16,7 @@ import { stylesOf } from "@/lib/doc/styles";
 import { setTabs } from "@/lib/client/tabs";
 import { api, ApiError, del, patch, post, Store, uploadFile } from "@/lib/client/api";
 import { setCommentState } from "@/lib/editor/comments";
-import { commitDomCaret, keepVisibleSelection, rangeTouchingCaret, retainHeldSelection, syncDomSelection, visibleTextSelection, type HeldRange } from "@/lib/editor/domSync";
+import { commitDomCaret, hasCaretGesture, keepVisibleSelection, rangeTouchingCaret, retainHeldSelection, syncDomSelection, visibleTextSelection, type HeldRange } from "@/lib/editor/domSync";
 import { formatSelectionKey, retainFormattingRange, setFormatSelection, type FormatRange } from "@/lib/editor/formatSelection";
 import type { PdfDocumentModel, PdfImage } from "@/lib/pdf/pdfWriter";
 import { APPEARANCE_PAPER, screenshotPage, type PageAppearance } from "@/lib/pdf/screenAppearance";
@@ -883,6 +883,9 @@ export class DocumentSession {
       const to = tr.mapping.map(this.formattingHold.to, -1);
       this.formattingHold = from < to ? { from, to } : null;
     }
+    // A layout flush or a toolbar press can report a caret where the page was showing a
+    // phrase. That is not the reader moving the insertion point. Keep the phrase.
+    const strayCollapse = !tr.docChanged && tr.selectionSet && tr.selection.empty && view.state.selection instanceof TextSelection && !view.state.selection.empty && view.hasFocus() && !hasCaretGesture();
     if (this.pendingSelection) {
       // Typing moves on from the phrase. A remote edit keeps it, mapped.
       if (tr.docChanged && tr.getMeta("addToHistory") !== false) this.pendingSelection = null;
@@ -893,7 +896,7 @@ export class DocumentSession {
       }
       // The reader collapsed a range the editor already had (an arrow key). A caret the
       // browser showed and the state never recorded is not this — that one stays pending.
-      if (this.pendingSelection && !view.state.selection.empty && tr.selectionSet && tr.selection.empty) this.pendingSelection = null;
+      if (this.pendingSelection && !strayCollapse && !view.state.selection.empty && tr.selectionSet && tr.selection.empty) this.pendingSelection = null;
     }
     // Focusing the font search or the size field collapses the DOM selection
     // after the editor has already blurred. Put the phrase back. While the
@@ -907,6 +910,7 @@ export class DocumentSession {
     if (this.heldScroll && tr.scrolledIntoView) this.releaseHold(false);
     const holding = Boolean(this.heldScroll);
     if (holding) this.pinningScroll = true;
+    if (strayCollapse && view.state.selection instanceof TextSelection) tr = tr.setSelection(view.state.selection);
     // Spelling and page layout dispatch without meaning to move the caret. A
     // range the browser has and the state does not would otherwise be painted away.
     tr = keepVisibleSelection(view, tr);
@@ -1394,12 +1398,13 @@ export class DocumentSession {
   private onSeenSelection = () => {
     const view = this.view;
     if (!view || this.destroyed) return;
+    // Record the phrase before committing. A commit that cannot run (the view is
+    // already updating) must not forget a range the page is showing.
+    const visible = visibleTextSelection(view);
+    if (visible) this.pendingSelection = { from: visible.from, to: visible.to };
     // Home, End, an arrow, or a click in the margin moves the caret on the page
     // before the editor state has it. Commit it before a layout pass reads the old one.
     commitDomCaret(view);
-    const visible = visibleTextSelection(view);
-    if (!visible) return;
-    this.pendingSelection = { from: visible.from, to: visible.to };
   };
 
   /** A press in the page starts a new selection. The phrase from before that press is finished. */
@@ -1429,10 +1434,14 @@ export class DocumentSession {
     const view = this.view;
     if (!view) return;
     // Read before the flush. A flush that cannot map the range paints the caret and the highlight is gone.
+    // The editor may already hold the phrase while the page has dropped it; keep that too.
     const before = visibleTextSelection(view);
+    const stateSelBefore = view.state.selection;
+    const stateRange = !stateSelBefore.empty && stateSelBefore instanceof TextSelection ? { from: stateSelBefore.from, to: stateSelBefore.to } : null;
     if (before) this.pendingSelection = { from: before.from, to: before.to };
+    else if (stateRange) this.pendingSelection = stateRange;
     syncDomSelection(view);
-    const visible = visibleTextSelection(view) ?? before;
+    const visible = visibleTextSelection(view) ?? before ?? stateRange;
     const stateSel = view.state.selection;
     const read = visible ?? (stateSel.empty ? null : { from: stateSel.from, to: stateSel.to });
     // Opening "More tools" captures the range, then Bold's press drops the

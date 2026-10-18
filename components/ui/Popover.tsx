@@ -16,6 +16,7 @@ export function Popover({
   label,
   onMouseDown,
   onPointerDown,
+  onPointerDownCapture,
 }: {
   open: boolean;
   onClose: () => void;
@@ -28,6 +29,7 @@ export function Popover({
   label?: string;
   onMouseDown?: (event: ReactMouseEvent) => void;
   onPointerDown?: (event: ReactPointerEvent) => void;
+  onPointerDownCapture?: (event: ReactPointerEvent) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const style = useAnchoredPosition(open, anchor, ref, placement);
@@ -58,7 +60,7 @@ export function Popover({
   }, [open, onClose, anchor]);
   if (!open || typeof document === "undefined") return null;
   return createPortal(
-    <div ref={ref} role={role} aria-label={label} className={`popover${className ? ` ${className}` : ""}`} style={{ position: "fixed", ...style }} onMouseDown={onMouseDown} onPointerDown={onPointerDown}>
+    <div ref={ref} role={role} aria-label={label} className={`popover${className ? ` ${className}` : ""}`} style={{ position: "fixed", ...style }} onMouseDown={onMouseDown} onPointerDown={onPointerDown} onPointerDownCapture={onPointerDownCapture}>
       {children}
     </div>,
     document.body,

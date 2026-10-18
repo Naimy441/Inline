@@ -433,7 +433,7 @@ const ToolbarView = memo(function ToolbarView({
   ];
 
   return (
-    <div ref={rowRef} className={`toolbar${viewing ? " is-viewing" : ""}`} role="toolbar" aria-label="Formatting" onPointerDown={rememberSelection} onMouseDown={keepEditorSelection}>
+    <div ref={rowRef} className={`toolbar${viewing ? " is-viewing" : ""}`} role="toolbar" aria-label="Formatting" onPointerDownCapture={rememberSelection} onMouseDown={keepEditorSelection}>
       {groups.slice(0, fit)}
       {fit < groups.length && (
         <Group edit={false} className="tb-more-group">
@@ -447,7 +447,7 @@ const ToolbarView = memo(function ToolbarView({
         {EDITOR_MODES[mode].icon(15)}
         <span className="tb-select-text">{EDITOR_MODES[mode].label}</span> <ChevronDown size={13} />
       </MenuButton>
-      <Popover open={moreOpen && fit < groups.length} onClose={closeMore} anchor={moreRef} placement="bottom-end" role="toolbar" className={`tb-overflow${viewing ? " is-viewing" : ""}`} onPointerDown={rememberSelection} onMouseDown={keepEditorSelection}>
+      <Popover open={moreOpen && fit < groups.length} onClose={closeMore} anchor={moreRef} placement="bottom-end" role="toolbar" className={`tb-overflow${viewing ? " is-viewing" : ""}`} onPointerDownCapture={rememberSelection} onMouseDown={keepEditorSelection}>
         {groups.slice(fit)}
       </Popover>
       <SpacingDialog open={customOpen} session={session} range={customRange.current} line={format.line === "mixed" ? String(meta?.settings.lineSpacing ?? 1.15) : format.line} before={format.beforePt} after={format.afterPt} onClose={() => setCustomOpen(false)} />
