@@ -15,7 +15,7 @@ import { stylesOf } from "@/lib/doc/styles";
 import { setTabs } from "@/lib/client/tabs";
 import { api, ApiError, del, patch, post, Store, uploadFile } from "@/lib/client/api";
 import { setCommentState } from "@/lib/editor/comments";
-import { keepVisibleSelection, rangeTouchingCaret, retainHeldSelection, syncDomSelection, visibleTextSelection, type HeldRange } from "@/lib/editor/domSync";
+import { keepVisibleSelection, rangeTouchingCaret, readDomSelection, retainHeldSelection, syncDomSelection, visibleTextSelection, type HeldRange } from "@/lib/editor/domSync";
 import { formatSelectionKey, retainFormattingRange, setFormatSelection, type FormatRange } from "@/lib/editor/formatSelection";
 import type { PdfDocumentModel, PdfImage } from "@/lib/pdf/pdfWriter";
 import { APPEARANCE_PAPER, screenshotPage, type PageAppearance } from "@/lib/pdf/screenAppearance";
@@ -332,6 +332,9 @@ export class DocumentSession {
    * either end of this range.
    */
   private pendingSelection: { from: number; to: number } | null = null;
+  /** A caret Home left on screen while the editor still has the typed position. */
+  private pendingDomCaret: { selection: TextSelection; doc: PMNode } | null = null;
+  private adoptingDomCaret = false;
   private seenRangeBound = false;
   /**
    * The phrase to format while the font menu or the size field is open. Unlike
@@ -712,6 +715,10 @@ export class DocumentSession {
           },
         },
       });
+      // After ProseMirror's own selectionchange listener, so a paint of the
+      // typed caret can be replaced with the one the page already showed.
+      mount.ownerDocument.removeEventListener("selectionchange", this.onSelectionSettled);
+      mount.ownerDocument.addEventListener("selectionchange", this.onSelectionSettled);
       this.applySnapshotUi(document);
       this.ui.set((ui) => ({ ...ui, status: "ready" }));
       this.editor.set(this.view.state);
@@ -755,6 +762,7 @@ export class DocumentSession {
     this.selectionHoldTimer = null;
     this.formattingHold = null;
     this.pendingSelection = null;
+    this.pendingDomCaret = null;
     this.unbindSeenRange();
     this.unbindFormattingWatch();
     this.releaseHold(false);
@@ -1344,16 +1352,43 @@ export class DocumentSession {
     if (!this.seenRangeBound || typeof document === "undefined") return;
     this.seenRangeBound = false;
     document.removeEventListener("selectionchange", this.onSeenSelection, true);
+    document.removeEventListener("selectionchange", this.onSelectionSettled);
     document.removeEventListener("pointerdown", this.onDocumentPointerDown, true);
   }
 
   /** Remember a range the page is showing, even when the editor state still has a caret. */
   private onSeenSelection = () => {
     const view = this.view;
-    if (!view || this.destroyed) return;
-    const visible = visibleTextSelection(view);
-    if (!visible) return;
-    this.pendingSelection = { from: visible.from, to: visible.to };
+    if (!view || this.destroyed || this.adoptingDomCaret) return;
+    const dom = readDomSelection(view);
+    if (dom && !dom.empty) this.pendingSelection = { from: dom.from, to: dom.to };
+    const stateSel = view.state.selection;
+    // Captured before ProseMirror handles this event. Home can move the caret
+    // on screen while state still has the position from before Home.
+    this.pendingDomCaret = dom && dom.empty && stateSel instanceof TextSelection && stateSel.empty && !dom.eq(stateSel)
+      ? { selection: dom, doc: view.state.doc }
+      : null;
+  };
+
+  /**
+   * ProseMirror may paint the caret it had before Home when it handles the
+   * same selection change. Put the on-screen caret back into the editor.
+   */
+  private onSelectionSettled = () => {
+    const view = this.view;
+    const pending = this.pendingDomCaret;
+    this.pendingDomCaret = null;
+    if (!view || this.destroyed || this.adoptingDomCaret || !pending || pending.doc !== view.state.doc) return;
+    const stateSel = view.state.selection;
+    if (!(stateSel instanceof TextSelection) || !stateSel.empty || pending.selection.eq(stateSel)) return;
+    this.adoptingDomCaret = true;
+    try {
+      view.dispatch(view.state.tr.setSelection(pending.selection).setMeta("addToHistory", false));
+    } catch {
+      // A caret on a page gap is not always a text position. Leave the editor caret.
+    } finally {
+      this.adoptingDomCaret = false;
+    }
   };
 
   /** A press in the page starts a new selection. The phrase from before that press is finished. */

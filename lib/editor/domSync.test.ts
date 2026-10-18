@@ -111,6 +111,30 @@ describe("keepVisibleSelection", () => {
     }
   });
 
+  it("keeps a caret the page shows when a layout pass would paint where typing finished", () => {
+    const text = "HelloSecond page.";
+    const { view, node, destroy } = mount(text);
+    try {
+      const typed = TextSelection.create(view.state.doc, 1 + "Hello".length);
+      view.dispatch(view.state.tr.setSelection(typed));
+      dom.window.document.getSelection = () =>
+        ({
+          anchorNode: node,
+          anchorOffset: 0,
+          focusNode: node,
+          focusOffset: 0,
+        }) as unknown as Selection;
+      const tr = keepVisibleSelection(view, view.state.tr.setMeta("spell", true));
+      assert.equal(tr.selection.empty, true);
+      assert.equal(tr.selection.from, 1);
+      syncDomSelection(view);
+      assert.equal(view.state.selection.empty, true);
+      assert.equal(view.state.selection.from, 1);
+    } finally {
+      destroy();
+    }
+  });
+
   it("adopts a range the page shows so a later flush cannot paint the caret", () => {
     const text = "Hello world";
     const { view, node, destroy } = mount(text);
