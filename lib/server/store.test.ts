@@ -12,6 +12,7 @@ import {
   deleteChatFile,
   deleteDocumentFile,
   documentFilePath,
+  withDocument,
   findUpload,
   listChatIds,
   listDocumentIds,
@@ -24,8 +25,10 @@ import {
   workspaceDir,
   writeChatFile,
   writeDocumentFile,
+  writeThumbnail,
   type StoredDocumentFile,
 } from "@/lib/server/store";
+import { writeDraft } from "@/lib/server/repo";
 
 process.env.INLINE_DATA_DIR = mkdtempSync(path.join(tmpdir(), "inline-store-"));
 
@@ -130,6 +133,44 @@ describe("documents", () => {
       await writes;
       await deleteDocumentFile("race");
       assert.equal(existsSync(path.dirname(documentFilePath("race"))), false);
+    });
+  });
+
+  it("a draft, a thumbnail and an export wait for the same queue as delete", async () => {
+    await inFreshDir(async () => {
+      await writeDocumentFile(docFile("race", "Race"));
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const holding = withDocument("race", async () => {
+        await gate;
+        const { mkdir, writeFile } = await import("node:fs/promises");
+        const extra = path.join(dataDir(), "repos", "race", "notes");
+        await mkdir(extra, { recursive: true });
+        await writeFile(path.join(extra, "a.txt"), "still writing");
+        await mkdir(path.join(dataDir(), "version-files", "race", "abc"), { recursive: true });
+        await writeFile(path.join(dataDir(), "version-files", "race", "abc", "out.txt"), "export");
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      const removing = deleteDocumentFile("race");
+      const drafting = writeDraft("race", { type: "doc", content: [] });
+      const thumb = writeThumbnail("race", new Uint8Array([1, 2, 3]));
+      let removed = false;
+      const done = removing.then(() => {
+        removed = true;
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(removed, false, "delete waits while another operation is still writing the document");
+      release();
+      await holding;
+      await removing;
+      await done;
+      await assert.rejects(drafting, /Document not found/);
+      await thumb;
+      assert.equal(existsSync(path.join(dataDir(), "repos", "race")), false);
+      assert.equal(existsSync(path.join(dataDir(), "version-files", "race")), false);
+      assert.equal(existsSync(path.join(dataDir(), "thumbnails", "race.img")), false);
     });
   });
 

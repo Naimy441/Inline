@@ -3,6 +3,7 @@ import { Plugin, PluginKey, type EditorState, type Transaction } from "prosemirr
 import { Decoration, DecorationSet, type EditorView } from "prosemirror-view";
 import { schema } from "@/lib/doc/schema";
 import { misspelledSpans, normalizeWord, WORD, type SpellChecker } from "@/lib/doc/words";
+import { syncDomSelection } from "@/lib/editor/domSync";
 
 /**
  * Live spelling underlines.
@@ -153,8 +154,10 @@ export function spellingPlugin(initial: Iterable<string>, options: SpellingPlugi
           if (!current || current.check) return;
           const check = remoteSpeller(() => {
             if (dead || !editorView.dom.isConnected) return;
+            syncDomSelection(editorView);
             editorView.dispatch(editorView.state.tr.setMeta(spellingKey, { refresh: true }).setMeta("addToHistory", false));
           });
+          syncDomSelection(editorView);
           editorView.dispatch(editorView.state.tr.setMeta(spellingKey, { check }).setMeta("addToHistory", false));
         },
         () => undefined,

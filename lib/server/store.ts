@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { HunkJSON } from "@/lib/doc/review";
@@ -66,18 +67,41 @@ export function chatFilePath(id: string) {
   return dir("chats", `${assertSafeId(id)}.json`);
 }
 
-const queues = new Map<string, Promise<void>>();
+const queues = new Map<string, Promise<unknown>>();
+const heldKeys = new AsyncLocalStorage<Set<string>>();
+
+/**
+ * Runs operations one at a time per key. Re-entering the same key from inside
+ * an operation runs immediately, so a save can init the repository it is
+ * already holding the queue for.
+ */
+function enqueue<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const held = heldKeys.getStore();
+  if (held?.has(key)) return operation();
+  const previous = queues.get(key) ?? Promise.resolve();
+  const run = previous.catch(() => undefined).then(() => {
+    const next = new Set(held);
+    next.add(key);
+    return heldKeys.run(next, operation);
+  });
+  const settled = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  queues.set(key, settled);
+  return run.finally(() => {
+    if (queues.get(key) === settled) queues.delete(key);
+  });
+}
+
+/** One queue for everything that creates or removes a document's files. */
+export function withDocument<T>(id: string, operation: () => Promise<T>): Promise<T> {
+  return enqueue(`document:${assertSafeId(id)}`, operation);
+}
 
 /** Runs file operations one at a time per path, so a late write can't land after a newer one or a delete. */
-async function serialized(file: string, operation: () => Promise<void>) {
-  const previous = queues.get(file) ?? Promise.resolve();
-  const next = previous.catch(() => undefined).then(operation);
-  queues.set(file, next);
-  try {
-    await next;
-  } finally {
-    if (queues.get(file) === next) queues.delete(file);
-  }
+function serialized(file: string, operation: () => Promise<void>) {
+  return enqueue(file, operation);
 }
 
 async function writeJsonAtomic(file: string, value: unknown) {
@@ -146,7 +170,7 @@ export async function readDocumentFile(id: string) {
 export async function writeDocumentFile(file: StoredDocumentFile) {
   // Enqueue before the first await so parallel writes land in call order.
   const target = documentFilePath(file.meta.id);
-  await serialized(target, async () => {
+  await withDocument(file.meta.id, async () => {
     const { ensureDocumentRepo } = await import("@/lib/server/repo");
     await ensureDocumentRepo(file.meta.id);
     await fs.mkdir(path.dirname(target), { recursive: true });
@@ -158,15 +182,17 @@ export async function writeDocumentFile(file: StoredDocumentFile) {
 
 export async function deleteDocumentFile(id: string) {
   assertSafeId(id);
-  await removeFile(dir("documents", `${id}.json`));
-  await removeFile(dir("thumbnails", `${id}.img`));
-  await removeFile(dir("thumbnails", `${id}.dark.img`));
-  await removeFile(dir("pdf-imports", `${id}.json`));
-  // Same queue as writeDocumentFile, so a trash save cannot recreate files
-  // under the repository while it is being removed.
-  await serialized(documentFilePath(id), () => removeTree(dir("repos", id)));
-  await removeTree(dir("versions", id));
-  await removeTree(dir("version-files", id));
+  // Saves, drafts, thumbnails, exports and git writes share this queue, so
+  // none of them can recreate files under a tree that is being removed.
+  await withDocument(id, async () => {
+    await fs.rm(dir("documents", `${id}.json`), { force: true });
+    await fs.rm(dir("thumbnails", `${id}.img`), { force: true });
+    await fs.rm(dir("thumbnails", `${id}.dark.img`), { force: true });
+    await fs.rm(dir("pdf-imports", `${id}.json`), { force: true });
+    await removeTree(dir("repos", id));
+    await removeTree(dir("versions", id));
+    await removeTree(dir("version-files", id));
+  });
 }
 
 export type ThumbnailTheme = "light" | "dark";
@@ -178,9 +204,10 @@ function thumbnailFile(id: string, theme: ThumbnailTheme) {
 /** The small first-page image shown on the home page (WebP or JPEG), drawn for the light or the dark theme. */
 export async function writeThumbnail(id: string, data: Uint8Array, theme: ThumbnailTheme = "light") {
   const file = thumbnailFile(id, theme);
-  // Same queue as delete, so a rename cannot land after the file was removed
-  // or fail because the file disappeared mid-write.
-  await serialized(file, async () => {
+  // Same queue as delete. A thumbnail that waited until the document was
+  // removed does not recreate the file.
+  await withDocument(id, async () => {
+    if (!(await fs.stat(documentFilePath(id)).catch(() => null))) return;
     await fs.mkdir(path.dirname(file), { recursive: true });
     const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
     await fs.writeFile(temp, data);

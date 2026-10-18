@@ -2,6 +2,7 @@ import type { Node as PMNode } from "prosemirror-model";
 import { Plugin, PluginKey } from "prosemirror-state";
 import { Decoration, DecorationSet, type EditorView } from "prosemirror-view";
 import type { TabStop } from "@/lib/doc/schema";
+import { syncDomSelection } from "@/lib/editor/domSync";
 
 /**
  * Tab stops. Each tab in a paragraph is drawn as a box (document.css
@@ -87,6 +88,7 @@ export function tabsPlugin(defaultStop: () => number) {
         if (frame || !tabsKey.getState(view.state)?.decorations.find().length) return;
         frame = requestAnimationFrame(() => {
           frame = 0;
+          syncDomSelection(view);
           const widths = measure(view, defaultStop());
           if (!widths) return;
           const current = tabsKey.getState(view.state)!.widths;
