@@ -130,6 +130,31 @@ describe("keepVisibleSelection", () => {
       syncDomSelection(view);
       assert.equal(view.state.selection.empty, true);
       assert.equal(view.state.selection.from, 1);
+      // The next key already moved the caret. The page still shows the previous one,
+      // including a second pass after the first one refused to follow it.
+      view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, 1 + "Hello".length)));
+      syncDomSelection(view);
+      syncDomSelection(view);
+      assert.equal(view.state.selection.from, 1 + "Hello".length);
+      // Home: state is still where typing finished, and the page shows the line start.
+      dom.window.document.getSelection = () =>
+        ({
+          anchorNode: node,
+          anchorOffset: "Hello".length,
+          focusNode: node,
+          focusOffset: "Hello".length,
+        }) as unknown as Selection;
+      syncDomSelection(view);
+      assert.equal(view.state.selection.from, 1 + "Hello".length);
+      dom.window.document.getSelection = () =>
+        ({
+          anchorNode: node,
+          anchorOffset: 0,
+          focusNode: node,
+          focusOffset: 0,
+        }) as unknown as Selection;
+      syncDomSelection(view);
+      assert.equal(view.state.selection.from, 1);
     } finally {
       destroy();
     }

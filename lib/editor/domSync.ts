@@ -12,6 +12,15 @@ import type { EditorView } from "prosemirror-view";
 type DomObserver = { flush(): void; forceFlush(): void; flushingSoon: number };
 
 let adoptingSelection = false;
+/** The caret last left in editor state. A DOM caret still there is behind a newer arrow, not a Home. */
+const lastCommittedCaret = new WeakMap<EditorView, { doc: PMNode; pos: number }>();
+
+/** A DOM caret the user moved, rather than the one still showing from before the last arrow. */
+export function domCaretIsCurrent(view: EditorView, doc: PMNode, stateFrom: number, domFrom: number) {
+  const previous = lastCommittedCaret.get(view);
+  if (!previous || previous.doc !== doc) return true;
+  return !(domFrom === previous.pos && stateFrom !== previous.pos);
+}
 
 /**
  * Read a browser selection into the editor state before a command or a layout
@@ -22,12 +31,17 @@ let adoptingSelection = false;
  */
 export function syncDomSelection(view: EditorView) {
   if (!adoptingSelection) {
+    const stateSel = view.state.selection;
     const visible = readDomSelection(view);
     // A cell or picture selection is already what the next command should use.
     // A range on the page (Shift+End) or a caret Home left at the start of a
     // line can be on screen before the editor has recorded it. A flush paints
-    // the state caret, which is still where typing finished.
-    if (visible && view.state.selection instanceof TextSelection && view.state.selection.empty && !visible.eq(view.state.selection)) {
+    // the state caret, which is still where typing finished. A DOM caret that
+    // is only the previous arrow is behind; adopting it would undo that arrow.
+    const textCaret = stateSel instanceof TextSelection && stateSel.empty;
+    const adoptCaret = Boolean(visible?.empty && textCaret && domCaretIsCurrent(view, view.state.doc, stateSel.from, visible.from));
+    const adoptRange = Boolean(visible && !visible.empty && textCaret);
+    if (visible && textCaret && !visible.eq(stateSel) && (adoptCaret || adoptRange)) {
       adoptingSelection = true;
       try {
         view.dispatch(view.state.tr.setSelection(visible).setMeta("addToHistory", false));
@@ -36,6 +50,15 @@ export function syncDomSelection(view: EditorView) {
       } finally {
         adoptingSelection = false;
       }
+    }
+    const committed = view.state.selection;
+    if (committed instanceof TextSelection && committed.empty) {
+      const previous = lastCommittedCaret.get(view);
+      const domFrom = visible?.empty ? visible.from : null;
+      // The page can still show the caret this state just left. Remembering the
+      // newer one would make the next pass treat that old caret as a Home.
+      const lagging = previous && previous.doc === view.state.doc && domFrom === previous.pos && committed.from !== previous.pos;
+      if (!lagging) lastCommittedCaret.set(view, { doc: view.state.doc, pos: committed.from });
     }
   }
   const observer = (view as unknown as { domObserver?: DomObserver }).domObserver;
@@ -127,5 +150,6 @@ export function keepVisibleSelection(view: EditorView, tr: Transaction): Transac
   // where typing finished.
   const visible = readDomSelection(view);
   if (!visible || visible.eq(tr.selection)) return tr;
+  if (visible.empty && !domCaretIsCurrent(view, tr.doc, tr.selection.from, visible.from)) return tr;
   return tr.setSelection(visible);
 }
