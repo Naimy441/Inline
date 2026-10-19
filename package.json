@@ -1,6 +1,6 @@
 {
   "name": "inline",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "license": "MIT",
   "description": "Inline: a paginated document editor with Claude Code built in.",
