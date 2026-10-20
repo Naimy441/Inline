@@ -7,7 +7,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Inline",
-  description: "A document editor with Claude built in.",
+  description: "A document editor with Claude and Codex built in.",
 };
 
 export const viewport: Viewport = {

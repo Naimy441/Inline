@@ -5,6 +5,7 @@ import { json, route } from "@/lib/server/http";
 export const GET = route(async (request) => {
   const refresh = new URL(request.url).searchParams.get("refresh") === "1";
   const runtime = agentRuntime();
-  const status = await runtime.agentStatus(refresh);
+  const provider = new URL(request.url).searchParams.get("provider") === "codex" ? "codex" : "claude";
+  const status = await runtime.agentStatus(refresh, provider);
   return json({ status, defaults: runtime.defaultSettings });
 });

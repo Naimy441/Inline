@@ -100,7 +100,7 @@ export function DictionaryCard({
         )}
         {lookup.status !== "loading" && lookup.status !== "ready" && onAsk && (
           <button type="button" className="btn btn-secondary btn-sm dictionary-ask" onClick={onAsk}>
-            Ask Claude about “{word}”
+            Ask AI about “{word}”
           </button>
         )}
       </div>

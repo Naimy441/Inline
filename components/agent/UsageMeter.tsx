@@ -86,17 +86,20 @@ function pauseFloor(windows: UsageWindow[]) {
  * The usage ring by the send button: the account's 5-hour and weekly plan
  * usage, what this chat has cost, and the limit Claude pauses at.
  */
-export function UsageMeter({ chat, running, usageLimit, onUsageLimit }: { chat: ChatState | null; running: boolean; usageLimit: number | null; onUsageLimit: (limit: number | null) => void }) {
+export function UsageMeter({ chat, running, usageLimit, onUsageLimit, provider: selectedProvider }: { chat: ChatState | null; running: boolean; usageLimit: number | null; onUsageLimit: (limit: number | null) => void; provider?: "claude" | "codex" }) {
   const [open, setOpen] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
-  const { usage } = usePlanUsage(running);
+  const provider = selectedProvider ?? chat?.settings.provider ?? "claude";
+  const name = provider === "codex" ? "Codex" : "Claude";
+  const { usage } = usePlanUsage(running, provider);
   const spent = chatSpend(chat);
+  const costUnavailable = chat?.messages.some((message) => message.role === "assistant" && message.usage?.costUnavailable);
   const context = chat?.context;
   const breakdown = contextView(context);
   const now = Date.now();
   const plan: PlanUsage | null = usage;
   const windows = plan?.available ? plan.windows.filter((window) => !window.resetsAt || window.resetsAt > now) : [];
-  const main = windows.filter((window) => window.id === "five_hour" || window.id === "seven_day");
+  const main = windows.filter((window) => window.id === "five_hour" || window.id === "seven_day" || window.id.startsWith("codex:"));
   const top = [...main].sort((a, b) => b.utilization - a.utilization)[0];
   const percent = top ? top.utilization : (context?.percentage ?? 0);
   const floor = pauseFloor(windows);
@@ -144,13 +147,13 @@ export function UsageMeter({ chat, running, usageLimit, onUsageLimit }: { chat: 
               <p className="usage-note">No usage reported yet.</p>
             )
           ) : (
-            <p className="usage-note">{plan ? "This sign-in has no plan limits (an API key or a cloud provider), so only costs are shown." : "Checking usage…"}</p>
+            <p className="usage-note">{plan ? "Plan usage is unavailable for this sign-in." : "Checking usage…"}</p>
           )}
         </div>
         <div className="usage-section">
           <div className="usage-line">
             <span>This chat</span>
-            <span className="usage-line-value">{formatUsd(spent)}</span>
+            <span className="usage-line-value">{costUnavailable ? spent > 0 ? `${formatUsd(spent)} + Codex (cost unavailable)` : "Not reported by Codex" : formatUsd(spent)}</span>
           </div>
           {context && !breakdown && (
             <div className="usage-line">
@@ -164,7 +167,7 @@ export function UsageMeter({ chat, running, usageLimit, onUsageLimit }: { chat: 
         <div className="usage-section">
           <div className="usage-limit">
             <div className="usage-limit-line">
-              <span>Pause Claude at</span>
+              <span>Pause {name} at</span>
               <span className="usage-line-value">{limitValue}%</span>
             </div>
             <input
@@ -174,7 +177,7 @@ export function UsageMeter({ chat, running, usageLimit, onUsageLimit }: { chat: 
               max={100}
               step={1}
               value={limitValue}
-              aria-label="Pause Claude at"
+              aria-label={`Pause ${name} at`}
               aria-valuemin={floor}
               aria-valuemax={100}
               aria-valuenow={limitValue}

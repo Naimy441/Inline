@@ -52,7 +52,7 @@ export function DraftBanner({
   };
 
   return (
-    <div className="draft-banner" role="region" aria-label="Revision from Claude">
+    <div className="draft-banner" role="region" aria-label="AI revision">
       <p>A revision is ready ({words.toLocaleString()} words). This document stays as it is until you keep it.</p>
       <div className="draft-banner-actions">
         <Button variant="ghost" onClick={onPreview}>

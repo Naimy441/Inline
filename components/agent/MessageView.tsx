@@ -240,7 +240,7 @@ export const AssistantView = memo(function AssistantView({
                 <span data-tip="Cost of this reply">{message.usage.costUsd < 0.01 ? "<$0.01" : `$${message.usage.costUsd.toFixed(2)}`}</span>
               </>
             )}
-            {message.model ? ` · ${modelLabel(message.model)}` : ""}
+            {message.model ? ` · ${message.provider === "codex" ? "Codex · " : ""}${modelLabel(message.model)}` : ""}
           </span>
           {documentCounts}
         </div>

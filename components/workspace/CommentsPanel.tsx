@@ -35,7 +35,7 @@ export function CommentsPanel({
   onDraftDone: () => void;
   onClose: () => void;
   onAskClaude: (comment: DocComment) => void;
-  /** Focus mode: no "Ask Claude" action, and the empty state doesn't mention Claude. */
+  /** Focus mode: no "Ask AI" action, and the empty state doesn't mention Claude. */
   hideAskClaude?: boolean;
 }) {
   const [showResolved, setShowResolved] = useState(false);
@@ -69,7 +69,7 @@ export function CommentsPanel({
         {!draft && order.length === 0 && (
           <div className="panel-empty small">
             <MessageSquare size={20} />
-            <p>{hideAskClaude ? "Select text and press the comment button to leave a note." : "Select text and press the comment button to leave a note. Claude can read and answer comments too."}</p>
+            <p>{hideAskClaude ? "Select text and press the comment button to leave a note." : "Select text and press the comment button to leave a note. Claude and Codex can read and answer comments too."}</p>
           </div>
         )}
         {order.map((comment) => (
@@ -212,8 +212,8 @@ export function CommentCard({
   return (
     <div className={`comment-card${active ? " is-active" : ""}${comment.resolved ? " is-resolved" : ""}${comment.pending ? " is-pending" : ""}`} onClick={onActivate}>
       <div className="comment-head">
-        <span className={`avatar ${comment.author === "claude" && !hideAskClaude ? "is-claude" : ""}`}>{comment.author === "claude" ? hideAskClaude ? "C" : <Sparkles size={11} /> : "Y"}</span>
-        <span className="comment-author">{comment.author === "claude" ? "Claude" : "You"}</span>
+        <span className={`avatar ${comment.author !== "user" && !hideAskClaude ? "is-claude" : ""}`}>{comment.author !== "user" ? hideAskClaude ? "C" : <Sparkles size={11} /> : "Y"}</span>
+        <span className="comment-author">{comment.author === "codex" ? "Codex" : comment.author === "claude" ? "Claude" : "You"}</span>
         <span className="comment-time">{comment.pending ? "Saving…" : when(comment.createdAt)}</span>
         {!comment.pending && (
           <span className="comment-tools">
@@ -249,7 +249,7 @@ export function CommentCard({
           anchor={menuRef}
           placement="bottom-end"
           items={[
-            ...(hideAskClaude ? [] : ([{ label: "Ask Claude to address this", icon: <Sparkles size={14} />, onSelect: onAskClaude }, { kind: "separator" }] as const)),
+            ...(hideAskClaude ? [] : ([{ label: "Ask AI to address this", icon: <Sparkles size={14} />, onSelect: onAskClaude }, { kind: "separator" }] as const)),
             { label: "Delete", icon: <Trash2 size={14} />, danger: true, onSelect: () => void session.deleteComment(comment.id).catch(failed) },
           ]}
         />
@@ -259,8 +259,8 @@ export function CommentCard({
       {comment.replies.map((item) => (
         <div key={item.id} className="comment-reply">
           <div className="comment-head">
-            <span className={`avatar ${item.author === "claude" && !hideAskClaude ? "is-claude" : ""}`}>{item.author === "claude" ? hideAskClaude ? "C" : <Sparkles size={11} /> : "Y"}</span>
-            <span className="comment-author">{item.author === "claude" ? "Claude" : "You"}</span>
+            <span className={`avatar ${item.author !== "user" && !hideAskClaude ? "is-claude" : ""}`}>{item.author !== "user" ? hideAskClaude ? "C" : <Sparkles size={11} /> : "Y"}</span>
+            <span className="comment-author">{item.author === "codex" ? "Codex" : item.author === "claude" ? "Claude" : "You"}</span>
             <span className="comment-time">{item.id.startsWith("pending-") ? "Saving…" : when(item.createdAt)}</span>
           </div>
           <div className="comment-body">{item.body}</div>

@@ -4,7 +4,7 @@
 
 # Inline
 
-**Google Docs-style documents with Claude Code built in.**
+**Google Docs-style documents with Claude Code and Codex built in.**
 
 [![Latest release](https://img.shields.io/github/v/release/Naimy441/Inline?label=release&color=2f6feb)](https://github.com/Naimy441/Inline/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/Naimy441/Inline/total?color=2f6feb)](https://github.com/Naimy441/Inline/releases)
@@ -25,9 +25,9 @@ TLDR: Inline is an open-source project that bridges AI coding-agent tools (like 
 
 ## Running Inline
 
-Inline's agent is Claude Code. It runs on your own Claude account through the Claude Agent SDK, so there are no API keys to paste into the app.
+Inline supports Claude Code through the Claude Agent SDK and Codex through the official Codex app-server. Use your own Claude or ChatGPT account and switch providers or models within the same chat. Claude keeps its native integration; both providers share Inline's document tools, tracked changes, restore checkpoints, attachments, library, Canvas, and PDF tools.
 
-**Requirements:** Node.js 20 or newer, and Claude Code signed in on the machine that runs Inline (run `claude`, then `/login`).
+**Requirements:** Node.js 22.13 or newer (Node.js 24 recommended). Sign in to Claude Code or Codex on the machine running Inline. Both runtimes are included by `npm install`; the AI chat panel also offers browser sign-in.
 
 ```bash
 npm install
@@ -47,13 +47,23 @@ Inline also comes as an app for macOS, Windows and Linux:
 | Windows 10/11 | [Inline-windows-x64-setup.exe](https://github.com/Naimy441/Inline/releases/latest/download/Inline-windows-x64-setup.exe) | Not yet signed: on first launch choose **More info › Run anyway**. |
 | Linux | [Inline-linux-x86_64.AppImage](https://github.com/Naimy441/Inline/releases/latest/download/Inline-linux-x86_64.AppImage) | `chmod +x` it, then run it. A `.tar.gz` is on the [release page](https://github.com/Naimy441/Inline/releases/latest). |
 
-Older versions are on the [Releases](https://github.com/Naimy441/Inline/releases) page. The app runs Inline's server on your computer and includes Claude Code, so there's nothing else to install. Sign in from the Claude panel with **Sign in with Claude**.
+Older versions are on the [Releases](https://github.com/Naimy441/Inline/releases) page. The app runs Inline's server on your computer and includes Claude Code and Codex, so there's nothing else to install. Open **AI chat**, select **Claude** or **Codex**, and sign in with your account.
 
 You can use the browser at the same time. While the app is open, **File › Open in Browser** opens the page you're on at `http://localhost:4319`, and both show the same documents live.
 
 The app's code is in [`desktop/`](desktop/README.md). It's a separate npm package, so `npm install` and `npm run dev` here stay web-only. To work on the app, run `npm install --prefix desktop` once, then `npm run desktop:dev`. To build installers, run `npm run desktop:dist`.
 
-Open a document and press <kbd>Ctrl/⌘</kbd>+<kbd>J</kbd> to open the Claude panel. Claude reads and edits the document through Inline's MCP tools. Each edit shows up as a tracked change that you can keep or undo, one at a time or all at once. Select text and press <kbd>Ctrl/⌘</kbd>+<kbd>L</kbd> to ask about just that passage.
+Open a document and press <kbd>Ctrl/⌘</kbd>+<kbd>J</kbd> to open the AI chat panel. Your selected provider reads and edits the document through Inline's MCP tools. Each edit shows up as a tracked change that you can keep or undo, one at a time or all at once. Select text and press <kbd>Ctrl/⌘</kbd>+<kbd>L</kbd> to ask about just that passage.
+
+### Switch between Claude and Codex
+
+Open **Model** below the message box to choose **Claude**, **Codex**, or a specific model from either provider. The model list and reasoning efforts come from each signed-in account. Stop an active reply before switching providers. The next provider receives the shared transcript and earlier image/PDF attachments, plus the current document and selection; switching back works the same way. Existing chats default to Claude.
+
+Each provider has a separate account usage meter. Codex reports its available quota buckets and reset times; the pause slider enforces your chosen limit before sending and between tool calls. Token and context usage are recorded for Codex replies. Codex does not report dollar costs, so the meter marks those as unavailable rather than presenting a zero cost.
+
+Codex sessions resume after idle close or restart. Rewinding a mixed-provider chat rebuilds the provider session from the messages you kept. Comments, saved versions, and review highlights identify Codex separately from Claude.
+
+Codex dynamic tools use the experimental app-server protocol. Inline pins the bundled CLI to a tested version. To use another installed binary, set `INLINE_CODEX_PATH` to its executable path; it must support the same app-server protocol. Authentication stays with the official local runtime. Inline does not copy or expose account tokens.
 
 ### Use Inline from Claude Code (or any MCP client)
 
@@ -69,7 +79,7 @@ The token keeps other programs on your machine from editing your documents. Inli
 
 The tools are `list_documents`, `open_document`, `create_document`, `read_document`, `get_outline`, `search_document`, `get_editor_context`, `edit_document`, `multi_edit_document`, `insert_content`, `write_document`, `format_text`, `set_paragraph_style`, `get_document_settings`, `update_document_settings`, `get_pending_changes`, `keep_changes`, `revert_changes`, `list_comments`, `add_comment`, `reply_to_comment`, `resolve_comment`, `list_versions`, `save_version`, `restore_version`, `analyze_writing`, `screenshot_page`, `export_document`, for imported PDFs: `get_pdf_import`, `read_pdf_page`, `crop_pdf_region`, `write_pdf_page`, `edit_pdf_page`, `align_pdf_page`, `compare_pdf_page`, `finish_pdf_import` and `show_pdf_annotations`, and for organizing: `list_library`, `search_documents`, `list_folders`, `move_documents`, `create_folder`, `update_folder` and `delete_folder`.
 
-On the home page, **Organize with Claude** (or <kbd>Ctrl/⌘</kbd>+<kbd>J</kbd>) opens Claude to sort your documents into folders. It works from titles and the first few words of each document rather than reading every document, so sorting a large library uses little of your Claude usage.
+On the home page, **Organize with AI** (or <kbd>Ctrl/⌘</kbd>+<kbd>J</kbd>) opens your selected assistant to sort your documents into folders. It works from titles and the first few words of each document rather than reading every document, so sorting a large library uses little of your plan usage.
 
 ### Your documents on your computer
 
@@ -79,7 +89,7 @@ Choose the folder, or turn copies off, with **On this computer** on the home pag
 
 ### Importing PDFs
 
-Choose **Import files** on the home page with a PDF. Inline reads it in your browser, takes each page's handwriting, highlighting and other annotations off it, and makes a document with the PDF's page size, margins, fonts (TeX documents get Computer Modern), line spacing, running header and page numbers, showing each page as a picture of the original. Claude then rebuilds the pages one by one as editable text, with equations in LaTeX, boxes, tab-aligned text, tables and the PDF's own images, lining each page up with the original and checking it side by side. You can watch, stop or steer it in the Claude panel, or continue it later from **Tools › Convert PDF pages with Claude**.
+Choose **Import files** on the home page with a PDF. Inline reads it in your browser, takes each page's handwriting, highlighting and other annotations off it, and makes a document with the PDF's page size, margins, fonts (TeX documents get Computer Modern), line spacing, running header and page numbers, showing each page as a picture of the original. Your selected provider then rebuilds the pages one by one as editable text, with equations in LaTeX, boxes, tab-aligned text, tables and the PDF's own images, lining each page up with the original and checking it side by side. You can watch, stop or steer it in the AI chat panel, or continue it later from **Tools › Convert PDF pages with AI**. You can switch the conversion chat to Codex too.
 
 The annotations aren't lost: **View › Show PDF annotations** draws them over the pages where they were on the original. They are pictures of the original pages, so they don't move when you edit the text.
 
@@ -97,7 +107,7 @@ Export your Google Drive with [Google Takeout](https://takeout.google.com/) (Dri
 | `INLINE_ACCESS_TOKEN` | unset | When set, every request must carry this secret, either as a `Bearer` token or as the `inline_token` cookie. Visit any page with `?token=<secret>` once to set the cookie. Set this whenever Inline is reachable by anyone but you, because the agent acts with your Claude account. |
 | `INLINE_MCP_TOKEN` | generated | The token MCP clients must send to `/api/mcp`. Set it to choose your own, or to `off` to accept any local client. |
 | `INLINE_LOG_LEVEL` | errors and warnings | Set to `info` to also print informational log lines. Logs are kept in `logs/inline.log` in the data folder. |
-| `INLINE_DEBUG_AGENT` | unset | Print Claude Code's stderr to the server log. |
+| `INLINE_DEBUG_AGENT` | unset | Print Claude Code and Codex stderr to the server log. |
 
 ### Development
 

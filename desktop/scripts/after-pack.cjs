@@ -20,11 +20,19 @@ exports.default = async function afterPack(context) {
   const cli = path.join(stage, "claude", `${platform}-${arch}`);
   if (!existsSync(cli)) throw new Error(`No Claude Code CLI staged for ${platform}-${arch}. Run scripts/prepare-server.mjs --platform ${platform} --arch ${arch}.`);
 
+  const codex = path.join(stage, "codex", `${platform}-${arch}`);
+  if (!existsSync(codex)) throw new Error(`No Codex CLI staged for ${platform}-${arch}.`);
+
+  const canvas = path.join(stage, "canvas", `${platform}-${arch}`);
+  if (!existsSync(canvas)) throw new Error(`No PDF canvas backend staged for ${platform}-${arch}.`);
+
   rmSync(server, { recursive: true, force: true });
   cpSync(path.join(stage, "server"), server, {
     recursive: true,
     // The staged server carries this machine's CLI for unpackaged runs; the one for the target goes in below.
-    filter: (source) => !/[\\/]node_modules[\\/]@anthropic-ai[\\/]claude-agent-sdk-[^\\/]+-[^\\/]+/.test(source),
+    filter: (source) => !/[\\/]node_modules[\\/]@napi-rs[\\/]canvas-(?:darwin|linux|win32)-/.test(source) && !/[\\/]node_modules[\\/]@openai[\\/]codex-(?:darwin|linux|win32)-/.test(source) && !/[\\/]node_modules[\\/]@anthropic-ai[\\/]claude-agent-sdk-[^\\/]+-[^\\/]+/.test(source),
   });
   cpSync(cli, path.join(server, "node_modules", "@anthropic-ai"), { recursive: true });
+  cpSync(codex, path.join(server, "node_modules", "@openai"), { recursive: true });
+  cpSync(canvas, path.join(server, "node_modules", "@napi-rs"), { recursive: true });
 };

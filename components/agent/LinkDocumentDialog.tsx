@@ -147,7 +147,7 @@ export function LinkDocumentDialog({
         )}
       </div>
       {selected && (
-        <div className="link-purpose" role="radiogroup" aria-label="How Claude should use it">
+        <div className="link-purpose" role="radiogroup" aria-label="How your assistant should use it">
           <label className={purpose === "voice" ? "is-selected" : ""}>
             <input type="radio" name="link-purpose" checked={purpose === "voice"} onChange={() => setPurpose("voice")} />
             <span className="link-purpose-name">Match the voice</span>

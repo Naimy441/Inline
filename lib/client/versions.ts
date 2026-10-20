@@ -7,7 +7,7 @@ export type VersionSummary = {
   id: string;
   documentId: string;
   label: string;
-  author: "user" | "claude";
+  author: "user" | "claude" | "codex";
   createdAt: number;
   wordCount?: number;
   pendingChanges?: number;

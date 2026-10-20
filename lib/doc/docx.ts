@@ -732,7 +732,7 @@ function commentsXml(threads: DocComment[], ids: Map<string, number[]>) {
       const lines = comment.body.split("\n");
       const id = (++paraId).toString(16).toUpperCase().padStart(8, "0");
       // Inline shows everyone's comments as yours; Claude's stay Claude's.
-      const author = comment.author === "claude" ? "Claude" : "You";
+      const author = comment.author === "codex" ? "Codex" : comment.author === "claude" ? "Claude" : "You";
       comments += `<w:comment w:id="${wordIds[index]}" w:author="${author}" w:initials="${author[0]}" w:date="${new Date(comment.createdAt).toISOString().replace(/\.\d+Z$/, "Z")}">${lines.map((line, n) => `<w:p${n === lines.length - 1 ? ` w14:paraId="${id}"` : ""}><w:r><w:t xml:space="preserve">${xml(line)}</w:t></w:r></w:p>`).join("")}</w:comment>`;
       extended += `<w15:commentEx w15:paraId="${id}"${parent ? ` w15:paraIdParent="${parent}"` : ""} w15:done="${thread.resolved ? 1 : 0}"/>`;
       parent ??= id;

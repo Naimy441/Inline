@@ -102,9 +102,9 @@ test.describe("phone", () => {
     await page.keyboard.press("Shift+Home");
     expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toContain("The meeting is on Friday at the main office.");
     await expect(page.locator(".bubble")).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Ask Claude" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Ask AI" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Comment", exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Edit with Claude" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Edit with AI" })).toHaveCount(0);
     await expect(page.locator(".doc-content")).toHaveText("The meeting is on Friday at the main office.");
   });
 
@@ -141,7 +141,7 @@ test.describe("phone", () => {
 
   test("Claude opens over the document, edits, and the change is kept from the review bar", async ({ page, request }) => {
     await openDocument(page, await createDocument(request, "Phone Claude", "The meeting is on Tuesday."));
-    await page.getByRole("button", { name: "Claude", exact: true }).click();
+    await page.getByRole("button", { name: "AI chat", exact: true }).click();
     const panel = page.locator(".panel-shell");
     await expect(panel).toBeVisible();
     await settled(page);
@@ -156,7 +156,7 @@ test.describe("phone", () => {
     await expect(page.locator(".msg-assistant").last()).toContainText("Replaced Tuesday with Thursday.");
 
     // Close the panel, then review in place.
-    await page.getByRole("button", { name: "Claude", exact: true }).click();
+    await page.getByRole("button", { name: "AI chat", exact: true }).click();
     await expect(panel).toHaveCount(0);
     const bar = page.locator(".review-bar");
     await expect(bar).toBeVisible();

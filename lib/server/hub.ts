@@ -544,7 +544,7 @@ export class LiveDocument {
   // A version is a git commit of this document and its folder. Typing only
   // updates the working tree, which is not a version.
 
-  async saveVersion(label: string, author: "user" | "claude") {
+  async saveVersion(label: string, author: "user" | "claude" | "codex") {
     await this.flush();
     return saveDocumentVersion(this.id, {
       label,

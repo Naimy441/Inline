@@ -2,10 +2,11 @@ import { z } from "zod";
 
 /** Request validation for the chat API. */
 
-export const EffortSchema = z.enum(["low", "medium", "high", "xhigh", "max"]);
+export const EffortSchema = z.enum(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 
 export const SettingsPatchSchema = z
   .object({
+    provider: z.enum(["claude", "codex"]).optional(),
     model: z.string().max(120).nullable().optional(),
     effort: EffortSchema.optional(),
     mode: z.enum(["agent", "ask"]).optional(),

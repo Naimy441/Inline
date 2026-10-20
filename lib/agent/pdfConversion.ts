@@ -28,7 +28,9 @@ export const CONVERSION_MODEL = { model: "opus", effort: "medium" } as const;
 export async function startPdfConversion(doc: LiveDocument, record: PdfImportRecord, options: { pages?: number[] } = {}) {
   const left = options.pages?.length ? options.pages : pagesLeft(doc.doc, record.manifest.pageCount);
   const pages = left.length ? left : record.manifest.pages.map((page) => page.page);
-  const chat = await agentRuntime().create({ documentId: doc.id, settings: { ...CONVERSION_MODEL, maxTurns: conversionMaxTurns(pages.length) } });
+  const runtime = agentRuntime();
+  const providerSettings = runtime.defaultSettings.provider === "codex" ? { provider: "codex" as const, model: runtime.defaultSettings.model, effort: runtime.defaultSettings.effort } : { provider: "claude" as const, ...CONVERSION_MODEL };
+  const chat = await runtime.create({ documentId: doc.id, settings: { ...providerSettings, maxTurns: conversionMaxTurns(pages.length) } });
   doc.setPdfImport({ status: "converting", chatId: chat.state.id });
   void chat.send({ text: conversionRequest(record, pages), documentId: doc.id }).catch((error) => {
     log("warn", "the PDF conversion couldn't start", { documentId: doc.id, error });

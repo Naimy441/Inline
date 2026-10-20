@@ -1464,8 +1464,8 @@ function buildThreads(comments: CommentInfo[], ranges: Map<string, { start: numb
   const byParaId = new Map(comments.filter((c) => c.paraId).map((c) => [c.paraId!, c]));
   const byRange = new Map<string, string>();
   // Inline's own files name its comments "You" and "Claude"; anyone else's name leads the comment.
-  const author = (comment: CommentInfo): CommentAuthor => (comment.author === "Claude" ? "claude" : "user");
-  const body = (comment: CommentInfo) => (comment.author && comment.author !== "You" && comment.author !== "Claude" ? `${comment.author}: ${comment.text}` : comment.text);
+  const author = (comment: CommentInfo): CommentAuthor => (comment.author === "Codex" ? "codex" : comment.author === "Claude" ? "claude" : "user");
+  const body = (comment: CommentInfo) => (comment.author && comment.author !== "You" && comment.author !== "Claude" && comment.author !== "Codex" ? `${comment.author}: ${comment.text}` : comment.text);
   // Thread starters first, then replies, each in the order they were written.
   const order = [...comments].sort((a, b) => Number(Boolean(a.parentParaId)) - Number(Boolean(b.parentParaId)) || a.date - b.date || Number(a.id) - Number(b.id));
   for (const comment of order) {

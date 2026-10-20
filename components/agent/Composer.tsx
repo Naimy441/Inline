@@ -30,7 +30,7 @@ function useDocumentTitles(exclude: string | null) {
 
 export type ComposerHandle = { focus: () => void; setText: (text: string) => void };
 
-const EFFORT_LABELS: Record<Effort, string> = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max" };
+const EFFORT_LABELS: Record<Effort, string> = { none: "None", minimal: "Minimal", ultra: "Ultra", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max" };
 
 export const Composer = forwardRef<
   ComposerHandle,
@@ -199,7 +199,9 @@ export const Composer = forwardRef<
     }
   };
 
-  const model = models.find((item) => item.value === settings.model) ?? models[0];
+  const provider = settings.provider ?? "claude";
+  const assistantName = provider === "codex" ? "Codex" : "Claude";
+  const model = models.find((item) => (item.provider ?? "claude") === provider && item.value === settings.model) ?? models.find((item) => (item.provider ?? "claude") === provider);
   const efforts = model?.efforts.length ? model.efforts : (["low", "medium", "high"] as Effort[]);
   const canSend = Boolean(text.trim() || attachments.length) && !disabled && !uploading;
 
@@ -294,16 +296,16 @@ export const Composer = forwardRef<
         value={text}
         placeholder={
           disabled
-            ? disabledReason ?? "Claude Code isn't available"
+            ? disabledReason ?? `${assistantName} isn't available`
             : running
               ? "Queue a follow-up…"
               : !documentId
                 ? settings.mode === "ask"
                   ? "Ask about your documents…"
-                  : "Ask Claude to organize or find documents…"
+                  : `Ask ${assistantName} to organize or find documents…`
                 : settings.mode === "ask"
                   ? "Ask about your document…"
-                  : "Ask Claude to write, edit or review…"
+                  : `Ask ${assistantName} to write, edit or review…`
         }
         disabled={disabled}
         onFocus={() => onWarm?.()}
@@ -370,7 +372,7 @@ export const Composer = forwardRef<
             onStop();
           }
         }}
-        aria-label="Message Claude"
+        aria-label={`Message ${assistantName}`}
       />
       <div className="composer-bar">
         <div className="composer-controls">
@@ -397,17 +399,27 @@ export const Composer = forwardRef<
             {settings.mode === "ask" ? "Ask" : "Agent"}
             <ChevronDown size={12} />
           </MenuButton>
-          {models.length > 0 && (
-            <MenuButton
-              className="pill pill-ghost"
-              label="Model"
-              placement="top-start"
-              items={models.map((item) => ({ label: item.displayName, checked: item.value === model?.value, onSelect: () => onSettings({ model: item.value }) }))}
-            >
-              {model ? model.displayName.replace(/\s*\(.*\)$/, "") : "Model"}
-              <ChevronDown size={12} />
-            </MenuButton>
-          )}
+          <MenuButton
+            className="pill pill-ghost"
+            label="Model"
+            placement="top-start"
+            items={[
+              { kind: "label", label: "Provider" },
+              ...(["claude", "codex"] as const).map((value) => ({
+                label: value === "codex" ? "Codex" : "Claude", checked: provider === value, disabled: running,
+                onSelect: () => {
+                  const next = models.find((item) => (item.provider ?? "claude") === value);
+                  onSettings({ provider: value, model: next?.value ?? null, effort: next?.efforts.includes(settings.effort) ? settings.effort : next?.efforts[0] ?? "medium" });
+                },
+              })),
+              { kind: "separator" },
+              { kind: "label", label: "Models" },
+              ...models.map((item) => ({ label: `${item.provider === "codex" ? "Codex" : "Claude"} · ${item.displayName}`, disabled: running && (item.provider ?? "claude") !== provider, checked: item === model, onSelect: () => onSettings({ model: item.value, provider: item.provider ?? "claude", effort: item.efforts.includes(settings.effort) ? settings.effort : item.efforts[0] ?? "medium" }) })),
+            ]}
+          >
+            {model ? model.displayName.replace(/\s*\(.*\)$/, "") : assistantName}
+            <ChevronDown size={12} />
+          </MenuButton>
           {efforts.length > 0 && (
             <MenuButton
               className="pill pill-ghost"

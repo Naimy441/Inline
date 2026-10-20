@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { setCodexConnectionFactory } from "./codexRpc";
+import { CodexSession, type CodexTokenTotals } from "./codexSession";
+import { codexAccount } from "./codexAccount";
+import { conversationHandoff, providerFor, providerName, type AgentProvider } from "./providers";
 import { readFile } from "node:fs/promises";
 import { query, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createInlineSdkServer, mcpToolName } from "@/lib/agent/mcp";
@@ -82,6 +86,9 @@ type PersistedChat = {
   todos: Todo[];
   /** Whether Claude Code has a transcript for this chat's session, so it can be resumed. */
   sessionStarted: boolean;
+  codexThreadId?: string | null;
+  codexTotals?: CodexTokenTotals;
+  handoffPending?: boolean;
   /** Claude Code's session id; the chat id until a rewind forks a new session. */
   sessionId?: string;
   /** A rewind not yet applied: the next session forks `forkFrom` at this transcript entry, as `sessionId`. */
@@ -188,6 +195,10 @@ function clip(text: string, max: number) {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
+function claudeEffort(effort: Effort): "low" | "medium" | "high" | "xhigh" | "max" {
+  return ["low", "medium", "high", "xhigh", "max"].includes(effort) ? effort as "low" | "medium" | "high" | "xhigh" | "max" : "medium";
+}
+
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -225,6 +236,10 @@ class ChatRuntime {
   private events: SequencedChatEvent[] = [];
   private listeners = new Set<(event: SequencedChatEvent) => void>();
   private query: Query | null = null;
+  private codex: CodexSession | null = null;
+  private codexThreadId: string | null = null;
+  private codexTotals?: CodexTokenTotals;
+  private handoffPending = false;
   private input: AsyncQueue<SDKUserMessage> | null = null;
   private current: AssistantMessage | null = null;
   private partsByBlock = new Map<string, string>();
@@ -253,6 +268,9 @@ class ChatRuntime {
 
   constructor(file: PersistedChat) {
     this.sessionStarted = file.sessionStarted;
+    this.codexThreadId = file.codexThreadId ?? null;
+    this.codexTotals = file.codexTotals;
+    this.handoffPending = file.handoffPending ?? false;
     this.sessionId = file.sessionId ?? file.id;
     this.forkAt = file.forkAt ?? null;
     this.forkFrom = file.forkFrom ?? null;
@@ -282,7 +300,7 @@ class ChatRuntime {
   }
 
   get live() {
-    return this.query !== null;
+    return this.query !== null || this.codex !== null;
   }
 
   get liveQuery() {
@@ -364,6 +382,9 @@ class ChatRuntime {
       messages: this.state.messages,
       todos: this.state.todos,
       sessionStarted: this.sessionStarted,
+      codexThreadId: this.codexThreadId,
+      codexTotals: this.codexTotals,
+      handoffPending: this.handoffPending,
       sessionId: this.sessionId,
       forkAt: this.forkAt,
       forkFrom: this.forkFrom,
@@ -410,9 +431,15 @@ class ChatRuntime {
     if (patch.documentId !== undefined) this.state.documentId = patch.documentId;
     if (patch.settings) {
       const next = { ...this.state.settings, ...patch.settings };
+      const switching = providerFor(next) !== providerFor(this.state.settings);
+      if (this.state.running && (switching || next.mode !== this.state.settings.mode)) throw new Error("Stop the current reply before switching provider or mode.");
+      if (switching) {
+        if (patch.settings.model === undefined) next.model = null;
+        this.resetProviderSessions();
+      }
       const query = this.query;
       if (query && next.model !== this.state.settings.model) await query.setModel(next.model ?? undefined).catch(() => this.close());
-      if (query && next.effort !== this.state.settings.effort) await query.applyFlagSettings({ effortLevel: next.effort }).catch(() => this.close());
+      if (query && next.effort !== this.state.settings.effort) await query.applyFlagSettings({ effortLevel: claudeEffort(next.effort) }).catch(() => this.close());
       // Limits are fixed when Claude Code starts; the session resumes with the new ones on the next message.
       if (query && !this.state.running && next.maxTurns !== this.state.settings.maxTurns) this.close();
       this.state.settings = next;
@@ -420,6 +447,67 @@ class ChatRuntime {
     this.state.updatedAt = Date.now();
     this.emitMeta();
     this.persistSoon();
+  }
+
+  private resetProviderSessions() {
+    this.close();
+    this.sessionId = randomUUID();
+    this.sessionStarted = false;
+    this.sessionCostUsd = null;
+    this.forkAt = null;
+    this.forkFrom = null;
+    this.codexThreadId = null;
+    this.codexTotals = undefined;
+    this.handoffPending = true;
+    this.listed = null;
+    this.state.context = undefined;
+  }
+
+  private ensureCodex() {
+    return this.codex ??= new CodexSession(this.codexThreadId, workspaceDirSync(), {
+      totals: (totals) => { this.codexTotals = totals; this.persistSoon(); },
+      context: () => this.toolContext(),
+      thread: (id) => { this.codexThreadId = id; this.persistSoon(); },
+      model: (model) => { if (this.current) this.current.model = model; },
+      part: (part) => {
+        if (!this.current) return;
+        const index = this.current.parts.findIndex((item) => item.id === part.id);
+        if (index < 0) this.addPart(part);
+        else { this.current.parts[index] = part; this.emit({ type: "part", messageId: this.current.id, part }); }
+        if (part.type === "tool") this.onToolStart(part);
+        else this.setStatus({ kind: part.type === "text" ? "responding" : "thinking" });
+      },
+      delta: (id, type, text) => {
+        if (!this.current) return;
+        const part = this.current.parts.find((item) => item.id === id);
+        if (part && (part.type === "text" || part.type === "thinking")) part.text += text;
+        this.emit({ type: type === "text" ? "text_delta" : "thinking_delta", messageId: this.current.id, partId: id, text });
+      },
+      todos: (todos) => { this.state.todos = todos; this.emit({ type: "todos", todos }); },
+      usage: (usage) => { if (this.current) this.current.usage = usage; },
+      contextUsage: (context) => { this.state.context = context; this.emit({ type: "context", context }); },
+      limits: () => this.overUsageLimit(),
+      compact: () => { this.listed = null; this.setStatus({ kind: "compacting" }); },
+    }, this.codexTotals);
+  }
+
+  private async runCodex(message: SDKUserMessage) {
+    const reply = this.current;
+    if (!reply) return;
+    const session = this.ensureCodex();
+    agentRuntime().noteLive(this);
+    try {
+      await session.send(message, this.state.settings);
+      if (this.current === reply) { this.handoffPending = false; this.finishTurn(this.interrupted ? "stopped" : "done"); }
+    } catch (error) {
+      if (this.current === reply) {
+        if (!this.interrupted) { this.codexThreadId = null; this.codexTotals = undefined; this.handoffPending = true; this.listed = null; }
+        this.codex?.close();
+        this.codex = null;
+        this.finishTurn(this.interrupted && !this.limitStop ? "stopped" : "error", this.limitStop ?? (this.interrupted ? undefined : errorText(error)));
+      }
+    }
+    void codexAccount().planUsage(true).catch(() => undefined);
   }
 
   // --- turns -------------------------------------------------------------------
@@ -454,7 +542,7 @@ class ChatRuntime {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     const now = Date.now();
     const user: UserMessage = { id: input.ids?.user ?? randomUUID(), role: "user", text: input.text, createdAt: now, selection: input.selection, attachments: input.attachments, mentions: input.mentions, links: input.links };
-    const assistant: AssistantMessage = { id: input.ids?.assistant ?? randomUUID(), role: "assistant", createdAt: now, parts: [], status: "streaming", model: this.state.settings.model ?? undefined };
+    const assistant: AssistantMessage = { id: input.ids?.assistant ?? randomUUID(), role: "assistant", createdAt: now, parts: [], status: "streaming", provider: providerFor(this.state.settings), model: this.state.settings.model ?? undefined };
     if (!this.state.messages.length || this.state.title === "New chat") {
       this.state.title = clip(input.text || input.attachments?.[0]?.name || "New chat", 60);
     }
@@ -472,11 +560,19 @@ class ChatRuntime {
     this.emit({ type: "running", running: true });
     this.emitMeta();
     this.setStatus({ kind: "starting" });
-    this.setDocumentActivity("thinking", "Claude is working");
+    this.setDocumentActivity("thinking", `${providerName(providerFor(this.state.settings))} is working`);
 
     let message: SDKUserMessage;
     try {
       message = await this.buildUserMessage(input);
+      if (providerFor(this.state.settings) === "codex") {
+        const over = await this.overUsageLimit(true);
+        if (over) { this.finishTurn("error", over); return; }
+        if (this.interrupted || !this.current) return;
+        void this.runCodex(message);
+        void this.persistNow();
+        return;
+      }
       const live = this.live;
       await this.syncCanvasTools(await this.openDocumentIsCanvas());
       const over = await this.overUsageLimit(true);
@@ -484,6 +580,8 @@ class ChatRuntime {
         this.finishTurn("error", over);
         return;
       }
+      if (this.interrupted || !this.current) return;
+      this.handoffPending = false;
       this.input!.push(message);
       // A session that is already running (warmed up, or from the last message) starts on it right away.
       if (live) this.setStatus({ kind: "thinking" });
@@ -506,6 +604,10 @@ class ChatRuntime {
     const limit = this.state.settings.usageLimit;
     if (!limit) return null;
     const runtime = agentRuntime();
+    if (providerFor(this.state.settings) === "codex") {
+      const usage = await codexAccount().planUsage().catch(() => null);
+      return usageLimitReason(usage, limit);
+    }
     let usage: PlanUsage | null = null;
     if (fresh && this.usageReady) {
       usage = await this.usageReady;
@@ -567,7 +669,7 @@ class ChatRuntime {
       if (isCanvas(doc.doc)) {
         const seen = this.listed?.id === doc.id ? this.listed.version : null;
         const since = seen != null && seen < doc.version ? doc.stepsSince(seen) : null;
-        const ownPatches = Boolean(since && since.clientIDs.length > 0 && since.clientIDs.every((id) => id === `agent:${this.state.id}`));
+        const ownPatches = Boolean(since && since.clientIDs.length > 0 && since.clientIDs.every((id) => id === `agent:${this.toolContext().author}`));
         if (seen === doc.version || ownPatches) {
           context.push("Type: Canvas.\nThe Canvas hasn't changed since you last saw its markup. Keep using read_canvas and patch_canvas.");
         } else {
@@ -636,7 +738,13 @@ class ChatRuntime {
       );
     }
     const blocks: Array<Record<string, unknown>> = [{ type: "text", text: `<inline-context>\n${context.join("\n")}\n</inline-context>` }];
-    for (const attachment of input.attachments ?? []) {
+    if (this.handoffPending) {
+      const history = conversationHandoff(this.state.messages.slice(0, -2));
+      if (history) blocks.unshift({ type: "text", text: history });
+    }
+    const previousAttachments = this.handoffPending ? this.state.messages.slice(0, -2).flatMap((message) => message.role === "user" ? message.attachments ?? [] : []).filter((item) => item.kind !== "text") : [];
+    const attachments = [...new Map([...previousAttachments, ...(input.attachments ?? [])].map((item) => [item.id, item])).values()];
+    for (const attachment of attachments) {
       const upload = await findUpload(attachment.id);
       if (!upload) {
         blocks.push({ type: "text", text: `[Attachment "${attachment.name}" is no longer available.]` });
@@ -690,6 +798,7 @@ class ChatRuntime {
     const removed = this.state.messages.slice(start);
     const user = removed[0]?.role === "user" ? removed[0] : null;
     const kept = this.state.messages.slice(0, start);
+    const mixedProviders = providerFor(this.state.settings) === "codex" || this.state.messages.some((message) => message.role === "assistant" && message.provider === "codex");
     const spent = removed.reduce((sum, message) => sum + (message.role === "assistant" ? (message.usage?.costUsd ?? 0) : 0), 0);
     if (spent) this.state.rewoundUsd = (this.state.rewoundUsd ?? 0) + spent;
     this.state.messages = kept;
@@ -718,6 +827,7 @@ class ChatRuntime {
       // A reply from before rewinds were possible has no recorded point: keep the session and tell Claude.
       this.rewindNote = `The user rewound this chat to before their message "${clip(user.text, 200)}". Disregard that message and everything after it.`;
     }
+    if (mixedProviders) this.resetProviderSessions();
     this.state.updatedAt = Date.now();
     this.emit({ type: "snapshot", chat: this.state });
     await this.persistNow();
@@ -730,14 +840,15 @@ class ChatRuntime {
 
   private toolContext(): ToolContext {
     return {
-      author: this.state.id,
+      author: providerFor(this.state.settings) === "codex" ? `codex:${this.state.id}` : this.state.id,
+      provider: providerFor(this.state.settings),
       turn: this.current?.id,
       attachments: () => this.state.messages.flatMap((message) => (message.role === "user" ? (message.attachments ?? []) : [])),
       documentId: this.state.documentId ?? undefined,
       readOnly: this.state.settings.mode === "ask",
       beforeWrite: async (doc) => {
         if (this.wroteThisTurn.has(doc.id)) return;
-        this.wroteThisTurn.set(doc.id, await doc.checkpoint("Before Claude's edits"));
+        this.wroteThisTurn.set(doc.id, await doc.checkpoint(`Before ${providerName(providerFor(this.state.settings))}'s edits`));
       },
       onChange: (change) => this.recordChange(change),
       onOpen: (documentId) => {
@@ -819,7 +930,7 @@ class ChatRuntime {
         settingSources: [],
         includePartialMessages: true,
         thinking: { type: "adaptive", display: "summarized" },
-        effort: settings.effort,
+        effort: claudeEffort(settings.effort),
         maxTurns: settings.maxTurns ?? DEFAULT_MAX_TURNS,
         ...(settings.model ? { model: settings.model } : {}),
         ...(fork ? fork : this.sessionStarted ? { resume: this.sessionId } : { sessionId: this.sessionId }),
@@ -1197,7 +1308,7 @@ class ChatRuntime {
     } catch (err) {
       log("warn", "couldn't record document state for the chat log", { chatId: this.state.id, error: errorText(err) });
     }
-    if (status === "error") log("warn", "a Claude turn ended with an error", { chatId: this.state.id, error: error ?? message.error });
+    if (status === "error") log("warn", "an agent turn ended with an error", { chatId: this.state.id, error: error ?? message.error });
     this.limitStop = null;
     message.status = status;
     if (error) message.error = error;
@@ -1262,6 +1373,14 @@ class ChatRuntime {
     this.state.queue = [];
     this.emit({ type: "queue", queue: [] });
     const q = this.query;
+    if (this.codex) {
+      const reply = this.current;
+      await this.codex.interrupt();
+      setTimeout(() => {
+        if (this.current === reply && this.interrupted) { this.close(); this.finishTurn(this.limitStop ? "error" : "stopped", this.limitStop ?? undefined); }
+      }, 5000).unref?.();
+      return;
+    }
     if (!q) {
       if (this.limitStop) this.finishTurn("error", this.limitStop);
       else this.finishTurn("stopped");
@@ -1301,8 +1420,18 @@ class ChatRuntime {
    */
   warm() {
     this.lastUsed = Date.now();
-    if (this.query || this.state.running || this.discarded) return false;
-    this.ensureQuery();
+    if (this.live || this.state.running || this.discarded) return false;
+    if (providerFor(this.state.settings) === "codex") {
+      const session = this.ensureCodex();
+      agentRuntime().noteLive(this);
+      void session.warm(this.state.settings).catch(() => {
+        if (this.codex === session && !this.state.running) {
+          session.close();
+          this.codex = null;
+          this.codexThreadId = null;
+        }
+      });
+    } else this.ensureQuery();
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = setTimeout(() => {
       if (!this.state.running) this.close();
@@ -1312,6 +1441,8 @@ class ChatRuntime {
   }
 
   close() {
+    this.codex?.close();
+    this.codex = null;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     const q = this.query;
     this.query = null;
@@ -1391,10 +1522,10 @@ function formatReset(at: number, now = Date.now()) {
 export function usageLimitReason(usage: PlanUsage | null, limit: number, now = Date.now()): string | null {
   if (!usage?.available) return null;
   const over = usage.windows
-    .filter((window) => (window.id === "five_hour" || window.id === "seven_day") && window.utilization >= limit && (!window.resetsAt || window.resetsAt > now))
+    .filter((window) => (window.id === "five_hour" || window.id === "seven_day" || window.id.startsWith("codex:")) && window.utilization >= limit && (!window.resetsAt || window.resetsAt > now))
     .sort((a, b) => b.utilization - a.utilization)[0];
   if (!over) return null;
-  const name = over.id === "five_hour" ? "5-hour session" : "weekly";
+  const name = over.id.startsWith("codex:") ? over.label : over.id === "five_hour" ? "5-hour session" : "weekly";
   const resets = over.resetsAt ? ` It resets ${formatReset(over.resetsAt, now)}.` : "";
   return `Paused at your usage limit: your ${name} usage is at ${Math.round(over.utilization)}% and your limit is ${limit}%.${resets} Raise the limit from the usage meter below the message box to keep going.`;
 }
@@ -1419,7 +1550,12 @@ class AgentRuntime {
   private usagePromise: Promise<PlanUsage & { sessionCostUsd?: number }> | null = null;
   defaultSettings: ChatSettings = { model: null, effort: "medium", mode: "agent" };
 
+  private fakeCodexInitialized = false;
   async init() {
+    if (process.env.INLINE_FAKE_CODEX === "1" && !this.fakeCodexInitialized) {
+      this.fakeCodexInitialized = true;
+      setCodexConnectionFactory((await import("./testing/fakeCodex")).fakeCodex().factory);
+    }
     if (!workspaceCache) workspaceCache = await workspaceDir();
     // Browser tests run against a scripted Claude instead of a signed-in Claude Code.
     if (process.env.INLINE_FAKE_CLAUDE === "1" && startQuery === query) {
@@ -1589,7 +1725,7 @@ class AgentRuntime {
     };
     if (options.query) return ask(options.query);
     if (!this.usagePromise) {
-      const live = [...this.chats.values()].find((chat) => chat.live)?.liveQuery;
+      const live = [...this.chats.values()].find((chat) => chat.liveQuery)?.liveQuery;
       this.usagePromise = (live ? ask(live) : withProbe((q) => ask(q))).finally(() => {
         this.usagePromise = null;
       });
@@ -1610,7 +1746,8 @@ class AgentRuntime {
   }
 
   /** Whether Claude Code is installed and signed in, and which models the account can use. Cached briefly. */
-  async agentStatus(force = false): Promise<AgentStatus> {
+  async agentStatus(force = false, provider: AgentProvider = "claude"): Promise<AgentStatus> {
+    if (provider === "codex") { await this.init(); return codexAccount().agentStatus(force); }
     if (!force && this.status && Date.now() - this.status.checkedAt < (this.status.state === "ready" ? 5 * 60_000 : 10_000)) return this.status;
     if (!this.statusPromise) {
       this.statusPromise = probeClaudeCode()

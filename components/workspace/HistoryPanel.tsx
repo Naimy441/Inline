@@ -32,7 +32,7 @@ function dayLabel(at: number) {
   return date.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", ...(date.getFullYear() === today.getFullYear() ? {} : { year: "numeric" }) });
 }
 
-const AUTHORS = { user: "You", claude: "Claude" } as const;
+const AUTHORS = { user: "You", claude: "Claude", codex: "Codex" } as const;
 
 /**
  * Files saved with the version on screen. "Open with…" hands that one file to
@@ -241,9 +241,9 @@ export function HistoryPanel({
                         <span className="version-label">{version.label}</span>
                         <span className="version-time">
                           {time(version.createdAt)}
-                          {!(hideAi && version.author === "claude") && (
+                          {!(hideAi && version.author !== "user") && (
                             <span className={`version-author is-${version.author}`}>
-                              {version.author === "claude" && <Sparkles size={11} />}
+                              {version.author !== "user" && <Sparkles size={11} />}
                               {AUTHORS[version.author]}
                             </span>
                           )}

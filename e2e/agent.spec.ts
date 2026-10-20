@@ -1,7 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
 /**
- * The Claude panel end to end. The test server runs a scripted Claude
+ * The AI chat panel end to end. The test server runs a scripted Claude
  * (INLINE_FAKE_CLAUDE=1, lib/agent/testing/e2eModel.ts) that acts through
  * Inline's real MCP tools, so everything after the model is the real path:
  * the agent runtime, the event stream, live review and the panel UI.
@@ -185,7 +185,7 @@ test("the inline prompt sends an edit about the selection straight to Claude", a
   await page.locator(".doc-content").click();
   await page.keyboard.press("ControlOrMeta+a");
   await page.keyboard.press("ControlOrMeta+Shift+k");
-  const prompt = page.getByLabel("Ask Claude to edit");
+  const prompt = page.getByLabel("Ask AI to edit");
   await expect(prompt).toBeFocused();
   await prompt.fill('replace "Tuesday" with "Thursday"');
   await prompt.press("Enter");

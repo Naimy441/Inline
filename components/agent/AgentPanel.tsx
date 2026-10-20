@@ -89,11 +89,13 @@ export const AgentPanel = forwardRef<
 >(function AgentPanel({ documentId, chatKey: chatKeyProp, hunks = NO_HUNKS, onClose, onReview, initialPrompt, home, onLibraryChange, documentCounts }, ref) {
   const chatKey = chatKeyProp ?? documentId ?? HOME_CHAT_KEY;
   const draftKey = documentId ?? HOME_CHAT_KEY;
-  const { status, defaults } = useAgentStatus();
+  const { status: claudeStatus, defaults } = useAgentStatus();
+  const { status: codexStatus } = useAgentStatus("codex");
   const router = useRouter();
   const [chatId, setChatId] = useState<string | null>(() => (typeof window === "undefined" ? null : readChatId(chatKey)));
   // A chat that is already open shows straight away, with nothing to load.
   const [session, setSession] = useState<ChatSession | null>(() => (chatId ? peekChat(chatId) : null));
+  const [changingSettings, setChangingSettings] = useState(false);
   const [draftSettings, setDraftSettings] = useState<ChatSettings | null>(null);
   // The quoted selection is part of the unsent message: it survives closing the panel.
   const [selection, setSelection] = useState<SelectionContext | null>(() => (typeof window === "undefined" ? null : loadDraftSelection(draftKey)));
@@ -146,7 +148,13 @@ export const AgentPanel = forwardRef<
   }, [chatId, chatKey]);
 
   const settings: ChatSettings = chat?.settings ?? draftSettings ?? defaults ?? { model: null, effort: "medium", mode: "agent" };
-  const models = status?.state === "ready" ? status.models : [];
+  const provider = settings.provider ?? "claude";
+  const assistantName = provider === "codex" ? "Codex" : "Claude";
+  const status = provider === "codex" ? codexStatus : claudeStatus;
+  const models = [
+    ...(claudeStatus?.state === "ready" ? claudeStatus.models.map((model) => ({ ...model, provider: "claude" as const })) : []),
+    ...(codexStatus?.state === "ready" ? codexStatus.models : []),
+  ];
   const ready = status?.state === "ready";
 
   useImperativeHandle(ref, () => ({
@@ -270,7 +278,10 @@ export const AgentPanel = forwardRef<
   }, [documentId, loadedChatId, opened.count, opened.id, router]);
 
   const updateSettings = (patch: Partial<ChatSettings>) => {
-    if (session) void session.update({ settings: patch });
+    if (session) {
+      setChangingSettings(true);
+      void session.update({ settings: patch }).catch((error: unknown) => toast(error instanceof Error ? error.message : "Couldn't update chat settings.", { tone: "error" })).finally(() => setChangingSettings(false));
+    }
     else setDraftSettings({ ...settings, ...patch });
   };
 
@@ -343,7 +354,7 @@ export const AgentPanel = forwardRef<
   const showTodos = todos.length > 0 && (chat?.running || todos.some((todo) => todo.status !== "completed"));
 
   return (
-    <aside className="agent-panel" aria-label="Claude">
+    <aside className="agent-panel" aria-label={assistantName}>
       <header className="panel-header">
         <div className="panel-title">
           <span className="panel-title-text">{chat?.title && chat.messages.length ? chat.title : "New chat"}</span>
@@ -405,7 +416,7 @@ export const AgentPanel = forwardRef<
         }}
       >
         {status && !ready ? (
-          <Onboarding state={status.state} message={"message" in status ? status.message : ""} />
+          <Onboarding key={provider} provider={provider} state={status.state} message={"message" in status ? status.message : ""} />
         ) : chat?.messages.length ? (
           <div className="messages">
             <MessageList messages={chat.messages} hunks={hunks} onRetry={retry} onReview={review} documentId={documentId ?? undefined} onRestore={(versionId, messageId) => setRewinding({ versionId, messageId })} onCopyTurn={devOptions ? copyTurn : undefined} onCopyLog={devOptions ? copyTurnLog : undefined} documentCounts={documentCounts} />
@@ -442,18 +453,18 @@ export const AgentPanel = forwardRef<
         {ui.error && <div className="panel-error">{ui.error}</div>}
         {ui.rateLimit && ui.rateLimit.status !== "allowed" && (
           <div className="panel-warning">
-            {ui.rateLimit.status === "rejected" ? "You've reached your Claude usage limit" : "You're close to your Claude usage limit"}
+            {ui.rateLimit.status === "rejected" ? `You've reached your ${assistantName} usage limit` : `You're close to your ${assistantName} usage limit`}
             {ui.rateLimit.resetsAt ? `; it resets at ${new Date(ui.rateLimit.resetsAt * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.` : "."}
           </div>
         )}
         <Composer
           ref={composer}
           running={Boolean(chat?.running)}
-          disabled={status ? !ready : false}
-          disabledReason={status && !ready ? "Connect Claude Code to start" : undefined}
+          disabled={changingSettings || (status ? !ready : false)}
+          disabledReason={status && !ready ? `Connect ${assistantName} to start` : undefined}
           settings={settings}
           models={models}
-          meter={<UsageMeter chat={chat} running={Boolean(chat?.running)} usageLimit={settings.usageLimit ?? null} onUsageLimit={(usageLimit) => updateSettings({ usageLimit })} />}
+          meter={<UsageMeter provider={provider} chat={chat} running={Boolean(chat?.running)} usageLimit={settings.usageLimit ?? null} onUsageLimit={(usageLimit) => updateSettings({ usageLimit })} />}
           selection={selection}
           documentId={documentId}
           onClearSelection={() => setSelection(null)}
@@ -480,7 +491,7 @@ export const AgentPanel = forwardRef<
           </>
         }
       >
-        <p>The document goes back to how it was before this reply&apos;s edits, and the chat rewinds to before your message, so Claude forgets it too. What you have now is not saved as a version unless you saved one.</p>
+        <p>The document goes back to how it was before this reply&apos;s edits, and the chat rewinds to before your message, so your assistant forgets it too. What you have now is not saved as a version unless you saved one.</p>
       </Dialog>
     </aside>
   );
@@ -535,11 +546,11 @@ function EmptyState({ home, onPick }: { home: boolean; onPick: (prompt: string) 
   return (
     <div className="panel-empty">
       <div className="panel-empty-mark">{home ? <FolderTree size={22} /> : <MessageSquarePlus size={22} />}</div>
-      <h3>{home ? "Organize with Claude" : "Write with Claude"}</h3>
+      <h3>{home ? "Organize your documents" : "Write together"}</h3>
       <p>
         {home
-          ? "Tell Claude how you'd like your documents sorted. It reads titles and the first lines of each document, not whole documents, so sorting a big library stays light on your usage."
-          : "Claude reads and edits this document directly. Every change shows up highlighted so you can keep or undo it."}
+          ? "Tell your assistant how you'd like your documents sorted. It reads titles and the first lines of each document, not whole documents, so sorting a big library stays light on your usage."
+          : "Claude and Codex read and edit this document directly. Every change shows up highlighted so you can keep or undo it."}
       </p>
       <div className="suggestions">
         {(home ? HOME_SUGGESTIONS : SUGGESTIONS).map((item) => (
@@ -552,9 +563,17 @@ function EmptyState({ home, onPick }: { home: boolean; onPick: (prompt: string) 
   );
 }
 
-function Onboarding({ state, message }: { state: "signed_out" | "unavailable"; message: string }) {
+function Onboarding({ state, message, provider = "claude" }: { provider?: "claude" | "codex"; state: "signed_out" | "unavailable"; message: string }) {
   const [checking, setChecking] = useState(false);
   const signedOut = state === "signed_out";
+  if (provider === "codex") return <div className="onboarding">
+    <div className="panel-empty-mark"><Terminal size={22} /></div>
+    <h3>{signedOut ? "Sign in to Codex" : "Codex isn't available"}</h3>
+    <p>Use Codex with your ChatGPT account. {message}</p>
+    {signedOut && <SignIn provider="codex" />}
+    {!signedOut && <p>Install Codex on the machine running Inline, then run <code>codex login</code>.</p>}
+    <Button loading={checking} onClick={async () => { setChecking(true); await refreshAgentStatus(true, "codex"); setChecking(false); }}>Check again</Button>
+  </div>;
   return (
     <div className="onboarding">
       <div className="panel-empty-mark">
@@ -583,7 +602,7 @@ function Onboarding({ state, message }: { state: "signed_out" | "unavailable"; m
           loading={checking}
           onClick={async () => {
             setChecking(true);
-            await refreshAgentStatus(true);
+            await refreshAgentStatus(true, provider);
             setChecking(false);
           }}
         >
@@ -597,7 +616,8 @@ function Onboarding({ state, message }: { state: "signed_out" | "unavailable"; m
 type LoginState = { state: "idle" } | { state: "waiting"; url: string | null } | { state: "done" } | { state: "failed"; message: string };
 
 /** Signs in with `claude auth login` on the computer running Inline: the sign-in page opens in the browser and this follows along. */
-function SignIn() {
+function SignIn({ provider = "claude" }: { provider?: "claude" | "codex" }) {
+  const loginUrl = `/api/agent/login?provider=${provider}`;
   const [login, setLogin] = useState<LoginState>({ state: "idle" });
   const [starting, setStarting] = useState(false);
   const [code, setCode] = useState("");
@@ -608,10 +628,10 @@ function SignIn() {
     let cancelled = false;
     const timer = window.setInterval(async () => {
       try {
-        const result = await api<{ login: LoginState }>("/api/agent/login");
+        const result = await api<{ login: LoginState }>(loginUrl);
         if (cancelled) return;
         setLogin(result.login);
-        if (result.login.state === "done") await refreshAgentStatus(true);
+        if (result.login.state === "done") await refreshAgentStatus(true, provider);
       } catch {
         // the next poll tries again
       }
@@ -625,7 +645,7 @@ function SignIn() {
   const start = async () => {
     setStarting(true);
     try {
-      const result = await post<{ login: LoginState }>("/api/agent/login", { action: "start" });
+      const result = await post<{ login: LoginState }>(loginUrl, { action: "start" });
       setLogin(result.login);
     } catch (error) {
       setLogin({ state: "failed", message: error instanceof Error ? error.message : "Couldn't start signing in." });
@@ -645,13 +665,13 @@ function SignIn() {
             Open the sign-in page again
           </a>
         )}
-        <form
+        {provider === "claude" && <form
           className="signin-code"
           onSubmit={async (event) => {
             event.preventDefault();
             if (!code.trim()) return;
             try {
-              setLogin((await post<{ login: LoginState }>("/api/agent/login", { action: "code", code })).login);
+              setLogin((await post<{ login: LoginState }>(loginUrl, { action: "code", code })).login);
               setCode("");
             } catch (error) {
               toast(error instanceof Error ? error.message : "Couldn't send the code.");
@@ -662,8 +682,8 @@ function SignIn() {
           <Button size="sm" type="submit" disabled={!code.trim()}>
             Continue
           </Button>
-        </form>
-        <button type="button" className="link-button" onClick={() => void post("/api/agent/login", { action: "cancel" }).then(() => setLogin({ state: "idle" }))}>
+        </form>}
+        <button type="button" className="link-button" onClick={() => void post(loginUrl, { action: "cancel" }).then(() => setLogin({ state: "idle" }))}>
           Cancel
         </button>
       </div>
@@ -673,7 +693,7 @@ function SignIn() {
   return (
     <div className="signin">
       <Button variant="primary" loading={starting || login.state === "done"} onClick={start}>
-        Sign in with Claude
+        {provider === "codex" ? "Sign in with ChatGPT" : "Sign in with Claude"}
       </Button>
       {login.state === "failed" && <p className="signin-error">{login.message}</p>}
     </div>

@@ -237,7 +237,7 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
       { kind: "separator" },
       { label: "Tabs & outline", onSelect: actions.toggleOutline },
       { kind: "separator" },
-      ...(actions.focusMode ? [] : [{ label: "Claude panel", shortcut: `⌘J`, onSelect: actions.toggleAgent }]),
+      ...(actions.focusMode ? [] : [{ label: "AI chat panel", shortcut: `⌘J`, onSelect: actions.toggleAgent }]),
       { label: "Focus mode", checked: actions.focusMode, onSelect: actions.toggleFocusMode },
       { label: "Show non-printing characters", shortcut: `⌘⇧P`, checked: actions.showInvisibles, onSelect: actions.toggleInvisibles },
       { label: "Show spelling underlines", checked: actions.spellcheck, onSelect: actions.toggleSpellcheck },
@@ -376,18 +376,18 @@ export function documentMenus(session: DocumentSession, actions: MenuActions, zo
         : ([
             { kind: "separator" },
             { label: "Check spelling & grammar here", shortcut: `⌘⌥X`, onSelect: actions.checkSpelling },
-            { label: "Ask Claude to add citations", onSelect: () => actions.ask(BUILTIN_COMMANDS.find((command) => command.name === "cite")!.prompt) },
-            { label: "Ask Claude to proofread", onSelect: () => actions.ask("Proofread the document and fix spelling, grammar and punctuation. Don't change the meaning or voice.") },
-            { label: "Ask Claude for feedback", onSelect: () => actions.ask("Read the document and give me your three most important suggestions to improve it. Don't edit yet.") },
+            { label: "Ask AI to add citations", onSelect: () => actions.ask(BUILTIN_COMMANDS.find((command) => command.name === "cite")!.prompt) },
+            { label: "Ask AI to proofread", onSelect: () => actions.ask("Proofread the document and fix spelling, grammar and punctuation. Don't change the meaning or voice.") },
+            { label: "Ask AI for feedback", onSelect: () => actions.ask("Read the document and give me your three most important suggestions to improve it. Don't edit yet.") },
             {
-              label: "Ask Claude to address all comments",
+              label: "Ask AI to address all comments",
               onSelect: () =>
                 actions.ask(
                   "Work through every open comment in the document (list_comments). For each one: make the change it asks for if it's clear, reply briefly with what you changed and resolve it; if it's a question or you're unsure, reply with your answer or question and leave it open. Finish with a short summary.",
                 ),
             },
             { label: "Check for AI-sounding writing", onSelect: () => actions.ask("Run analyze_writing on the document and point out any passages that sound generic or AI-written. Suggest fixes but don't edit yet.") },
-            ...(actions.convertPdf ? [{ label: "Convert PDF pages with Claude", onSelect: actions.convertPdf }] : []),
+            ...(actions.convertPdf ? [{ label: "Convert PDF pages with AI", onSelect: actions.convertPdf }] : []),
           ] as MenuItem[])),
     ],
     Help: [

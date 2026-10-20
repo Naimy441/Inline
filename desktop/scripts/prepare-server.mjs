@@ -93,6 +93,50 @@ for (const arch of arches) {
   rmSync(download, { recursive: true, force: true });
 }
 
+// Codex uses an official optional binary package per target, just like Claude Code.
+const codexVersion = JSON.parse(readFileSync(path.join(root, "node_modules", "@openai", "codex", "package.json"), "utf8")).version;
+for (const arch of arches) {
+  const name = `codex-${platform}-${arch}`;
+  const target = path.join(stage, "codex", `${platform}-${arch}`, name);
+  const installed = path.join(root, "node_modules", "@openai", name);
+  mkdirSync(path.dirname(target), { recursive: true });
+  if (existsSync(installed) && JSON.parse(readFileSync(path.join(installed, "package.json"), "utf8")).version === `${codexVersion}-${platform}-${arch}`) {
+    console.log(`Codex CLI for ${platform}-${arch}: from node_modules`);
+    cpSync(installed, target, { recursive: true });
+    continue;
+  }
+  console.log(`Codex CLI for ${platform}-${arch}: downloading…`);
+  const download = path.join(stage, "download");
+  mkdirSync(download, { recursive: true });
+  const tarball = execFileSync(npm, ["pack", `@openai/codex@${codexVersion}-${platform}-${arch}`, "--silent"], { cwd: download, shell: process.platform === "win32" }).toString().trim().split(/\r?\n/).pop();
+  mkdirSync(target, { recursive: true });
+  run("tar", ["-xzf", path.join(download, tarball), "-C", target, "--strip-components=1"]);
+  rmSync(download, { recursive: true, force: true });
+}
+// pdf.js uses this native canvas backend for multimodal PDF attachments.
+const canvasVersion = JSON.parse(readFileSync(path.join(root, "node_modules", "@napi-rs", "canvas", "package.json"), "utf8")).version;
+for (const arch of arches) {
+  const suffix = platform === "linux" ? "-gnu" : platform === "win32" ? "-msvc" : "";
+  const name = `canvas-${platform}-${arch}${suffix}`;
+  const target = path.join(stage, "canvas", `${platform}-${arch}`, name);
+  const installed = path.join(root, "node_modules", "@napi-rs", name);
+  mkdirSync(path.dirname(target), { recursive: true });
+  if (existsSync(installed) && JSON.parse(readFileSync(path.join(installed, "package.json"), "utf8")).version === canvasVersion) {
+    cpSync(installed, target, { recursive: true });
+    continue;
+  }
+  const download = path.join(stage, "download");
+  mkdirSync(download, { recursive: true });
+  const tarball = execFileSync(npm, ["pack", `@napi-rs/${name}@${canvasVersion}`, "--silent"], { cwd: download, shell: process.platform === "win32" }).toString().trim().split(/\r?\n/).pop();
+  mkdirSync(target, { recursive: true });
+  run("tar", ["-xzf", path.join(download, tarball), "-C", target, "--strip-components=1"]);
+  rmSync(download, { recursive: true, force: true });
+}
+const canvasHost = path.join(stage, "canvas", `${process.platform}-${process.arch}`);
+if (existsSync(canvasHost)) cpSync(canvasHost, path.join(server, "node_modules", "@napi-rs"), { recursive: true });
+const codexHost = path.join(stage, "codex", `${process.platform}-${process.arch}`);
+if (existsSync(codexHost)) cpSync(codexHost, path.join(server, "node_modules", "@openai"), { recursive: true });
+
 // Running the app unpackaged (npm start in desktop/) uses this machine's CLI straight from the staged server.
 const host = path.join(stage, "claude", `${process.platform}-${process.arch}`);
 if (existsSync(host)) cpSync(host, path.join(server, "node_modules", "@anthropic-ai"), { recursive: true });

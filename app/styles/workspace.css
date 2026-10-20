@@ -2495,7 +2495,7 @@ button.status-item:hover {
 .workspace.is-focus .claude-toggle,
 .workspace.is-focus .bubble-ask,
 .workspace.is-focus .bubble-ask + .bubble-sep,
-.workspace.is-focus .bubble-btn[aria-label="Edit with Claude"],
+.workspace.is-focus .bubble-btn[aria-label="Edit with AI"],
 .workspace.is-focus .bubble-prompt,
 .workspace.is-focus .agent-locator,
 .workspace.is-focus .usage-ring,

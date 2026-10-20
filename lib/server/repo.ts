@@ -38,7 +38,7 @@ export class UnsavedChangesError extends Error {
 /** A version has no files to open, or the requested file is not one of them. */
 export class VersionFilesError extends Error {}
 
-export type VersionAuthor = "user" | "claude";
+export type VersionAuthor = "user" | "claude" | "codex";
 
 export type VersionSummary = {
   id: string;
@@ -125,8 +125,8 @@ async function gitResult(id: string, args: string[], options: { env?: Record<str
 function authorEnv(author: VersionAuthor, date?: Date): Record<string, string> {
   const when = date ? date.toISOString() : undefined;
   return {
-    GIT_AUTHOR_NAME: author === "claude" ? "Claude" : "You",
-    GIT_AUTHOR_EMAIL: author === "claude" ? "claude@inline.local" : "you@inline.local",
+    GIT_AUTHOR_NAME: author === "codex" ? "Codex" : author === "claude" ? "Claude" : "You",
+    GIT_AUTHOR_EMAIL: author === "codex" ? "codex@inline.local" : author === "claude" ? "claude@inline.local" : "you@inline.local",
     GIT_COMMITTER_NAME: "Inline",
     GIT_COMMITTER_EMAIL: "inline@localhost",
     ...(when ? { GIT_AUTHOR_DATE: when, GIT_COMMITTER_DATE: when } : {}),
@@ -141,7 +141,7 @@ function commitMessage(input: { label: string; author: VersionAuthor; title: str
 
 function parseMessage(body: string) {
   const label = body.split("\n")[0]?.trim() || "Saved version";
-  const author = (/Inline-Author: (user|claude)/.exec(body)?.[1] ?? "user") as VersionAuthor;
+  const author = (/Inline-Author: (user|claude|codex)/.exec(body)?.[1] ?? "user") as VersionAuthor;
   const wordCount = Number(/Inline-Words: (\d+)/.exec(body)?.[1] ?? 0);
   const pending = Number(/Inline-Pending: (\d+)/.exec(body)?.[1] ?? 0);
   const title = /Inline-Title: (.*)/.exec(body)?.[1]?.trim() ?? "";

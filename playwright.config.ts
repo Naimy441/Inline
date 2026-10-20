@@ -13,6 +13,12 @@ export default defineConfig({
   testDir: "e2e",
   timeout: 60_000,
   forbidOnly: Boolean(process.env.CI),
+  // Provider selection updates the app's defaults. Finish that suite (and
+  // reset its defaults) before the other browser workers start.
+  projects: [
+    { name: "codex", testMatch: "**/codex.spec.ts" },
+    { name: "regression", testIgnore: "**/codex.spec.ts", dependencies: ["codex"] },
+  ],
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: {
     baseURL: `http://localhost:${port}`,
@@ -24,6 +30,6 @@ export default defineConfig({
     url: `http://localhost:${port}`,
     reuseExistingServer: false,
     timeout: 120_000,
-    env: { INLINE_FAKE_CLAUDE: "1", INLINE_DATA_DIR: path.join(os.tmpdir(), `inline-e2e-${Date.now()}`), INLINE_MIRROR_DIR: MIRROR_DIR },
+    env: { INLINE_FAKE_CLAUDE: "1", INLINE_FAKE_CODEX: "1", INLINE_DATA_DIR: path.join(os.tmpdir(), `inline-e2e-${Date.now()}`), INLINE_MIRROR_DIR: MIRROR_DIR },
   },
 });

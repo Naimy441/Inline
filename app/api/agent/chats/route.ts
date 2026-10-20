@@ -25,6 +25,8 @@ export const POST = route(async (request) => {
   const runtime = agentRuntime();
   if (body.settings) runtime.setDefaults(stripUndefined(body.settings));
   const chat = await runtime.create({ id: body.id, documentId: body.documentId ?? null, settings: stripUndefined(body.settings ?? {}) });
+  // A draft may already have been warmed with a different provider or model.
+  if (!chat.state.messages.length && body.settings) await chat.update({ settings: stripUndefined(body.settings) });
   if (body.message) await chat.send(body.message);
   else if (body.warm) chat.warm();
   return json({ chat: chat.state }, { status: 201 });

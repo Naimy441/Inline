@@ -83,6 +83,7 @@ import { createToc, describeToc, findToc, syncTocTransform, tocDepth } from "@/l
 export type ToolContext = {
   /** Chat id for in-app sessions, "external" for MCP clients. */
   author: string;
+  provider?: "claude" | "codex";
   /** The document a chat is attached to; tools default to it. */
   documentId?: string;
   /** The chat message being written, so the changes it makes can be reviewed together. */
@@ -1131,7 +1132,7 @@ export const TOOLS = [
       const userSuggestions = doc.hunks.filter(isUserSuggestion).length;
       const claudeChanges = doc.hunks.length - userSuggestions;
       const pending = [
-        claudeChanges ? `${claudeChanges} change${claudeChanges === 1 ? "" : "s"} by Claude` : "",
+        claudeChanges ? `${claudeChanges} change${claudeChanges === 1 ? "" : "s"} by ${doc.hunks.some((hunk) => hunk.author.startsWith("codex:")) ? "AI" : "Claude"}` : "",
         userSuggestions ? `${userSuggestions} suggestion${userSuggestions === 1 ? "" : "s"} by the user` : "",
       ].filter(Boolean);
       parts.push(pending.length ? `${pending.join(" and ")} awaiting review (use get_pending_changes).` : "No pending changes.");
@@ -1153,7 +1154,7 @@ export const TOOLS = [
       const entries = textblockLines(serializeDoc(doc.doc));
       const rows = doc.hunksJSON().map((hunk) => {
         const entry = entries.find((item) => item.pos + item.node.nodeSize > hunk.from);
-        const author = isUserSuggestion(hunk) ? "suggested by the user" : "by Claude";
+        const author = isUserSuggestion(hunk) ? "suggested by the user" : hunk.author.startsWith("codex:") ? "by Codex" : "by Claude";
         const described = describeHunk(hunk, doc.doc);
         return `- ${hunk.id} (line ${entry?.startLine ?? "?"}, ${author}): "${clip(described.deleted)}" → "${clip(described.inserted)}"`;
       });
@@ -1216,8 +1217,8 @@ export const TOOLS = [
       if (!comments.length) return ok(args.include_resolved ? "No comments." : "No open comments.");
       const rows = comments.map((comment) => {
         const anchor = comment.anchor ? `on "${clip(comment.anchor.text, 200)}"` : `(anchor text was deleted; originally "${clip(comment.quote, 120)}")`;
-        const replies = comment.replies.map((reply) => `    ↳ ${reply.author === "claude" ? "Claude" : "User"}: ${reply.body}`).join("\n");
-        return `- [${comment.id}]${comment.resolved ? " (resolved)" : ""} ${comment.author === "claude" ? "Claude" : "User"} ${anchor}: ${comment.body}${replies ? `\n${replies}` : ""}`;
+        const replies = comment.replies.map((reply) => `    ↳ ${reply.author === "codex" ? "Codex" : reply.author === "claude" ? "Claude" : "User"}: ${reply.body}`).join("\n");
+        return `- [${comment.id}]${comment.resolved ? " (resolved)" : ""} ${comment.author === "codex" ? "Codex" : comment.author === "claude" ? "Claude" : "User"} ${anchor}: ${comment.body}${replies ? `\n${replies}` : ""}`;
       });
       return ok(rows.join("\n"));
     },
@@ -1242,7 +1243,7 @@ export const TOOLS = [
       if (found.length > 1 && !args.occurrence) return fail(`"${args.text}" appears ${found.length} times. Pass occurrence (1-based) or quote more text.`);
       const target = found[(args.occurrence ?? 1) - 1];
       if (!target) return fail(`Only ${found.length} matches.`);
-      const comment = doc.addComment({ from: target.from, to: target.to, body: args.comment, author: "claude" }, { kind: "agent", author: ctx.author });
+      const comment = doc.addComment({ from: target.from, to: target.to, body: args.comment, author: ctx.provider ?? "claude" }, { kind: "agent", author: ctx.author });
       return ok(`Added comment ${comment.id} on line ${target.line}.`);
     },
   }),
@@ -1260,7 +1261,7 @@ export const TOOLS = [
     write: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
-      doc.replyToComment(args.comment_id, args.reply, "claude");
+      doc.replyToComment(args.comment_id, args.reply, ctx.provider ?? "claude");
       if (args.resolve) doc.setCommentResolved(args.comment_id, true);
       return ok(`Replied to ${args.comment_id}${args.resolve ? " and resolved it" : ""}.`);
     },
@@ -2000,7 +2001,7 @@ export const TOOLS = [
     write: true,
     async handler(args, ctx) {
       const doc = await resolveDocument(ctx, args.document_id);
-      const version = await doc.saveVersion(args.label, "claude");
+      const version = await doc.saveVersion(args.label, ctx.provider ?? "claude");
       const files = version.files.length ? ` Files: ${version.files.join(", ")}.` : "";
       return ok(`Saved version "${version.label}" (${version.id}).${files}`);
     },

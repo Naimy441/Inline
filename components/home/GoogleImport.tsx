@@ -103,7 +103,7 @@ export function TakeoutGuide({ open, importing, onClose, onImport }: { open: boo
           Google emails you when the export is ready, usually within minutes for documents. Download the .zip (or each part, if it was split) and click <strong>Import .zip</strong> below.
         </li>
       </ol>
-      <p className="takeout-note">Previews of every page are drawn after the import, and you can ask Claude to sort anything that isn&apos;t in a folder yet.</p>
+      <p className="takeout-note">Previews of every page are drawn after the import, and you can ask AI to sort anything that isn&apos;t in a folder yet.</p>
     </Dialog>
   );
 }

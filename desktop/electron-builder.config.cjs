@@ -79,8 +79,8 @@ module.exports = {
     executableName: "inline",
     syncDesktopName: true,
     category: "Office",
-    synopsis: "A document editor with Claude built in",
-    description: "Inline is a paginated document editor with Claude Code built in.",
+    synopsis: "A document editor with Claude and Codex built in",
+    description: "Inline is a paginated document editor with Claude Code and Codex built in.",
     target: [
       { target: "AppImage", arch: ["x64"] },
       { target: "tar.gz", arch: ["x64"] },

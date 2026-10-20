@@ -8,10 +8,10 @@ const GROUPS: Array<[string, Array<[string, string]>]> = [
   [
     "Claude",
     [
-      ["Ask Claude about the selection", "⌘ L"],
-      ["Edit with Claude inline", "⌘ ⇧ K"],
+      ["Ask AI about the selection", "⌘ L"],
+      ["Edit with AI inline", "⌘ ⇧ K"],
       ["Check spelling & grammar here", "⌘ ⌥ X"],
-      ["Show or hide Claude", "⌘ J"],
+      ["Show or hide AI chat", "⌘ J"],
       ["Keep the change at the cursor", "⌘ ⇧ ⏎"],
       ["Undo the change at the cursor", "⌘ ⇧ ⌫"],
       ["Next / previous change", "⌥ ] / ⌥ ["],
@@ -69,7 +69,7 @@ const GROUPS: Array<[string, Array<[string, string]>]> = [
   ],
 ];
 
-const AI_SHORTCUTS = new Set(["Ask Claude about the selection", "Edit with Claude inline", "Check spelling & grammar here", "Show or hide Claude", "Stop Claude (in the chat box)"]);
+const AI_SHORTCUTS = new Set(["Ask AI about the selection", "Edit with AI inline", "Check spelling & grammar here", "Show or hide AI chat", "Stop Claude (in the chat box)"]);
 
 export function ShortcutsDialog({ open, onClose, hideAi = false }: { open: boolean; onClose: () => void; /** Focus mode: drop shortcuts that open Claude. Review shortcuts stay. */ hideAi?: boolean }) {
   if (!open) return null;

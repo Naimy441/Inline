@@ -615,7 +615,7 @@ export function Workspace({ documentId }: { documentId: string }) {
         only ??
         session.selection() ?? (view ? { documentId: session.id, text: "", from: view.state.selection.from, to: view.state.selection.from } : null);
       const deliver = (tries: number) => {
-        if (agentRef.current) void agentRef.current.send(selection, text).catch(() => toast("Couldn't send that to Claude.", { tone: "error" }));
+        if (agentRef.current) void agentRef.current.send(selection, text).catch(() => toast("Couldn't send that message.", { tone: "error" }));
         else if (tries > 0) requestAnimationFrame(() => deliver(tries - 1));
       };
       setPanel("agent");
@@ -732,7 +732,7 @@ export function Workspace({ documentId }: { documentId: string }) {
       link.click();
       link.remove();
     } else if (command.kind === "open_document" && command.documentId !== documentId && !focusRef.current) {
-      toast("Claude opened another document.", { action: { label: "Open", run: () => router.push(`/d/${command.documentId}`) } });
+      toast("Your assistant opened another document.", { action: { label: "Open", run: () => router.push(`/d/${command.documentId}`) } });
     } else if (command.kind === "scroll_to") session.followEdit(command.from, command.to);
     else if (command.kind === "render_pages") void session.answerRender(command).catch(() => undefined);
     else if (command.kind === "measure_fit") void session.answerFit(command).catch(() => undefined);
@@ -756,7 +756,7 @@ export function Workspace({ documentId }: { documentId: string }) {
         session.setShowInvisibles(!preferences.get().showInvisibles);
         return;
       }
-      // Links own ⌘K. Edit with Claude inline — the selection sent from the document — is ⌘⇧K.
+      // Links own ⌘K. Edit with AI inline — the selection sent from the document — is ⌘⇧K.
       if (key === "k" && event.shiftKey && !event.altKey && session.view?.hasFocus() && session.ui.get().mode !== "viewing") {
         if (focusRef.current) return;
         event.preventDefault();
@@ -896,7 +896,7 @@ export function Workspace({ documentId }: { documentId: string }) {
     toggleDevOptions: () => {
       const next = !prefs.devOptions;
       setPreference("devOptions", next);
-      toast(next ? "Developer options on. Copy actions appear in Claude chats." : "Developer options off.");
+      toast(next ? "Developer options on. Copy actions appear in AI chats." : "Developer options off.");
     },
     pdfAnnotations: meta?.pdfImport?.inkPages.length ? meta.pdfImport.showAnnotations : null,
     togglePdfAnnotations: () => void togglePdfAnnotations(),
@@ -932,7 +932,7 @@ export function Workspace({ documentId }: { documentId: string }) {
   const working = Boolean(ui.activity && ui.activity.status !== "idle");
   const chatOpen = shownPanel === "agent";
 
-  /** Show a chat in the Claude panel (the one converting an imported PDF). */
+  /** Show a chat in the AI chat panel (the one converting an imported PDF). */
   const openChat = (chatId: string) => {
     if (focusRef.current) return;
     rememberChat(chatKey, chatId);
@@ -1006,7 +1006,7 @@ export function Workspace({ documentId }: { documentId: string }) {
               {openComments > 0 && <span className="badge">{openComments}</span>}
             </IconButton>
             {!focusMode && (
-              <IconButton label="Claude" className={`claude-toggle${panel === "agent" ? " is-active" : ""}${working ? " is-working" : ""}`} onClick={() => setPanel((current) => (current === "agent" ? null : "agent"))}>
+              <IconButton label="AI chat" className={`claude-toggle${panel === "agent" ? " is-active" : ""}${working ? " is-working" : ""}`} onClick={() => setPanel((current) => (current === "agent" ? null : "agent"))}>
                 <Sparkles size={16} />
               </IconButton>
             )}
@@ -1035,11 +1035,11 @@ export function Workspace({ documentId }: { documentId: string }) {
                 className={`btn btn-md claude-toggle claude-toggle-text${panel === "agent" ? " is-active" : ""}`}
                 onClick={() => setPanel((current) => (current === "agent" ? null : "agent"))}
                 aria-pressed={panel === "agent"}
-                data-tip={`${panel === "agent" ? "Close" : "Open"} Claude  ${keys("⌘J")}`}
+                data-tip={`${panel === "agent" ? "Close" : "Open"} AI chat  ${keys("⌘J")}`}
               >
                 {/* With the panel closed, the button is where Claude shows it is working. */}
                 {working && panel !== "agent" ? <Spark size={15} /> : <PanelRight size={15} />}
-                <span className="btn-label">Claude</span>
+                <span className="btn-label">AI chat</span>
               </button>
             )}
             <MenuButton className="btn btn-secondary btn-md export-btn" label="Download" placement="bottom-end" items={downloads}>

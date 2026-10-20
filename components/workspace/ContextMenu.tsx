@@ -131,7 +131,7 @@ export function ContextMenu({
     { label: "Paste without formatting", shortcut: `⌘⇧V`, disabled: readOnly, onSelect: () => paste(true) },
     { label: "Delete", icon: <Trash2 size={14} />, disabled: !hasSelection || readOnly, onSelect: () => run(deleteSelection) },
     { kind: "separator" },
-    ...(hideClaude ? [] : [{ label: hasSelection ? "Ask Claude about this" : "Ask Claude", icon: <Sparkles size={14} />, shortcut: `⌘L`, onSelect: onAsk }]),
+    ...(hideClaude ? [] : [{ label: hasSelection ? "Ask AI about this" : "Ask AI", icon: <Sparkles size={14} />, shortcut: `⌘L`, onSelect: onAsk }]),
     { label: "Comment", icon: <MessageSquarePlus size={14} />, shortcut: `⌘⌥M`, disabled: !hasSelection, onSelect: onComment },
     { label: "Link", icon: <Link2 size={14} />, shortcut: `⌘K`, disabled: readOnly, onSelect: onLink },
     ...(hideClaude
@@ -139,7 +139,7 @@ export function ContextMenu({
       : [
           locked
             ? { label: "Unlock for Claude", icon: <LockOpen size={14} />, disabled: readOnly, onSelect: () => lockSelection(false) }
-            : { label: "Lock from Claude's edits", icon: <Lock size={14} />, disabled: !hasSelection || readOnly, onSelect: () => lockSelection(true) },
+            : { label: "Lock from AI's edits", icon: <Lock size={14} />, disabled: !hasSelection || readOnly, onSelect: () => lockSelection(true) },
         ]),
     ...(inTable && !readOnly
       ? ([

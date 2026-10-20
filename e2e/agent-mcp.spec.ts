@@ -129,7 +129,7 @@ async function revealControls(page: Page, text: string) {
  * between the two steps, so retry a few times.
  */
 async function openViaAgent(page: Page, current: string, target: string) {
-  const toastBox = page.locator(".toast", { hasText: "Claude opened another document." }).last();
+  const toastBox = page.locator(".toast", { hasText: "Your assistant opened another document." }).last();
   for (let attempt = 0; attempt < 8; attempt++) {
     const focused = page.waitForResponse((response) => response.url().includes(`/api/documents/${current}/selection`));
     await page.locator(".doc-content").evaluate((element) => (element as HTMLElement).blur());

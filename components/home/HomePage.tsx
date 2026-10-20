@@ -791,7 +791,7 @@ export function HomePage() {
                   <button type="button" className="template-card" onClick={() => void createCanvas()} disabled={creating !== null}>
                     <span className="template-thumb is-blank" aria-hidden />
                     <span className="template-title">{creating === "canvas" ? "Creating…" : "Canvas"}</span>
-                    <span className="template-desc">Design editable pages with Claude</span>
+                    <span className="template-desc">Design editable pages with Claude or Codex</span>
                   </button>
                 )}
               </Fragment>
@@ -829,9 +829,9 @@ export function HomePage() {
                 className={`organize-button${agentOpen ? " is-open" : ""}`}
                 aria-pressed={agentOpen}
                 onClick={() => setAgentOpen((open) => !open)}
-                title={`${agentOpen ? "Close Claude" : "Ask Claude to sort your documents into folders"} (${keys("⌘J")})`}
+                title={`${agentOpen ? "Close Claude" : "Ask AI to sort your documents into folders"} (${keys("⌘J")})`}
               >
-                Organize with Claude
+                Organize with AI
               </Button>
             )}
             {view === "documents" && (
@@ -919,7 +919,7 @@ export function HomePage() {
               ) : (
                 <>
                   <FileText size={28} />
-                  <p>No documents yet. Pick a template above to start, then ask Claude to help you write.</p>
+                  <p>No documents yet. Pick a template above to start, then ask AI to help you write.</p>
                 </>
               )}
             </div>

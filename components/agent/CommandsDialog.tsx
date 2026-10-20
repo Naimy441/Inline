@@ -61,7 +61,7 @@ export function CommandsDialog({ open, onClose }: { open: boolean; onClose: () =
       open={open}
       onClose={onClose}
       title="Slash commands"
-      description={`Type / in the Claude panel to use one. Built in: ${BUILTIN_COMMANDS.map((command) => `/${command.name}`).join(", ")}. A command of yours with the same name replaces the built-in one.`}
+      description={`Type / in the AI chat panel to use one. Built in: ${BUILTIN_COMMANDS.map((command) => `/${command.name}`).join(", ")}. A command of yours with the same name replaces the built-in one.`}
       width={560}
       footer={
         <>
@@ -90,7 +90,7 @@ export function CommandsDialog({ open, onClose }: { open: boolean; onClose: () =
                 <Trash2 size={14} />
               </IconButton>
             </div>
-            <textarea className="input" aria-label="Prompt" rows={3} placeholder="The prompt Claude receives" value={draft.prompt} onChange={(event) => update(index, { prompt: event.target.value })} />
+            <textarea className="input" aria-label="Prompt" rows={3} placeholder="The prompt your assistant receives" value={draft.prompt} onChange={(event) => update(index, { prompt: event.target.value })} />
           </div>
         ))}
         <Button size="sm" variant="ghost" icon={<Plus size={14} />} onClick={() => setDrafts((list) => [...list, { name: "", description: "", prompt: "" }])}>

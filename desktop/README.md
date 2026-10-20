@@ -2,8 +2,8 @@
 
 The Inline web app in a native window for macOS, Windows and Linux. The app
 starts Inline's own server on the user's computer, so there is nothing to host:
-documents, the Word copies and Claude all run locally on the user's own Claude
-account, exactly as with `npm run dev`.
+documents and Word copies stay local, and Claude Code and Codex use the user's
+own accounts, exactly as with `npm run dev`.
 
 This folder is its own npm package. Nothing in it is needed for the web app:
 `npm install` and `npm run dev` in the project folder never install Electron.
@@ -17,7 +17,12 @@ This folder is its own npm package. Nothing in it is needed for the web app:
 - **Claude Code:** the Agent SDK's Claude Code CLI is a separate binary for
   each platform. The right one is copied into each build
   (`scripts/after-pack.cjs`), so users don't need Claude Code installed.
-  They sign in from the Claude panel (**Sign in with Claude**).
+  They sign in from the AI chat panel (**Claude › Sign in with Claude**).
+- **Codex:** the official pinned Codex CLI is staged for each target platform
+  beside Claude Code. The AI chat panel uses its app-server protocol for
+  models, browser sign-in, streaming turns, document tools and account usage.
+  The target platform's PDF canvas backend is staged too, so PDF attachments
+  work in packaged apps. Neither runtime requires a separate installation.
 - **Windows:** the page's own header is the title bar. On macOS the traffic
   lights sit inside it, and on Windows the window buttons are drawn over it.
   `app/styles/desktop.css` makes room for them. Linux keeps the system frame.

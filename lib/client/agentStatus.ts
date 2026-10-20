@@ -1,18 +1,21 @@
 "use client";
 
 import { useEffect, useSyncExternalStore } from "react";
+import type { AgentProvider } from "@/lib/agent/providers";
 import type { AgentStatus, ChatSettings } from "@/lib/agent/types";
 import { api, Store } from "@/lib/client/api";
 
 type State = { status: AgentStatus | null; defaults: ChatSettings | null; loading: boolean };
 
-const store = new Store<State>({ status: null, defaults: null, loading: false });
-let inflight: Promise<void> | null = null;
+const stores = { claude: new Store<State>({ status: null, defaults: null, loading: false }), codex: new Store<State>({ status: null, defaults: null, loading: false }) };
+const pending: Record<AgentProvider, Promise<void> | null> = { claude: null, codex: null };
 
-export function refreshAgentStatus(force = false) {
+export function refreshAgentStatus(force = false, provider: AgentProvider = "claude") {
+  const store = stores[provider];
+  const inflight = pending[provider];
   if (inflight && !force) return inflight;
   store.set((state) => ({ ...state, loading: true }));
-  inflight = api<{ status: AgentStatus; defaults: ChatSettings }>(`/api/agent/status${force ? "?refresh=1" : ""}`)
+  pending[provider] = api<{ status: AgentStatus; defaults: ChatSettings }>(`/api/agent/status?provider=${provider}${force ? "&refresh=1" : ""}`)
     .then((result) => store.set({ status: result.status, defaults: result.defaults, loading: false }))
     .catch((error: unknown) =>
       store.set({
@@ -22,15 +25,16 @@ export function refreshAgentStatus(force = false) {
       }),
     )
     .finally(() => {
-      inflight = null;
+      pending[provider] = null;
     });
-  return inflight;
+  return pending[provider];
 }
 
-export function useAgentStatus() {
+export function useAgentStatus(provider: AgentProvider = "claude") {
+  const store = stores[provider];
   const state = useSyncExternalStore(store.subscribe, store.get, store.get);
   useEffect(() => {
-    if (!state.status && !state.loading) void refreshAgentStatus();
-  }, [state.status, state.loading]);
+    if (!state.status && !state.loading) void refreshAgentStatus(false, provider);
+  }, [state.status, state.loading, provider]);
   return state;
 }

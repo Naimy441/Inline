@@ -74,7 +74,7 @@ test("Claude searches documents from the home page and opens the match", async (
   expect(response.status()).toBe(201);
 
   await page.goto("/");
-  await page.getByRole("button", { name: "Organize with Claude" }).click();
+  await page.getByRole("button", { name: "Organize with AI" }).click();
   const composer = page.getByLabel("Message Claude");
   await composer.fill(`find the document about "${marker}"`);
   await composer.press("Enter");
@@ -90,9 +90,9 @@ test("Claude files documents from the home page, and the page updates as it work
   await page.goto("/");
   await expect(page.locator(".doc-card", { hasText: title })).toBeVisible();
 
-  await page.getByRole("button", { name: "Organize with Claude" }).click();
+  await page.getByRole("button", { name: "Organize with AI" }).click();
   const panel = page.getByRole("complementary", { name: "Claude" });
-  await expect(panel.getByRole("heading", { name: "Organize with Claude" })).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "Organize your documents" })).toBeVisible();
   await expect(panel.getByRole("button", { name: "Sort everything into folders" })).toBeVisible();
   await panel.getByRole("button", { name: "Organize my Google Docs import" }).click();
   await expect(page.getByLabel("Message Claude")).toHaveValue(/"To Delete" for documents I probably don't need and "Misc"/);
@@ -123,9 +123,9 @@ test("Claude files documents from the home page, and the page updates as it work
   await expect.poll(async () => (await page.locator(".home-agent").boundingBox())!.width).toBeGreaterThan(before.width + 80);
 
   // The Organize button toggles the panel, as does Ctrl/Cmd+J, and the chat is kept.
-  await page.getByRole("button", { name: "Organize with Claude" }).click();
+  await page.getByRole("button", { name: "Organize with AI" }).click();
   await expect(panel).toHaveCount(0);
-  await page.getByRole("button", { name: "Organize with Claude" }).click();
+  await page.getByRole("button", { name: "Organize with AI" }).click();
   await expect(panel.locator(".msg-assistant").last()).toContainText("Filed");
   await page.keyboard.press("ControlOrMeta+j");
   await expect(panel).toHaveCount(0);

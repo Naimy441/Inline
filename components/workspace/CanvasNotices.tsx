@@ -107,14 +107,14 @@ export function PdfImportNotice({ pdf, working, chatOpen, onConvert, onShowChat,
       <span className="pdf-notice-text">
         {converting ? (
           <>
-            <strong>Claude is converting this PDF</strong> into editable text: {done} of {pdf.pages} page{pdf.pages === 1 ? "" : "s"} done.
+            <strong>Your assistant is converting this PDF</strong> into editable text: {done} of {pdf.pages} page{pdf.pages === 1 ? "" : "s"} done.
           </>
         ) : (
           <>
             <strong>
               {pdf.pages - done} of {pdf.pages} page{pdf.pages === 1 ? " is" : "s are"} still {pdf.pages - done === 1 ? "a picture" : "pictures"} of the PDF.
             </strong>{" "}
-            Claude can rebuild {pdf.pages - done === 1 ? "it" : "them"} as editable text.
+            Your assistant can rebuild {pdf.pages - done === 1 ? "it" : "them"} as editable text.
           </>
         )}
       </span>
@@ -126,7 +126,7 @@ export function PdfImportNotice({ pdf, working, chatOpen, onConvert, onShowChat,
         )
       ) : (
         <button type="button" className="pdf-notice-action is-primary" onClick={onConvert}>
-          {done ? "Continue converting" : "Convert with Claude"}
+          {done ? "Continue converting" : "Convert with AI"}
         </button>
       )}
       {annotations && (

@@ -4,7 +4,7 @@
  */
 
 export type AgentMode = "agent" | "ask";
-export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+export type Effort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 export type Todo = { content: string; activeForm?: string; status: "pending" | "in_progress" | "completed" };
 
@@ -124,6 +124,8 @@ export type DocumentTurnLog = {
 };
 
 export type TurnUsage = {
+  /** Codex reports tokens but does not report a dollar cost. */
+  costUnavailable?: boolean;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
@@ -134,6 +136,7 @@ export type TurnUsage = {
 };
 
 export type AssistantMessage = {
+  provider?: import("./providers").AgentProvider;
   id: string;
   role: "assistant";
   createdAt: number;
@@ -155,6 +158,8 @@ export type AssistantMessage = {
 export type ChatMessage = UserMessage | AssistantMessage;
 
 export type ChatSettings = {
+  /** Absent in older chats: Claude. */
+  provider?: import("./providers").AgentProvider;
   model: string | null;
   effort: Effort;
   mode: AgentMode;
@@ -264,7 +269,7 @@ export type ChatEvent =
 
 export type SequencedChatEvent = ChatEvent & { seq: number };
 
-export type ModelOption = { value: string; displayName: string; description: string; efforts: Effort[] };
+export type ModelOption = { value: string; displayName: string; description: string; efforts: Effort[]; provider?: import("./providers").AgentProvider };
 
 export type AgentStatus =
   | {

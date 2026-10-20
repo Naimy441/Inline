@@ -251,8 +251,8 @@ export function SelectionBubble({
         <input
           ref={promptInput}
           className="input input-sm"
-          aria-label="Ask Claude to edit"
-          placeholder={state.selection.empty ? "Ask Claude to write here…" : "Ask Claude to change the selection…"}
+          aria-label="Ask AI to edit"
+          placeholder={state.selection.empty ? "Ask AI to write here…" : "Ask AI to change the selection…"}
           value={instruction}
           onChange={(event) => setInstruction(event.target.value)}
           onBlur={(event) => {

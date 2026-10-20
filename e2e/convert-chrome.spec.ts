@@ -57,7 +57,7 @@ test("conversion chips stack, and Show progress hides while chat is open", async
   const notice = page.locator(".pdf-notice");
   const toggle = page.locator(".claude-toggle");
   const progress = page.getByRole("button", { name: "Show progress" });
-  await expect(notice).toContainText("Claude is converting this PDF", { timeout: 30_000 });
+  await expect(notice).toContainText("Your assistant is converting this PDF", { timeout: 30_000 });
   await expect(toggle).toHaveClass(/is-active/);
   await expect(progress).toHaveCount(0);
 

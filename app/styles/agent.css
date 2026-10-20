@@ -996,6 +996,10 @@ button.msg-meta-count:hover {
   flex: none;
 }
 
+.composer-controls {
+  flex-wrap: wrap;
+}
+
 .pill {
   display: inline-flex;
   align-items: center;

@@ -172,7 +172,7 @@ export type DocumentTab = { id: string; title: string; root?: boolean; outline?:
 export type TabHeading = { pos: number; level: number; text: string };
 
 export type CommentReply = { id: string; author: CommentAuthor; body: string; createdAt: number };
-export type CommentAuthor = "user" | "claude";
+export type CommentAuthor = "user" | "claude" | "codex";
 
 export type DocComment = {
   id: string;

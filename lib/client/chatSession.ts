@@ -206,7 +206,10 @@ export class ChatSession {
         }
         if (event.type === "rate_limit") next = { ...next, rateLimit: event.rateLimit };
         else if (event.type === "snapshot") next = { ...next, chat: event.chat };
-        else if (next.chat) next = { ...next, chat: reduceChat(next.chat, event) };
+        else if (next.chat) {
+          if (event.type === "meta" && event.settings.provider !== next.chat.settings.provider) next = { ...next, rateLimit: null };
+          next = { ...next, chat: reduceChat(next.chat!, event) };
+        }
       }
       return next;
     });
@@ -314,7 +317,7 @@ export class ChatSession {
 
   update(input: { title?: string; documentId?: string | null; settings?: Partial<ChatSettings> }) {
     return patch<{ chat: ChatState }>(`/api/agent/chats/${this.id}`, input).then((result) => {
-      this.ui.set((ui) => ({ ...ui, chat: ui.chat ? { ...ui.chat, title: result.chat.title, settings: result.chat.settings, documentId: result.chat.documentId } : result.chat }));
+      this.ui.set((ui) => ({ ...ui, chat: ui.chat ? { ...ui.chat, title: result.chat.title, settings: result.chat.settings, documentId: result.chat.documentId, context: result.chat.context } : result.chat }));
       return result.chat;
     });
   }

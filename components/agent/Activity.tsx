@@ -25,7 +25,7 @@ function runningTool(message: AssistantMessage | undefined): ToolPart | undefine
 }
 
 function label(status: RunStatus | undefined, message: AssistantMessage | undefined, tick: number, elapsed: number) {
-  if (!status || status.kind === "starting") return elapsed >= 2 ? "Starting Claude Code" : "Getting started";
+  if (!status || status.kind === "starting") return elapsed >= 2 ? message?.provider === "codex" ? "Starting Codex" : "Starting Claude Code" : "Getting started";
   if (status.kind === "retrying") return `${status.error} Retrying (${status.attempt}/${status.maxRetries})`;
   if (status.kind === "compacting") return "Summarizing earlier messages to free up context";
   if (status.kind === "responding") return "Writing";
@@ -88,7 +88,7 @@ export function ActivityLine({ status, message, since }: { status: RunStatus | u
     // Between steps it fades in after a beat, so a quick hand-off doesn't flash it.
     <div className={message?.parts.length ? "activity is-between" : "activity"}>
       <span className="sr-only" role="status">
-        Claude is working
+        {message?.provider === "codex" ? "Codex" : "Claude"} is working
       </span>
       <Spark />
       <span key={text} className="activity-label" aria-hidden>
