@@ -185,4 +185,30 @@ describe("sandboxed commands", () => {
     const made = await readWorkspaceText("box", "made.txt");
     assert.equal(made.kind === "text" && made.text, "from python");
   });
+
+  it("puts temp files and caches outside the document folder, and plots without a window", async () => {
+    await writeDocumentFile(docFile("temps", "Stay"));
+    const ran = await runWorkspaceCommand(
+      "temps",
+      `python3 -c 'import os, tempfile; f = tempfile.NamedTemporaryFile(delete=False); print(f.name); print(os.environ["PIP_CACHE_DIR"]); print(os.environ["MPLBACKEND"])'`,
+      20_000,
+    );
+    assert.equal(ran.code, 0, ran.stderr);
+    const [temp, pip, backend] = ran.stdout.trim().split("\n");
+    assert.equal(temp!.startsWith(path.join(dataDir(), "cache", "tmp")), true, temp);
+    assert.equal(pip, path.join(dataDir(), "cache", "pip"));
+    assert.equal(backend, "Agg");
+    assert.doesNotMatch(ran.stderr, /couldn't create cache file/);
+  });
+
+  it("keeps a virtualenv and node_modules out of versions and the file list", async () => {
+    await writeDocumentFile(docFile("venv", "Stay"));
+    await writeWorkspaceFile("venv", "plot.py", "print(1)\n");
+    const root = documentRepoPath("venv");
+    for (const dir of [".venv/lib", "node_modules/pkg", "sub/.venv/bin"]) mkdirSync(path.join(root, dir), { recursive: true });
+    for (const file of [".venv/lib/site.py", "node_modules/pkg/index.js", "sub/.venv/bin/python"]) writeFileSync(path.join(root, file), "x");
+    assert.deepEqual((await listWorkspaceFiles("venv")).map((file) => file.path), ["plot.py"]);
+    const saved = await save("venv", "With a venv");
+    assert.deepEqual(saved.files, ["plot.py"]);
+  });
 });

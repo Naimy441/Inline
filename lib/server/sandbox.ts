@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { accessSync, constants } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -39,20 +39,46 @@ export function commandEnvironment() {
 }
 
 /**
- * Matplotlib and fontconfig write a cache on import. The cache lives beside
- * the document repositories, not inside one, so a plot does not create
- * `matplotlib-*` in that document's git repo. The sandbox may write there.
+ * Matplotlib, fontconfig and pip write a cache, and Python writes temp files.
+ * All of that lives beside the document repositories, not inside one, so a
+ * plot or a `pip install` does not leave `matplotlib-*`, `tmp*` or a pip
+ * cache in that document's git repo. The sandbox may write there.
  */
 function cacheRoot() {
   return path.join(dataDir(), "cache");
 }
 
-async function commandCacheEnv() {
-  const cache = path.join(cacheRoot(), "xdg");
-  const mpl = path.join(cacheRoot(), "matplotlib");
-  await mkdir(cache, { recursive: true });
-  await mkdir(mpl, { recursive: true });
-  return { XDG_CACHE_HOME: cache, MPLCONFIGDIR: mpl };
+async function commandCacheEnv(): Promise<Record<string, string> & { TMPDIR: string }> {
+  const dirs = { XDG_CACHE_HOME: "xdg", MPLCONFIGDIR: "matplotlib", PIP_CACHE_DIR: "pip", TMPDIR: "tmp" };
+  const env: Record<string, string> = {};
+  for (const [name, dir] of Object.entries(dirs)) {
+    env[name] = path.join(cacheRoot(), dir);
+    await mkdir(env[name]!, { recursive: true });
+  }
+  // No window can open from the sandbox. Without Agg, pyplot on macOS starts
+  // Python.app and prints sandbox and XPC errors, though the file is written.
+  return { ...env, TMPDIR: env.TMPDIR!, MPLBACKEND: "Agg", PIP_DISABLE_PIP_VERSION_CHECK: "1" };
+}
+
+let userTemp: string | null | undefined;
+
+/**
+ * macOS's per-user temp folder (/var/folders/…/T/). xcrun, behind
+ * /usr/bin/python3 and the other developer-tool shims, keeps its lookup cache
+ * there whatever TMPDIR says, and reports every refused write on stderr.
+ */
+function darwinUserTemp() {
+  if (userTemp === undefined) {
+    userTemp = null;
+    if (process.platform === "darwin") {
+      try {
+        userTemp = execFileSync("/usr/bin/getconf", ["DARWIN_USER_TEMP_DIR"], { encoding: "utf8" }).trim() || null;
+      } catch {
+        // No such folder; xcrun then has nowhere to cache either.
+      }
+    }
+  }
+  return userTemp;
 }
 
 /** Text Claude should see for a command: the exit reason, both streams, and where it ran. */
@@ -95,10 +121,14 @@ export async function runInFolder(folder: string, command: string, timeoutMs: nu
   }
   try {
     await ensureSandbox();
-    const wrapped = await SandboxManager.wrapWithSandboxArgv(command, undefined, folderConfig(root), signal, root);
     const cache = await commandCacheEnv();
+    // The runtime sets TMPDIR=/tmp/claude in the wrapper, after the spawn
+    // environment. That folder may not exist, and Python's tempfile then falls
+    // back to the working directory, which is the document folder.
+    const sandboxed = `export TMPDIR=${shellQuote(cache.TMPDIR)}\n${command}`;
+    const wrapped = await SandboxManager.wrapWithSandboxArgv(sandboxed, undefined, folderConfig(root), signal, root);
     const captured = await capture(wrapped.argv[0]!, wrapped.argv.slice(1), timeoutMs, { cwd: root, env: { ...wrapped.env, ...cache }, signal });
-    const stderr = SandboxManager.annotateStderrWithSandboxFailures(command, captured.stderr);
+    const stderr = SandboxManager.annotateStderrWithSandboxFailures(sandboxed, captured.stderr);
     return { ...captured, stderr, started: true, backend: BACKEND };
   } catch (error) {
     const stderr = errorText(error);
@@ -112,10 +142,15 @@ export async function runInFolder(folder: string, command: string, timeoutMs: nu
  * not add a block list of our own.
  */
 function folderConfig(folder: string): SandboxRuntimeConfig {
+  const temp = darwinUserTemp();
   return {
     network: { deniedDomains: [] },
-    filesystem: { denyRead: [], allowWrite: [folder, cacheRoot()], denyWrite: [] },
+    filesystem: { denyRead: [], allowWrite: [folder, cacheRoot(), ...(temp ? [path.join(temp, "xcrun_db*")] : [])], denyWrite: [] },
   } as unknown as SandboxRuntimeConfig;
+}
+
+function shellQuote(value: string) {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 let ready: Promise<void> | null = null;

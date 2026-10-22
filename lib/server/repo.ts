@@ -27,7 +27,10 @@ const exec = promisify(execFile);
 
 const SHA = /^[0-9a-f]{40}$/;
 const RESERVED = new Set([".git", ".draft", ".tmp", "document.json"]);
-const EXCLUDE = `.draft/\n.tmp/\n__pycache__/\n*.pyc\n.DS_Store\n`;
+/** Kept out of versions. A virtualenv or node_modules is thousands of files Claude can rebuild. */
+const EXCLUDE = [".draft/", ".tmp/", "__pycache__/", "*.pyc", ".DS_Store", ".venv/", "node_modules/", ".ipynb_checkpoints/", ".pytest_cache/", ".mypy_cache/"];
+/** Folders the file list skips: Inline's own, and the tool folders above. */
+const UNLISTED = new Set([".git", ".draft", ".tmp", "__pycache__", ".venv", "node_modules", ".ipynb_checkpoints", ".pytest_cache", ".mypy_cache"]);
 
 export class UnsavedChangesError extends Error {
   constructor() {
@@ -84,7 +87,9 @@ export async function ensureDocumentRepo(id: string) {
     await fs.mkdir(info, { recursive: true });
     const exclude = path.join(info, "exclude");
     const current = await fs.readFile(exclude, "utf8").catch(() => "");
-    if (!current.includes(".draft/")) await fs.writeFile(exclude, `${current.trim()}\n${EXCLUDE}`.trim() + "\n");
+    const lines = new Set(current.split("\n").map((line) => line.trim()));
+    const missing = EXCLUDE.filter((line) => !lines.has(line));
+    if (missing.length) await fs.writeFile(exclude, `${current.trim()}\n${missing.join("\n")}`.trim() + "\n");
     // Once the document itself lives in the repo, the old snapshot folder is not a second history.
     const legacy = path.join(dataDir(), "documents", `${id}.json`);
     if (!(await fs.stat(legacy).catch(() => null))) await fs.rm(path.join(dataDir(), "versions", id), { recursive: true, force: true });
@@ -471,7 +476,7 @@ export function mimeForFile(filePath: string) {
 async function walk(root: string, dir: string, into: WorkspaceFile[]) {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
-    if (entry.name === ".git" || entry.name === ".draft" || entry.name === ".tmp" || entry.name === "document.json") continue;
+    if (entry.name === "document.json" || UNLISTED.has(entry.name)) continue;
     const full = path.join(dir, entry.name);
     if (entry.isSymbolicLink()) {
       const real = await fs.realpath(full).catch(() => null);

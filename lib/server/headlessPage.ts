@@ -73,7 +73,8 @@ export function playwrightCliPath() {
 export function installPlaywrightBrowser() {
   const cli = playwrightCliPath();
   return new Promise<void>((resolve, reject) => {
-    const child = spawn(process.execPath, [cli, "install", "chromium"], { stdio: "inherit" });
+    // In the desktop app the server is an Electron utility process, so execPath is Electron; this makes it run the CLI as Node.
+    const child = spawn(process.execPath, [cli, "install", "chromium"], { stdio: "inherit", env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
     child.on("error", reject);
     child.on("exit", (code) => {
       if (code === 0) resolve();
@@ -122,8 +123,9 @@ export async function layoutBrowser() {
       let chromium: typeof import("playwright").chromium;
       try {
         chromium = (await import("playwright")).chromium;
-      } catch {
-        throw new Error("Couldn't picture the page because the layout browser isn't installed.");
+      } catch (error) {
+        const reason = error instanceof Error ? ` ${error.message.split("\n")[0]}` : "";
+        throw new Error(`Couldn't picture the page because the layout browser isn't installed.${reason}`);
       }
       return launchPlaywrightChromium(chromium);
     })().catch((error) => {

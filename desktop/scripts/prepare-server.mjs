@@ -53,6 +53,14 @@ cpSync(path.join(root, "public"), path.join(server, "public"), { recursive: true
 
 // Never ship local data or secrets that happened to be in the project folder.
 for (const name of [".inline", ".env", ".env.local", ".env.production", ".env.production.local"]) rmSync(path.join(server, name), { recursive: true, force: true });
+// Next.js traces only the Playwright files its import reaches. Playwright reads
+// browsers.json at run time and installs its browser with cli.js, so without the
+// whole packages the layout browser (check_layout, screenshot_page) can't load.
+for (const name of ["playwright", "playwright-core"]) {
+  const target = path.join(server, "node_modules", name);
+  rmSync(target, { recursive: true, force: true });
+  cpSync(path.join(root, "node_modules", name), target, { recursive: true, dereference: true });
+}
 // sharp is only for next/image, which Inline doesn't use, and is built for one platform.
 for (const name of ["sharp", "@img"]) rmSync(path.join(server, "node_modules", name), { recursive: true, force: true });
 

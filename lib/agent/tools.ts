@@ -1906,7 +1906,7 @@ export const TOOLS = [
     name: "run_command",
     title: "Run command",
     description:
-      "Run a shell command with this document's folder as the working directory, in Claude Code's sandbox. A file you just wrote is right here. The result always includes the exit reason, stdout, and stderr: read those when it fails. Default timeout is 30 seconds (max 120).",
+      "Run a shell command with this document's folder as the working directory, in Claude Code's sandbox. A file you just wrote is right here. The result always includes the exit reason, stdout, and stderr: read those when it fails. TMPDIR, the pip cache and the matplotlib cache are already set to writable folders outside the document, and MPLBACKEND is Agg; do not override them. For Python packages, make a virtualenv at .venv in the folder: it is reused across commands and is not saved in versions. Default timeout is 30 seconds (max 120).",
     shape: {
       document_id: documentId,
       command: z.string().describe("Shell command, run with bash. The working directory is the document folder."),
