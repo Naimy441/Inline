@@ -504,7 +504,8 @@ export function imageSelectionPlugin() {
       const onMargin = (event: Event) => {
         if (!("button" in event) || (event as MouseEvent).button !== 0 || !editorView.editable || editorView.isDestroyed) return;
         const mouse = event as MouseEvent;
-        if (mouse.target && editorView.dom.contains(mouse.target as Node)) return;
+        // Blank space inside the editor counts too (left of a centred picture is
+        // still the margin). Text is left alone: pictureInMargin skips text blocks.
         const hit = pictureInMargin(editorView, mouse);
         if (!hit) return;
         mouse.preventDefault();
@@ -592,21 +593,28 @@ function pictureInMargin(view: EditorView, event: MouseEvent): { pos: number; si
   const target = event.target;
   if (target instanceof Element && target.closest("[data-keep-photo], .picture-bar, .picture-menu, .picture-options, img, .image-handle, .image-rotate, p, h1, h2, h3, h4, h5, h6, li, td, th, pre, blockquote")) return null;
   let found: { pos: number; side: "left" | "right" } | null = null;
+  // A point on any picture is that picture (even when text covers it), never the margin of another one.
+  let onPicture = false;
   view.state.doc.descendants((node, pos) => {
-    if (found || node.type.name !== "image") return;
+    if (node.type.name !== "image") return;
     const dom = view.nodeDOM(pos);
     if (!(dom instanceof HTMLElement)) return;
     const frame = dom.querySelector(".image-frame") ?? dom;
     const rect = frame.getBoundingClientRect();
     if (rect.height < 2) return;
     if (event.clientY < rect.top - 3 || event.clientY > rect.bottom + 3) return;
+    if (event.clientX >= rect.left - 2 && event.clientX <= rect.right + 2) {
+      onPicture = true;
+      return;
+    }
+    if (found) return;
     const page = dom.closest(".page-stack") ?? view.dom;
     const pageRect = page.getBoundingClientRect();
     if (event.clientX < pageRect.left - 12 || event.clientX > pageRect.right + 12) return;
     if (event.clientX < rect.left - 2) found = { pos, side: "left" };
     else if (event.clientX > rect.right + 2) found = { pos, side: "right" };
   });
-  return found;
+  return onPicture ? null : found;
 }
 
 function describeSelection(state: EditorState): PictureSelection | null {

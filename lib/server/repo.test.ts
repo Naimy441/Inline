@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 
+import { sandboxSkip } from "@/lib/agent/testing/sandboxSkip";
 import { DEFAULT_SETTINGS } from "@/lib/doc/settings";
 import {
   UnsavedChangesError,
@@ -174,7 +175,7 @@ describe("legacy snapshots", () => {
   });
 });
 
-describe("sandboxed commands", () => {
+describe("sandboxed commands", { skip: sandboxSkip() }, () => {
   it("runs in the document folder through Claude Code's sandbox", async () => {
     await writeDocumentFile(docFile("box", "Stay"));
     const wrote = await runWorkspaceCommand("box", "python3 -c 'open(\"made.txt\",\"w\").write(\"from python\")'", 20_000);

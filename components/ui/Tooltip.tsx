@@ -10,7 +10,7 @@ const GAP = 6;
 
 /** Tips go above controls near the bottom of the window (the message box, the status corner). */
 function prefersAbove(element: HTMLElement, rect: DOMRect) {
-  return Boolean(element.closest(".composer, .review-bar, .status-corner")) || rect.bottom + 40 > window.innerHeight;
+  return Boolean(element.closest(".composer, .review-bar, .statusbar")) || rect.bottom + 40 > window.innerHeight;
 }
 
 /**

@@ -47,7 +47,7 @@ async function chooseFit(page: Page) {
   await expect(page.locator(".menu")).toHaveCount(0);
 }
 
-test("manual zoom stays centered and the zoomed page scrolls on both axes", async ({ page, request }) => {
+test("manual zoom stays centered and the zoomed page scrolls on both axes", { tag: "@smoke" }, async ({ page, request }) => {
   await openDocument(page, await createDocument(request, "Zoom memo", MEMO));
   const toggle = page.locator(".claude-toggle");
   if (((await toggle.getAttribute("class")) ?? "").includes("is-active")) await toggle.click();
@@ -137,6 +137,20 @@ test("manual zoom stays centered and the zoomed page scrolls on both axes", asyn
   expect(reach.endBottom).toBeLessThan(160);
 });
 
+test("a new window starts at 100%, and zooming out stops there", async ({ page, request }) => {
+  await openDocument(page, await createDocument(request, "Default memo", MEMO));
+  await expect(page.locator(".tb-zoom")).toHaveText(/^100%/);
+  const sheet = page.locator(".sheet").first();
+  const spot = await sheet.boundingBox();
+  expect(spot).toBeTruthy();
+  const point = { x: spot!.x + spot!.width * 0.5, y: spot!.y + 140 };
+
+  await ctrlWheel(page, 400, point);
+  await expect(page.locator(".tb-zoom")).toHaveText(/^100%/);
+  const width = (await sheet.boundingBox())!.width;
+  expect(Math.abs(width - spot!.width)).toBeLessThan(1);
+});
+
 async function fractionAt(page: Page, point: { x: number; y: number }) {
   return page.evaluate(({ x, y }) => {
     const sheet = document.querySelector<HTMLElement>(".sheet")!.getBoundingClientRect();
@@ -194,7 +208,7 @@ test("ctrl+scroll zooms toward the pointer and stops at the 100% lock", async ({
   expect(back.centerGap).toBeLessThan(24);
 });
 
-test("a 50% toolbar lock stops zoom-out there and centers", async ({ page, request }) => {
+test("a 50% toolbar lock stops zoom-out there and centers", { tag: "@smoke" }, async ({ page, request }) => {
   await openDocument(page, await createDocument(request, "Lock memo", MEMO));
   await chooseZoom(page, "50%");
   const sheet = page.locator(".sheet").first();

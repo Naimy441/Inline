@@ -261,13 +261,13 @@ test.describe("editing", () => {
     await image.click();
     await expect(selected).toHaveCount(1);
 
-    // The block around the photo is not the photo.
+    // Blank space beside the photo, in its line, is the photo's margin and selects it.
     const figure = await page.locator(".doc-content .doc-image").boundingBox();
     expect(figure).toBeTruthy();
     await page.mouse.click(figure!.x + 8, figure!.y + figure!.height / 2);
-    await expect(selected).toHaveCount(0);
+    await expect(selected).toHaveCount(1);
     await page.mouse.click(figure!.x + 8, figure!.y + figure!.height / 2);
-    await expect(selected).toHaveCount(0);
+    await expect(selected).toHaveCount(1);
 
     await image.click();
     await expect(selected).toHaveCount(1);
@@ -285,7 +285,7 @@ test.describe("editing", () => {
     expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toContain("Hi Before the photo.");
   });
 
-  test("undo and redo", async ({ page, request }) => {
+  test("undo and redo", { tag: "@smoke" }, async ({ page, request }) => {
     await openDocument(page, await createDocument(request, "Undo", "Start"));
     const doc = page.locator(".doc-content");
     await doc.click();
@@ -312,7 +312,7 @@ test.describe("editing", () => {
     await expect(page.locator(".doc-content table")).toContainText("Cell A");
   });
 
-  test("find and replace all", async ({ page, request }) => {
+  test("find and replace all", { tag: "@smoke" }, async ({ page, request }) => {
     await openDocument(page, await createDocument(request, "Replace", "red apple, red pear, red plum"));
     await page.locator(".doc-content").click();
     await page.keyboard.press("Control+h");
@@ -356,7 +356,7 @@ test.describe("editing", () => {
     await expect(page.locator(".doc-content .comment-hl")).toHaveCount(1);
   });
 
-  test("a saved version can be restored", async ({ page, request }) => {
+  test("a saved version can be restored", { tag: "@smoke" }, async ({ page, request }) => {
     await openDocument(page, await createDocument(request, "History", "The original wording."));
     await menu(page, "File", "Version history");
     await page.getByPlaceholder("Name the current version").fill("Checkpoint");
@@ -425,7 +425,7 @@ test.describe("page layout", () => {
 });
 
 test.describe("downloads", () => {
-  test("Markdown, Word and PDF files", async ({ page, request }) => {
+  test("Markdown, Word and PDF files", { tag: "@smoke" }, async ({ page, request }) => {
     await openDocument(page, await createDocument(request, "Export me", "# Heading\n\nSome **bold** text."));
 
     const download = async (label: string) => {
@@ -470,7 +470,7 @@ test.describe("downloads", () => {
 });
 
 test.describe("collaboration and Claude", () => {
-  test("two tabs see each other's typing", async ({ browser, request }) => {
+  test("two tabs see each other's typing", { tag: "@smoke" }, async ({ browser, request }) => {
     const id = await createDocument(request, "Shared", "Shared start");
     const context = await browser.newContext();
     const [first, second] = [await context.newPage(), await context.newPage()];
@@ -494,7 +494,7 @@ test.describe("collaboration and Claude", () => {
     expect(response.headers()["x-content-type-options"]).toBe("nosniff");
   });
 
-  test("the API refuses cross-site writes", async ({ request }) => {
+  test("the API refuses cross-site writes", { tag: "@smoke" }, async ({ request }) => {
     const response = await request.post("/api/documents", { data: { title: "x" }, headers: { origin: "https://evil.example" } });
     expect(response.status()).toBe(403);
   });

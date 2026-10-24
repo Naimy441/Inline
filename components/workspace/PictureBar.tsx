@@ -166,9 +166,9 @@ export function PictureBar({ session, state }: { session: DocumentSession; state
       >
         <button
           type="button"
-          aria-label="Wrap text"
+          aria-label="Wrap text options"
           aria-expanded={menu === "wrap"}
-          title="Wrap text"
+          title="Wrap text options"
           onMouseDown={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -176,6 +176,7 @@ export function PictureBar({ session, state }: { session: DocumentSession; state
           }}
         >
           <WrapGlyph kind={placement} />
+          <span>Wrap text options</span>
           <ChevronDown size={14} aria-hidden />
         </button>
         <button
@@ -191,6 +192,7 @@ export function PictureBar({ session, state }: { session: DocumentSession; state
           }}
         >
           <ImageIcon size={16} aria-hidden />
+          <span>Image options</span>
         </button>
       </div>
       {menu === "wrap" && (
