@@ -54,7 +54,8 @@ type Zoom = number | "fit";
 
 const PANEL_KEY = "inline-panel";
 const PANEL_WIDTH_KEY = "inline-panel-width";
-const ZOOM_KEY = "inline-zoom";
+// A new key, so the "fit" default that older builds stored does not override the 100% start.
+const ZOOM_KEY = "inline-zoom-lock";
 const OUTLINE_KEY = "inline-outline";
 const FOCUS_KEY = "inline-focus-mode";
 
@@ -88,7 +89,7 @@ export function Workspace({ documentId }: { documentId: string }) {
 
   const [panel, setPanelState] = useState<Panel>("agent");
   const [panelWidth, setPanelWidth] = useState(420);
-  const [zoom, setZoomState] = useState<Zoom>("fit");
+  const [zoom, setZoomState] = useState<Zoom>(1);
   /** Scale above the toolbar lock while a pinch or ctrl+scroll is zoomed in. Null on the lock. */
   const [lift, setLift] = useState<number | null>(null);
   const [canvasWidth, setCanvasWidth] = useState(0);
@@ -167,7 +168,8 @@ export function Workspace({ documentId }: { documentId: string }) {
       setPanelState(focusOn && next === "agent" ? null : next);
     }
     setPanelWidth(readStored(PANEL_WIDTH_KEY, 420, (raw) => (Number(raw) >= 320 ? Math.min(760, Number(raw)) : null)));
-    setZoomState(readStored<Zoom>(ZOOM_KEY, "fit", (raw) => (raw === "fit" ? "fit" : Number(raw) >= 0.5 && Number(raw) <= 2 ? Number(raw) : null)));
+    // Desktop windows start at 100%. Phones and tablets have no room for a whole page, so they start in Fit.
+    setZoomState(readStored<Zoom>(ZOOM_KEY, isCompact() ? "fit" : 1, (raw) => (raw === "fit" ? "fit" : Number(raw) >= 0.5 && Number(raw) <= 2 ? Number(raw) : null)));
     setOutline(!isCompact() && readStored(OUTLINE_KEY, false, (raw) => raw === "1"));
   }, []);
 
