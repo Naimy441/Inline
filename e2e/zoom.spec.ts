@@ -137,6 +137,20 @@ test("manual zoom stays centered and the zoomed page scrolls on both axes", asyn
   expect(reach.endBottom).toBeLessThan(160);
 });
 
+test("a new window starts at 100%, and zooming out stops there", async ({ page, request }) => {
+  await openDocument(page, await createDocument(request, "Default memo", MEMO));
+  await expect(page.locator(".tb-zoom")).toHaveText(/^100%/);
+  const sheet = page.locator(".sheet").first();
+  const spot = await sheet.boundingBox();
+  expect(spot).toBeTruthy();
+  const point = { x: spot!.x + spot!.width * 0.5, y: spot!.y + 140 };
+
+  await ctrlWheel(page, 400, point);
+  await expect(page.locator(".tb-zoom")).toHaveText(/^100%/);
+  const width = (await sheet.boundingBox())!.width;
+  expect(Math.abs(width - spot!.width)).toBeLessThan(1);
+});
+
 async function fractionAt(page: Page, point: { x: number; y: number }) {
   return page.evaluate(({ x, y }) => {
     const sheet = document.querySelector<HTMLElement>(".sheet")!.getBoundingClientRect();
