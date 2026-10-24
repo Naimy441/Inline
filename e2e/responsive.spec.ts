@@ -244,15 +244,16 @@ test.describe("narrow desktop window", () => {
     const toggle = page.locator(".claude-toggle");
     if (!((await toggle.getAttribute("class")) ?? "").includes("is-active")) await toggle.click();
     await expect(page.locator(".agent-panel")).toBeVisible();
-    await expectNoSidewaysScroll(page);
-    await expect(page.locator(".tb-zoom")).not.toContainText("100%");
-
-    await page.locator(".tb-zoom").click();
-    await page.locator(".menu-item", { hasText: "100%" }).click();
+    // New windows start at 100%, which is wider than the space beside the panel, so it scrolls.
     await expect(page.locator(".tb-zoom")).toContainText("100%");
+
     await page.locator(".tb-zoom").click();
     await page.locator(".menu-item", { hasText: "Fit" }).click();
     await expect(page.locator(".tb-zoom")).not.toContainText("100%");
+    await expectNoSidewaysScroll(page);
+    await page.locator(".tb-zoom").click();
+    await page.locator(".menu-item", { hasText: "100%" }).click();
+    await expect(page.locator(".tb-zoom")).toContainText("100%");
   });
 });
 
