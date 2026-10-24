@@ -168,6 +168,14 @@
 }
 
 /* Quiet type mark beside the title. The only place the chrome says this document is a canvas. */
+.unrestricted-canvas {
+  display: block;
+  width: 100%;
+  min-height: calc(100vh - 140px);
+  border: 0;
+  background: #fff;
+}
+
 .canvas-kind-badge {
   flex: none;
   display: inline-flex;

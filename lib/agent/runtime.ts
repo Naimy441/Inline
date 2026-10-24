@@ -11,7 +11,7 @@ import { systemPrompt } from "@/lib/agent/prompt";
 import { PAGE_LAYOUT_PLUGIN_DIR, PAGE_LAYOUT_SKILL } from "@/lib/agent/skills";
 import { documentTurnLog } from "@/lib/agent/documentLog";
 import { canvasTurnContext, documentListing, type ToolContext } from "@/lib/agent/tools";
-import { isCanvas } from "@/lib/canvas/compiler";
+import { isCanvas, isUnrestrictedCanvas } from "@/lib/canvas/compiler";
 import type {
   AgentStatus,
   AssistantMessage,
@@ -671,7 +671,8 @@ class ChatRuntime {
         const since = seen != null && seen < doc.version ? doc.stepsSince(seen) : null;
         const ownPatches = Boolean(since && since.clientIDs.length > 0 && since.clientIDs.every((id) => id === `agent:${this.toolContext().author}`));
         if (seen === doc.version || ownPatches) {
-          context.push("Type: Canvas.\nThe Canvas hasn't changed since you last saw its markup. Keep using read_canvas and patch_canvas.");
+          const tools = isUnrestrictedCanvas(doc.doc) ? "read_unrestricted_canvas and write_unrestricted_canvas" : "read_canvas and patch_canvas";
+          context.push(`Type: Canvas.\nThe Canvas hasn't changed since you last saw its markup. Keep using ${tools}.`);
         } else {
           context.push(canvasTurnContext(doc));
         }

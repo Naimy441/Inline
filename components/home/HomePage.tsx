@@ -227,10 +227,10 @@ export function HomePage() {
     router.push(`/d/${id}`);
   };
 
-  const createCanvas = async () => {
-    setCreating("canvas");
+  const createCanvas = async (mode: "blank" | "unrestricted" = "blank") => {
+    setCreating(mode === "blank" ? "canvas" : "unrestricted");
     try {
-      const { document } = await post<{ document: Snapshot }>("/api/documents", { canvas: "blank", title: "Untitled canvas", folderId: targetFolder });
+      const { document } = await post<{ document: Snapshot }>("/api/documents", { canvas: mode, title: "Untitled canvas", folderId: targetFolder });
       router.push(`/d/${document.meta.id}`);
     } catch (error) { toast(error instanceof Error ? error.message : "Couldn't create the canvas.", { tone: "error" }); setCreating(null); }
   };
@@ -792,6 +792,13 @@ export function HomePage() {
                     <span className="template-thumb is-blank" aria-hidden />
                     <span className="template-title">{creating === "canvas" ? "Creating…" : "Canvas"}</span>
                     <span className="template-desc">Design editable pages with Claude or Codex</span>
+                  </button>
+                )}
+                {index === 0 && (
+                  <button type="button" className="template-card" onClick={() => void createCanvas("unrestricted")} disabled={creating !== null}>
+                    <span className="template-thumb is-blank" aria-hidden />
+                    <span className="template-title">{creating === "unrestricted" ? "Creating…" : "Unrestricted canvas"}</span>
+                    <span className="template-desc">A free-form HTML page that Claude or Codex controls completely</span>
                   </button>
                 )}
               </Fragment>

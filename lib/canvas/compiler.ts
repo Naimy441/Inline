@@ -10,7 +10,9 @@ import { validateCanvasDocument } from "./model";
 type Element = DefaultTreeAdapterMap["element"];
 type Child = DefaultTreeAdapterMap["childNode"];
 export type CanvasDesign = { format: 1; css: string };
-export const isCanvas = (doc: PMNode) => doc.attrs.canvas?.format === 1;
+/** Any Canvas: the SDK composition (format 1) or an unrestricted HTML page (format 2). Markdown tools must refuse both. */
+export const isCanvas = (doc: PMNode) => doc.attrs.canvas?.format === 1 || doc.attrs.canvas?.format === 2;
+export const isUnrestrictedCanvas = (doc: PMNode) => doc.attrs.canvas?.format === 2;
 const CONTAINERS: Record<string, string> = { section: "canvas_section", stack: "canvas_stack", columns: "canvas_columns", column: "canvas_column", richtext: "canvas_richtext", figure: "canvas_figure" };
 const CLASSES = /^(?:[A-Za-z_][\w-]*)(?:\s+[A-Za-z_][\w-]*)*$/;
 const IDS = /^[a-zA-Z0-9_-]{1,80}$/;

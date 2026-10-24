@@ -34,6 +34,7 @@ import { addTab, rememberedRoot, takeScroll, useTabs } from "@/lib/client/tabs";
 import { documentMenus, MenuBar, type MenuActions } from "@/components/workspace/MenuBar";
 import { OutlinePanel } from "@/components/workspace/OutlinePanel";
 import { PageCanvas } from "@/components/workspace/PageCanvas";
+import { UnrestrictedCanvasFrame } from "@/components/workspace/UnrestrictedCanvas";
 import { PageSetupDialog } from "@/components/workspace/PageSetupDialog";
 import { ReviewBar } from "@/components/workspace/ReviewBar";
 import { EDITOR_MODES, modeMenuItems } from "@/components/workspace/modes";
@@ -1145,7 +1146,11 @@ export function Workspace({ documentId }: { documentId: string }) {
           {versionShown && shownPanel === "history" && <VersionPreview key={versionShown.id} session={session} version={versionShown} onClose={() => setVersionShown(null)} />}
           {draftPreview && ui.draft && !versionShown && <DraftPreview session={session} />}
           <div className="page-stack-slot">
-            <PageCanvas session={session} meta={meta} pages={ui.pages} zoom={effectiveZoom} printing={ui.printing} flow={false} zoomCommit={zoomCommit} />
+            {meta?.canvasMode === "unrestricted" && meta && <UnrestrictedCanvasFrame session={session} title={meta.title} />}
+            {/* The paged editor stays mounted, so the session keeps its state, but it is hidden for an unrestricted page. */}
+            <div hidden={meta?.canvasMode === "unrestricted"}>
+              <PageCanvas session={session} meta={meta} pages={ui.pages} zoom={effectiveZoom} printing={ui.printing} flow={false} zoomCommit={zoomCommit} />
+            </div>
           </div>
           {!shownPanel && (
             <WithEditorState session={session}>

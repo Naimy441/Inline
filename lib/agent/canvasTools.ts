@@ -8,6 +8,8 @@ import { canvasCssNotes } from "@/lib/canvas/styles";
 import { CANVAS_FRAGMENTS, CANVAS_GUIDE } from "@/lib/canvas/examples";
 import { renderCanvas } from "@/lib/server/canvasRender";
 import { dropCanvasPreview, putCanvasPreview } from "@/lib/server/canvasPreview";
+import { UNRESTRICTED_STARTER, readUnrestrictedCanvas, unrestrictedCanvasDoc, unrestrictedHtml, unrestrictedTransform, validateUnrestrictedHtml } from "@/lib/canvas/unrestricted";
+import { renderUnrestrictedCanvas } from "@/lib/server/unrestrictedRender";
 
 const document_id = z.string().optional();
 const canvasOpShape = {
@@ -53,6 +55,65 @@ export const canvasTools = [
       ctx.onChange?.({ documentId: doc.id, title: doc.meta.title, tool: "create_canvas", added: doc.meta.wordCount, removed: 0 });
       ctx.onOpen?.(doc.id);
       return { text: JSON.stringify(readCanvas(doc), null, 2) };
+    },
+  }),
+  define({
+    name: "create_unrestricted_canvas", title: "Create unrestricted canvas", write: true,
+    description: "Create an unrestricted Canvas: one complete HTML document (<!doctype html> through </html>, with its own <style> and optional <script>) that you control entirely. Use this when the user wants a page you design freely, not the SDK. Nothing is restricted and no components are required. The page is shown in a sandboxed frame with scripts enabled but no access to Inline's own page, so it cannot read the app's data. Images must be https URLs, data: URIs, or files in this document's folder at /api/documents/<id>/files/<name>. Read read_unrestricted_canvas after writing to see the stored HTML, and screenshot_unrestricted_canvas to see how it looks.",
+    shape: { title: z.string().max(300), html: z.string().max(500_000).optional(), folder_id: z.string().optional() },
+    async handler(args, ctx) {
+      const doc = await documentHub().create({ title: args.title, doc: unrestrictedCanvasDoc(validateUnrestrictedHtml(args.html ?? UNRESTRICTED_STARTER)).toJSON(), folderId: args.folder_id });
+      ctx.onChange?.({ documentId: doc.id, title: doc.meta.title, tool: "create_unrestricted_canvas", added: 0, removed: 0 });
+      ctx.onOpen?.(doc.id);
+      return { text: JSON.stringify(readUnrestrictedCanvas(doc), null, 2) };
+    },
+  }),
+  define({
+    name: "read_unrestricted_canvas", title: "Read unrestricted canvas", write: false,
+    description: "Read the complete HTML of an unrestricted Canvas, with its epoch and revision. Read before every write_unrestricted_canvas, because the revision changes on every write.",
+    shape: { document_id },
+    async handler(args, ctx) {
+      const doc = await resolve(ctx, args.document_id);
+      return { text: JSON.stringify(readUnrestrictedCanvas(doc), null, 2) };
+    },
+  }),
+  define({
+    name: "write_unrestricted_canvas", title: "Write unrestricted canvas", write: true,
+    description: "Change an unrestricted Canvas against the epoch and version from read_unrestricted_canvas. Pass html to replace the whole document, or edits for exact find-and-replace pairs: each old_string must occur exactly once in the current HTML and is replaced by new_string, applied in order. Either the whole write applies or none of it does. A stale epoch or version is rejected.",
+    shape: {
+      document_id,
+      epoch: z.string(),
+      version: z.number().int().min(0),
+      html: z.string().max(500_000).optional(),
+      edits: z.array(z.object({ old_string: z.string().max(500_000), new_string: z.string().max(500_000) })).min(1).max(50).optional(),
+    },
+    async handler(args, ctx) {
+      const doc = await resolve(ctx, args.document_id);
+      unrestrictedTransform(doc, args); // Validate before checkpointing; recheck after the await.
+      await ctx.beforeWrite?.(doc);
+      const tr = unrestrictedTransform(doc, args);
+      doc.applyTransform(tr, { kind: "agent", author: ctx.author, turn: ctx.turn, tool: "write_unrestricted_canvas" });
+      ctx.onChange?.({ documentId: doc.id, title: doc.meta.title, tool: "write_unrestricted_canvas", added: 0, removed: 0 });
+      return { text: `Canvas updated. ${JSON.stringify({ epoch: doc.epoch, version: doc.version })}. Call screenshot_unrestricted_canvas to see the result.` };
+    },
+  }),
+  define({
+    name: "screenshot_unrestricted_canvas", title: "Screenshot unrestricted canvas", write: false,
+    description: "Picture an unrestricted Canvas as one full-height PNG, laid out at the width you pass (default 1280 px) in light or dark appearance. Scripts run as they do in the editor. Use it after each write you judged visually. It shows the current stored HTML, and it does not change the document.",
+    shape: {
+      document_id,
+      width: z.number().int().min(320).max(2400).optional().describe("Viewport width in CSS pixels (default 1280)."),
+      theme: z.enum(["light", "dark"]).optional().describe("Color scheme to render with (default light)."),
+    },
+    async handler(args, ctx) {
+      const doc = await resolve(ctx, args.document_id);
+      unrestrictedHtml(doc.doc);
+      const shot = await renderUnrestrictedCanvas(doc, { width: args.width, theme: args.theme });
+      const errors = shot.errors.length ? ` Script errors: ${shot.errors.slice(0, 5).join(" | ")}` : "";
+      return {
+        text: `Picture of "${doc.meta.title}" at ${shot.width} × ${shot.height} CSS px.${errors}`,
+        images: [{ data: Buffer.from(shot.png).toString("base64"), mimeType: "image/png" }],
+      };
     },
   }),
   define({

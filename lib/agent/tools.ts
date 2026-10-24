@@ -1,5 +1,6 @@
 import { canvasTools } from "@/lib/agent/canvasTools";
-import { canvasMarkup, isCanvas } from "@/lib/canvas/compiler";
+import { canvasMarkup, isCanvas, isUnrestrictedCanvas } from "@/lib/canvas/compiler";
+import { unrestrictedHtml } from "@/lib/canvas/unrestricted";
 import { renderCanvas } from "@/lib/server/canvasRender";
 import type { Node as PMNode } from "prosemirror-model";
 import { Transform } from "prosemirror-transform";
@@ -130,7 +131,8 @@ const fail = (text: string): ToolResult => ({ text, isError: true });
 /** Markdown reads and rewrites flatten a Canvas. Refuse them and leave the document alone. */
 function canvasMarkupRefusal(doc: LiveDocument): string | null {
   if (!isCanvas(doc.doc)) return null;
-  return "This is a Canvas. Read it with read_canvas and change it with patch_canvas. Markdown tools would drop its composition and design, so this call was refused and the canvas is unchanged.";
+  const tools = isUnrestrictedCanvas(doc.doc) ? "read_unrestricted_canvas and change it with write_unrestricted_canvas" : "read_canvas and change it with patch_canvas";
+  return `This is a Canvas. Read it with ${tools}. Markdown tools would drop its composition and design, so this call was refused and the canvas is unchanged.`;
 }
 
 const documentId = z
@@ -200,6 +202,16 @@ async function imageNaturals(doc: PMNode) {
  * of a Canvas drops the text inside Section and Text, so it is not included.
  */
 export function canvasTurnContext(doc: LiveDocument) {
+  if (isUnrestrictedCanvas(doc.doc)) {
+    const html = unrestrictedHtml(doc.doc);
+    const lines = [
+      "Type: unrestricted Canvas.",
+      "This is one HTML page you control completely, not a Markdown document or an SDK composition. Change it with write_unrestricted_canvas and read it with read_unrestricted_canvas. Picture it with screenshot_unrestricted_canvas.",
+    ];
+    if (html.length <= 40_000) lines.push(`Current HTML, a complete document. A write still needs the epoch and version from read_unrestricted_canvas:\n<canvas-html>\n${html}\n</canvas-html>`);
+    else lines.push("Read it with read_unrestricted_canvas before changing it. Its HTML is not included here.");
+    return lines.join("\n");
+  }
   let markup = "";
   try {
     markup = canvasMarkup(doc.doc);
