@@ -1908,6 +1908,12 @@
   color: var(--text-2);
 }
 
+.picture-bar > button > span {
+  padding: 0 4px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
 .picture-bar > button:hover,
 .picture-bar > button[aria-expanded="true"] {
   background: var(--surface-hover);
@@ -2235,25 +2241,17 @@
   }
 }
 
-/* With the chat closed, the word and page counts float in the bottom-right margin, with no bar behind them. */
+/* The bottom bar: the document's tab (and outline), pending changes, the mode, and the word and page counts. */
 
-.status-corner {
-  position: absolute;
-  z-index: 4;
-  right: 8px;
-  bottom: 6px;
+.statusbar {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  align-content: flex-end;
-  justify-content: flex-end;
-  gap: 0 2px;
-  max-width: calc(var(--text-inset-right, 200px) - 16px);
-  color: var(--muted);
+  gap: 2px;
+  padding: 0 8px;
+  background: var(--canvas);
   font-size: 12px;
-  pointer-events: none;
-  background: none;
-  user-select: none;
+  color: var(--muted);
+  overflow: hidden;
 }
 
 .status-item {
@@ -2280,14 +2278,13 @@ button.status-item:hover {
   color: var(--accent-text);
 }
 
-.status-corner:empty {
-  display: none;
-}
-
-.status-corner .status-item {
-  pointer-events: auto;
+.statusbar .status-item {
   min-width: 0;
   max-width: 100%;
+}
+
+.status-spacer {
+  flex: 1;
 }
 
 /*

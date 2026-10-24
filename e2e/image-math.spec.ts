@@ -160,9 +160,9 @@ test("a percent width fits the column and the picture bar is one quiet row", asy
     labels: [...element.querySelectorAll("button")].map((button) => (button.textContent ?? "").trim()),
   }));
   expect(shape.height).toBeLessThan(48);
-  expect(shape.labels).toEqual(["", ""]);
+  expect(shape.labels).toEqual(["Wrap text options", "Image options"]);
   await expect(bar.getByRole("button")).toHaveCount(2);
-  await expect(bar.getByRole("button", { name: "Wrap text", exact: true })).toBeVisible();
+  await expect(bar.getByRole("button", { name: "Wrap text options", exact: true })).toBeVisible();
   await expect(bar.getByRole("button", { name: "Image options", exact: true })).toBeVisible();
 });
 

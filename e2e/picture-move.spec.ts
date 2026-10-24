@@ -159,6 +159,12 @@ test("drag, delete, caret, margins, handles and picture menus", async ({ page, r
   await page.mouse.click(pageBox!.x + 16, (beforeMargin.top + beforeMargin.bottom) / 2);
   await expect(figure).toHaveClass(/ProseMirror-selectednode/);
 
+  // Blank space left of a centred picture, inside the text column, is the picture's margin too.
+  await page.mouse.click(aboveBox!.x + 40, aboveBox!.y + aboveBox!.height / 2);
+  await expect(figure).not.toHaveClass(/ProseMirror-selectednode/);
+  await page.mouse.click(beforeMargin.left - 30, (beforeMargin.top + beforeMargin.bottom) / 2);
+  await expect(figure).toHaveClass(/ProseMirror-selectednode/);
+
   await page.mouse.click(beforeMargin.right + 36, (beforeMargin.top + beforeMargin.bottom) / 2);
   await expect.poll(async () => {
     const caret = await lineCaret();

@@ -52,6 +52,11 @@ export type PageMeasurer = {
   /** Advance width in CSS pixels of text set in the given style. */
   textWidth(text: string, style: SnapshotStyle): number;
   image(img: HTMLImageElement, width: number, height: number): { jpeg: Uint8Array; width: number; height: number } | null;
+  /**
+   * A picture of a run of text the PDF's own fonts can't set (right-to-left script), drawn by the browser so its letters join
+   * and run in the right order. `size` is the run's box in CSS pixels; `baseline` is where its baseline sits from the box's top.
+   */
+  picture?(text: string, style: SnapshotStyle, size: { width: number; height: number; baseline: number }, color: RGB): { jpeg: Uint8Array; width: number; height: number } | null;
   /** A picture of a typeset equation (see mathRaster.ts), drawn instead of its text. */
   raster?(el: Element): Raster | null;
   /** The style of an element's ::before (a list's own bullet). */
@@ -114,6 +119,9 @@ type Placed = { page: number; x: number; y: number; width: number; height: numbe
 type Inherited = { underline: boolean; strike: boolean };
 /** A list marker: right-aligned before the item (the page's own markers) or starting at `left` (a list's own bullet). */
 type Marker = { text: string; right: number; left?: number; style: SnapshotStyle };
+
+/** Hebrew, Arabic, Syriac, Thaana, NKo and their presentation forms: script the standard fonts can't set. */
+const RIGHT_TO_LEFT = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufeff]/;
 
 export function snapshotPages(
   root: HTMLElement,
@@ -215,7 +223,14 @@ export function snapshotPages(
       });
       marker = null;
     }
-    add(at.page, { kind: "text", x: at.x, y: baseline, text: transform(text, style.textTransform), font, size: sizePt, color, ...(own ? { embedded: own.key, width: at.width, ...(own.fallback ? { fallback: own.fallback } : {}) } : {}) });
+    const drawn = transform(text, style.textTransform);
+    // Right-to-left words are pictured: the PDF's fonts can't join their letters or put them in visual order, so as text they come out as question marks.
+    const picture = measure.picture && RIGHT_TO_LEFT.test(drawn) ? measure.picture(drawn, style, { width: box.width / scale, height: box.height / scale, baseline: (baseline - at.y) / at.height * (box.height / scale) }, color) : null;
+    if (picture) {
+      add(at.page, { kind: "image", x: at.x, y: at.y, width: at.width, height: at.height, jpeg: picture.jpeg, pixelWidth: picture.width, pixelHeight: picture.height });
+      return;
+    }
+    add(at.page, { kind: "text", x: at.x, y: baseline, text: drawn, font, size: sizePt, color, ...(own ? { embedded: own.key, width: at.width, ...(own.fallback ? { fallback: own.fallback } : {}) } : {}) });
   };
 
   /** Underline and strike-through run across a whole line of the node, spaces included. */
@@ -661,6 +676,37 @@ export function domMeasurer(rasters?: ReadonlyMap<Element, Raster>, font?: PageM
         return { jpeg, width: w, height: h };
       } catch {
         // Cross-origin images taint the canvas and cannot be read back.
+        return null;
+      }
+    },
+    picture: (text, style, size, color) => {
+      // Four pixels to a CSS pixel keeps the letters sharp when the page is printed or zoomed in a viewer.
+      const pixels = 4;
+      const w = Math.max(1, Math.ceil(size.width * pixels));
+      const h = Math.max(1, Math.ceil(size.height * pixels));
+      const target = document.createElement("canvas");
+      target.width = w;
+      target.height = h;
+      const ctx = target.getContext("2d");
+      if (!ctx) return null;
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, w, h);
+      try {
+        ctx.setTransform(pixels, 0, 0, pixels, 0, 0);
+        ctx.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+        // The browser shapes the letters itself; a run that starts with a right-to-left letter is set from the right.
+        ctx.direction = RIGHT_TO_LEFT.test(text) ? "rtl" : "ltr";
+        // Left-aligned from x = 0 whichever way the run reads: "start" would set a right-to-left run off the canvas.
+        ctx.textAlign = "left";
+        ctx.textBaseline = "alphabetic";
+        ctx.fillStyle = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+        ctx.fillText(text, 0, size.baseline);
+        const url = target.toDataURL("image/jpeg", 0.92);
+        const binary = atob(url.slice(url.indexOf(",") + 1));
+        const jpeg = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) jpeg[i] = binary.charCodeAt(i);
+        return { jpeg, width: w, height: h };
+      } catch {
         return null;
       }
     },

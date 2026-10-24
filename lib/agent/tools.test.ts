@@ -10,6 +10,7 @@ import { ReplaceStep, Transform } from "prosemirror-transform";
 import { READ_ONLY_TOOL_NAMES, TOOLS, WRITE_TOOL_NAMES, runTool, type ToolContext } from "@/lib/agent/tools";
 import { schema } from "@/lib/doc/schema";
 import { docToMarkdown } from "@/lib/doc/markdown";
+import { sandboxSkip } from "@/lib/agent/testing/sandboxSkip";
 import { documentHub, type HubEvent, type LiveDocument } from "@/lib/server/hub";
 
 // The store resolves its directory on each call, so this applies before any write.
@@ -1606,7 +1607,9 @@ print("wrote", len(png))
 `;
 
 describe("document folder", () => {
-  test("a Python script draws a chart, the picture lands in the document, and a version restores both", async () => {
+  const sandboxed = { skip: sandboxSkip() };
+
+  test("a Python script draws a chart, the picture lands in the document, and a version restores both", sandboxed, async () => {
     const { doc, ctx } = await setup();
     const before = md(doc);
     const wrote = await runTool("write_file", { path: "chart.py", content: CHART_PY }, ctx);
@@ -1641,7 +1644,7 @@ describe("document folder", () => {
     assert.equal(picture.images?.[0]?.mimeType, "image/png");
   });
 
-  test("a failing plot reports stdout, stderr, and why it exited, from the document folder", async () => {
+  test("a failing plot reports stdout, stderr, and why it exited, from the document folder", sandboxed, async () => {
     const { ctx } = await setup();
     const content = "# plot-marker\nprint('stdout-from-plot')\nimport sys\nsys.stderr.write('stderr-from-plot\\n')\nprint('file-says', open('plot.py').readline().strip())\nraise SystemExit(1)\n";
     const wrote = await runTool("write_file", { path: "plot.py", content }, ctx);
@@ -1662,7 +1665,7 @@ describe("document folder", () => {
     assert.doesNotMatch(ran.text, /environment: PATH=/);
   });
 
-  test("gives matplotlib a writable cache and does not print PATH", async () => {
+  test("gives matplotlib a writable cache and does not print PATH", sandboxed, async () => {
     const { ctx } = await setup();
     const ran = await runTool("run_command", { command: "python3 -c 'import os; print(os.environ[\"MPLCONFIGDIR\"]); print(os.environ[\"XDG_CACHE_HOME\"])'" }, ctx);
     assert.equal(ran.isError, undefined, ran.text);
@@ -1673,7 +1676,7 @@ describe("document folder", () => {
     assert.doesNotMatch(ran.text, /environment: PATH=/);
   });
 
-  test("a command that prints nothing still reports empty stdout and stderr", async () => {
+  test("a command that prints nothing still reports empty stdout and stderr", sandboxed, async () => {
     const { ctx } = await setup();
     const ran = await runTool("run_command", { command: "false" }, ctx);
     assert.equal(ran.isError, true, ran.text);
@@ -1682,7 +1685,7 @@ describe("document folder", () => {
     assert.match(ran.text, /stderr:\n\(empty\)/);
   });
 
-  test("files and commands stay inside the document folder", async () => {
+  test("files and commands stay inside the document folder", sandboxed, async () => {
     const { ctx } = await setup();
     for (const filePath of ["../package.json", "/etc/passwd", "document.json", ".git/config"]) {
       const result = await runTool("read_file", { path: filePath }, ctx);
