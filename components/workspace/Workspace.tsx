@@ -168,7 +168,8 @@ export function Workspace({ documentId }: { documentId: string }) {
       setPanelState(focusOn && next === "agent" ? null : next);
     }
     setPanelWidth(readStored(PANEL_WIDTH_KEY, 420, (raw) => (Number(raw) >= 320 ? Math.min(760, Number(raw)) : null)));
-    setZoomState(readStored<Zoom>(ZOOM_KEY, 1, (raw) => (raw === "fit" ? "fit" : Number(raw) >= 0.5 && Number(raw) <= 2 ? Number(raw) : null)));
+    // Desktop windows start at 100%. Phones and tablets have no room for a whole page, so they start in Fit.
+    setZoomState(readStored<Zoom>(ZOOM_KEY, isCompact() ? "fit" : 1, (raw) => (raw === "fit" ? "fit" : Number(raw) >= 0.5 && Number(raw) <= 2 ? Number(raw) : null)));
     setOutline(!isCompact() && readStored(OUTLINE_KEY, false, (raw) => raw === "1"));
   }, []);
 
