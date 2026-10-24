@@ -190,7 +190,7 @@ test("Ctrl+K prefills a granted clipboard URL and does not ask when it is not gr
   await expect(page.getByLabel("Link URL")).toHaveValue("https://example.com/quiet");
 });
 
-test("typing is saved and survives a reload", async ({ page }) => {
+test("typing is saved and survives a reload", { tag: "@smoke" }, async ({ page }) => {
   await newBlankDocument(page);
   await page.locator(".doc-content").click();
   await page.keyboard.type("# Field notes\nThe first **bold** line.\n");
@@ -652,7 +652,7 @@ test("focus mode hides Claude", async ({ page }) => {
   await expect(page.locator(".claude-toggle")).toBeVisible();
   await expect(page.locator(".doc-content .is-empty")).toBeVisible();
   const placeholder = () => page.locator(".doc-content .is-empty").evaluate((el) => getComputedStyle(el, "::before").content);
-  expect(await placeholder()).toContain("ask AI");
+  expect(await placeholder()).toContain("ask Claude");
 
   await page.locator(".menubar-item", { hasText: "View" }).click();
   await page.locator(".menu-item", { hasText: "Focus mode" }).click();
