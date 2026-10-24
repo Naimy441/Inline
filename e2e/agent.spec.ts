@@ -31,7 +31,7 @@ async function ask(page: Page, text: string) {
 
 const lastReply = (page: Page) => page.locator(".msg-assistant").last();
 
-test("Claude edits the document and the user keeps the change", async ({ page, request }) => {
+test("Claude edits the document and the user keeps the change", { tag: "@smoke" }, async ({ page, request }) => {
   await openWithClaude(page, request, "The meeting is on Tuesday.");
   await ask(page, 'replace "Tuesday" with "Thursday"');
 
@@ -54,7 +54,7 @@ test("Claude edits the document and the user keeps the change", async ({ page, r
   await expect(page.locator(".doc-content")).toHaveText("The meeting is on Thursday.");
 });
 
-test("undoing Claude's change from the reply restores the text", async ({ page, request }) => {
+test("undoing Claude's change from the reply restores the text", { tag: "@smoke" }, async ({ page, request }) => {
   await openWithClaude(page, request, "Keep the original wording.");
   await ask(page, 'replace "original" with "rewritten"');
   await expect(page.locator(".doc-content .review-insert")).toContainText("rewritten");
@@ -434,7 +434,7 @@ test("developer options copy one turn or the whole chat, and hide those actions 
   await expect(page.locator(".agent-panel")).not.toContainText("Pending review:");
 });
 
-test("the conversation survives a reload", async ({ page, request }) => {
+test("the conversation survives a reload", { tag: "@smoke" }, async ({ page, request }) => {
   await openWithClaude(page, request, "Text.");
   await ask(page, "Remember this message");
   await expect(lastReply(page)).toContainText("You said: Remember this message");
