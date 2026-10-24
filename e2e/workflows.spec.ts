@@ -261,13 +261,13 @@ test.describe("editing", () => {
     await image.click();
     await expect(selected).toHaveCount(1);
 
-    // The block around the photo is not the photo.
+    // Blank space beside the photo, in its line, is the photo's margin and selects it.
     const figure = await page.locator(".doc-content .doc-image").boundingBox();
     expect(figure).toBeTruthy();
     await page.mouse.click(figure!.x + 8, figure!.y + figure!.height / 2);
-    await expect(selected).toHaveCount(0);
+    await expect(selected).toHaveCount(1);
     await page.mouse.click(figure!.x + 8, figure!.y + figure!.height / 2);
-    await expect(selected).toHaveCount(0);
+    await expect(selected).toHaveCount(1);
 
     await image.click();
     await expect(selected).toHaveCount(1);
