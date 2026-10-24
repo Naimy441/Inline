@@ -447,6 +447,19 @@ function headingFollowSlice(units: Unit[], span: BlockSpan, contentHeight: numbe
   return 0;
 }
 
+/**
+ * Whether a text fragment (top..bottom, in local px) is on the same line as a
+ * line already found. A fragment's box is its font's content area, and a
+ * script with tall glyph metrics (Arabic, for one) makes the boxes of two
+ * neighbouring lines overlap by several pixels. Those are two lines, so the
+ * fragments must share most of their height, not just touch, to be one line.
+ */
+export function sharesLine(line: { top: number; bottom: number }, top: number, bottom: number): boolean {
+  const shared = Math.min(bottom, line.bottom) - Math.max(top, line.top);
+  const smaller = Math.min(bottom - top, line.bottom - line.top);
+  return shared > Math.max(2, smaller / 2);
+}
+
 function measure(view: EditorView, geometry: PageGeometry, keepCache = true): { breaks: Break[]; pages: number; lastPageFill: number } | null {
   const root = view.dom as HTMLElement;
   if (!root.isConnected || !root.offsetWidth) return null;
@@ -496,7 +509,7 @@ function measure(view: EditorView, geometry: PageGeometry, keepCache = true): { 
         const top = toLocal(rect.top);
         const bottom = toLocal(rect.bottom);
         if (insideGap(top, bottom)) continue;
-        const line = lines.find((item) => top < item.bottom - 2 && bottom > item.top + 2);
+        const line = lines.find((item) => sharesLine(item, top, bottom));
         if (line) {
           line.top = Math.min(line.top, top);
           line.bottom = Math.max(line.bottom, bottom);

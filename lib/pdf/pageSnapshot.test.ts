@@ -203,6 +203,29 @@ describe("snapshotPages", () => {
     assert.equal(link?.kind === "link" && link.uri, "file:///tmp/notes.pdf");
   });
 
+  it("draws right-to-left words as pictures and keeps the rest as text", () => {
+    const html = `
+      <div class="page-stack">
+        <div class="sheet" data-box="100 50 408 528"></div>
+        <div class="page-content" data-box="148 98 312 1000">
+          <div class="doc-content ProseMirror" data-box="148 98 312 1000">
+            <p data-box="148 98 300 8">مرحبا Hello</p>
+          </div>
+        </div>
+      </div>`;
+    const dom = new JSDOM(html);
+    const root = dom.window.document.querySelector<HTMLElement>(".page-stack")!;
+    const measure = { ...fakeMeasurer(), picture: () => ({ jpeg: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), width: 40, height: 16 }) };
+    const items = snapshotPages(root, "Notes", measure).pages[0]!.items;
+    const pictures = items.filter((item) => item.kind === "image");
+    assert.equal(pictures.length, 1, "the Arabic word is a picture");
+    assert.equal(texts(items).some((item) => item.text === "Hello"), true, "the Latin word stays text");
+    assert.equal(texts(items).some((item) => /[\u0600-\u06ff]/.test(item.text)), false, "no Arabic text reaches the PDF's fonts");
+    // Without a picture to draw with, the word stays text (as before).
+    const plain = snapshotPages(root, "Notes", fakeMeasurer()).pages[0]!.items;
+    assert.equal(plain.some((item) => item.kind === "image"), false);
+  });
+
   it("omits a misspelled word's underline from the PDF and keeps one the user applied", () => {
     const html = `
       <div class="page-stack">
