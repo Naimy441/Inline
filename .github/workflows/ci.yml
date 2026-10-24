@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Nightly full run, so a regression outside the PR smoke set shows up within a day.
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
 
 # A new push to a branch cancels the run it replaces instead of queuing behind it.
 concurrency:
@@ -32,9 +36,11 @@ jobs:
       - run: npm test
       - run: npm run build
 
-  e2e:
+  # Every PR: unit tests above, plus the @smoke e2e set. The full suite runs on main and nightly.
+  e2e-smoke:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -44,7 +50,7 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run build
-      - run: npm run test:e2e
+      - run: npx playwright test --grep @smoke --grep-invert @quarantine
         env:
           E2E_START: "1"
       - uses: actions/upload-artifact@v4
@@ -55,3 +61,48 @@ jobs:
             playwright-report
             test-results
           retention-days: 7
+
+  # Main and nightly: everything except quarantined tests, which gate nothing.
+  e2e-full:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: npx playwright test --grep-invert @quarantine
+        env:
+          E2E_START: "1"
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report-full
+          path: |
+            playwright-report
+            test-results
+          retention-days: 7
+
+  # Quarantined tests run on main and nightly for signal only. Their failures do not block.
+  e2e-quarantine:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: npx playwright test --grep @quarantine
+        env:
+          E2E_START: "1"

@@ -47,7 +47,7 @@ async function chooseFit(page: Page) {
   await expect(page.locator(".menu")).toHaveCount(0);
 }
 
-test("manual zoom stays centered and the zoomed page scrolls on both axes", async ({ page, request }) => {
+test("manual zoom stays centered and the zoomed page scrolls on both axes", { tag: "@smoke" }, async ({ page, request }) => {
   await openDocument(page, await createDocument(request, "Zoom memo", MEMO));
   const toggle = page.locator(".claude-toggle");
   if (((await toggle.getAttribute("class")) ?? "").includes("is-active")) await toggle.click();
@@ -194,7 +194,7 @@ test("ctrl+scroll zooms toward the pointer and stops at the 100% lock", async ({
   expect(back.centerGap).toBeLessThan(24);
 });
 
-test("a 50% toolbar lock stops zoom-out there and centers", async ({ page, request }) => {
+test("a 50% toolbar lock stops zoom-out there and centers", { tag: "@smoke" }, async ({ page, request }) => {
   await openDocument(page, await createDocument(request, "Lock memo", MEMO));
   await chooseZoom(page, "50%");
   const sheet = page.locator(".sheet").first();
