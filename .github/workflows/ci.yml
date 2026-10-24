@@ -103,6 +103,6 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run build
-      - run: npx playwright test --grep @quarantine
+      - run: npx playwright test --grep @quarantine --pass-with-no-tests
         env:
           E2E_START: "1"
