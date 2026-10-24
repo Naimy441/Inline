@@ -1,6 +1,20 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { canvasHeadingShouldMove, pageGapCovers, preferredBreak } from "./pagination";
+import { canvasHeadingShouldMove, pageGapCovers, preferredBreak, sharesLine } from "./pagination";
+
+describe("line grouping", () => {
+  it("keeps two lines apart when tall script boxes only touch them", () => {
+    // Arabic at 30px: each content box is 40px, and the next line starts 34px lower.
+    assert.equal(sharesLine({ top: 248, bottom: 288 }, 282, 322), false);
+  });
+
+  it("joins fragments of one line whatever their size", () => {
+    // A larger inline word on the same line: its box covers the smaller one.
+    assert.equal(sharesLine({ top: 240, bottom: 290 }, 256, 274), true);
+    // Two fragments that differ by a pixel or two (rounding) are still one line.
+    assert.equal(sharesLine({ top: 100, bottom: 118 }, 101, 119), true);
+  });
+});
 
 describe("line breaks", () => {
   it("splits where the line overflows when widow control is off", () => {
