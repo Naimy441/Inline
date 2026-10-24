@@ -1158,14 +1158,6 @@ export function Workspace({ documentId }: { documentId: string }) {
           <WithEditorState session={session}>{(state) => <SelectionBubble session={session} state={state} linkEditing={linkEditing} linkSession={linkSession} linkPrefill={linkPrefill} onLinkEditing={(open) => (open ? openLinkEditor(false) : setLinkEditing(false))} prompting={prompting && !focusMode} onPrompting={setPrompting} onInlineAsk={inlineAsk} hideAi={focusMode} />}</WithEditorState>
           <WithEditorState session={session}>{(state) => <PictureBar session={session} state={state} />}</WithEditorState>
         </main>
-        <footer className="status-corner">
-          {!chatOpen && <DocCounts session={session} pages={ui.pages} fallbackWords={meta?.wordCount ?? 0} onWords={() => setCounting(true)} />}
-          {ui.mode !== "editing" && (
-            <button type="button" className={`status-item status-mode is-${ui.mode}`} onClick={() => void session.setMode("editing")} data-tip="Back to editing">
-              {EDITOR_MODES[ui.mode].icon(13)} {EDITOR_MODES[ui.mode].label}
-            </button>
-          )}
-        </footer>
         </div>
 
         {shownPanel && (
@@ -1185,7 +1177,6 @@ export function Workspace({ documentId }: { documentId: string }) {
                 chatKey={chatKey}
                 hunks={ui.hunks}
                 initialPrompt={initialAsk}
-                documentCounts={chatOpen ? <DocCounts session={session} pages={ui.pages} fallbackWords={meta?.wordCount ?? 0} onWords={() => setCounting(true)} variant="meta" /> : undefined}
                 onClose={() => setPanel(null)}
                 onReview={(action, ids) => {
                   if (action === "next") session.gotoChange(1, ids);
@@ -1209,6 +1200,16 @@ export function Workspace({ documentId }: { documentId: string }) {
           </div>
         )}
       </div>
+
+      <footer className="statusbar">
+        {ui.mode !== "editing" && (
+          <button type="button" className={`status-item status-mode is-${ui.mode}`} onClick={() => void session.setMode("editing")} data-tip="Back to editing">
+            {EDITOR_MODES[ui.mode].icon(13)} {EDITOR_MODES[ui.mode].label}
+          </button>
+        )}
+        <span className="status-spacer" />
+        <DocCounts session={session} pages={ui.pages} fallbackWords={meta?.wordCount ?? 0} onWords={() => setCounting(true)} />
+      </footer>
 
       <PageSetupDialog open={Boolean(setup)} initialTab={setup?.tab} session={session} settings={meta?.settings} onClose={() => setSetup(null)} />
       <StyleDialog open={styleEditor !== null} styleId={styleEditor?.id ?? null} session={session} settings={meta?.settings} onClose={() => setStyleEditor(null)} />
@@ -1267,28 +1268,14 @@ function countLabel(count: number, singular: string) {
   return `${count.toLocaleString()} ${count === 1 ? singular : `${singular}s`}`;
 }
 
-/** The document's word and page counts. One item is singular. */
-function DocCounts({ session, pages, fallbackWords, onWords, variant = "corner" }: { session: DocumentSession; pages: number; fallbackWords: number; onWords: () => void; variant?: "corner" | "meta" }) {
-  const words = (
-    <WithEditorState session={session}>{(state) => <>{countLabel(state ? docWordCount(state.doc) : fallbackWords, "word")}</>}</WithEditorState>
-  );
-  const pagesLabel = countLabel(pages, "page");
-  if (variant === "meta") {
-    return (
-      <span className="msg-meta-counts">
-        <button type="button" className="msg-meta-count" onClick={onWords}>
-          {words}
-        </button>
-        <span className="msg-meta-count">{pagesLabel}</span>
-      </span>
-    );
-  }
+/** The document's word and page counts, as the status bar shows them. One item is singular. */
+function DocCounts({ session, pages, fallbackWords, onWords }: { session: DocumentSession; pages: number; fallbackWords: number; onWords: () => void }) {
   return (
     <>
       <button type="button" className="status-item" onClick={onWords}>
-        {words}
+        <WithEditorState session={session}>{(state) => <>{countLabel(state ? docWordCount(state.doc) : fallbackWords, "word")}</>}</WithEditorState>
       </button>
-      <span className="status-item">{pagesLabel}</span>
+      <span className="status-item">{countLabel(pages, "page")}</span>
     </>
   );
 }

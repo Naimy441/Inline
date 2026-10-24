@@ -129,3 +129,13 @@ test("double-clicking a margin edits that header or footer, and alignment and pa
   }
   await expectAligned(page, ".sheet-footer .sheet-number", "center");
 });
+
+test("the bottom bar keeps the word and page counts with the chat open", async ({ page, request }) => {
+  const id = await createDocument(request, "Bar check", "One two three.\n\n\\pagebreak\n\nFour.", {});
+  await page.goto(`/d/${id}`);
+  await expect(page.locator(".doc-content")).toBeVisible();
+  const bar = page.locator("footer.statusbar");
+  await expect(bar).toBeVisible();
+  await expect(bar).toContainText("2 pages");
+  await expect(bar).toContainText("words");
+});
