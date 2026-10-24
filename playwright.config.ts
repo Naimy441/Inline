@@ -13,6 +13,9 @@ export default defineConfig({
   testDir: "e2e",
   timeout: 60_000,
   forbidOnly: Boolean(process.env.CI),
+  // A retry in CI turns a flake green and marks it "flaky" in the report, so the
+  // run stays honest and the trace of the first failure is kept for the fix.
+  retries: process.env.CI ? 2 : 0,
   // Provider selection updates the app's defaults. Finish that suite (and
   // reset its defaults) before the other browser workers start.
   projects: [
@@ -23,6 +26,7 @@ export default defineConfig({
   use: {
     baseURL: `http://localhost:${port}`,
     viewport: { width: 1440, height: 900 },
+    trace: "on-first-retry",
     launchOptions: process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : undefined,
   },
   webServer: {
