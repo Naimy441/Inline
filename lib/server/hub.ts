@@ -162,7 +162,7 @@ export class LiveDocument {
     this.meta = file.meta;
     this.doc = loadDoc(file.doc);
     validateCanvasDocument(this.doc);
-    if (this.doc.attrs.canvas) this.meta = { ...this.meta, kind: "canvas" };
+    if (this.doc.attrs.canvas) this.meta = { ...this.meta, kind: "canvas", ...(this.doc.attrs.canvas.format === 2 ? { canvasMode: "unrestricted" as const } : {}) };
     this.comments = Array.isArray(file.comments) ? file.comments : [];
     this.hunks = (file.hunks ?? []).flatMap((json) => {
       try {
@@ -807,6 +807,7 @@ class DocumentHub {
       wordCount: wordCount(text),
       preview: text.replace(/\s+/g, " ").trim().slice(0, 240),
       ...(doc.attrs.canvas ? { kind: "canvas" as const } : {}),
+      ...(doc.attrs.canvas?.format === 2 ? { canvasMode: "unrestricted" as const } : {}),
       ...(input.parentId ? { parentId: input.parentId } : {}),
       ...(input.tabTitle ? { tabTitle: cleanTabTitle(input.tabTitle) } : {}),
       ...(input.folderId && !input.parentId ? { folderId: input.folderId } : {}),

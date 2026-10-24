@@ -103,6 +103,8 @@ export const DEFAULT_MATH_SIZE = 1.1;
 export type DocumentMeta = {
   /** Designed, paginated HTML/CSS composition; ordinary documents omit this. */
   kind?: "canvas";
+  /** Set on a Canvas whose page is plain HTML (see lib/canvas/unrestricted.ts). */
+  canvasMode?: "unrestricted";
   id: string;
   title: string;
   createdAt: number;

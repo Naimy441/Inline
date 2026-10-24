@@ -1,6 +1,7 @@
 import type { Node as PMNode } from "prosemirror-model";
 import { validateCanvasCss, validateCanvasClass } from "./styles";
 import postcss from "postcss";
+import { validateUnrestrictedDocument } from "./unrestricted";
 
 /** Match the SDK's deliberately small selector vocabulary against model nodes. */
 function selectorMatches(selector: string, path: PMNode[]): boolean {
@@ -52,6 +53,7 @@ export function validateCanvasDocument(doc: PMNode) {
     if (hasCanvas) throw new Error("Canvas components require a Canvas document.");
     return;
   }
+  if (design.format === 2) return validateUnrestrictedDocument(doc);
   if (design.format !== 1 || typeof design.css !== "string") throw new Error("Unsupported Canvas format.");
   validateCanvasCss(design.css);
   validateCanvasDecorations(doc);

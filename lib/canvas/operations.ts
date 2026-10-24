@@ -1,6 +1,6 @@
 import { Fragment, Slice, type Node as PMNode } from "prosemirror-model";
 import { Transform, ReplaceStep } from "prosemirror-transform";
-import { canvasAuthoredIds, compileCanvas, canvasMarkup, isCanvas } from "./compiler";
+import { canvasAuthoredIds, compileCanvas, canvasMarkup, isCanvas, isUnrestrictedCanvas } from "./compiler";
 import { validateCanvasCss } from "./styles";
 import { EditError, lockedBetween } from "@/lib/doc/editing";
 import type { LiveDocument } from "@/lib/server/hub";
@@ -21,6 +21,7 @@ export type CanvasPatch = {
 export type CanvasPatchResult = { tr: Transform; notes: string[] };
 
 export function readCanvas(doc: LiveDocument) {
+  if (isUnrestrictedCanvas(doc.doc)) throw new EditError("This is an unrestricted Canvas: its page is plain HTML. Read it with read_unrestricted_canvas and change it with write_unrestricted_canvas.");
   if (!isCanvas(doc.doc)) throw new EditError("This is not a Canvas. Use create_canvas to create one.");
   return { id: doc.id, title: doc.meta.title, epoch: doc.epoch, version: doc.version, html: canvasMarkup(doc.doc), css: doc.doc.attrs.canvas.css as string };
 }
