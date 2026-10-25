@@ -1,0 +1,9 @@
+{
+  "scene": "select",
+  "index": 0,
+  "text": "Select a passage and press Command L to ask about just that part.",
+  "src": "vo/select-0.mp3",
+  "speechStart": 0,
+  "speechEnd": 4.88,
+  "hash": "a2346afeea4b"
+}

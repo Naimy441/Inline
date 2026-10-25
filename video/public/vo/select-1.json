@@ -1,0 +1,9 @@
+{
+  "scene": "select",
+  "index": 1,
+  "text": "Here, Claude checks the claim against the paper, finds the right hurricane, and rewrites the sentence, with its sources.",
+  "src": "vo/select-1.mp3",
+  "speechStart": 0,
+  "speechEnd": 8.08,
+  "hash": "dbd07ae076ea"
+}

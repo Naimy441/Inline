@@ -1,0 +1,17 @@
+{
+  "marks": [
+    {
+      "label": "click",
+      "at": 1.2
+    },
+    {
+      "label": "sent",
+      "at": 4.77
+    },
+    {
+      "label": "done",
+      "at": 18.1
+    }
+  ],
+  "seconds": 21.4
+}

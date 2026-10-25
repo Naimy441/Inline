@@ -1,0 +1,9 @@
+{
+  "scene": "pdf",
+  "index": 0,
+  "text": "Import a PDF, and Inline matches its page size, fonts, and margins.",
+  "src": "vo/pdf-0.mp3",
+  "speechStart": 0,
+  "speechEnd": 5.52,
+  "hash": "85520dabf2cf"
+}

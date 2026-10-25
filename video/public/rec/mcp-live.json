@@ -1,0 +1,133 @@
+{
+  "marks": [
+    {
+      "label": "start",
+      "at": 1.5
+    },
+    {
+      "label": "event",
+      "at": 2.46
+    },
+    {
+      "label": "event",
+      "at": 4.08
+    },
+    {
+      "label": "event",
+      "at": 4.58
+    },
+    {
+      "label": "event",
+      "at": 4.59
+    },
+    {
+      "label": "event",
+      "at": 4.93
+    },
+    {
+      "label": "event",
+      "at": 5.47
+    },
+    {
+      "label": "event",
+      "at": 5.49
+    },
+    {
+      "label": "event",
+      "at": 5.49
+    },
+    {
+      "label": "event",
+      "at": 6.79
+    },
+    {
+      "label": "event",
+      "at": 6.89
+    },
+    {
+      "label": "event",
+      "at": 6.91
+    },
+    {
+      "label": "event",
+      "at": 8.32
+    },
+    {
+      "label": "event",
+      "at": 8.45
+    },
+    {
+      "label": "event",
+      "at": 8.46
+    },
+    {
+      "label": "event",
+      "at": 8.63
+    },
+    {
+      "label": "event",
+      "at": 8.65
+    },
+    {
+      "label": "event",
+      "at": 9.76
+    },
+    {
+      "label": "event",
+      "at": 10.99
+    },
+    {
+      "label": "event",
+      "at": 12.2
+    },
+    {
+      "label": "event",
+      "at": 12.45
+    },
+    {
+      "label": "event",
+      "at": 12.45
+    },
+    {
+      "label": "event",
+      "at": 12.7
+    },
+    {
+      "label": "event",
+      "at": 13.82
+    },
+    {
+      "label": "event",
+      "at": 13.85
+    },
+    {
+      "label": "event",
+      "at": 15.08
+    },
+    {
+      "label": "event",
+      "at": 15.25
+    },
+    {
+      "label": "event",
+      "at": 15.25
+    },
+    {
+      "label": "event",
+      "at": 16.25
+    },
+    {
+      "label": "event",
+      "at": 17.32
+    },
+    {
+      "label": "event",
+      "at": 17.34
+    },
+    {
+      "label": "done",
+      "at": 17.79
+    }
+  ],
+  "seconds": 20.6
+}

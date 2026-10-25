@@ -1,0 +1,187 @@
+1
+00:00:00,800 --> 00:00:04,433
+AI agents have become remarkable writing partners.
+
+2
+00:00:04,500 --> 00:00:11,033
+In a code editor, they read a whole project, make precise edits, and check their own work.
+
+3
+00:00:11,700 --> 00:00:16,033
+But most of the writing that matters doesn't live in a code editor.
+
+4
+00:00:16,133 --> 00:00:18,467
+It lives on the page.
+
+5
+00:00:20,900 --> 00:00:23,000
+This is Inline.
+
+6
+00:00:27,100 --> 00:00:32,900
+Inline is a paginated document editor with Claude Code and Codex built in.
+
+7
+00:00:32,967 --> 00:00:38,367
+The agent works on the same page you do, through more than forty document tools.
+
+8
+00:00:38,433 --> 00:00:42,533
+And every edit it makes is a suggestion you can review.
+
+9
+00:00:42,633 --> 00:00:45,367
+It's free, and open source.
+
+10
+00:00:49,300 --> 00:00:55,500
+It runs as a desktop app on Mac, Windows, and Linux, with everything included.
+
+11
+00:00:55,567 --> 00:00:57,900
+Let's open a real account.
+
+12
+00:01:01,100 --> 00:01:02,633
+This is home.
+
+13
+00:01:02,733 --> 00:01:08,267
+Documents live in color-coded folders, with live previews of their pages.
+
+14
+00:01:08,367 --> 00:01:14,300
+Templates cover essays, MLA papers, reports, résumés and more.
+
+15
+00:01:14,400 --> 00:01:18,167
+And search finds any document in a keystroke.
+
+16
+00:01:23,100 --> 00:01:27,033
+Open a thesis proposal and you get real pages.
+
+17
+00:01:27,133 --> 00:01:35,167
+A live table of contents, citations, LaTeX equations, tables and figures, with headers and page numbers.
+
+18
+00:01:35,233 --> 00:01:38,467
+Everything you'd expect from a word processor.
+
+19
+00:01:45,100 --> 00:01:48,500
+Press Command J, and Claude joins you.
+
+20
+00:01:48,567 --> 00:01:51,400
+Ask it to tighten the introduction.
+
+21
+00:01:51,467 --> 00:01:55,433
+Claude reads the document and edits the page directly.
+
+22
+00:01:55,500 --> 00:02:02,333
+Every change appears as a tracked suggestion: deletions struck through, additions highlighted.
+
+23
+00:02:02,433 --> 00:02:06,300
+It even noticed a citation that doesn't match its source.
+
+24
+00:02:06,367 --> 00:02:12,400
+Keep what you like and undo the rest, one change at a time, or all at once.
+
+25
+00:02:19,100 --> 00:02:24,233
+Select a passage and press Command L to ask about just that part.
+
+26
+00:02:24,333 --> 00:02:32,667
+Here, Claude checks the claim against the paper, finds the right hurricane, and rewrites the sentence, with its sources.
+
+27
+00:02:41,100 --> 00:02:43,600
+Comments work the way you'd expect.
+
+28
+00:02:43,700 --> 00:02:46,200
+My advisor left three.
+
+29
+00:02:46,267 --> 00:02:53,500
+Ask Claude to address them, and it fixes each one in the text, replies in the thread, and resolves it.
+
+30
+00:03:01,100 --> 00:03:07,433
+Save named versions as you go, and open any earlier draft to compare it or restore it.
+
+31
+00:03:07,533 --> 00:03:11,633
+Every reply from the agent leaves a restore checkpoint, too.
+
+32
+00:03:15,100 --> 00:03:16,800
+Prefer Codex?
+
+33
+00:03:16,900 --> 00:03:20,833
+Switch providers or models in the middle of a conversation.
+
+34
+00:03:20,933 --> 00:03:25,200
+The next model picks up the same transcript, and the same document.
+
+35
+00:03:28,100 --> 00:03:32,133
+When the layout is part of the message, use a Canvas.
+
+36
+00:03:32,200 --> 00:03:40,400
+The agent designs editable pages with columns, color, and type, and you can still click in and change any word.
+
+37
+00:03:45,100 --> 00:03:50,900
+Import a PDF, and Inline matches its page size, fonts, and margins.
+
+38
+00:03:50,967 --> 00:04:00,433
+Then Claude rebuilds each page as editable text, with equations in LaTeX, and checks its work against the original, side by side.
+
+39
+00:04:08,100 --> 00:04:13,800
+Back home, Organize with AI files everything into folders in seconds.
+
+40
+00:04:13,900 --> 00:04:19,267
+It reads only titles and first lines, so it barely touches your usage.
+
+41
+00:04:23,100 --> 00:04:25,767
+Your documents stay yours.
+
+42
+00:04:25,867 --> 00:04:37,233
+Inline keeps a Word copy of every one in a folder on your computer, exports to PDF, Markdown and more, and brings in your whole Google Drive from a single zip.
+
+43
+00:04:41,100 --> 00:04:47,767
+And because Inline speaks MCP, Claude Code in your terminal can work on your documents too.
+
+44
+00:04:47,867 --> 00:04:52,200
+Ask from the command line, and watch the edit land on the page.
+
+45
+00:05:00,500 --> 00:05:01,800
+Inline.
+
+46
+00:05:02,300 --> 00:05:05,433
+Real documents, with the agent built in.
+
+47
+00:05:05,533 --> 00:05:09,933
+Free and open source, for Mac, Windows, and Linux.

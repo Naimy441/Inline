@@ -1,0 +1,9 @@
+{
+  "scene": "home",
+  "index": 0,
+  "text": "This is home.",
+  "src": "vo/home-0.mp3",
+  "speechStart": 0,
+  "speechEnd": 1.28,
+  "hash": "b7c83265371d"
+}

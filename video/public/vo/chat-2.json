@@ -1,0 +1,9 @@
+{
+  "scene": "chat",
+  "index": 2,
+  "text": "Claude reads the document and edits the page directly.",
+  "src": "vo/chat-2.mp3",
+  "speechStart": 0,
+  "speechEnd": 3.68,
+  "hash": "f1f2170849c2"
+}
