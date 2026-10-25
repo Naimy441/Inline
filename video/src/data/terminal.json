@@ -1,0 +1,10 @@
+[
+  { "at": 10, "kind": "cmd", "text": "claude mcp add --transport http inline http://localhost:4319/api/mcp --header \"Authorization: Bearer ••••••••\"" },
+  { "at": 64, "kind": "ok", "text": "✓ Added HTTP MCP server inline" },
+  { "at": 88, "kind": "cmd", "text": "claude \"In my Inline document 'Weekly sync: October 21', add a short 'Next sync' section with two agenda items from the open action items.\"" },
+  { "at": 176, "kind": "say", "text": "I'll read the document first to see the open action items." },
+  { "at": 212, "kind": "tool", "text": "inline - list_documents", "sub": "19 documents" },
+  { "at": 250, "kind": "tool", "text": "inline - read_document (Weekly sync: October 21)", "sub": "115 words · 1 page" },
+  { "at": -1, "kind": "tool", "text": "inline - edit_document", "sub": "Edited. The change is live in the editor, marked for review." },
+  { "at": 400, "kind": "say", "text": "Done! I've added a \"Next sync\" section at the end, dated October 28, with two agenda items from your open action items." }
+]

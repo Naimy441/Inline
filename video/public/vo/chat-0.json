@@ -1,0 +1,9 @@
+{
+  "scene": "chat",
+  "index": 0,
+  "text": "Press Command J, and Claude joins you.",
+  "src": "vo/chat-0.mp3",
+  "speechStart": 0,
+  "speechEnd": 3.12,
+  "hash": "9ca18d273b6a"
+}

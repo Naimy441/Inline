@@ -1,0 +1,9 @@
+{
+  "scene": "pdf",
+  "index": 1,
+  "text": "Then Claude rebuilds each page as editable text, with equations in LaTeX, and checks its work against the original, side by side.",
+  "src": "vo/pdf-1.mp3",
+  "speechStart": 0,
+  "speechEnd": 9.2,
+  "hash": "eedc5bf3a7ab"
+}

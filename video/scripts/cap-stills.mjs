@@ -1,0 +1,28 @@
+// Stills of the thesis after the AI work: resolved threads, history, outline, export, dark mode.
+import { launch, go, shot, ids, sleep, chrome } from './app.mjs';
+const { app, page } = await launch();
+const d = ids();
+await go(page, `/d/${d.thesis}`, 3500);
+const side = async (label) => { await page.click(`button[aria-label="${label}"]`); await sleep(1500); await chrome(page); };
+await side('Comments');
+if (!(await page.getByText('Show resolved').isVisible())) await side('Comments');
+await page.getByText('Show resolved', { exact: false }).click();
+await sleep(1200);
+await shot(page, 'comments-replies');
+await page.getByRole('button', { name: 'Keep all' }).first().click().catch(() => {});
+await sleep(1200);
+await side('Version history');
+if (!(await page.getByText('Name the current version').isVisible().catch(() => false)) && !(await page.locator('input[placeholder="Name the current version"]').isVisible())) await side('Version history');
+await shot(page, 'history');
+await side('Tabs & outline');
+await shot(page, 'outline');
+await page.click('button[aria-label="Download"]').catch(() => page.getByRole('button', { name: 'Export' }).click());
+await sleep(1000);
+await shot(page, 'export-menu');
+await page.keyboard.press('Escape');
+await page.click('button[aria-label="Dark theme"]');
+await sleep(1500);
+await shot(page, 'thesis-dark');
+await page.click('button[aria-label="Light theme"]').catch(() => page.click('button[aria-label="Dark theme"]'));
+await sleep(800);
+await app.close();

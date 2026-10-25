@@ -1,0 +1,454 @@
+{
+  "fps": 30,
+  "frames": 9435,
+  "scenes": [
+    {
+      "id": "open",
+      "from": 0,
+      "frames": 600,
+      "lines": [
+        {
+          "text": "AI agents have become remarkable writing partners.",
+          "src": "vo/open-0.mp3",
+          "at": 24,
+          "end": 125,
+          "clipFrom": 24
+        },
+        {
+          "text": "In a code editor, they read a whole project, make precise edits, and check their own work.",
+          "src": "vo/open-1.mp3",
+          "at": 135,
+          "end": 323,
+          "clipFrom": 135
+        },
+        {
+          "text": "But most of the writing that matters doesn't live in a code editor.",
+          "src": "vo/open-2.mp3",
+          "at": 351,
+          "end": 473,
+          "clipFrom": 351
+        },
+        {
+          "text": "It lives on the page.",
+          "src": "vo/open-3.mp3",
+          "at": 484,
+          "end": 546,
+          "clipFrom": 484
+        }
+      ]
+    },
+    {
+      "id": "title",
+      "from": 600,
+      "frames": 195,
+      "lines": [
+        {
+          "text": "This is Inline.",
+          "src": "vo/title-0.mp3",
+          "at": 27,
+          "end": 82,
+          "clipFrom": 27
+        }
+      ]
+    },
+    {
+      "id": "idea",
+      "from": 795,
+      "frames": 660,
+      "lines": [
+        {
+          "text": "Inline is a paginated document editor with Claude Code and Codex built in.",
+          "src": "vo/idea-0.mp3",
+          "at": 18,
+          "end": 184,
+          "clipFrom": 18
+        },
+        {
+          "text": "The agent works on the same page you do, through more than forty document tools.",
+          "src": "vo/idea-1.mp3",
+          "at": 194,
+          "end": 348,
+          "clipFrom": 194
+        },
+        {
+          "text": "And every edit it makes is a suggestion you can review.",
+          "src": "vo/idea-2.mp3",
+          "at": 358,
+          "end": 473,
+          "clipFrom": 358
+        },
+        {
+          "text": "It's free, and open source.",
+          "src": "vo/idea-3.mp3",
+          "at": 484,
+          "end": 558,
+          "clipFrom": 484
+        }
+      ]
+    },
+    {
+      "id": "desktop",
+      "from": 1455,
+      "frames": 360,
+      "lines": [
+        {
+          "text": "It runs as a desktop app on Mac, Windows, and Linux, with everything included.",
+          "src": "vo/desktop-0.mp3",
+          "at": 24,
+          "end": 202,
+          "clipFrom": 24
+        },
+        {
+          "text": "Let's open a real account.",
+          "src": "vo/desktop-1.mp3",
+          "at": 212,
+          "end": 274,
+          "clipFrom": 212
+        }
+      ]
+    },
+    {
+      "id": "home",
+      "from": 1815,
+      "frames": 660,
+      "lines": [
+        {
+          "text": "This is home.",
+          "src": "vo/home-0.mp3",
+          "at": 18,
+          "end": 56,
+          "clipFrom": 18
+        },
+        {
+          "text": "Documents live in color-coded folders, with live previews of their pages.",
+          "src": "vo/home-1.mp3",
+          "at": 67,
+          "end": 225,
+          "clipFrom": 67
+        },
+        {
+          "text": "Templates cover essays, MLA papers, reports, résumés and more.",
+          "src": "vo/home-2.mp3",
+          "at": 236,
+          "end": 406,
+          "clipFrom": 236
+        },
+        {
+          "text": "And search finds any document in a keystroke.",
+          "src": "vo/home-3.mp3",
+          "at": 417,
+          "end": 522,
+          "clipFrom": 417
+        }
+      ]
+    },
+    {
+      "id": "editor",
+      "from": 2475,
+      "frames": 660,
+      "lines": [
+        {
+          "text": "Open a thesis proposal and you get real pages.",
+          "src": "vo/editor-0.mp3",
+          "at": 18,
+          "end": 128,
+          "clipFrom": 18
+        },
+        {
+          "text": "A live table of contents, citations, LaTeX equations, tables and figures, with headers and page numbers.",
+          "src": "vo/editor-1.mp3",
+          "at": 139,
+          "end": 372,
+          "clipFrom": 139
+        },
+        {
+          "text": "Everything you'd expect from a word processor.",
+          "src": "vo/editor-2.mp3",
+          "at": 382,
+          "end": 471,
+          "clipFrom": 382
+        }
+      ]
+    },
+    {
+      "id": "chat",
+      "from": 3135,
+      "frames": 1020,
+      "lines": [
+        {
+          "text": "Press Command J, and Claude joins you.",
+          "src": "vo/chat-0.mp3",
+          "at": 18,
+          "end": 112,
+          "clipFrom": 18
+        },
+        {
+          "text": "Ask it to tighten the introduction.",
+          "src": "vo/chat-1.mp3",
+          "at": 122,
+          "end": 199,
+          "clipFrom": 122
+        },
+        {
+          "text": "Claude reads the document and edits the page directly.",
+          "src": "vo/chat-2.mp3",
+          "at": 209,
+          "end": 320,
+          "clipFrom": 209
+        },
+        {
+          "text": "Every change appears as a tracked suggestion: deletions struck through, additions highlighted.",
+          "src": "vo/chat-3.mp3",
+          "at": 330,
+          "end": 527,
+          "clipFrom": 330
+        },
+        {
+          "text": "It even noticed a citation that doesn't match its source.",
+          "src": "vo/chat-4.mp3",
+          "at": 538,
+          "end": 646,
+          "clipFrom": 538
+        },
+        {
+          "text": "Keep what you like and undo the rest, one change at a time, or all at once.",
+          "src": "vo/chat-5.mp3",
+          "at": 656,
+          "end": 829,
+          "clipFrom": 656
+        }
+      ]
+    },
+    {
+      "id": "select",
+      "from": 4155,
+      "frames": 660,
+      "lines": [
+        {
+          "text": "Select a passage and press Command L to ask about just that part.",
+          "src": "vo/select-0.mp3",
+          "at": 18,
+          "end": 164,
+          "clipFrom": 18
+        },
+        {
+          "text": "Here, Claude checks the claim against the paper, finds the right hurricane, and rewrites the sentence, with its sources.",
+          "src": "vo/select-1.mp3",
+          "at": 175,
+          "end": 417,
+          "clipFrom": 175
+        }
+      ]
+    },
+    {
+      "id": "comments",
+      "from": 4815,
+      "frames": 600,
+      "lines": [
+        {
+          "text": "Comments work the way you'd expect.",
+          "src": "vo/comments-0.mp3",
+          "at": 18,
+          "end": 85,
+          "clipFrom": 18
+        },
+        {
+          "text": "My advisor left three.",
+          "src": "vo/comments-1.mp3",
+          "at": 96,
+          "end": 163,
+          "clipFrom": 96
+        },
+        {
+          "text": "Ask Claude to address them, and it fixes each one in the text, replies in the thread, and resolves it.",
+          "src": "vo/comments-2.mp3",
+          "at": 173,
+          "end": 382,
+          "clipFrom": 173
+        }
+      ]
+    },
+    {
+      "id": "history",
+      "from": 5415,
+      "frames": 420,
+      "lines": [
+        {
+          "text": "Save named versions as you go, and open any earlier draft to compare it or restore it.",
+          "src": "vo/history-0.mp3",
+          "at": 18,
+          "end": 200,
+          "clipFrom": 18
+        },
+        {
+          "text": "Every reply from the agent leaves a restore checkpoint, too.",
+          "src": "vo/history-1.mp3",
+          "at": 211,
+          "end": 326,
+          "clipFrom": 211
+        }
+      ]
+    },
+    {
+      "id": "providers",
+      "from": 5835,
+      "frames": 390,
+      "lines": [
+        {
+          "text": "Prefer Codex?",
+          "src": "vo/providers-0.mp3",
+          "at": 18,
+          "end": 61,
+          "clipFrom": 18
+        },
+        {
+          "text": "Switch providers or models in the middle of a conversation.",
+          "src": "vo/providers-1.mp3",
+          "at": 72,
+          "end": 182,
+          "clipFrom": 72
+        },
+        {
+          "text": "The next model picks up the same transcript, and the same document.",
+          "src": "vo/providers-2.mp3",
+          "at": 193,
+          "end": 313,
+          "clipFrom": 193
+        }
+      ]
+    },
+    {
+      "id": "canvas",
+      "from": 6225,
+      "frames": 510,
+      "lines": [
+        {
+          "text": "When the layout is part of the message, use a Canvas.",
+          "src": "vo/canvas-0.mp3",
+          "at": 18,
+          "end": 131,
+          "clipFrom": 18
+        },
+        {
+          "text": "The agent designs editable pages with columns, color, and type, and you can still click in and change any word.",
+          "src": "vo/canvas-1.mp3",
+          "at": 141,
+          "end": 379,
+          "clipFrom": 141
+        }
+      ]
+    },
+    {
+      "id": "pdf",
+      "from": 6735,
+      "frames": 690,
+      "lines": [
+        {
+          "text": "Import a PDF, and Inline matches its page size, fonts, and margins.",
+          "src": "vo/pdf-0.mp3",
+          "at": 18,
+          "end": 184,
+          "clipFrom": 18
+        },
+        {
+          "text": "Then Claude rebuilds each page as editable text, with equations in LaTeX, and checks its work against the original, side by side.",
+          "src": "vo/pdf-1.mp3",
+          "at": 194,
+          "end": 470,
+          "clipFrom": 194
+        }
+      ]
+    },
+    {
+      "id": "organize",
+      "from": 7425,
+      "frames": 450,
+      "lines": [
+        {
+          "text": "Back home, Organize with AI files everything into folders in seconds.",
+          "src": "vo/organize-0.mp3",
+          "at": 18,
+          "end": 181,
+          "clipFrom": 18
+        },
+        {
+          "text": "It reads only titles and first lines, so it barely touches your usage.",
+          "src": "vo/organize-1.mp3",
+          "at": 192,
+          "end": 345,
+          "clipFrom": 192
+        }
+      ]
+    },
+    {
+      "id": "files",
+      "from": 7875,
+      "frames": 540,
+      "lines": [
+        {
+          "text": "Your documents stay yours.",
+          "src": "vo/files-0.mp3",
+          "at": 18,
+          "end": 90,
+          "clipFrom": 18
+        },
+        {
+          "text": "Inline keeps a Word copy of every one in a folder on your computer, exports to PDF, Markdown and more, and brings in your whole Google Drive from a single zip.",
+          "src": "vo/files-1.mp3",
+          "at": 101,
+          "end": 434,
+          "clipFrom": 101
+        }
+      ]
+    },
+    {
+      "id": "mcp",
+      "from": 8415,
+      "frames": 570,
+      "lines": [
+        {
+          "text": "And because Inline speaks MCP, Claude Code in your terminal can work on your documents too.",
+          "src": "vo/mcp-0.mp3",
+          "at": 18,
+          "end": 210,
+          "clipFrom": 18
+        },
+        {
+          "text": "Ask from the command line, and watch the edit land on the page.",
+          "src": "vo/mcp-1.mp3",
+          "at": 221,
+          "end": 343,
+          "clipFrom": 221
+        }
+      ]
+    },
+    {
+      "id": "outro",
+      "from": 8985,
+      "frames": 450,
+      "lines": [
+        {
+          "text": "Inline.",
+          "src": "vo/outro-0.mp3",
+          "at": 30,
+          "end": 61,
+          "clipFrom": 30
+        },
+        {
+          "text": "Real documents, with the agent built in.",
+          "src": "vo/outro-1.mp3",
+          "at": 84,
+          "end": 170,
+          "clipFrom": 84
+        },
+        {
+          "text": "Free and open source, for Mac, Windows, and Linux.",
+          "src": "vo/outro-2.mp3",
+          "at": 181,
+          "end": 305,
+          "clipFrom": 181
+        }
+      ]
+    }
+  ]
+}
