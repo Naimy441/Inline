@@ -1793,6 +1793,8 @@ async function withProbe<T>(use: (q: Query) => Promise<T>): Promise<T> {
   }
 }
 
+const HAIKU_5_5 = "claude-haiku-5-5";
+
 async function probeClaudeCode(): Promise<AgentStatus> {
   await agentRuntime().init();
   const input = new AsyncQueue<SDKUserMessage>();
@@ -1818,6 +1820,8 @@ async function probeClaudeCode(): Promise<AgentStatus> {
       description: model.description,
       efforts: (model.supportedEffortLevels ?? (model.supportsEffort ? ["low", "medium", "high"] : [])) as Effort[],
     }));
+    // Claude Code's list can lag the newest models; Haiku 5.5 is added by id when the list lacks it.
+    if (!models.some((model) => model.value === HAIKU_5_5)) models.push({ value: HAIKU_5_5, displayName: "Haiku 5.5", description: "Fastest for quick answers", efforts: [] });
     if (!signedIn) return { state: "signed_out", message: "Claude Code is installed but not signed in.", checkedAt: Date.now() };
     return {
       state: "ready",

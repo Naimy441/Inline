@@ -130,12 +130,20 @@ test("double-clicking a margin edits that header or footer, and alignment and pa
   await expectAligned(page, ".sheet-footer .sheet-number", "center");
 });
 
-test("the bottom bar keeps the word and page counts with the chat open", async ({ page, request }) => {
+test("the word and page counts sit in the corner only with the chat closed, and an empty page shows none", async ({ page, request }) => {
   const id = await createDocument(request, "Bar check", "One two three.\n\n\\pagebreak\n\nFour.", {});
   await page.goto(`/d/${id}`);
   await expect(page.locator(".doc-content")).toBeVisible();
-  const bar = page.locator("footer.statusbar");
-  await expect(bar).toBeVisible();
-  await expect(bar).toContainText("2 pages");
-  await expect(bar).toContainText("words");
+  const corner = page.locator("footer.status-corner");
+  await expect(page.locator(".agent-panel")).toBeVisible();
+  await expect(corner).not.toContainText("pages");
+  await page.locator(".agent-panel").getByRole("button", { name: "Close panel" }).click();
+  await expect(corner).toContainText("2 pages");
+  await expect(corner).toContainText("words");
+
+  const empty = await createDocument(request, "Empty", "", {});
+  await page.goto(`/d/${empty}`);
+  await expect(page.locator(".doc-content")).toBeVisible();
+  await expect(page.locator("footer.status-corner")).not.toContainText("page");
+  await expect(page.locator("footer.status-corner")).not.toContainText("word");
 });

@@ -413,8 +413,8 @@ export const Composer = forwardRef<
                 },
               })),
               { kind: "separator" },
-              { kind: "label", label: "Models" },
-              ...models.map((item) => ({ label: `${item.provider === "codex" ? "Codex" : "Claude"} · ${item.displayName}`, disabled: running && (item.provider ?? "claude") !== provider, checked: item === model, onSelect: () => onSettings({ model: item.value, provider: item.provider ?? "claude", effort: item.efforts.includes(settings.effort) ? settings.effort : item.efforts[0] ?? "medium" }) })),
+              { kind: "label", label: `${assistantName} models` },
+              ...models.filter((item) => (item.provider ?? "claude") === provider).map((item) => ({ label: item.displayName, checked: item === model, onSelect: () => onSettings({ model: item.value, provider, effort: item.efforts.includes(settings.effort) ? settings.effort : item.efforts[0] ?? "medium" }) })),
             ]}
           >
             {model ? model.displayName.replace(/\s*\(.*\)$/, "") : assistantName}

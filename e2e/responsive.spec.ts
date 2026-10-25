@@ -141,7 +141,7 @@ test.describe("phone", () => {
 
   test("Claude opens over the document, edits, and the change is kept from the review bar", async ({ page, request }) => {
     await openDocument(page, await createDocument(request, "Phone Claude", "The meeting is on Tuesday."));
-    await page.getByRole("button", { name: "AI chat", exact: true }).click();
+    await page.getByRole("button", { name: "Claude chat", exact: true }).click();
     const panel = page.locator(".panel-shell");
     await expect(panel).toBeVisible();
     await settled(page);
@@ -156,7 +156,7 @@ test.describe("phone", () => {
     await expect(page.locator(".msg-assistant").last()).toContainText("Replaced Tuesday with Thursday.");
 
     // Close the panel, then review in place.
-    await page.getByRole("button", { name: "AI chat", exact: true }).click();
+    await page.getByRole("button", { name: "Claude chat", exact: true }).click();
     await expect(panel).toHaveCount(0);
     const bar = page.locator(".review-bar");
     await expect(bar).toBeVisible();

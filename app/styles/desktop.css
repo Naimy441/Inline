@@ -43,7 +43,7 @@
 }
 
 /* Everything you can click or type in stays clickable. */
-[data-desktop] .titlebar :is(button, input, a, select, textarea, [role="button"], [role="menubar"], [role="menuitem"], .menubar, .title-input),
+[data-desktop] .titlebar :is(button, input, a, select, textarea, [role="button"], [role="menubar"], [role="menuitem"], .menubar, .title-input, .canvas-kind-badge),
 [data-desktop] .home-header :is(button, input, a, select, textarea, [role="button"], .home-search) {
   -webkit-app-region: no-drag;
 }

@@ -1,5 +1,7 @@
 import { HttpError, json, notFound, route, routeDocument } from "@/lib/server/http";
 import { readThumbnail, writeThumbnail } from "@/lib/server/store";
+import { isUnrestrictedCanvas } from "@/lib/canvas/compiler";
+import { refreshUnrestrictedThumbnail } from "@/lib/server/unrestrictedRender";
 
 type Context = { params: Promise<{ id: string }> };
 
@@ -27,6 +29,14 @@ export const GET = route(async (request, context: Context) => {
       "X-Content-Type-Options": "nosniff",
     },
   });
+});
+
+/** An unrestricted Canvas cannot be drawn by the browser, so the server draws its cover now. */
+export const POST = route(async (_request, context: Context) => {
+  const doc = await routeDocument(context);
+  if (!isUnrestrictedCanvas(doc.doc)) throw new HttpError(400, "Only an unrestricted Canvas is drawn on the server.");
+  if (!(await refreshUnrestrictedThumbnail(doc))) throw new HttpError(503, "The cover couldn't be drawn.");
+  return json({ thumbnailAt: doc.meta.thumbnailAt });
 });
 
 /** The editor saves a new thumbnail when the first page changes: the dark one (?theme=dark), then the light one, whose ?key= names what it shows. */

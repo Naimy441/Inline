@@ -160,7 +160,8 @@ export function canvasDesignPlugin() {
       let lastCss: string | null = null;
       const update = () => {
         const design = view.state.doc.attrs.canvas;
-        if (!design) { view.dom.removeAttribute("data-canvas-root"); sheet.textContent = ""; lastCss = null; return; }
+        // An unrestricted canvas (format 2) has no CSS: its page is shown in a frame, so there is nothing to scope here.
+        if (!design || design.format !== 1) { view.dom.removeAttribute("data-canvas-root"); sheet.textContent = ""; lastCss = null; return; }
         view.dom.setAttribute("data-canvas-root", id);
         const light = scopedCanvasCss(design.css, id);
         // Screen-only. Print and the light PDF render keep the authored colors above.

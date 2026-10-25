@@ -206,7 +206,7 @@ export function canvasTurnContext(doc: LiveDocument) {
     const html = unrestrictedHtml(doc.doc);
     const lines = [
       "Type: unrestricted Canvas.",
-      "This is one HTML page you control completely, not a Markdown document or an SDK composition. Change it with write_unrestricted_canvas and read it with read_unrestricted_canvas. Picture it with screenshot_unrestricted_canvas.",
+      "This is one HTML page you control completely, not a Markdown document or an SDK composition. Change it with write_unrestricted_canvas and read it with read_unrestricted_canvas. Picture it with screenshot_unrestricted_canvas. It is still a paginated, printable document: keep fixed-size page elements with page breaks (read_unrestricted_canvas has the page contract).",
     ];
     if (html.length <= 40_000) lines.push(`Current HTML, a complete document. A write still needs the epoch and version from read_unrestricted_canvas:\n<canvas-html>\n${html}\n</canvas-html>`);
     else lines.push("Read it with read_unrestricted_canvas before changing it. Its HTML is not included here.");

@@ -324,8 +324,8 @@ export function MessageList({
   const byTurn = useStableGroups(hunks);
   const copyAt = useMemo(() => (onCopyTurn || onCopyLog ? turnCopyTargets(messages) : null), [onCopyTurn, onCopyLog, messages]);
   const last = messages[messages.length - 1];
-  const latestThinking = last?.role === "assistant" ? last.parts.findLast((part) => part.type === "thinking")?.id : undefined;
   const countsOn = documentCounts ? latestUsageMessage(messages) : undefined;
+  const latestThinking = last?.role === "assistant" ? last.parts.findLast((part) => part.type === "thinking")?.id : undefined;
   return (
     <>
       {messages.map((message, index) =>

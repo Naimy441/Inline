@@ -22,6 +22,9 @@ export function codexPlanUsage(answer: CodexLimits, now = Date.now()): PlanUsage
   return windows.length ? { available: true, plan, windows, checkedAt: now } : { available: false, plan, checkedAt: now };
 }
 
+/** OpenAI's GPT models, which Inline lists ahead of the others. */
+const isGpt = (model: ModelOption) => /\bgpt/i.test(model.value) || /\bgpt/i.test(model.displayName);
+
 class CodexAccount {
   private status: AgentStatus | null = null;
   private statusPending: Promise<AgentStatus> | null = null;
@@ -58,7 +61,10 @@ class CodexAccount {
         }
         cursor = page.nextCursor ?? null;
       } while (cursor);
-      return { state: "ready", account: { email: account?.email ?? undefined, plan: account?.planType, provider: "codex" }, models, defaultModel: defaultModel ?? models[0]?.value ?? null, checkedAt: Date.now() };
+      // GPT models come first, and the first of them is the one a new Codex chat starts on.
+      const ordered = [...models.filter(isGpt), ...models.filter((model) => !isGpt(model))];
+      const gpt = ordered.find(isGpt);
+      return { state: "ready", account: { email: account?.email ?? undefined, plan: account?.planType, provider: "codex" }, models: ordered, defaultModel: gpt?.value ?? defaultModel ?? ordered[0]?.value ?? null, checkedAt: Date.now() };
     } catch (error) { return { state: "unavailable", message: error instanceof Error ? error.message : "Codex isn't available.", checkedAt: Date.now() }; }
     finally { rpc?.close(); }
   }

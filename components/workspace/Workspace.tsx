@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronRight, CloudOff, Download, History, ListTree, Loader2, MessageSquare, Moon, MoreHorizontal, PanelRight, Sparkles, Sun } from "lucide-react";
+import { Check, ChevronRight, CloudOff, Download, History, ListTree, Loader2, MessageSquare, Moon, MoreHorizontal, Sun } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
@@ -23,6 +23,9 @@ import { ConfirmHost } from "@/components/ui/Confirm";
 import { MenuButton, type MenuItem } from "@/components/ui/Menu";
 import { toast, Toaster } from "@/components/ui/Toast";
 import { InlineLogo } from "@/components/ui/Logo";
+import { ProviderMark } from "@/components/ui/ProviderMark";
+import { useChatProvider } from "@/lib/client/chatProvider";
+import { providerName } from "@/lib/agent/providers";
 import { CommentsPanel } from "@/components/workspace/CommentsPanel";
 import { CommentMargin, marginFits } from "@/components/workspace/CommentMargin";
 import { FindBar } from "@/components/workspace/FindBar";
@@ -86,6 +89,8 @@ export function Workspace({ documentId }: { documentId: string }) {
   const agentRef = useRef<AgentPanelHandle>(null);
   const imageInput = useRef<HTMLInputElement>(null);
   const { dark, toggle: toggleTheme } = useTheme();
+  const chatProvider = useChatProvider();
+  const chatName = `${providerName(chatProvider)} chat`;
   const keys = useShortcut();
 
   const [panel, setPanelState] = useState<Panel>("agent");
@@ -934,6 +939,23 @@ export function Workspace({ documentId }: { documentId: string }) {
   })();
   const working = Boolean(ui.activity && ui.activity.status !== "idle");
   const chatOpen = shownPanel === "agent";
+  // An untitled document or canvas nobody wrote in is not worth keeping: leaving it deletes it.
+  const leaving = useRef({ meta, comments: ui.comments.length });
+  leaving.current = { meta, comments: ui.comments.length };
+  useEffect(
+    () => () => {
+      const { meta: last, comments } = leaving.current;
+      const doc = session.editor.get()?.doc;
+      if (!doc || !last || !last.autoTitle || last.parentId || last.tabs?.length || last.pdfImport || last.canvasMode || last.trashedAt || comments) return;
+      let blank = true;
+      doc.descendants((node) => {
+        if (node.isText || (node.isLeaf && node.type.name !== "hard_break")) blank = false;
+        return blank;
+      });
+      if (blank) void fetch(`/api/documents/${last.id}`, { method: "DELETE", keepalive: true }).catch(() => undefined);
+    },
+    [session],
+  );
 
   /** Show a chat in the AI chat panel (the one converting an imported PDF). */
   const openChat = (chatId: string) => {
@@ -991,7 +1013,14 @@ export function Workspace({ documentId }: { documentId: string }) {
         <div className="title-stack">
           <div className="title-line">
             <TitleInput meta={meta} session={session} onRename={(title) => void session.updateMeta({ title })} />
-            {meta?.kind === "canvas" && <span className="canvas-kind-badge">Canvas</span>}
+            {meta?.kind === "canvas" && (
+              <span
+                className="canvas-kind-badge"
+                data-tip={meta.canvasMode === "unrestricted" ? "Unrestricted canvas: the AI has full control of the page's HTML" : "Default canvas mode. Ask the AI to switch to an unrestricted canvas to give it full control of the page"}
+              >
+                {meta.canvasMode === "unrestricted" ? "Unrestricted" : "Canvas"}
+              </span>
+            )}
             {openTab && <TabHeading title={openTab.title} />}
           </div>
           <MenuBar session={session} actions={actions} zoom={effectiveZoom} hunks={ui.hunks.length} />
@@ -1009,8 +1038,8 @@ export function Workspace({ documentId }: { documentId: string }) {
               {openComments > 0 && <span className="badge">{openComments}</span>}
             </IconButton>
             {!focusMode && (
-              <IconButton label="AI chat" className={`claude-toggle${panel === "agent" ? " is-active" : ""}${working ? " is-working" : ""}`} onClick={() => setPanel((current) => (current === "agent" ? null : "agent"))}>
-                <Sparkles size={16} />
+              <IconButton label={chatName} className={`claude-toggle${panel === "agent" ? " is-active" : ""}${working ? " is-working" : ""}`} onClick={() => setPanel((current) => (current === "agent" ? null : "agent"))}>
+                <ProviderMark provider={chatProvider} size={16} />
               </IconButton>
             )}
             <MenuButton className="icon-btn icon-btn-md" label="More options" title={meta?.title ?? "Document"} placement="bottom-end" items={moreItems}>
@@ -1035,14 +1064,14 @@ export function Workspace({ documentId }: { documentId: string }) {
             {!focusMode && (
               <button
                 type="button"
-                className={`btn btn-md claude-toggle claude-toggle-text${panel === "agent" ? " is-active" : ""}`}
+                className={`icon-btn icon-btn-md claude-toggle${panel === "agent" ? " is-active" : ""}`}
                 onClick={() => setPanel((current) => (current === "agent" ? null : "agent"))}
+                aria-label={chatName}
                 aria-pressed={panel === "agent"}
-                data-tip={`${panel === "agent" ? "Close" : "Open"} AI chat  ${keys("⌘J")}`}
+                data-tip={`${panel === "agent" ? "Close" : "Open"} ${chatName}  ${keys("⌘J")}`}
               >
-                {/* With the panel closed, the button is where Claude shows it is working. */}
-                {working && panel !== "agent" ? <Spark size={15} /> : <PanelRight size={15} />}
-                <span className="btn-label">AI chat</span>
+                {/* With the panel closed, the button is where the assistant shows it is working. */}
+                {working && panel !== "agent" ? <Spark size={15} /> : <ProviderMark provider={chatProvider} size={16} />}
               </button>
             )}
             <MenuButton className="btn btn-secondary btn-md export-btn" label="Download" placement="bottom-end" items={downloads}>
@@ -1163,6 +1192,14 @@ export function Workspace({ documentId }: { documentId: string }) {
           <WithEditorState session={session}>{(state) => <SelectionBubble session={session} state={state} linkEditing={linkEditing} linkSession={linkSession} linkPrefill={linkPrefill} onLinkEditing={(open) => (open ? openLinkEditor(false) : setLinkEditing(false))} prompting={prompting && !focusMode} onPrompting={setPrompting} onInlineAsk={inlineAsk} hideAi={focusMode} />}</WithEditorState>
           <WithEditorState session={session}>{(state) => <PictureBar session={session} state={state} />}</WithEditorState>
         </main>
+        <footer className="status-corner">
+          {!chatOpen && <DocCounts session={session} pages={ui.pages} fallbackWords={meta?.wordCount ?? 0} onWords={() => setCounting(true)} />}
+          {ui.mode !== "editing" && (
+            <button type="button" className={`status-item status-mode is-${ui.mode}`} onClick={() => void session.setMode("editing")} data-tip="Back to editing">
+              {EDITOR_MODES[ui.mode].icon(13)} {EDITOR_MODES[ui.mode].label}
+            </button>
+          )}
+        </footer>
         </div>
 
         {shownPanel && (
@@ -1182,6 +1219,7 @@ export function Workspace({ documentId }: { documentId: string }) {
                 chatKey={chatKey}
                 hunks={ui.hunks}
                 initialPrompt={initialAsk}
+                documentCounts={chatOpen ? <DocCounts session={session} pages={ui.pages} fallbackWords={meta?.wordCount ?? 0} onWords={() => setCounting(true)} variant="meta" /> : undefined}
                 onClose={() => setPanel(null)}
                 onReview={(action, ids) => {
                   if (action === "next") session.gotoChange(1, ids);
@@ -1205,16 +1243,6 @@ export function Workspace({ documentId }: { documentId: string }) {
           </div>
         )}
       </div>
-
-      <footer className="statusbar">
-        {ui.mode !== "editing" && (
-          <button type="button" className={`status-item status-mode is-${ui.mode}`} onClick={() => void session.setMode("editing")} data-tip="Back to editing">
-            {EDITOR_MODES[ui.mode].icon(13)} {EDITOR_MODES[ui.mode].label}
-          </button>
-        )}
-        <span className="status-spacer" />
-        <DocCounts session={session} pages={ui.pages} fallbackWords={meta?.wordCount ?? 0} onWords={() => setCounting(true)} />
-      </footer>
 
       <PageSetupDialog open={Boolean(setup)} initialTab={setup?.tab} session={session} settings={meta?.settings} onClose={() => setSetup(null)} />
       <StyleDialog open={styleEditor !== null} styleId={styleEditor?.id ?? null} session={session} settings={meta?.settings} onClose={() => setStyleEditor(null)} />
@@ -1273,15 +1301,35 @@ function countLabel(count: number, singular: string) {
   return `${count.toLocaleString()} ${count === 1 ? singular : `${singular}s`}`;
 }
 
-/** The document's word and page counts, as the status bar shows them. One item is singular. */
-function DocCounts({ session, pages, fallbackWords, onWords }: { session: DocumentSession; pages: number; fallbackWords: number; onWords: () => void }) {
+/** The document's word and page counts, in the corner or on the chat's usage line. One item is singular. An empty one-page document shows none. */
+function DocCounts({ session, pages, fallbackWords, onWords, variant = "corner" }: { session: DocumentSession; pages: number; fallbackWords: number; onWords: () => void; variant?: "corner" | "meta" }) {
   return (
-    <>
-      <button type="button" className="status-item" onClick={onWords}>
-        <WithEditorState session={session}>{(state) => <>{countLabel(state ? docWordCount(state.doc) : fallbackWords, "word")}</>}</WithEditorState>
-      </button>
-      <span className="status-item">{countLabel(pages, "page")}</span>
-    </>
+    <WithEditorState session={session}>
+      {(state) => {
+        const words = state ? docWordCount(state.doc) : fallbackWords;
+        if (words === 0 && pages <= 1) return null;
+        const wordsLabel = countLabel(words, "word");
+        const pagesLabel = countLabel(pages, "page");
+        if (variant === "meta") {
+          return (
+            <span className="msg-meta-counts">
+              <button type="button" className="msg-meta-count" onClick={onWords}>
+                {wordsLabel}
+              </button>
+              <span className="msg-meta-count">{pagesLabel}</span>
+            </span>
+          );
+        }
+        return (
+          <>
+            <button type="button" className="status-item" onClick={onWords}>
+              {wordsLabel}
+            </button>
+            <span className="status-item">{pagesLabel}</span>
+          </>
+        );
+      }}
+    </WithEditorState>
   );
 }
 

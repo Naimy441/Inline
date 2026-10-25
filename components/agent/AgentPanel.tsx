@@ -8,6 +8,7 @@ import { formatChatHistory, formatChatLogs, formatPromptTurn, formatTurnLog, tur
 import { ActivityLine, isWaiting } from "@/components/agent/Activity";
 import { refreshAgentStatus, useAgentStatus } from "@/lib/client/agentStatus";
 import { acquireChat, ChatSession, newChatId, peekChat, releaseChat, rememberChat, rememberedChat, warmChat, type ChatUiState } from "@/lib/client/chatSession";
+import { setChatProvider } from "@/lib/client/chatProvider";
 import { Composer, type ComposerHandle } from "@/components/agent/Composer";
 import { MessageList, type TurnHunk } from "@/components/agent/MessageView";
 import { Button, IconButton } from "@/components/ui/Button";
@@ -16,7 +17,7 @@ import { UsageMeter } from "@/components/agent/UsageMeter";
 import { Dialog } from "@/components/ui/Dialog";
 import { toast } from "@/components/ui/Toast";
 import { api, post } from "@/lib/client/api";
-import { loadDraftSelection, saveDraftSelection } from "@/lib/client/drafts";
+import { loadDraftSelection, loadDraftSettings, saveDraftSelection, saveDraftSettings } from "@/lib/client/drafts";
 import { promptTexts } from "@/lib/client/promptHistory";
 import { loadPreferences, preferences } from "@/lib/client/preferences";
 
@@ -96,7 +97,7 @@ export const AgentPanel = forwardRef<
   // A chat that is already open shows straight away, with nothing to load.
   const [session, setSession] = useState<ChatSession | null>(() => (chatId ? peekChat(chatId) : null));
   const [changingSettings, setChangingSettings] = useState(false);
-  const [draftSettings, setDraftSettings] = useState<ChatSettings | null>(null);
+  const [draftSettings, setDraftSettings] = useState<ChatSettings | null>(() => loadDraftSettings(draftKey));
   // The quoted selection is part of the unsent message: it survives closing the panel.
   const [selection, setSelection] = useState<SelectionContext | null>(() => (typeof window === "undefined" ? null : loadDraftSelection(draftKey)));
   useEffect(() => saveDraftSelection(draftKey, selection), [draftKey, selection]);
@@ -156,6 +157,7 @@ export const AgentPanel = forwardRef<
     ...(codexStatus?.state === "ready" ? codexStatus.models : []),
   ];
   const ready = status?.state === "ready";
+  useEffect(() => setChatProvider(provider), [provider]);
 
   useImperativeHandle(ref, () => ({
     ask: (next, text) => {
@@ -282,7 +284,11 @@ export const AgentPanel = forwardRef<
       setChangingSettings(true);
       void session.update({ settings: patch }).catch((error: unknown) => toast(error instanceof Error ? error.message : "Couldn't update chat settings.", { tone: "error" })).finally(() => setChangingSettings(false));
     }
-    else setDraftSettings({ ...settings, ...patch });
+    else {
+      const next = { ...settings, ...patch };
+      saveDraftSettings(draftKey, next);
+      setDraftSettings(next);
+    }
   };
 
   // Stable callbacks, so replies that didn't change don't re-render while another streams.

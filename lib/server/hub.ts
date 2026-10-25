@@ -215,6 +215,19 @@ export class LiveDocument {
     return this.listeners.size;
   }
 
+  private coverTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** An unrestricted Canvas has no editor layout to draw its home-page cover from, so draw the page on the server a moment after it settles. */
+  private scheduleCoverRefresh() {
+    if (this.coverTimer) clearTimeout(this.coverTimer);
+    this.coverTimer = setTimeout(() => {
+      this.coverTimer = null;
+      if (this.deleted) return;
+      void import("./unrestrictedRender").then((module) => module.refreshUnrestrictedThumbnail(this)).catch(() => undefined);
+    }, 3000);
+    this.coverTimer.unref?.();
+  }
+
   private emit(event: HubEvent) {
     for (const listener of this.listeners) {
       try {
@@ -296,8 +309,13 @@ export class LiveDocument {
       ...(hunksChanged ? { hunks: this.hunksJSON() } : {}),
     });
     this.meta = { ...this.meta, updatedAt: newerThan(this.meta.updatedAt) };
+    if (this.doc.attrs.canvas?.format === 2 && this.meta.canvasMode !== "unrestricted") {
+      this.meta = { ...this.meta, canvasMode: "unrestricted" };
+      this.emit({ type: "meta", meta: this.meta });
+    }
     this.dirtySinceRewind = true;
     this.lastUsed = Date.now();
+    if (this.doc.attrs.canvas?.format === 2) this.scheduleCoverRefresh();
     // The title follows the first line as the letters arrive, not after the save delay.
     this.syncAutoTitle();
     this.schedulePersist();
@@ -945,7 +963,26 @@ class DocumentHub {
     return listed.filter((meta): meta is DocumentMeta => Boolean(meta));
   }
 
+  /**
+   * Drop untitled documents and canvases that were created and never changed:
+   * nothing in them is worth saving. A document someone has open, or touched in
+   * the last few seconds, stays.
+   */
+  async purgePristine(now = Date.now()): Promise<number> {
+    let purged = 0;
+    for (const meta of await this.allMetas()) {
+      if (!meta.autoTitle || meta.trashedAt || meta.parentId || meta.tabs?.length || meta.pdfImport || meta.canvasMode || meta.wordCount !== 0 || meta.preview) continue;
+      if (now - Math.max(meta.createdAt, meta.updatedAt, meta.lastOpenedAt) < PRISTINE_GRACE_MS) continue;
+      const doc = await this.get(meta.id);
+      if (!doc || !doc.idle || !isBlankDoc(doc.doc) || doc.comments.length) continue;
+      await this.remove(meta.id);
+      purged += 1;
+    }
+    return purged;
+  }
+
   async list(options: { trashed?: boolean } = {}): Promise<DocumentMeta[]> {
+    if (!options.trashed) await this.purgePristine().catch(() => undefined);
     const metas = await this.allMetas();
     return metas
       .filter((meta) => !meta.parentId && (options.trashed ? Boolean(meta.trashedAt) : !meta.trashedAt))
@@ -1026,6 +1063,18 @@ class DocumentHub {
   async flushAll() {
     await Promise.all([...this.open.values()].map((doc) => doc.flush().catch(() => undefined)));
   }
+}
+
+const PRISTINE_GRACE_MS = 5_000;
+
+/** A document with no text, pictures or other content: at most empty paragraphs and canvas containers. */
+function isBlankDoc(doc: PMNode) {
+  let blank = true;
+  doc.descendants((node) => {
+    if (node.isText || (node.isLeaf && node.type.name !== "hard_break")) blank = false;
+    return blank;
+  });
+  return blank;
 }
 
 function normalizeFile(file: StoredDocumentFile): StoredDocumentFile {

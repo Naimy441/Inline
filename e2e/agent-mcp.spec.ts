@@ -254,7 +254,7 @@ test.describe("review of agent edits", () => {
     const { id } = await newDocumentInEditor(page, request, { title: "Pending count", markdown: paragraphs.join("\n\n") });
     const panel = page.locator(".agent-panel");
     if (await panel.count()) await panel.getByRole("button", { name: "Close panel" }).click();
-    await expect(page.locator("footer.statusbar")).toContainText("3 pages");
+    await expect(page.locator(".status-corner")).toContainText("3 pages");
     await mcp.ok("multi_edit_document", { document_id: id, edits: paragraphs.map((_, i) => ({ old_string: ` Cut ${i}: ${filler.repeat(3)}`, new_string: "" })) });
     await expect(page.locator(".review-bar-count")).toHaveText("30 changes by Claude");
 
@@ -266,7 +266,7 @@ test.describe("review of agent edits", () => {
     // Once kept, the editor lays out exactly the count Claude was given.
     await page.locator(".review-bar .btn-primary").click();
     await expect(page.locator(".doc-content .review-delete")).toHaveCount(0);
-    await expect(page.locator("footer.statusbar")).toContainText(`${kept} page`);
+    await expect(page.locator(".status-corner")).toContainText(`${kept} page`);
     await expect.poll(async () => (await mcp.ok("get_page_count", { document_id: id })).match(/fills (\d+) pages?, as laid out/)?.[1]).toBe(String(kept));
   });
 

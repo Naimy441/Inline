@@ -1,6 +1,6 @@
 "use client";
 
-import type { Attachment, DocumentMention, LinkedDocument, SelectionContext } from "@/lib/agent/types";
+import type { Attachment, ChatSettings, DocumentMention, LinkedDocument, SelectionContext } from "@/lib/agent/types";
 
 /**
  * The message being written to Claude, kept per document so closing the panel
@@ -12,6 +12,7 @@ export type Draft = { text: string; attachments: Attachment[]; mentions: Documen
 
 const EMPTY: Draft = { text: "", attachments: [], mentions: [], links: [] };
 const selections = new Map<string, SelectionContext>();
+const draftSettings = new Map<string, ChatSettings>();
 
 function key(documentId: string) {
   return `inline-draft:${documentId}`;
@@ -54,4 +55,13 @@ export function loadDraftSelection(documentId: string) {
 export function saveDraftSelection(documentId: string, selection: SelectionContext | null) {
   if (selection) selections.set(documentId, selection);
   else selections.delete(documentId);
+}
+
+/** The provider, model and options chosen before a chat exists, kept for this tab so closing the panel keeps them. */
+export function loadDraftSettings(documentId: string) {
+  return draftSettings.get(documentId) ?? null;
+}
+
+export function saveDraftSettings(documentId: string, settings: ChatSettings) {
+  draftSettings.set(documentId, settings);
 }

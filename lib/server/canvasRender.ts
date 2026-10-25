@@ -6,7 +6,7 @@ import { EditError } from "@/lib/doc/editing";
 
 export async function renderCanvas(doc: LiveDocument, options: { page?: number; pdf?: boolean; preview?: string } = {}) {
   if (!doc.doc.attrs.canvas) throw new EditError("This is not a Canvas.");
-  if (doc.doc.attrs.canvas.format === 2) throw new EditError("An unrestricted Canvas is plain HTML. Picture it with screenshot_unrestricted_canvas; PDF export is not available for it yet.");
+  if (doc.doc.attrs.canvas.format === 2) throw new EditError("An unrestricted Canvas is plain HTML. Picture it with screenshot_unrestricted_canvas.");
   const origin = serverOrigin();
   if (!origin) throw new EditError("Open Inline in a browser before inspecting or exporting a Canvas.");
   const expected = { epoch: doc.epoch, version: doc.version };

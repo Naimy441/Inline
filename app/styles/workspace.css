@@ -171,9 +171,9 @@
 .unrestricted-canvas {
   display: block;
   width: 100%;
-  min-height: calc(100vh - 140px);
+  min-height: 200px;
   border: 0;
-  background: #fff;
+  background: #e8e8ea;
 }
 
 .canvas-kind-badge {
@@ -2241,17 +2241,25 @@
   }
 }
 
-/* The bottom bar: the document's tab (and outline), pending changes, the mode, and the word and page counts. */
+/* With the chat closed, the word and page counts float in the bottom-right margin, with no bar behind them. */
 
-.statusbar {
+.status-corner {
+  position: absolute;
+  z-index: 4;
+  right: 8px;
+  bottom: 6px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 2px;
-  padding: 0 8px;
-  background: var(--canvas);
-  font-size: 12px;
+  align-content: flex-end;
+  justify-content: flex-end;
+  gap: 0 2px;
+  max-width: calc(var(--text-inset-right, 200px) - 16px);
   color: var(--muted);
-  overflow: hidden;
+  font-size: 12px;
+  pointer-events: none;
+  background: none;
+  user-select: none;
 }
 
 .status-item {
@@ -2278,13 +2286,14 @@ button.status-item:hover {
   color: var(--accent-text);
 }
 
-.statusbar .status-item {
-  min-width: 0;
-  max-width: 100%;
+.status-corner:empty {
+  display: none;
 }
 
-.status-spacer {
-  flex: 1;
+.status-corner .status-item {
+  pointer-events: auto;
+  min-width: 0;
+  max-width: 100%;
 }
 
 /*

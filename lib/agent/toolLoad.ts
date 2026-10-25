@@ -6,7 +6,7 @@ export const CANVAS_TOOL_NAMES = [
   "patch_canvas",
   "inspect_canvas",
   "check_layout",
-  "create_unrestricted_canvas",
+  "switch_to_unrestricted_canvas",
   "read_unrestricted_canvas",
   "write_unrestricted_canvas",
   "screenshot_unrestricted_canvas",

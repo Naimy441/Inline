@@ -1234,6 +1234,12 @@ export class DocumentSession {
     const meta = this.meta;
     const ui = this.ui.get();
     if (!view || !meta || this.destroyed || ui.flow || ui.printing || ui.exporting || (!options.force && document.visibilityState !== "visible")) return null;
+    // An unrestricted Canvas lives in a frame this page cannot draw: the server draws its cover.
+    if (meta.canvasMode === "unrestricted") {
+      if (!options.force) return null;
+      const response = await fetch(`/api/documents/${this.id}/thumbnail`, { method: "POST" });
+      return response.ok ? ((await response.json().catch(() => ({}))) as { thumbnailAt?: number }).thumbnailAt ?? null : null;
+    }
     const end = Math.min(layout?.starts[0] ?? view.state.doc.content.size, view.state.doc.content.size);
     // "2": thumbnails since there is a dark version as well, so older ones are redrawn once.
     const key = hashText(`2\n${meta.title}\n${JSON.stringify(meta.settings)}\n${JSON.stringify(view.state.doc.slice(0, end).content.toJSON())}`);
