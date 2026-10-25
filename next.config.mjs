@@ -38,9 +38,9 @@ const nextConfig = {
     "/api/spellcheck": ["./lib/server/hunspell/**"],
   },
   // The agent routes' traces take in the whole project folder, which would put
-  // the desktop app's own builds (desktop/dist) and the tests inside its server.
+  // the desktop app's own builds (desktop/dist), the product video (video/) and the tests inside its server.
   outputFileTracingExcludes: {
-    "/*": ["./desktop/**", "./e2e/**", "./tests/**", "./test-results/**", "./playwright-report/**"],
+    "/*": ["./desktop/**", "./video/**", "./e2e/**", "./tests/**", "./test-results/**", "./playwright-report/**"],
   },
   experimental: {
     // proxy.ts runs on every request, and Next.js silently truncates bodies
